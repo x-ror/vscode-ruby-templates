@@ -8,6 +8,10 @@ use walkdir::WalkDir;
 static RENDER_STR: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
 });
+// ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
+static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
+// `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
+static KEYWORD_ARG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
 static RENDER_COMPONENT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 
@@ -186,6 +190,93 @@ pub fn render_string_prefix(line: &str, col: usize) -> Option<String> {
     OPEN.captures(before).map(|c| c[1].to_string())
 }
 
+/// A template's `locals: (…)` magic comment.
+#[derive(Debug, PartialEq)]
+pub struct StrictLocals {
+    /// The parameter list as written, without the parentheses.
+    pub params: String,
+    /// `(name, default)`; no default means required.
+    pub locals: Vec<(String, Option<String>)>,
+    /// `**rest` accepts any other local.
+    pub rest: bool,
+}
+
+pub fn strict_locals(text: &str) -> Option<StrictLocals> {
+    let params = STRICT_LOCALS.captures(text)?.get(1)?.as_str().trim();
+    let mut sig = StrictLocals { params: params.to_string(), locals: vec![], rest: false };
+    for arg in split_args(params)? {
+        // `**nil` is how Rails spells "no other locals".
+        if arg.starts_with("**") && arg != "**nil" {
+            sig.rest = true;
+        } else if let Some((name, default)) = keyword_arg(arg) {
+            sig.locals.push((name.to_string(), Some(default.to_string()).filter(|d| !d.is_empty())));
+        }
+    }
+    Some(sig)
+}
+
+/// `name: value` → `(name, value)`; `value` is empty for `name:`.
+fn keyword_arg(arg: &str) -> Option<(&str, &str)> {
+    let cap = KEYWORD_ARG.captures(arg)?;
+    Some((cap.get(1)?.as_str(), cap.get(2)?.as_str().trim()))
+}
+
+/// Split a Ruby argument list at top-level commas; `None` when brackets or quotes don't balance.
+fn split_args(s: &str) -> Option<Vec<&str>> {
+    if s.trim().is_empty() {
+        return Some(vec![]);
+    }
+    let (mut depth, mut quote, mut start, mut out) = (0u32, None, 0, vec![]);
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match (quote, c) {
+            (Some(_), '\\') => { chars.next(); }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(' | '[' | '{') => depth += 1,
+            (None, ')' | ']' | '}') => depth = depth.checked_sub(1)?,
+            (None, ',') if depth == 0 => {
+                out.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 || quote.is_some() {
+        return None;
+    }
+    out.push(s[start..].trim());
+    Some(out)
+}
+
+/// Local names passed by a one-line literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }`;
+/// `None` for anything less simple (splats, `collection:`, variables, continued lines).
+pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
+    if r.kind != RenderKind::Partial {
+        return None;
+    }
+    let rest = line.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
+    // `render("x", a: 1)`: the call's closing paren is the one that doesn't balance.
+    let args = split_args(rest).or_else(|| split_args(rest.strip_suffix(')')?))?;
+    let args = match args.as_slice() {
+        [] => &[][..],
+        ["", args @ ..] => args,
+        _ => return None,
+    };
+    let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
+    let pairs = match (options_form, args) {
+        (false, args) => args.to_vec(),
+        (true, []) => vec![],
+        (true, [locals]) => match keyword_arg(locals)? {
+            ("locals", hash) => split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?,
+            _ => return None,
+        },
+        (true, _) => return None,
+    };
+    pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +292,52 @@ mod tests {
         assert_eq!(component_ref_at("= render Users::CardComponent.new(user: u)", 12).unwrap(), "Users::CardComponent");
         assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), "us");
         assert_eq!(snake_case("CardComponent"), "card_component");
+    }
+
+    #[test]
+    fn strict_locals_signature() {
+        let sig = strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>").unwrap();
+        assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
+        assert_eq!(sig.locals, vec![
+            ("title".to_string(), None),
+            ("items".to_string(), Some("[1, 2]".to_string())),
+            ("label".to_string(), Some("t(\"a, b\")".to_string())),
+        ]);
+        assert!(sig.rest);
+        let none = strict_locals("<%# locals: () -%>").unwrap();
+        assert!(none.locals.is_empty() && !none.rest);
+        assert_eq!(strict_locals("-# locals: (user: nil)").unwrap().locals, vec![("user".to_string(), Some("nil".to_string()))]);
+        assert_eq!(strict_locals("<%# locals: (a: ')') %>").unwrap().locals, vec![("a".to_string(), Some("')'".to_string()))]);
+        let no_rest = strict_locals("<%# locals: (a:, **nil) %>").unwrap();
+        assert_eq!((no_rest.locals.len(), no_rest.rest), (1, false));
+        // Lazy: stops at the `)` that closes the tag, not the last one on the line.
+        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>").unwrap().params, "a:");
+        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>").unwrap();
+        assert_eq!(multi.locals, vec![("a".to_string(), None), ("b".to_string(), Some("[1,\n 2]".to_string()))]);
+        // ActionView needs whitespace before the parenthesis.
+        assert!(strict_locals("<%# locals:(a:) %>").is_none());
+        assert!(strict_locals("<%# just a comment %>").is_none());
+    }
+
+    #[test]
+    fn literal_render_locals() {
+        fn passed(line: &str) -> Option<Vec<&str>> { passed_locals(line, &render_refs(line)[0]) }
+        assert_eq!(passed(r#"<%= render "card", title: "a, b", n: f(1, 2) %>"#), Some(vec!["title", "n"]));
+        assert_eq!(passed(r#"<%= render("card", user:) -%>"#), Some(vec!["user"]));
+        assert_eq!(passed(r#"<%= render "card" %>"#), Some(vec![]));
+        assert_eq!(passed(r#"<%= render partial: "card", locals: { a: 1, b: [2] } %>"#), Some(vec!["a", "b"]));
+        assert_eq!(passed(r#"= render(partial: "card")"#), Some(vec![]));
+        for skip in [
+            r#"<%= render partial: "card", collection: @cards %>"#,
+            r#"<%= render "card", **opts %>"#,
+            r#"<%= render "card", locals %>"#,
+            r#"<%= render "card", Card::DEFAULTS %>"#,
+            r#"<%= render "card", "a" => 1 %>"#,
+            r#"<%= render "card", a: 1,"#,
+            r#"<%= render "card" do %>"#,
+            r#"<%= render template: "a/b" %>"#,
+        ] {
+            assert_eq!(passed(skip), None, "{skip}");
+        }
     }
 }

@@ -31,6 +31,9 @@
           "include": "#erb-literal"
         },
         {
+          "include": "#erb-strict-locals"
+        },
+        {
           "include": "#erb-comment"
         },
         {
@@ -44,6 +47,40 @@
     "erb-literal": {
       "name": "constant.character.escape.erb",
       "match": "<%%|%%>"
+    },
+    "erb-strict-locals": {
+      "name": "meta.embedded.strict-locals.erb",
+      "contentName": "source.ruby",
+      "begin": "(<%#)\\s+(locals)(:)\\s+(\\()",
+      "end": "[-=]?%>",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.section.embedded.begin.erb"
+        },
+        "2": {
+          "name": "keyword.other.strict-locals.erb"
+        },
+        "3": {
+          "name": "punctuation.separator.key-value.erb"
+        },
+        "4": {
+          "name": "punctuation.definition.parameters.begin.erb"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.erb"
+        }
+      },
+      "patterns": [
+        {
+          "name": "punctuation.definition.parameters.end.erb",
+          "match": "\\)(?=\\s*[-=]?%>)"
+        },
+        {
+          "include": "source.ruby"
+        }
+      ]
     },
     "erb-comment": {
       "name": "comment.block.erb",

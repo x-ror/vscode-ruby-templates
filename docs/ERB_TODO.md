@@ -121,7 +121,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
-- [ ] Strict locals: missing required local / unknown local passed to `render`
+- [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
 - [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
 - [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
@@ -159,7 +159,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] ~78 Rails view helpers with snippet arguments, only inside `<% %>` (`server/src/helpers.rs` `HELPERS`, `server/src/main.rs` `in_ruby_context`)
 - [ ] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`)
 - [ ] Instance variables used in the matching controller action
-- [ ] Locals from `<%# locals: %>` or from callers' `render … locals:`
+- [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
 - [ ] i18n keys from `config/locales`
 - [ ] Route helpers from `bin/rails routes` (cached)
@@ -174,7 +174,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [x] Hover on render call lists resolved file(s) or "No matching template found" (`server/src/main.rs` `hover`)
 - [x] Hover on a known Rails helper shows its signature (`server/src/main.rs`, `server/src/helpers.rs`)
-- [ ] Partial hover shows its strict locals signature
+- [x] Partial hover shows its strict locals signature (`server/src/main.rs` `render_hover`)
 - [ ] i18n key hover shows the translations
 - [ ] Route helper hover shows verb + path
 - [ ] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim)
@@ -198,8 +198,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 14. Rails-specific
 
-- [ ] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment
-- [ ] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11)
+- [x] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment (`syntaxes/erb.tmLanguage.json` `erb-strict-locals`)
+- [x] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11) (see items above)
 - [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
 - [ ] ViewComponent previews (`spec/components/previews`) navigation
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported

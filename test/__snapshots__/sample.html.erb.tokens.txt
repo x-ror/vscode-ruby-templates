@@ -2,6 +2,41 @@
    "<%#"                       comment.block > punctuation.definition.comment.begin
    " Comment here "            comment.block
    "%>"                        comment.block > punctuation.definition.comment.end
+"<%# locals: (title:, count: 0, tags: [\"a\", \"b\"], **options) -%>"
+   "<%#"                       meta.embedded.strict-locals > punctuation.section.embedded.begin
+   "locals"                    meta.embedded.strict-locals > keyword.other.strict-locals
+   ":"                         meta.embedded.strict-locals > punctuation.separator.key-value
+   "("                         meta.embedded.strict-locals > punctuation.definition.parameters.begin
+   "title:,"                   meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "count:"                    meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "0,"                        meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "tags:"                     meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   " ["                        meta.embedded.strict-locals > source.ruby
+   "\"a\""                     meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   ","                         meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "\"b\""                     meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "]"                         meta.embedded.strict-locals > source.ruby
+   ","                         meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "**options"                 meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   ")"                         meta.embedded.strict-locals > source.ruby > punctuation.definition.parameters.end
+   "-%>"                       meta.embedded.strict-locals > punctuation.section.embedded.end
+"<%# locals: (user:) TODO %><p class=\"x\">(a) %></p>"
+   "<%#"                       meta.embedded.strict-locals > punctuation.section.embedded.begin
+   "locals"                    meta.embedded.strict-locals > keyword.other.strict-locals
+   ":"                         meta.embedded.strict-locals > punctuation.separator.key-value
+   "("                         meta.embedded.strict-locals > punctuation.definition.parameters.begin
+   "user:"                     meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   ") "                        meta.embedded.strict-locals > source.ruby
+   "TODO"                      meta.embedded.strict-locals > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.strict-locals > punctuation.section.embedded.end
+   "<p"                        stub.text.html.basic
+   "class="                    stub.text.html.basic
+   "\"x\""                     stub.text.html.basic
+   ">"                         stub.text.html.basic
+   "("                         
+   "a"                         stub.text.html.basic
+   ") "                        
+   "%></p>"                    stub.text.html.basic
 "<div class=\"users\">"
    "<div"                      stub.text.html.basic
    "class="                    stub.text.html.basic

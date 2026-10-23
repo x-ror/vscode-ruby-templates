@@ -51,6 +51,7 @@ fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
     }
     if let Ok(path) = uri.to_file_path() {
         out.extend(unresolved_renders(doc.lang, &path, &doc.text));
+        out.extend(strict_locals_mismatches(doc.lang, &path, &doc.text));
     }
     out
 }
@@ -72,27 +73,91 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
+        if !ruby_line(lang, line) { continue; }
         for r in partials::render_refs(line) {
             // `render layout: "x"` inside a view looks up a partial; skip rather than guess.
             if r.kind == partials::RenderKind::Layout { continue; }
-            // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
-            // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
-            // neither is knowable without reading controllers or the bundle.
-            match r.name.rsplit_once('/') {
-                Some((dir, _)) if views.join(dir).is_dir() => {}
-                _ => continue,
-            }
-            let ruby_line = match lang {
-                TemplateLang::Erb => true,
-                _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
-            };
-            if !ruby_line || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
+            if !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
         }
     }
     out
+}
+
+/// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
+fn strict_locals_mismatches(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
+    let Some(views) = partials::views_root(path) else { return vec![] };
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        if !ruby_line(lang, line) { continue; }
+        for r in partials::render_refs(line) {
+            if !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, line, r.start) { continue; }
+            let Some(passed) = partials::passed_locals(line, &r) else { continue };
+            // Several variants/formats: which one Rails picks depends on the request.
+            let found = partials::resolve(path, &r);
+            let [file] = found.as_slice() else { continue };
+            let Some(sig) = file_signature(file) else { continue };
+            let missing: Vec<&str> = sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+            let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
+            let range = util::line_range(text, i, r.start, r.end);
+            if !missing.is_empty() {
+                out.push(util::warning(range, format!("Partial `{}` requires locals: {}", r.name, code_list(&missing))));
+            }
+            if !unknown.is_empty() {
+                out.push(util::warning(range, format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown))));
+            }
+        }
+    }
+    out
+}
+
+fn code_list(names: &[&str]) -> String {
+    names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+}
+
+fn file_signature(file: &Path) -> Option<partials::StrictLocals> {
+    partials::strict_locals(&std::fs::read_to_string(file).ok()?)
+}
+
+// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
+// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
+// neither is knowable without reading controllers or the bundle.
+fn in_app_views_dir(views: &Path, name: &str) -> bool {
+    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
+}
+
+/// ERB lines are scanned per tag; Haml/Slim lines only when they start with a Ruby marker.
+fn ruby_line(lang: TemplateLang, line: &str) -> bool {
+    match lang {
+        TemplateLang::Erb => true,
+        _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
+    }
+}
+
+fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
+    let found = partials::resolve(path, r);
+    if found.is_empty() {
+        return format!("**{}** `{}`\n\nNo matching template found.", kind_name(r.kind), r.name);
+    }
+    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
+    let mut md = format!("**{}** `{}`\n\n{}", kind_name(r.kind), r.name, list.join("\n"));
+    if let Some(sig) = file_signature(&found[0]) {
+        md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
+    }
+    md
+}
+
+/// The current template's own strict locals, as completions.
+fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
+    let Some(sig) = partials::strict_locals(text) else { return vec![] };
+    sig.locals.into_iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, default)| CompletionItem {
+        label: name,
+        kind: Some(CompletionItemKind::VARIABLE),
+        detail: Some(default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"))),
+        ..Default::default()
+    }).collect()
 }
 
 impl Backend {
@@ -219,13 +284,7 @@ impl LanguageServer for Backend {
         let col = Self::byte_col(line, pos.character);
         if let Ok(path) = uri.to_file_path() {
             if let Some(r) = partials::render_ref_at(line, col) {
-                let found = partials::resolve(&path, &r);
-                let md = if found.is_empty() {
-                    format!("**{}** `{}`\n\nNo matching template found.", kind_name(r.kind), r.name)
-                } else {
-                    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
-                    format!("**{}** `{}`\n\n{}", kind_name(r.kind), r.name, list.join("\n"))
-                };
+                let md = render_hover(&path, &r);
                 return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: md }), range: None }));
             }
         }
@@ -303,14 +362,15 @@ impl LanguageServer for Backend {
         if !in_ruby_context(doc.lang, line, col) { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }
-        let items: Vec<CompletionItem> = helpers::HELPERS.iter().filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
+        let mut items = local_completions(&doc.text, typed);
+        items.extend(helpers::HELPERS.iter().filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
             label: h.name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
             detail: Some(h.detail.to_string()),
             insert_text: Some(h.snippet.to_string()),
             insert_text_format: Some(InsertTextFormat::SNIPPET),
             ..Default::default()
-        }).collect();
+        }));
         Ok(Some(CompletionResponse::Array(items)))
     }
 }
@@ -443,6 +503,47 @@ mod tests {
         let haml = users.join("show.html.haml");
         assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
         assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_hover_completion_and_diagnostics() {
+        let root = std::env::temp_dir().join(format!("rt-locals-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        let card = "<%# locals: (user:, size: :md) -%>\n<p><%= user.name %></p>\n";
+        std::fs::write(users.join("_card.html.erb"), card).unwrap();
+        std::fs::write(users.join("_any.html.erb"), "<%# locals: (user:, **rest) -%>").unwrap();
+        std::fs::write(users.join("_plain.html.erb"), "").unwrap();
+        std::fs::write(users.join("_multi.html.erb"), "<%# locals: (a:) -%>").unwrap();
+        std::fs::write(users.join("_multi.html+phone.erb"), "<%# locals: (b:) -%>").unwrap();
+        let file = users.join("index.html.erb");
+
+        let line = r#"<%= render partial: "card" %>"#;
+        let md = render_hover(&file, &partials::render_ref_at(line, 22).unwrap());
+        assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
+        assert!(!render_hover(&file, &partials::render_ref_at(r#"render "plain""#, 9).unwrap()).contains("locals:"));
+
+        let items: Vec<(String, Option<String>)> = local_completions(card, "").into_iter().map(|c| (c.label, c.detail)).collect();
+        assert_eq!(items, vec![
+            ("user".to_string(), Some("local (required)".to_string())),
+            ("size".to_string(), Some("local = :md".to_string())),
+        ]);
+        assert_eq!(local_completions(card, "si").len(), 1);
+        assert!(local_completions("<p>", "").is_empty());
+
+        let text = concat!(
+            "<%= render \"users/card\", user: u %> <%= render \"users/plain\", x: 1 %> <%= render \"users/any\", user: u, x: 1 %>\n",
+            "<%= render \"users/card\", size: :lg, colour: 1 %>\n",
+            "<%= render partial: \"users/card\", locals: { user: u } %> <%= render \"users/card\", **opts %>\n",
+            "<%= render \"users/card\", Card::DEFAULTS %> <%= render \"card\" %> <%= render \"users/multi\" %>\n",
+        );
+        let got: Vec<(String, Range)> = strict_locals_mismatches(TemplateLang::Erb, &file, text).into_iter().map(|d| (d.message, d.range)).collect();
+        let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
+        assert_eq!(got, vec![
+            ("Partial `users/card` requires locals: `user`".to_string(), at(1, 12, 22)),
+            ("Partial `users/card` does not accept locals: `colour`".to_string(), at(1, 12, 22)),
+        ]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
