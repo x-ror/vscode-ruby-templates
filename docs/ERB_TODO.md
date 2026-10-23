@@ -59,8 +59,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Indent on Enter after an opening `<% if/unless/... %>` (`language-configuration/erb.json` `onEnterRules`)
 - [x] Word pattern includes `@ivar`, `$global`, `predicate?` (`language-configuration/erb.json` `wordPattern`)
 - [x] Default `tabSize: 2`, spaces (`package.json` `configurationDefaults["[erb]"]`)
-- [ ] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered)
-- [ ] `onEnterRules` that keep the cursor between `<% %>` on Enter
+- [x] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered) (`language-configuration/erb.json`, `test/langconfig.js`)
+- [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
 - [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
 - [ ] Linked editing of HTML tag pairs
@@ -92,7 +92,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Preview rendered HTML via `erb -T -` (`src/extension.js` `renderToHtml`)
 - [x] Show compiled Ruby via `erb -x` (`src/extension.js` `compileToRuby`)
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
-- [ ] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`)
+- [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
 - [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
 - [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
 - [ ] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`)

@@ -499,6 +499,7 @@
     "package": "npx @vscode/vsce package",
     "test:tokens": "node test/tokenize.js",
     "test:snippets": "node test/snippets.js",
+    "test:unit": "node test/erbTags.js && node test/langconfig.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
     "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*"
   },

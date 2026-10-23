@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { startClient, stopClient, restartClient } = require('./client');
+const { toggleErbTagAt } = require('./erbTags');
 
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
@@ -61,34 +62,19 @@ function cfg() { return vscode.workspace.getConfiguration('rubyTemplates'); }
 
 // ---------------------------------------------------------------- ERB editing
 
-const ERB_RE = /<%(==|=|#|-)?([\s\S]*?)(-?)%>/g;
-
-/** Find the ERB tag containing `offset`, or null. */
-function erbTagAt(text, offset) {
-  ERB_RE.lastIndex = 0;
-  let m;
-  while ((m = ERB_RE.exec(text))) {
-    if (offset >= m.index && offset <= m.index + m[0].length) {
-      return { start: m.index, end: m.index + m[0].length, kind: m[1] || '', body: m[2], trimEnd: m[3] };
-    }
-    if (m.index > offset) break;
-  }
-  return null;
-}
-
 async function toggleErbTag() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   const doc = ed.document;
-  const cycle = { '': '=', '=': '#', '#': '', '-': '=', '==': '#' };
+  const text = doc.getText();
+  // Several cursors in one tag must yield one edit; overlapping edits make ed.edit throw.
+  const done = new Set();
   await ed.edit(eb => {
     for (const sel of ed.selections) {
-      const tag = erbTagAt(doc.getText(), doc.offsetAt(sel.active));
-      if (!tag) continue;
-      const next = cycle[tag.kind] ?? '';
-      const body = tag.body.trim();
-      const replacement = `<%${next} ${body} ${tag.trimEnd}%>`.replace(/\s+-%>$/, ' -%>');
-      eb.replace(new vscode.Range(doc.positionAt(tag.start), doc.positionAt(tag.end)), replacement);
+      const tag = toggleErbTagAt(text, doc.offsetAt(sel.active));
+      if (!tag || done.has(tag.start)) continue;
+      done.add(tag.start);
+      eb.replace(new vscode.Range(doc.positionAt(tag.start), doc.positionAt(tag.end)), tag.replacement);
     }
   });
 }
