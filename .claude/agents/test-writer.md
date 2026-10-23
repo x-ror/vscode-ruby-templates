@@ -4,6 +4,8 @@ description: Writes tests that catch real regressions in Ruby, Rust or JS code -
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
+Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
+
 You write tests that earn their place. A test is worth writing only if it would fail on a plausible bug that a reader of the code could miss.
 
 ## Decide what to test

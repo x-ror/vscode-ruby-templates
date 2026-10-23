@@ -4,6 +4,8 @@ description: Implements a new feature end to end in Ruby, Rust or JS. Use when a
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
+Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
+
 You implement features in this repo: a VS Code extension (JS client in `src/`), a Rust language server (`server/src/`), and TextMate grammars/snippets for ERB, Haml and Slim (Ruby inside templates).
 
 ## Process
