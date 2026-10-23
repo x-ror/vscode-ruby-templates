@@ -3,6 +3,7 @@ mod helpers;
 mod indented;
 mod partials;
 mod ruby;
+mod tags;
 mod util;
 
 use dashmap::DashMap;
@@ -43,10 +44,26 @@ fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
         TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
         TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
     };
+    if doc.lang == TemplateLang::Erb && html_host(uri) {
+        let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
+        out.extend(tags::diagnostics(&doc.text, partial));
+    }
     if let Ok(path) = uri.to_file_path() {
         out.extend(unresolved_renders(doc.lang, &path, &doc.text));
     }
     out
+}
+
+/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
+// ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
+fn html_host(uri: &Url) -> bool {
+    let path = uri.path();
+    if path.ends_with(".rhtml") {
+        return true;
+    }
+    let Some(stem) = path.strip_suffix(".erb") else { return false };
+    let host = stem.rsplit('/').next().and_then(|file| file.rsplit_once('.')).map_or("", |(_, ext)| ext);
+    host == "html" || host.starts_with("html+") || host == "turbo_stream"
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
@@ -349,6 +366,22 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn html_host_by_file_name() {
+        for (path, html) in [
+            ("/v/users/show.html.erb", true),
+            ("/v/users/show.html+phone.erb", true),
+            ("/v/users/create.turbo_stream.erb", true),
+            ("/v/old.rhtml", true),
+            ("/v/users/index.js.erb", false),
+            ("/v/mailer/welcome.text.erb", false),
+            ("/v.html/config.yml.erb", false),
+            ("/v.html/nginx.erb", false),
+        ] {
+            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
+        }
+    }
+
     #[test]
     fn host_specific_erb_ids() {
         let untitled = Url::parse("untitled:Untitled-1").unwrap();

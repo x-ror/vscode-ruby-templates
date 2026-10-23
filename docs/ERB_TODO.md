@@ -116,7 +116,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `if`/`end` inside `<%= %>` warning (`server/src/erb.rs`)
 - [x] Modifier `if`, `x = if … end`, `while … do`, keywords in strings/comments/symbol keys ignored (`server/src/ruby.rs` tests)
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/main.rs`)
-- [ ] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries
+- [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
 - [ ] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): via Prism or tree-sitter-ruby over the compiled source
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks

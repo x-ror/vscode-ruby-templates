@@ -5,7 +5,7 @@ use crate::util::{error, offset_to_position, warning};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 // Helpers whose block content only reaches the page through their return value.
 // `cache`, `content_for`, `capture` are deliberately absent: `<% … do %>` is correct for them.
@@ -17,13 +17,15 @@ fn node_range(text: &str, node: Node) -> Range {
     Range::new(offset_to_position(text, node.start_byte()), offset_to_position(text, node.end_byte()))
 }
 
+pub fn parse(text: &str) -> Option<Tree> {
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_embedded_template::LANGUAGE.into()).ok()?;
+    parser.parse(text, None)
+}
+
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    let mut parser = Parser::new();
-    if parser.set_language(&tree_sitter_embedded_template::LANGUAGE.into()).is_err() {
-        return out;
-    }
-    let Some(tree) = parser.parse(text, None) else { return out };
+    let Some(tree) = parse(text) else { return out };
     let root = tree.root_node();
 
     // Syntax errors reported by the grammar (unclosed `<%`, stray `%>`).
