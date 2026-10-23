@@ -77,12 +77,12 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Hotwire: `turbo_frame`, `turbo_stream`, `stimulus`, `data-action` (`snippets/erb.json`)
 - [x] i18n/format: `t`, `l`, `currency`, `pluralize`, `time_ago` (`snippets/erb.json`)
 - [x] `flash`, `errors`, `cache`, `debug`, `image_tag`, `content_tag`, `tag.` (`snippets/erb.json`)
-- [ ] Strict locals magic comment `<%# locals: (name:, default: nil) -%>`
-- [ ] `elsif`, `else`, `end`, `when` single-tag snippets
-- [ ] `turbo_stream.*` action snippets for `.turbo_stream.erb`
-- [ ] `render @collection` / `render partial:, locals:` / `render layout: do`
-- [ ] `javascript_include_tag`, `favicon_link_tag`, `turbo_include_tags`, `asset_path`
-- [ ] Mailer text-part skeleton snippet (`mail_to` is already a completion in `server/src/helpers.rs`)
+- [x] Strict locals magic comment `<%# locals: (name:, default: nil) -%>` (`snippets/erb.json` `locals`)
+- [x] `elsif`, `else`, `end`, `when` single-tag snippets (`snippets/erb.json` prefixed `p*` to avoid hijacking prose)
+- [x] `turbo_stream.*` action snippets for `.turbo_stream.erb` (`snippets/erb.json` `ts-*`)
+- [x] `render @collection` / `render partial:, locals:` / `render layout: do` (`snippets/erb.json` `renderall`/`renderl`/`renderlayout`)
+- [x] `javascript_include_tag`, `favicon_link_tag`, `turbo_include_tags`, `asset_path` (`snippets/erb.json` `turbo_include_tags` is deprecated → `turbo_script`)
+- [x] Mailer text-part skeleton snippet (`mail_to` is already a completion in `server/src/helpers.rs`) (`snippets/erb.json` `mailer_text`)
 - [ ] Snippets for ViewComponent templates (`content`, `helpers.`, slots `with_*`)
 
 ## 6. Commands and editing helpers
@@ -192,7 +192,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [ ] Request forwarding to VS Code's HTML language service for positions outside ERB tags (completion, hover, formatting)
 - [ ] Same for CSS in `<style>` and JS in `<script>`
-- [ ] Emmet enabled by default (`emmet.includeLanguages` contributed via `configurationDefaults`; today it is only a README tip)
+- [x] Emmet enabled by default (`emmet.includeLanguages` contributed via `configurationDefaults`; today it is only a README tip) (`package.json` `configurationDefaults`)
 - [ ] HTML custom data (Stimulus/Turbo attributes) for attribute completion
 - [ ] Ruby features inside tags delegated to Ruby LSP (README notes coexistence; no actual integration)
 
