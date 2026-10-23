@@ -494,9 +494,9 @@
   },
   "scripts": {
     "package": "npx @vscode/vsce package",
-    "test:tokens": "node test/tokenize.js text.html.erb test/sample.html.erb && node test/tokenize.js text.haml test/sample.html.haml && node test/tokenize.js text.slim test/sample.html.slim && node test/tokenize.js source.js.erb test/sample.js.erb && node test/tokenize.js source.json.erb test/sample.json.erb && node test/tokenize.js text.plain.erb test/sample.text.erb",
+    "test:tokens": "node test/tokenize.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
-    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.html.erb test/sample.html.haml test/sample.html.slim test/sample.js.erb test/sample.json.erb test/sample.text.erb"
+    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*"
   },
   "devDependencies": {
     "vscode-oniguruma": "^2.0.1",

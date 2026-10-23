@@ -27,6 +27,10 @@ jobs:
         if: ${{ !matrix.cross }}
         working-directory: server
         run: cargo test --release --target ${{ matrix.target }}
+      - name: Check samples
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
       - uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.dir }}

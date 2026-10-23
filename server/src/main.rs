@@ -280,7 +280,7 @@ async fn main() {
         for f in &args[1..] {
             let Ok(text) = std::fs::read_to_string(f) else { eprintln!("cannot read {}", f); failed = true; continue };
             let Ok(uri) = Url::from_file_path(std::fs::canonicalize(f).unwrap_or_else(|_| PathBuf::from(f))) else { continue };
-            let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { eprintln!("{}: unknown template type", f); continue };
+            let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { eprintln!("{}: unknown template type", f); failed = true; continue };
             let doc = Doc { lang, text };
             let diags = match lang {
                 TemplateLang::Erb => erb::diagnostics(&doc.text),

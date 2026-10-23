@@ -45,7 +45,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] (?) ERB inside HTML comments `<!-- <%= x %> -->`
 - [ ] ERB in attribute-name position, e.g. `<div <%= attrs %>>`
 - [ ] `test/tokenize.js` loads the real HTML/Ruby grammars instead of stubs so embedding is actually checked
-- [ ] Token snapshot assertions (diff against a committed baseline) instead of a dump
+- [x] Token snapshot assertions (diff against a committed baseline) instead of a dump (`test/tokenize.js`, `test/__snapshots__/`)
 - [ ] Semantic tokens from the server (instance vars, locals, helpers) to fix what TextMate gets wrong
 
 ## 4. Language configuration
@@ -224,9 +224,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] LSP end-to-end smoke test: definition, hover, completion, diagnostics on a fake Rails tree (`test/e2e.js`)
 - [x] Broken-file fixture (`test/broken/bad.html.erb`)
 - [x] CI builds the server for 5 targets, runs `cargo test` on 4 (skipped for cross-built linux-arm64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
-- [ ] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text)
+- [x] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text) (`server/src/erb.rs` tests)
 - [ ] `test/e2e.js` asserts results (it only prints them) and runs in CI
-- [ ] `test:server` (`--check` on samples) runs in CI
+- [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
 - [ ] Extension-host tests (`@vscode/test-electron`) for commands: toggle, wrap, convert
 - [ ] Fixture corpus of real-world Rails views (no false-positive diagnostics)

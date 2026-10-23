@@ -89,3 +89,76 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
 fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp::lsp_types::DiagnosticSeverity;
+
+    fn only(text: &str) -> Diagnostic {
+        let diags = diagnostics(text);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        diags.into_iter().next().unwrap()
+    }
+
+    fn span(line: u32, start: u32, end: u32) -> Range {
+        Range::new(Position::new(line, start), Position::new(line, end))
+    }
+
+    #[test]
+    fn balanced_template_is_clean() {
+        assert!(diagnostics("<% if x %>é<% else %>😀<% end %>\n<%= link_to 'a', b %>").is_empty());
+    }
+
+    #[test]
+    fn unclosed_tag_points_at_opener_after_emoji() {
+        let d = only("😀 <% foo");
+        assert_eq!(d.message, "Unclosed ERB tag: missing `%>`");
+        assert_eq!(d.range, span(0, 3, u32::MAX));
+    }
+
+    #[test]
+    fn unclosed_tag_on_second_line_after_multibyte() {
+        let d = only("é\né <%= foo");
+        assert_eq!(d.message, "Unclosed ERB tag: missing `%>`");
+        assert_eq!(d.range, span(1, 2, u32::MAX));
+    }
+
+    #[test]
+    fn malformed_tag() {
+        // The grammar only yields an ERROR node (vs. a MISSING `%>`) for an unclosed tag at document start.
+        let d = only("<%# 😀");
+        assert_eq!(d.message, "Malformed ERB tag");
+        assert_eq!(d.range, span(0, 0, u32::MAX));
+    }
+
+    #[test]
+    fn unexpected_end_uses_utf16_columns() {
+        // 😀 is 2 UTF-16 units, é is 1: tag starts at column 4.
+        let d = only("😀é <% end %>");
+        assert_eq!(d.message, "Unexpected `end`: no open block");
+        assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(d.range, span(0, 4, 13));
+    }
+
+    #[test]
+    fn continuation_without_block() {
+        assert_eq!(only("<% elsif y %>").message, "`elsif y` without an open block");
+    }
+
+    #[test]
+    fn control_flow_in_output_tag_warns() {
+        let d = only("<% if x %><%= end %>");
+        assert_eq!(d.message, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?");
+        assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(d.range, span(0, 10, 20));
+    }
+
+    #[test]
+    fn never_closed_block_truncates_long_snippet() {
+        let d = only("é\n  😀<% items_with_a_very_long_name.each_with_index do |item, i| %>");
+        assert_eq!(d.message, "Block `items_with_a_very_long_name.each_with_in…` is never closed: missing `<% end %>`");
+        assert_eq!(d.range.start, Position::new(1, 4));
+    }
+}

@@ -1,0 +1,102 @@
+"!!! 5"
+   "!!!"                       meta.prolog > punctuation.definition.prolog
+   "5"                         meta.prolog > entity.name.tag.doctype
+"-# silent comment"
+   "-#"                        comment.block > punctuation.definition.comment
+   " silent comment"           comment.block > comment.line
+"/ html comment"
+   "/"                         comment.block.html > punctuation.definition.comment
+   " html comment"             comment.block.html > comment.block.html
+"%html{lang: \"en\"}"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "html"                      meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "lang:"                     meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "\"en\""                    meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+"  %head"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "head"                      meta.tag > entity.name.tag
+"    %title= content_for(:title) || \"App\""
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "title"                     meta.tag > entity.name.tag
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "content_for"               meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   "("                         meta.tag > meta.embedded.line.ruby > source.ruby
+   ":title"                    meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   ") "                        meta.tag > meta.embedded.line.ruby > source.ruby
+   "||"                        meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   "\"App\""                   meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    :javascript"
+   ":"                         meta.filter > punctuation.definition.filter
+   "javascript"                meta.filter > entity.name.function.filter
+"      console.log(\"hi\");"
+   "console.log"               meta.filter > source.js > stub.source.js
+   "("                         meta.filter > source.js
+   "\"hi\""                    meta.filter > source.js > stub.source.js
+   ")"                         meta.filter > source.js
+   ";"                         meta.filter > source.js > stub.source.js
+"  %body.main#page"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "body"                      meta.tag > entity.name.tag
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "main"                      meta.tag > entity.other.attribute-name.class
+   "#"                         meta.tag > entity.other.attribute-name.id > punctuation.definition.entity
+   "page"                      meta.tag > entity.other.attribute-name.id
+"    - @users.each do |user|"
+   "-"                         meta.line.ruby > punctuation.section.embedded.ruby
+   "@users.each"               meta.line.ruby > source.ruby > stub.source.ruby
+   "do"                        meta.line.ruby > source.ruby > stub.source.ruby
+   "|user|"                    meta.line.ruby > source.ruby > stub.source.ruby
+"      .user{class: user.role, data: {id: user.id}}"
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "user"                      meta.tag > entity.other.attribute-name.class
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "class:"                    meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "user.role,"                meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "data:"                     meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   " {"                        meta.tag > meta.attributes.hash > source.ruby
+   "id:"                       meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "user.id"                   meta.tag > meta.attributes.hash > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+   "}"                         meta.tag
+"        %a(href=user_path(user) class=\"name\")= user.name"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "a"                         meta.tag > entity.name.tag
+   "("                         meta.tag > meta.attributes.html > punctuation.section.attributes.begin
+   "href"                      meta.tag > meta.attributes.html > entity.other.attribute-name.html
+   "="                         meta.tag > meta.attributes.html > keyword.operator.assignment
+   "user_path"                 meta.tag > meta.attributes.html > source.ruby > stub.source.ruby
+   "("                         meta.tag > meta.attributes.html > source.ruby
+   "user"                      meta.tag > meta.attributes.html > source.ruby > stub.source.ruby
+   ")"                         meta.tag > meta.attributes.html > source.ruby
+   "class"                     meta.tag > meta.attributes.html > entity.other.attribute-name.html
+   "="                         meta.tag > meta.attributes.html > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   "name"                      meta.tag > meta.attributes.html > string.quoted.double
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   ")"                         meta.tag > meta.attributes.html > punctuation.section.attributes.end
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "user.name"                 meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"        %span.badge Admin #{user.role}"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "span"                      meta.tag > entity.name.tag
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "badge"                     meta.tag > entity.other.attribute-name.class
+   "Admin "                    meta.tag > string.unquoted.text
+   "#{"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "user.role"                 meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
+"        %p"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "p"                         meta.tag > entity.name.tag
+"          Plain text here"
+   "Plain text here"           string.unquoted.text
+"    = render \"footer\""
+   "="                         meta.line.ruby > punctuation.section.embedded.ruby
+   "render"                    meta.line.ruby > source.ruby > stub.source.ruby
+   "\"footer\""                meta.line.ruby > source.ruby > stub.source.ruby
+"    \\= escaped text"
+   "\\"                        string.unquoted.text > constant.character.escape
+   "= escaped text"            string.unquoted.text
+""
