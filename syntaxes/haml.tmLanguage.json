@@ -1,0 +1,557 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Haml",
+  "scopeName": "text.haml",
+  "fileTypes": [
+    "haml",
+    "html.haml"
+  ],
+  "patterns": [
+    {
+      "include": "#doctype"
+    },
+    {
+      "include": "#silent-comment"
+    },
+    {
+      "include": "#html-comment"
+    },
+    {
+      "include": "#filters"
+    },
+    {
+      "include": "#tag-line"
+    },
+    {
+      "include": "#ruby-line"
+    },
+    {
+      "include": "#plain-line"
+    }
+  ],
+  "repository": {
+    "doctype": {
+      "name": "meta.prolog.haml",
+      "match": "^\\s*(!!!)(?:\\s+(\\S.*))?$",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.prolog.haml"
+        },
+        "2": {
+          "name": "entity.name.tag.doctype.haml"
+        }
+      }
+    },
+    "silent-comment": {
+      "name": "comment.block.haml",
+      "begin": "^(\\s*)(-#)(.*)$",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.definition.comment.haml"
+        },
+        "3": {
+          "name": "comment.line.haml"
+        }
+      },
+      "end": "^(?!\\1\\s)(?=\\s*\\S)"
+    },
+    "html-comment": {
+      "name": "comment.block.html.haml",
+      "begin": "^(\\s*)(/)(\\[[^\\]]*\\])?(.*)$",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.definition.comment.haml"
+        },
+        "3": {
+          "name": "keyword.other.conditional-comment.haml"
+        },
+        "4": {
+          "name": "comment.block.html"
+        }
+      },
+      "end": "^(?!\\1\\s)(?=\\s*\\S)",
+      "patterns": [
+        {
+          "include": "#tag-line"
+        },
+        {
+          "include": "#plain-line"
+        }
+      ]
+    },
+    "filters": {
+      "patterns": [
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.js",
+          "begin": "^(\\s*)(:)(javascript)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.js"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.css",
+          "begin": "^(\\s*)(:)(css)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.css"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.ruby",
+          "begin": "^(\\s*)(:)(ruby)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.ruby"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.css.scss",
+          "begin": "^(\\s*)(:)(scss)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.css.scss"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.sass",
+          "begin": "^(\\s*)(:)(sass)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.sass"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "source.coffee",
+          "begin": "^(\\s*)(:)(coffee)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "source.coffee"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "text.html.markdown",
+          "begin": "^(\\s*)(:)(markdown)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "text.html.markdown"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "text.html.erb",
+          "begin": "^(\\s*)(:)(erb)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "text.html.erb"
+            }
+          ]
+        },
+        {
+          "name": "meta.filter.haml",
+          "contentName": "string.unquoted.haml",
+          "begin": "^(\\s*)(:)(plain|preserve|escaped|cdata|textile|maruku|less|styl|stylus|builder|nokogiri|wiki|creole|mediawiki)\\s*$",
+          "beginCaptures": {
+            "2": {
+              "name": "punctuation.definition.filter.haml"
+            },
+            "3": {
+              "name": "entity.name.function.filter.haml"
+            }
+          },
+          "end": "^(?!\\1\\s)(?=\\s*\\S)",
+          "patterns": [
+            {
+              "include": "#interpolation"
+            }
+          ]
+        }
+      ]
+    },
+    "tag-line": {
+      "name": "meta.tag.haml",
+      "begin": "^\\s*(?=%[\\w:-]+|[.#][\\w-])",
+      "end": "$",
+      "patterns": [
+        {
+          "name": "entity.name.tag.haml",
+          "match": "(%)([\\w:-]+)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.tag.haml"
+            }
+          }
+        },
+        {
+          "name": "entity.other.attribute-name.class.haml",
+          "match": "(\\.)([\\w-]+)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.entity.haml"
+            }
+          }
+        },
+        {
+          "name": "entity.other.attribute-name.id.haml",
+          "match": "(#)([\\w-]+)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.entity.haml"
+            }
+          }
+        },
+        {
+          "include": "#hash-attributes"
+        },
+        {
+          "include": "#html-attributes"
+        },
+        {
+          "include": "#object-ref"
+        },
+        {
+          "name": "keyword.operator.whitespace.haml",
+          "match": "[<>]+"
+        },
+        {
+          "name": "punctuation.definition.tag.self-closing.haml",
+          "match": "/"
+        },
+        {
+          "include": "#inline-ruby"
+        },
+        {
+          "include": "#inline-text"
+        }
+      ]
+    },
+    "hash-attributes": {
+      "name": "meta.attributes.hash.haml",
+      "contentName": "source.ruby",
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.begin.haml"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.end.haml"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    "html-attributes": {
+      "name": "meta.attributes.html.haml",
+      "begin": "\\(",
+      "end": "\\)",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.begin.haml"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.end.haml"
+        }
+      },
+      "patterns": [
+        {
+          "name": "entity.other.attribute-name.html.haml",
+          "match": "[\\w:@-]+(?=\\s*=)"
+        },
+        {
+          "name": "keyword.operator.assignment.haml",
+          "match": "="
+        },
+        {
+          "include": "#string-double"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "name": "source.ruby",
+          "begin": "(?<==)(?=[^\\s\"'\\)])",
+          "end": "(?=[\\s\\)])",
+          "patterns": [
+            {
+              "begin": "\\(",
+              "end": "\\)",
+              "patterns": [
+                {
+                  "include": "source.ruby"
+                }
+              ]
+            },
+            {
+              "begin": "\\[",
+              "end": "\\]",
+              "patterns": [
+                {
+                  "include": "source.ruby"
+                }
+              ]
+            },
+            {
+              "begin": "\\{",
+              "end": "\\}",
+              "patterns": [
+                {
+                  "include": "source.ruby"
+                }
+              ]
+            },
+            {
+              "include": "source.ruby"
+            }
+          ]
+        }
+      ]
+    },
+    "object-ref": {
+      "name": "meta.attributes.object-reference.haml",
+      "contentName": "source.ruby",
+      "begin": "\\[",
+      "end": "\\]",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.begin.haml"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.attributes.end.haml"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    "inline-ruby": {
+      "name": "meta.embedded.line.ruby.haml",
+      "contentName": "source.ruby",
+      "begin": "\\s*(!=|&=|~|=)\\s*",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.section.embedded.ruby.haml"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    "inline-text": {
+      "name": "string.unquoted.text.haml",
+      "begin": "\\s+(?=\\S)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#interpolation"
+        },
+        {
+          "include": "#escape"
+        }
+      ]
+    },
+    "ruby-line": {
+      "patterns": [
+        {
+          "name": "meta.line.ruby.haml",
+          "contentName": "source.ruby",
+          "begin": "^\\s*(-|!=|&=|~|=)\\s*",
+          "end": "$",
+          "beginCaptures": {
+            "1": {
+              "name": "punctuation.section.embedded.ruby.haml"
+            }
+          },
+          "patterns": [
+            {
+              "name": "keyword.control.haml",
+              "match": "\\b(end|else|elsif|when|rescue|ensure)\\b(?=\\s*$)"
+            },
+            {
+              "include": "source.ruby"
+            }
+          ]
+        },
+        {
+          "name": "meta.line.ruby.continuation.haml",
+          "contentName": "source.ruby",
+          "begin": "^\\s*(?=.*[,|]\\s*$)(?!%|[.#][\\w-]|/|-#|:\\w)",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "source.ruby"
+            }
+          ]
+        }
+      ]
+    },
+    "plain-line": {
+      "name": "string.unquoted.text.haml",
+      "begin": "^\\s*(\\\\)?(?=\\S)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "constant.character.escape.haml"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#interpolation"
+        },
+        {
+          "include": "#escape"
+        }
+      ]
+    },
+    "interpolation": {
+      "name": "meta.embedded.interpolation.haml",
+      "contentName": "source.ruby",
+      "begin": "(?<!\\\\)#\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.haml"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.haml"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    "escape": {
+      "name": "constant.character.escape.haml",
+      "match": "\\\\#\\{"
+    },
+    "string-double": {
+      "name": "string.quoted.double.haml",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "include": "#interpolation"
+        },
+        {
+          "name": "constant.character.escape.haml",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "string-single": {
+      "name": "string.quoted.single.haml",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.haml",
+          "match": "\\\\."
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,11 @@
+<%# Comment here %>
+<div class="users">
+  <% @users.each do |user| %>
+    <%= link_to user.name, user_path(user), class: "name" %>
+    <%- if user.admin? -%>
+      <span>Admin</span>
+    <% end %>
+  <% end %>
+  <%== raw_html %>
+  <%% literal %>
+</div>

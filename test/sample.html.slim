@@ -1,0 +1,27 @@
+doctype html
+/ code comment
+/! html comment
+html lang="en"
+  head
+    title = content_for(:title) || "App"
+    javascript:
+      console.log("hi");
+  body.main#page
+    - @users.each do |user|
+      .user class=user.role data-id=user.id *{role: "row"}
+        a href=user_path(user) class="name" = user.name
+        span.badge Admin #{user.role}
+        li: a href="/" Home
+        p
+          | Plain text
+            block
+    = render "footer"
+    == raw_html
+    input type="checkbox" checked
+    input(type="checkbox" checked disabled=@locked)
+    a[href="/x" title=t(".x")] Link
+    li: a href="/" Home
+    div *{role: "row"} *attrs text
+    = form_with model: @user,
+        class: "form" do |f|
+      = f.text_field :name

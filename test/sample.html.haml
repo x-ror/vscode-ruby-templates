@@ -1,0 +1,17 @@
+!!! 5
+-# silent comment
+/ html comment
+%html{lang: "en"}
+  %head
+    %title= content_for(:title) || "App"
+    :javascript
+      console.log("hi");
+  %body.main#page
+    - @users.each do |user|
+      .user{class: user.role, data: {id: user.id}}
+        %a(href=user_path(user) class="name")= user.name
+        %span.badge Admin #{user.role}
+        %p
+          Plain text here
+    = render "footer"
+    \= escaped text

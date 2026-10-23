@@ -1,0 +1,18 @@
+{
+  "comments": { "lineComment": "-#" },
+  "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+  "autoClosingPairs": [
+    { "open": "{", "close": "}" },
+    { "open": "[", "close": "]" },
+    { "open": "(", "close": ")" },
+    { "open": "\"", "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string", "comment"] }
+  ],
+  "surroundingPairs": [["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]],
+  "folding": { "offSide": true },
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(%[\\w:-]+|[.#][\\w-]+)(?![^{(\\[]*[=~/<>&!]\\s*\\S).*$|^\\s*-\\s*(if|unless|while|until|for|case|begin|def|class|module|else|elsif|when|rescue|ensure)\\b|^\\s*[-=~].*\\bdo\\b(\\s*\\|[^|]*\\|)?\\s*$|^\\s*:(\\w+)\\s*$|^\\s*(/|-#)\\s*$",
+    "decreaseIndentPattern": "^\\s*-\\s*(end|else|elsif|when|rescue|ensure)\\b"
+  },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([A-Za-z_@$][\\w-]*[?!]?)"
+}

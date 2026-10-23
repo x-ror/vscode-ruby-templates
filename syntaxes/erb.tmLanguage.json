@@ -1,0 +1,117 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "HTML (ERB)",
+  "scopeName": "text.html.erb",
+  "fileTypes": [
+    "erb",
+    "rhtml",
+    "html.erb"
+  ],
+  "injections": {
+    "L:text.html.erb - (meta.embedded.block.erb | meta.embedded.line.erb | comment.block.erb)": {
+      "patterns": [
+        {
+          "include": "#erb"
+        }
+      ]
+    }
+  },
+  "patterns": [
+    {
+      "include": "#erb"
+    },
+    {
+      "include": "text.html.basic"
+    }
+  ],
+  "repository": {
+    "erb": {
+      "patterns": [
+        {
+          "include": "#erb-literal"
+        },
+        {
+          "include": "#erb-comment"
+        },
+        {
+          "include": "#erb-output"
+        },
+        {
+          "include": "#erb-code"
+        }
+      ]
+    },
+    "erb-literal": {
+      "name": "constant.character.escape.erb",
+      "match": "<%%|%%>"
+    },
+    "erb-comment": {
+      "name": "comment.block.erb",
+      "begin": "<%#",
+      "end": "-?%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.begin.erb"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.end.erb"
+        }
+      }
+    },
+    "erb-output": {
+      "name": "meta.embedded.line.erb",
+      "contentName": "source.ruby",
+      "begin": "<%==?-?",
+      "end": "-?%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.erb"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.erb"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#ruby-inner"
+        }
+      ]
+    },
+    "erb-code": {
+      "name": "meta.embedded.block.erb",
+      "contentName": "source.ruby",
+      "begin": "<%-?(?![=#%])",
+      "end": "-?%>",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.erb"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.erb"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#ruby-inner"
+        }
+      ]
+    },
+    "ruby-inner": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.ruby",
+          "match": "#(?!\\{).*?(?=-?%>)"
+        },
+        {
+          "include": "source.ruby"
+        }
+      ]
+    }
+  }
+}
