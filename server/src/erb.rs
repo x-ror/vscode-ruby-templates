@@ -1,9 +1,17 @@
 //! ERB diagnostics via tree-sitter-embedded-template + Ruby block balancing.
 
-use crate::ruby::{analyze, BlockEffect};
+use crate::ruby::{analyze, ends_with_block, BlockEffect};
 use crate::util::{error, offset_to_position, warning};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 use tree_sitter::{Node, Parser};
+
+// Helpers whose block content only reaches the page through their return value.
+// `cache`, `content_for`, `capture` are deliberately absent: `<% … do %>` is correct for them.
+static OUTPUT_BLOCK_HELPER: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(form_with|form_for|form_tag|fields_for|fields|link_to|button_to|button_tag|label_tag|content_tag|turbo_frame_tag|tag\.\w+)(?:\(|\s+[^=\s])").unwrap()
+});
 
 fn node_range(text: &str, node: Node) -> Range {
     Range::new(offset_to_position(text, node.start_byte()), offset_to_position(text, node.end_byte()))
@@ -73,11 +81,13 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
             BlockEffect::Neutral => {}
         }
         let is_output = text[node.start_byte()..].starts_with("<%=");
+        let t = snippet.trim();
         if is_output {
-            let t = snippet.trim();
             if t.starts_with("if ") || t.starts_with("unless ") || t == "end" || t.starts_with("end ") {
                 out.push(warning(range, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?"));
             }
+        } else if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
+            out.push(warning(range, format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1])));
         }
     }
     for o in openers {
@@ -153,6 +163,34 @@ mod tests {
         assert_eq!(d.message, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?");
         assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
         assert_eq!(d.range, span(0, 10, 20));
+    }
+
+    #[test]
+    fn block_helper_in_non_output_tag_warns() {
+        let d = only("<% form_with model: @u do |f| %><% end %>");
+        assert_eq!(d.message, "Block helper `form_with` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?");
+        assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(d.range, span(0, 0, 32));
+        assert!(only("<%- tag.div(class: 'x') do %><% end %>").message.contains("`tag.div`"));
+        assert!(only("<% link_to path do %><% end %>").message.contains("`link_to`"));
+    }
+
+    #[test]
+    fn block_helper_false_positives() {
+        for ok in [
+            "<%= form_with model: @u do |f| %><% end %>",
+            "<% @items.each do |i| %><% end %>",
+            "<% cache @u do %><% end %>",
+            "<% content_for :title do %><% end %>",
+            "<% if link_to %><% end %>",
+            "<% fields.each do |f| %><% end %>",
+            "<% fields = list.map do |f| %><% end %>",
+            "<% link_to_thing do %><% end %>",
+            "<% link_to 'a', b %>",
+            "<%# form_with do %>",
+        ] {
+            assert!(diagnostics(ok).is_empty(), "{ok}: {:?}", diagnostics(ok));
+        }
     }
 
     #[test]

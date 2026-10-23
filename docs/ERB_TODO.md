@@ -118,9 +118,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/main.rs`)
 - [ ] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries
 - [ ] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): via Prism or tree-sitter-ruby over the compiled source
-- [ ] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing)
+- [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks
-- [ ] Unresolved `render "partial"` reported as a warning
+- [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [ ] Strict locals: missing required local / unknown local passed to `render`
 - [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
 - [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)

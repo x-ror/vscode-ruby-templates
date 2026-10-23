@@ -6,7 +6,7 @@ mod ruby;
 mod util;
 
 use dashmap::DashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -37,18 +37,50 @@ struct Backend {
     docs: DashMap<Url, Doc>,
 }
 
-impl Backend {
-    fn diagnostics_for(&self, doc: &Doc) -> Vec<Diagnostic> {
-        match doc.lang {
-            TemplateLang::Erb => erb::diagnostics(&doc.text),
-            TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
-            TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
+fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
+    let mut out = match doc.lang {
+        TemplateLang::Erb => erb::diagnostics(&doc.text),
+        TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
+        TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
+    };
+    if let Ok(path) = uri.to_file_path() {
+        out.extend(unresolved_renders(doc.lang, &path, &doc.text));
+    }
+    out
+}
+
+/// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
+fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
+    let Some(views) = partials::views_root(path) else { return vec![] };
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        for r in partials::render_refs(line) {
+            // `render layout: "x"` inside a view looks up a partial; skip rather than guess.
+            if r.kind == partials::RenderKind::Layout { continue; }
+            // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
+            // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
+            // neither is knowable without reading controllers or the bundle.
+            match r.name.rsplit_once('/') {
+                Some((dir, _)) if views.join(dir).is_dir() => {}
+                _ => continue,
+            }
+            let ruby_line = match lang {
+                TemplateLang::Erb => true,
+                _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
+            };
+            if !ruby_line || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
+                continue;
+            }
+            out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
         }
     }
+    out
+}
 
+impl Backend {
     async fn publish(&self, uri: Url) {
         let diags = match self.docs.get(&uri) {
-            Some(doc) => self.diagnostics_for(&doc),
+            Some(doc) => diagnostics(&uri, &doc),
             None => vec![],
         };
         self.client.publish_diagnostics(uri, diags, None).await;
@@ -255,13 +287,31 @@ fn word_at(line: &str, col: usize) -> &str {
     &line[start..end]
 }
 
+/// A `#` (not `#{`) outside a string means the rest of the tag is a Ruby comment.
+fn ruby_comment_before(code: &str) -> bool {
+    let mut quote = None;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), '\\') => { chars.next(); }
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '#') if chars.peek() != Some(&'{') => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
     let before = &line[..col.min(line.len())];
     match lang {
         TemplateLang::Erb => {
             let open = before.rfind("<%");
             let close = before.rfind("%>");
-            matches!((open, close), (Some(o), None) | (Some(o), Some(_)) if close.map(|c| c < o).unwrap_or(true)) && !before[open.unwrap()..].starts_with("<%#")
+            matches!((open, close), (Some(o), None) | (Some(o), Some(_)) if close.map(|c| c < o).unwrap_or(true))
+                && !before[open.unwrap()..].starts_with("<%#")
+                && !ruby_comment_before(&before[open.unwrap() + 2..])
         }
         TemplateLang::Haml | TemplateLang::Slim => {
             let t = before.trim_start();
@@ -281,12 +331,7 @@ async fn main() {
             let Ok(text) = std::fs::read_to_string(f) else { eprintln!("cannot read {}", f); failed = true; continue };
             let Ok(uri) = Url::from_file_path(std::fs::canonicalize(f).unwrap_or_else(|_| PathBuf::from(f))) else { continue };
             let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { eprintln!("{}: unknown template type", f); failed = true; continue };
-            let doc = Doc { lang, text };
-            let diags = match lang {
-                TemplateLang::Erb => erb::diagnostics(&doc.text),
-                TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
-                TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
-            };
+            let diags = diagnostics(&uri, &Doc { lang, text });
             for d in &diags {
                 let sev = match d.severity { Some(DiagnosticSeverity::ERROR) => "error", Some(DiagnosticSeverity::WARNING) => "warning", _ => "info" };
                 println!("{}:{}:{}: {}: {}", f, d.range.start.line + 1, d.range.start.character + 1, sev, d.message);
@@ -311,5 +356,38 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
         let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
+    }
+
+    #[test]
+    fn unresolved_render_warnings() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "").unwrap();
+        let file = users.join("index.html.erb");
+        let text = concat!(
+            "<%= render \"card\" %> <%= render partial: \"users/missing\" %>\n",
+            "é<%= render \"users/nope\" %>\n",
+            "<%= render \"bare\" %> <%= render \"devise/shared/links\" %> <% # render \"users/old\" %>\n",
+            "<%= render @users %> <%= render \"a/#{b}\" %> <%= render layout: \"box\" do %>\n",
+            "<p>we render \"prose\"</p>\n",
+        );
+        let diags = unresolved_renders(TemplateLang::Erb, &file, text);
+        let got: Vec<(String, Range)> = diags.iter().map(|d| (d.message.clone(), d.range)).collect();
+        let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
+        assert_eq!(got, vec![
+            ("Partial `users/missing` not found".to_string(), at(0, 42, 55)),
+            ("Partial `users/nope` not found".to_string(), at(1, 13, 23)),
+        ]);
+        assert!(diags.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+
+        let layouts = root.join("app/views/layouts");
+        std::fs::create_dir_all(&layouts).unwrap();
+        assert!(unresolved_renders(TemplateLang::Erb, &layouts.join("application.html.erb"), "<%= render \"header\" %>").is_empty());
+        assert!(unresolved_renders(TemplateLang::Erb, Path::new("/tmp/x.html.erb"), "<%= render \"users/nope\" %>").is_empty());
+        let haml = users.join("show.html.haml");
+        assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
+        assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

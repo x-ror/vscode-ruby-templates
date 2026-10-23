@@ -10,7 +10,7 @@ fs.writeFileSync(path.join(views, 'users', '_card.html.slim'), '.card = user.nam
 fs.writeFileSync(path.join(views, 'shared', '_footer.html.erb'), '<footer></footer>\n');
 fs.writeFileSync(path.join(root, 'app', 'components', 'badge_component.rb'), 'class BadgeComponent; end\n');
 const file = path.join(views, 'users', 'index.html.erb');
-const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n';
+const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n';
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
 
