@@ -44,6 +44,101 @@
         "configuration": "./language-configuration/erb.json"
       },
       {
+        "id": "erb-js",
+        "aliases": [
+          "JavaScript (ERB)"
+        ],
+        "extensions": [
+          ".js.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-css",
+        "aliases": [
+          "CSS (ERB)"
+        ],
+        "extensions": [
+          ".css.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-scss",
+        "aliases": [
+          "SCSS (ERB)"
+        ],
+        "extensions": [
+          ".scss.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-json",
+        "aliases": [
+          "JSON (ERB)"
+        ],
+        "extensions": [
+          ".json.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-text",
+        "aliases": [
+          "Text (ERB)"
+        ],
+        "extensions": [
+          ".text.erb",
+          ".txt.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-xml",
+        "aliases": [
+          "XML (ERB)"
+        ],
+        "extensions": [
+          ".xml.erb",
+          ".rss.erb",
+          ".atom.erb",
+          ".svg.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-markdown",
+        "aliases": [
+          "Markdown (ERB)"
+        ],
+        "extensions": [
+          ".md.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-ruby",
+        "aliases": [
+          "Ruby (ERB)"
+        ],
+        "extensions": [
+          ".rb.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
+        "id": "erb-yaml",
+        "aliases": [
+          "YAML (ERB)"
+        ],
+        "extensions": [
+          ".yml.erb",
+          ".yaml.erb"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
         "id": "haml",
         "aliases": [
           "Haml",
@@ -81,6 +176,75 @@
         }
       },
       {
+        "language": "erb-js",
+        "scopeName": "source.js.erb",
+        "path": "./syntaxes/erb-js.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-css",
+        "scopeName": "source.css.erb",
+        "path": "./syntaxes/erb-css.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-scss",
+        "scopeName": "source.css.scss.erb",
+        "path": "./syntaxes/erb-scss.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-json",
+        "scopeName": "source.json.erb",
+        "path": "./syntaxes/erb-json.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-text",
+        "scopeName": "text.plain.erb",
+        "path": "./syntaxes/erb-text.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-xml",
+        "scopeName": "text.xml.erb",
+        "path": "./syntaxes/erb-xml.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-markdown",
+        "scopeName": "text.html.markdown.erb",
+        "path": "./syntaxes/erb-markdown.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
+        "language": "erb-ruby",
+        "scopeName": "source.ruby.erb",
+        "path": "./syntaxes/erb-ruby.tmLanguage.json"
+      },
+      {
+        "language": "erb-yaml",
+        "scopeName": "source.yaml.erb",
+        "path": "./syntaxes/erb-yaml.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
         "language": "haml",
         "scopeName": "text.haml",
         "path": "./syntaxes/haml.tmLanguage.json",
@@ -112,6 +276,42 @@
     "snippets": [
       {
         "language": "erb",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-js",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-css",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-scss",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-json",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-text",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-xml",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-markdown",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-ruby",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-yaml",
         "path": "./snippets/erb.json"
       },
       {
@@ -158,36 +358,36 @@
         "command": "rubyTemplates.toggleErbTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == erb"
+        "when": "editorTextFocus && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.wrapInErb",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId == erb"
+        "when": "editorTextFocus && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.preview",
         "key": "ctrl+alt+p",
         "mac": "cmd+alt+p",
-        "when": "editorTextFocus && (editorLangId == erb || editorLangId == haml || editorLangId == slim)"
+        "when": "editorTextFocus && (editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim)"
       }
     ],
     "menus": {
       "editor/context": [
         {
           "command": "rubyTemplates.toggleErbTag",
-          "when": "editorLangId == erb",
+          "when": "editorLangId =~ /^erb/",
           "group": "rubyTemplates@1"
         },
         {
           "command": "rubyTemplates.wrapInErb",
-          "when": "editorLangId == erb && editorHasSelection",
+          "when": "editorLangId =~ /^erb/ && editorHasSelection",
           "group": "rubyTemplates@2"
         },
         {
           "command": "rubyTemplates.preview",
-          "when": "editorLangId == erb || editorLangId == haml || editorLangId == slim",
+          "when": "editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim",
           "group": "rubyTemplates@3"
         },
         {
@@ -204,11 +404,11 @@
       "commandPalette": [
         {
           "command": "rubyTemplates.toggleErbTag",
-          "when": "editorLangId == erb"
+          "when": "editorLangId =~ /^erb/"
         },
         {
           "command": "rubyTemplates.wrapInErb",
-          "when": "editorLangId == erb"
+          "when": "editorLangId =~ /^erb/"
         },
         {
           "command": "rubyTemplates.convertToHaml",
@@ -276,6 +476,9 @@
       }
     },
     "configurationDefaults": {
+      "emmet.includeLanguages": {
+        "erb": "html"
+      },
       "[haml]": {
         "editor.tabSize": 2,
         "editor.insertSpaces": true,
@@ -294,9 +497,10 @@
   },
   "scripts": {
     "package": "npx @vscode/vsce package",
-    "test:tokens": "node test/tokenize.js text.html.erb test/sample.html.erb && node test/tokenize.js text.haml test/sample.html.haml && node test/tokenize.js text.slim test/sample.html.slim",
+    "test:tokens": "node test/tokenize.js",
+    "test:snippets": "node test/snippets.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
-    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.html.erb test/sample.html.haml test/sample.html.slim"
+    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*"
   },
   "devDependencies": {
     "vscode-oniguruma": "^2.0.1",

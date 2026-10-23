@@ -7,6 +7,8 @@ const fs = require('fs');
 const { startClient, stopClient, restartClient } = require('./client');
 
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
+// Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
+const engineOf = languageId => languageId.startsWith('erb-') ? 'erb' : languageId;
 
 /** @type {vscode.WebviewPanel | undefined} */
 let previewPanel;
@@ -46,7 +48,7 @@ function activate(context) {
   status.tooltip = 'Ruby Templates: preview rendered HTML';
   const updateStatus = () => {
     const ed = vscode.window.activeTextEditor;
-    if (ed && TEMPLATE_LANGS.has(ed.document.languageId)) {
+    if (ed && TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
       status.text = `$(preview) ${ed.document.languageId.toUpperCase()}`;
       status.show();
     } else status.hide();
@@ -139,7 +141,7 @@ function run(cmd, args, options, input) {
 
 /** Render a template document to HTML with the matching CLI. */
 async function renderToHtml(doc) {
-  const lang = doc.languageId;
+  const lang = engineOf(doc.languageId);
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
   if (lang === 'slim') {
@@ -163,7 +165,7 @@ async function renderToHtml(doc) {
 
 /** Compile a template to the Ruby source the engine generates. */
 async function compileToRuby(doc) {
-  const lang = doc.languageId;
+  const lang = engineOf(doc.languageId);
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
   if (lang === 'slim') return run(cfg().get('commands.slimrb', 'slimrb'), ['--compile'], { cwd }, src);
@@ -177,13 +179,13 @@ async function compileToRuby(doc) {
 }
 
 function missingToolMessage(bin, lang) {
-  const gem = { slim: 'slim', haml: 'haml', erb: '(ships with Ruby)' }[lang] || bin;
+  const gem = { slim: 'slim', haml: 'haml', erb: '(ships with Ruby)' }[engineOf(lang)] || bin;
   return `"${bin}" was not found. Install it with: gem install ${gem} — or point rubyTemplates.commands.* at the executable.`;
 }
 
 async function openPreview(context) {
   const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(ed.document.languageId)) {
+  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
     vscode.window.showInformationMessage('Open an ERB, Haml or Slim file first.');
     return;
   }
@@ -206,7 +208,7 @@ async function renderPreview(doc) {
   }
   if (r.code !== 0) {
     previewPanel.webview.html = errorPage('Render failed', r.stderr || r.stdout,
-      doc.languageId === 'erb'
+      engineOf(doc.languageId) === 'erb'
         ? 'Plain `erb` has no Rails helpers (link_to, render, …). The preview works best for templates that only use Ruby core.'
         : 'Rails helpers (link_to, render, …) are not available in a standalone render.');
     return;
@@ -236,7 +238,7 @@ ${hint ? `<p style="opacity:.8">${esc(hint)}</p>` : ''}</body></html>`;
 
 async function showCompiledSource() {
   const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(ed.document.languageId)) return;
+  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) return;
   const r = await compileToRuby(ed.document);
   if (r.err && r.err.code === 'ENOENT') {
     vscode.window.showErrorMessage(missingToolMessage(r.err.path, ed.document.languageId));

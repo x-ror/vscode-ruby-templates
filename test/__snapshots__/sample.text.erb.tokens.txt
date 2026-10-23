@@ -1,0 +1,26 @@
+"Hello <%= @user.name %>,"
+   "Hello "                    
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "@user.name"                meta.embedded.line > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+   ","                         
+"<%# comment %>"
+   "<%#"                       comment.block > punctuation.definition.comment.begin
+   " comment "                 comment.block
+   "%>"                        comment.block > punctuation.definition.comment.end
+"<% @items.each do |item| -%>"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "@items.each"               meta.embedded.block > source.ruby > stub.source.ruby
+   "do"                        meta.embedded.block > source.ruby > stub.source.ruby
+   "|item|"                    meta.embedded.block > source.ruby > stub.source.ruby
+   "-%>"                       meta.embedded.block > punctuation.section.embedded.end
+"- <%= item %>"
+   "- "                        
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "item"                      meta.embedded.line > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+"<% end -%>"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
+   "-%>"                       meta.embedded.block > punctuation.section.embedded.end
+""

@@ -74,11 +74,11 @@ fn matching_templates(dir: &Path, basename: &str) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file())
         .filter(|p| {
             let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
             fname == basename || fname.starts_with(&format!("{}.", basename))
         })
+        .filter(|p| p.is_file())
         .collect();
     found.sort();
     found

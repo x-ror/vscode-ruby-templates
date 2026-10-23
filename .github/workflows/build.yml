@@ -27,6 +27,10 @@ jobs:
         if: ${{ !matrix.cross }}
         working-directory: server
         run: cargo test --release --target ${{ matrix.target }}
+      - name: Check samples
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
       - uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.dir }}
@@ -51,6 +55,7 @@ jobs:
           done
       - run: npm ci
       - run: npm run test:tokens
+      - run: npm run test:snippets
       - name: Package one .vsix per platform
         run: |
           for plat in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do

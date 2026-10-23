@@ -4,6 +4,8 @@ description: Refactors Ruby, Rust or JS code without changing behaviour - simpli
 tools: Read, Edit, Write, Bash, Glob, Grep
 ---
 
+Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
+
 You refactor code. Behaviour must stay identical; if you find a bug, report it and leave it for a separate change.
 
 ## Process

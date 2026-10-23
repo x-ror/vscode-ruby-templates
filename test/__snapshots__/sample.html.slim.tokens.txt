@@ -1,0 +1,179 @@
+"doctype html"
+   "doctype"                   meta.prolog > keyword.other.doctype
+   "html"                      meta.prolog > entity.name.tag.doctype
+"/ code comment"
+   "/"                         comment.block > punctuation.definition.comment
+   " code comment"             comment.block > comment.line
+"/! html comment"
+   "/!"                        comment.block.html > punctuation.definition.comment
+   " html comment"             comment.block.html > comment.block.html
+"html lang=\"en\""
+   "html"                      meta.tag > entity.name.tag
+   "lang"                      meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "en"                        meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+"  head"
+   "head"                      meta.tag > entity.name.tag
+"    title = content_for(:title) || \"App\""
+   "title"                     meta.tag > entity.name.tag
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "content_for"               meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   "("                         meta.tag > meta.embedded.line.ruby > source.ruby
+   ":title"                    meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   ") "                        meta.tag > meta.embedded.line.ruby > source.ruby
+   "||"                        meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+   "\"App\""                   meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    javascript:"
+   "javascript"                meta.embedded.block > entity.name.function.embedded
+   ":"                         meta.embedded.block > punctuation.definition.embedded
+"      console.log(\"hi\");"
+   "console.log"               meta.embedded.block > source.js > stub.source.js
+   "("                         meta.embedded.block > source.js
+   "\"hi\""                    meta.embedded.block > source.js > stub.source.js
+   ")"                         meta.embedded.block > source.js
+   ";"                         meta.embedded.block > source.js > stub.source.js
+"  body.main#page"
+   "body"                      meta.tag > entity.name.tag
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "main"                      meta.tag > entity.other.attribute-name.class
+   "#"                         meta.tag > entity.other.attribute-name.id > punctuation.definition.entity
+   "page"                      meta.tag > entity.other.attribute-name.id
+"    - @users.each do |user|"
+   "-"                         meta.line.control > punctuation.section.embedded.ruby
+   "@users.each"               meta.line.control > source.ruby > stub.source.ruby
+   "do"                        meta.line.control > source.ruby > stub.source.ruby
+   "|user|"                    meta.line.control > source.ruby > stub.source.ruby
+"      .user class=user.role data-id=user.id *{role: \"row\"}"
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "user"                      meta.tag > entity.other.attribute-name.class
+   "class"                     meta.tag > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attribute.ruby > keyword.operator.assignment
+   "user.role"                 meta.tag > meta.attribute.ruby > source.ruby > stub.source.ruby
+   "data-id"                   meta.tag > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attribute.ruby > keyword.operator.assignment
+   "user.id"                   meta.tag > meta.attribute.ruby > source.ruby > stub.source.ruby
+   "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
+   "{"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.begin
+   "role:"                     meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "\"row\""                   meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.end
+"        a href=user_path(user) class=\"name\" = user.name"
+   "a"                         meta.tag > entity.name.tag
+   "href"                      meta.tag > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attribute.ruby > keyword.operator.assignment
+   "user_path"                 meta.tag > meta.attribute.ruby > source.ruby > stub.source.ruby
+   "("                         meta.tag > meta.attribute.ruby > source.ruby
+   "user"                      meta.tag > meta.attribute.ruby > source.ruby > stub.source.ruby
+   ")"                         meta.tag > meta.attribute.ruby > source.ruby
+   "class"                     meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "name"                      meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "user.name"                 meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"        span.badge Admin #{user.role}"
+   "span"                      meta.tag > entity.name.tag
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "badge"                     meta.tag > entity.other.attribute-name.class
+   "Admin "                    meta.tag > string.unquoted.text
+   "#{"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "user.role"                 meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
+"        li: a href=\"/\" Home"
+   "li"                        meta.tag > entity.name.tag
+   ":"                         meta.tag > punctuation.separator.inline-tag
+   "a"                         meta.tag > entity.name.tag
+   "href"                      meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "/"                         meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "Home"                      meta.tag > string.unquoted.text
+"        p"
+   "p"                         meta.tag > entity.name.tag
+"          | Plain text"
+   "|"                         meta.text.block > punctuation.definition.text
+   "Plain text"                meta.text.block > string.unquoted.text
+"            block"
+   "            block"         meta.text.block > string.unquoted.text
+"    = render \"footer\""
+   "="                         meta.line.output > punctuation.section.embedded.ruby
+   "render"                    meta.line.output > source.ruby > stub.source.ruby
+   "\"footer\""                meta.line.output > source.ruby > stub.source.ruby
+"    == raw_html"
+   "=="                        meta.line.output > punctuation.section.embedded.ruby
+   "raw_html"                  meta.line.output > source.ruby > stub.source.ruby
+"    input type=\"checkbox\" checked"
+   "input"                     meta.tag > entity.name.tag
+   "type"                      meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "checkbox"                  meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "checked"                   meta.tag > string.unquoted.text
+"    input(type=\"checkbox\" checked disabled=@locked)"
+   "input"                     meta.tag > entity.name.tag
+   "("                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.begin
+   "type"                      meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "checkbox"                  meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "checked"                   meta.tag > meta.attributes.wrapped > entity.other.attribute-name.boolean
+   "disabled"                  meta.tag > meta.attributes.wrapped > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > keyword.operator.assignment
+   "@locked"                   meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby > stub.source.ruby
+   ")"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.end
+"    a[href=\"/x\" title=t(\".x\")] Link"
+   "a"                         meta.tag > entity.name.tag
+   "["                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.begin
+   "href"                      meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "/x"                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "title"                     meta.tag > meta.attributes.wrapped > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > keyword.operator.assignment
+   "t"                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby > stub.source.ruby
+   "("                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby
+   "\".x\""                    meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby > stub.source.ruby
+   ")"                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby
+   "]"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.end
+   "Link"                      meta.tag > string.unquoted.text
+"    li: a href=\"/\" Home"
+   "li"                        meta.tag > entity.name.tag
+   ":"                         meta.tag > punctuation.separator.inline-tag
+   "a"                         meta.tag > entity.name.tag
+   "href"                      meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "/"                         meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "Home"                      meta.tag > string.unquoted.text
+"    div *{role: \"row\"} *attrs text"
+   "div"                       meta.tag > entity.name.tag
+   "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
+   "{"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.begin
+   "role:"                     meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "\"row\""                   meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.end
+   "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
+   "attrs"                     meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "text"                      meta.tag > string.unquoted.text
+"    = form_with model: @user,"
+   "="                         meta.line.output > punctuation.section.embedded.ruby
+   "form_with"                 meta.line.output > source.ruby > stub.source.ruby
+   "model:"                    meta.line.output > source.ruby > stub.source.ruby
+   "@user,"                    meta.line.output > source.ruby > stub.source.ruby
+"        class: \"form\" do |f|"
+   "class"                     meta.tag > entity.name.tag
+   ":"                         meta.tag
+   "\"form\" do |f|"           meta.tag > string.unquoted.text
+"      = f.text_field :name"
+   "="                         meta.line.output > punctuation.section.embedded.ruby
+   "f.text_field"              meta.line.output > source.ruby > stub.source.ruby
+   ":name"                     meta.line.output > source.ruby > stub.source.ruby
+""

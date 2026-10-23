@@ -1,0 +1,27 @@
+"{"
+   "{"                         
+"  \"name\": \"<%= @user.name %>\","
+   "\"name\""                  stub.source.json
+   ":"                         stub.source.json
+   "\"<%= @user.name %>\""     stub.source.json
+   ","                         stub.source.json
+"  <% if @admin %>\"admin\": true, <% end %>"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "if"                        meta.embedded.block > source.ruby > stub.source.ruby
+   "@admin"                    meta.embedded.block > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+   "\"admin\""                 stub.source.json
+   ":"                         stub.source.json
+   "true,"                     stub.source.json
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+"  \"count\": <%= @count -%>"
+   "\"count\""                 stub.source.json
+   ":"                         stub.source.json
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "@count"                    meta.embedded.line > source.ruby > stub.source.ruby
+   "-%>"                       meta.embedded.line > punctuation.section.embedded.end
+"}"
+   "}"                         
+""

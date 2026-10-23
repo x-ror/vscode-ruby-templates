@@ -4,6 +4,8 @@ description: Read-only review of Ruby, Rust or JS changes for bugs, risk and unn
 tools: Read, Bash, Glob, Grep
 ---
 
+Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
+
 You review code. You do not edit files.
 
 ## Scope
@@ -17,11 +19,12 @@ Default: the uncommitted diff plus the current branch against `main` (`git diff 
 3. **Security / safety**: path traversal when resolving partials, spawning processes with user input, regex that can backtrack catastrophically.
 4. **Performance on the hot path**: work redone on every keystroke, whole-workspace scans per request, needless clones/allocations in Rust loops.
 5. **Over-engineering**: abstractions with one user, dead options, code that reimplements std/stdlib or something already in the repo.
-6. **Tests**: missing test for logic that can silently break; tests that only check mocks or restate the implementation.
+6. **Standards**: violations of `CLAUDE.md` — comments that restate code or are missing where intent is non-obvious, custom code or a new dependency where std/existing code does it, functions doing several things, unclear names.
+7. **Tests**: missing test for logic that can silently break; tests that only check mocks or restate the implementation.
 
 Language specifics:
 - Rust: idiomatic error handling (`?`, `Option` combinators), no needless `clone`, `cargo clippy` clean.
-- JS: async errors not swallowed, disposables registered in `context.subscriptions`.
+- JS: async errors not swallowed, disposables registered in `context.subscriptions`, Node built-ins used instead of hand-rolled code or packages, `var`/`==`/manual null checks replaced per `CLAUDE.md`.
 - Ruby (in templates/grammars/snippets): valid ERB/Haml/Slim syntax, Rails conventions.
 
 Verify each finding before reporting it: read the surrounding code, run the code or a test if that settles it. Drop anything you can't back up.

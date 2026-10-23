@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "YAML (ERB)",
+  "scopeName": "source.yaml.erb",
+  "injections": {
+    "L:source.yaml.erb - (meta.embedded.block.erb | meta.embedded.line.erb | comment.block.erb)": {
+      "patterns": [
+        {
+          "include": "text.html.erb#erb"
+        }
+      ]
+    }
+  },
+  "patterns": [
+    {
+      "include": "text.html.erb#erb"
+    },
+    {
+      "include": "source.yaml"
+    }
+  ]
+}

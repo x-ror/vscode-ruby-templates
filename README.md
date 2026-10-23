@@ -11,7 +11,7 @@ One extension for the three most common Ruby HTML template languages.
 
 **Editing**
 - Bracket matching, auto-closing pairs (`<%` → `<% %>`), comment toggling (`Ctrl+/`), indentation rules for `if/each/do … end`, indentation-based folding for Haml/Slim.
-- Snippets for Rails helpers: `link_to`, `render`, `form_with`, `ff` (form field), `each`, `if`, `turbo_frame`, `stimulus`, `flash`, `errors`, `layout`, and more. Type the prefix and press Tab.
+- Snippets for Rails helpers: `link_to`, `render`, `form_with`, `ff` (form field), `each`, `if`, `turbo_frame`, `ts-append` (Turbo Stream actions), `locals` (strict locals), `stimulus`, `flash`, `errors`, `layout`, and more. Type the prefix and press Tab.
 
 **Language server (Rust)**
 
@@ -52,7 +52,7 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 
 ## Tips
 
-- Emmet in ERB: add `"emmet.includeLanguages": { "erb": "html" }` to your settings.
+- Emmet works in `.html.erb` out of the box (the extension defaults `"emmet.includeLanguages": { "erb": "html" }`).
 - Ruby LSP (Shopify) and this extension both register the `erb` language id, so they work together.
 - If you also have another Slim or Haml extension installed, VS Code picks one grammar; disable the other to avoid surprises.
 

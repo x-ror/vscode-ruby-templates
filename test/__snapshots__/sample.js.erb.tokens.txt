@@ -1,0 +1,29 @@
+"<%# Comment here %>"
+   "<%#"                       comment.block > punctuation.definition.comment.begin
+   " Comment here "            comment.block
+   "%>"                        comment.block > punctuation.definition.comment.end
+"const users = <%= raw @users.to_json %>;"
+   "const"                     stub.source.js
+   "users"                     stub.source.js
+   "="                         stub.source.js
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "raw"                       meta.embedded.line > source.ruby > stub.source.ruby
+   "@users.to_json"            meta.embedded.line > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+   ";"                         stub.source.js
+"<% if current_user %>"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "if"                        meta.embedded.block > source.ruby > stub.source.ruby
+   "current_user"              meta.embedded.block > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+"alert(\"Hi <%= j current_user.name %>\");"
+   "alert"                     stub.source.js
+   "("                         
+   "\"Hi <%= j current_user.name %>\""stub.source.js
+   ")"                         
+   ";"                         stub.source.js
+"<% end %>"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
+   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+""
