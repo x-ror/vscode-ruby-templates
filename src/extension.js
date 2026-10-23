@@ -4,6 +4,8 @@ const cp = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+const { startClient, stopClient, restartClient } = require('./client');
+
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 
 /** @type {vscode.WebviewPanel | undefined} */
@@ -20,6 +22,15 @@ function activate(context) {
   sub('rubyTemplates.showRenderedSource', showCompiledSource);
   sub('rubyTemplates.convertToHaml', () => convert('haml'));
   sub('rubyTemplates.convertToSlim', () => convert('slim'));
+
+  // Language server (Rust): diagnostics, go-to-partial, completions, hover.
+  const output = vscode.window.createOutputChannel('Ruby Templates');
+  context.subscriptions.push(output);
+  sub('rubyTemplates.restartServer', () => restartClient(context, output));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('rubyTemplates.server')) restartClient(context, output);
+  }));
+  startClient(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(doc => {
@@ -287,6 +298,6 @@ async function convert(target) {
   }
 }
 
-function deactivate() { previewPanel?.dispose(); }
+function deactivate() { previewPanel?.dispose(); return stopClient(); }
 
 module.exports = { activate, deactivate };

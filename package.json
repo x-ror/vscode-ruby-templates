@@ -138,15 +138,19 @@
       },
       {
         "command": "rubyTemplates.convertToHaml",
-        "title": "Ruby Templates: Convert ERB → Haml"
+        "title": "Ruby Templates: Convert ERB \u2192 Haml"
       },
       {
         "command": "rubyTemplates.convertToSlim",
-        "title": "Ruby Templates: Convert ERB/Haml → Slim"
+        "title": "Ruby Templates: Convert ERB/Haml \u2192 Slim"
       },
       {
         "command": "rubyTemplates.showRenderedSource",
         "title": "Ruby Templates: Show Compiled Ruby Source"
+      },
+      {
+        "command": "rubyTemplates.restartServer",
+        "title": "Ruby Templates: Restart Language Server"
       }
     ],
     "keybindings": [
@@ -237,17 +241,17 @@
         "rubyTemplates.commands.html2haml": {
           "type": "string",
           "default": "html2haml",
-          "description": "Executable for ERB → Haml (gem install html2haml)."
+          "description": "Executable for ERB \u2192 Haml (gem install html2haml)."
         },
         "rubyTemplates.commands.haml2slim": {
           "type": "string",
           "default": "haml2slim",
-          "description": "Executable for Haml → Slim (gem install haml2slim)."
+          "description": "Executable for Haml \u2192 Slim (gem install haml2slim)."
         },
         "rubyTemplates.commands.erb2slim": {
           "type": "string",
           "default": "erb2slim",
-          "description": "Executable for ERB → Slim (gem install html2slim)."
+          "description": "Executable for ERB \u2192 Slim (gem install html2slim)."
         },
         "rubyTemplates.preview.refreshOnSave": {
           "type": "boolean",
@@ -258,6 +262,16 @@
           "type": "boolean",
           "default": false,
           "description": "Prefix render commands with `bundle exec` when a Gemfile exists in the workspace."
+        },
+        "rubyTemplates.server.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the Rust language server (diagnostics, go to partial, completions, hover)."
+        },
+        "rubyTemplates.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the ruby-templates-ls binary. Leave empty to use the bundled one."
         }
       }
     },
@@ -279,8 +293,10 @@
     }
   },
   "scripts": {
-    "package": "npx @vscode/vsce package --no-dependencies",
-    "test:tokens": "node test/tokenize.js text.html.erb test/sample.html.erb && node test/tokenize.js text.haml test/sample.html.haml && node test/tokenize.js text.slim test/sample.html.slim"
+    "package": "npx @vscode/vsce package",
+    "test:tokens": "node test/tokenize.js text.html.erb test/sample.html.erb && node test/tokenize.js text.haml test/sample.html.haml && node test/tokenize.js text.slim test/sample.html.slim",
+    "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
+    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.html.erb test/sample.html.haml test/sample.html.slim"
   },
   "devDependencies": {
     "vscode-oniguruma": "^2.0.1",
@@ -289,5 +305,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/x-ror/vscode-ruby-templates"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

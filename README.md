@@ -13,6 +13,20 @@ One extension for the three most common Ruby HTML template languages.
 - Bracket matching, auto-closing pairs (`<%` → `<% %>`), comment toggling (`Ctrl+/`), indentation rules for `if/each/do … end`, indentation-based folding for Haml/Slim.
 - Snippets for Rails helpers: `link_to`, `render`, `form_with`, `ff` (form field), `each`, `if`, `turbo_frame`, `stimulus`, `flash`, `errors`, `layout`, and more. Type the prefix and press Tab.
 
+**Language server (Rust)**
+
+A small language server written in Rust (`server/`, built on tower-lsp and tree-sitter) adds what a TextMate grammar can't:
+
+- Diagnostics as you type:
+  - ERB: unclosed `<%` tags, blocks without `<% end %>`, stray `end`, `if`/`end` inside `<%= %>`.
+  - Haml / Slim: mixed tabs and spaces, inconsistent indentation, dedent to a level that doesn't exist, explicit `- end`, unclosed attribute brackets, unknown filters / embedded engines, nesting under a doctype, Haml illegal nesting (inline content + children).
+- Go to definition (`F12` / Ctrl+click) on `render "users/card"`, `render partial: "row"`, `render template:`, `render layout:` and `render FooComponent.new` → opens the partial, template or component.
+- Hover on a render call shows the resolved file(s); hover on a Rails helper shows its signature.
+- Completion: partial names inside `render "…"`, form builder methods after `f.`, and Rails view helpers (`link_to`, `form_with`, `turbo_frame_tag`, `number_to_currency`, …) with snippet arguments.
+- `ruby-templates-ls --check file.slim …` runs the same diagnostics from the command line (exit code 1 on errors), handy for CI.
+
+The binary for your platform is bundled in `bin/<platform>/`. To build it yourself: `npm run build:server` (needs a Rust toolchain). Settings: `rubyTemplates.server.enabled`, `rubyTemplates.server.path`. Command: *Ruby Templates: Restart Language Server*.
+
 **Commands** (Command Palette, right-click menu, or keybinding)
 
 | Command | Keys | What it does |
@@ -46,8 +60,11 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 
 ```sh
 npm install
+npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
 npm run test:tokens   # dump token scopes for the sample files in test/
+npm run test:server   # cargo test + diagnostics check on the samples
+node test/e2e.js      # LSP smoke test against a fake Rails tree
 npm run package       # build the .vsix
 ```
 
-Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, commands in `src/extension.js`.
+Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (`erb.rs`, `indented.rs` for Slim/Haml, `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux, macOS and Windows and packages one `.vsix` per platform.
