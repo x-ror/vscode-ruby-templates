@@ -1,6 +1,7 @@
 mod erb;
 mod helpers;
 mod indented;
+mod outline;
 mod partials;
 mod ruby;
 mod tags;
@@ -132,6 +133,8 @@ impl LanguageServer for Backend {
                 }),
                 document_link_provider: Some(DocumentLinkOptions { resolve_provider: Some(false), work_done_progress_options: Default::default() }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -235,6 +238,25 @@ impl LanguageServer for Backend {
             }));
         }
         Ok(None)
+    }
+
+    async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
+        // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
+        // what folds Haml/Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
+        if doc.lang != TemplateLang::Erb || !html_host(&p.text_document.uri) {
+            return Ok(None);
+        }
+        Ok(Some(outline::folding_ranges(&doc.text)))
+    }
+
+    async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = p.text_document.uri;
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        if doc.lang != TemplateLang::Erb {
+            return Ok(None);
+        }
+        Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
     }
 
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {

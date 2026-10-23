@@ -10,7 +10,7 @@ fs.writeFileSync(path.join(views, 'users', '_card.html.slim'), '.card = user.nam
 fs.writeFileSync(path.join(views, 'shared', '_footer.html.erb'), '<footer></footer>\n');
 fs.writeFileSync(path.join(root, 'app', 'components', 'badge_component.rb'), 'class BadgeComponent; end\n');
 const file = path.join(views, 'users', 'index.html.erb');
-const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n';
+const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n';
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
 
@@ -54,6 +54,11 @@ const rel = p => p.replace(root, '');
   console.log('completion link_to     →', (c3.result || []).map(i => i.label));
   const links = await send('textDocument/documentLink', { textDocument: { uri } });
   console.log('documentLinks          →', (links.result || []).map(l => rel(l.target)));
+  const folds = await send('textDocument/foldingRange', { textDocument: { uri } });
+  console.log('foldingRanges          →', (folds.result || []).map(f => `${f.startLine}-${f.endLine}`));
+  const syms = await send('textDocument/documentSymbol', { textDocument: { uri } });
+  const tree = s => s.children ? `${s.name} [${s.children.map(tree).join(', ')}]` : s.name;
+  console.log('documentSymbols        →', (syms.result || []).map(tree));
   await new Promise(r => setTimeout(r, 200));
   const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics');
   console.log('diagnostics            →', diag ? diag.params.diagnostics.map(d => `${d.range.start.line + 1}: ${d.message}`) : 'none');

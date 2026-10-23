@@ -64,7 +64,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
 - [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
 - [ ] Linked editing of HTML tag pairs
-- [ ] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`)
+- [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)
 - [ ] Line comment toggle for a single line inside a code tag (`# `) vs whole-tag toggle
 
 ## 5. Snippets
@@ -184,7 +184,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [ ] Rename a partial file and update every `render "…"` that points at it
 - [ ] Rename a local across a partial and its callers
-- [ ] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids
+- [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
 - [ ] Breadcrumbs follow the symbol tree
 - [ ] Find all references to an i18n key
 

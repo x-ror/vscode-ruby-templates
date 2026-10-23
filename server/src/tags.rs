@@ -120,20 +120,37 @@ fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Block>) -> boo
     true
 }
 
+/// A matched `<name …>…</name>` pair, as byte offsets.
+pub struct Element { pub name: String, pub start: usize, pub open_end: usize, pub close_start: usize, pub end: usize }
+
 /// `partial`: split-wrapper partials (`_header` opens a `<div>` that `_footer` closes) are legitimate,
 /// so only mismatches are reported there.
 pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    let Some((html, events)) = split(text) else { return out };
+    scan(text, partial, &mut out, &mut Vec::new());
+    out
+}
+
+/// Matched element pairs up to the first point where the tag stack becomes uncertain.
+pub fn elements(text: &str) -> Vec<Element> {
+    let mut elements = Vec::new();
+    scan(text, true, &mut Vec::new(), &mut elements);
+    elements
+}
+
+fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
+    let Some((html, events)) = split(text) else { return };
     let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
     let mut events = events.iter().peekable();
     let mut stack: Vec<Tag> = Vec::new();
+    // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
+    let mut optional: Vec<Tag> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut i = 0;
     while let Some(start) = find(&html, i, b"<") {
         while let Some(event) = events.next_if(|e| e.at < start) {
             if !apply(event, &mut stack, &mut blocks) {
-                return out;
+                return;
             }
         }
         i = start + 1;
@@ -152,41 +169,55 @@ pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
         }
         let name_len = html[name_start..].iter().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
         let name = String::from_utf8_lossy(&html[name_start..name_start + name_len]).into_owned();
-        let Some((end, self_closing)) = tag_end(&html, name_start + name_len) else { return out };
+        let Some((end, self_closing)) = tag_end(&html, name_start + name_len) else { return };
         i = end;
-        if VOID.contains(&name.as_str()) || OPTIONAL_END.contains(&name.as_str()) {
+        if VOID.contains(&name.as_str()) {
+            continue;
+        }
+        if OPTIONAL_END.contains(&name.as_str()) {
+            if !closing {
+                optional.push(Tag { name, start, end });
+            } else if let Some(at) = optional.iter().rposition(|t| t.name == name) {
+                elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
+                optional.truncate(at);
+            }
             continue;
         }
         if closing {
             match stack.last() {
                 None if partial => {}
                 None => out.push(warning(range(start, end), format!("Unexpected closing tag `</{name}>`"))),
-                Some(top) if top.name == name => { stack.pop(); }
+                Some(top) if top.name == name => {
+                    elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
+                    stack.pop();
+                }
                 Some(top) => {
                     let line = offset_to_position(text, top.start).line + 1;
                     out.push(warning(range(start, end), format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name)));
                     // ponytail: first mismatch only; recovery guesses would cascade into noise.
-                    return out;
+                    return;
                 }
             }
         } else if self_closing {
             // Self-closing (`<svg … />`, custom elements in XHTML style).
         } else if RAW_TEXT.contains(&name.as_str()) {
             let close = format!("</{name}");
-            i = find(&html, end, close.as_bytes()).map_or(html.len(), |p| p + close.len());
+            let Some(close_start) = find(&html, end, close.as_bytes()) else { i = html.len(); continue };
+            i = close_start + close.len();
+            let close_end = i + (html.get(i) == Some(&b'>')) as usize;
+            elements.push(Element { name, start, open_end: end, close_start, end: close_end });
         } else {
             stack.push(Tag { name, start, end });
         }
     }
     for event in events {
         if !apply(event, &mut stack, &mut blocks) {
-            return out;
+            return;
         }
     }
     if blocks.is_empty() && !partial {
         out.extend(stack.iter().map(|t| warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name))));
     }
-    out
 }
 
 #[cfg(test)]
@@ -259,6 +290,18 @@ mod tests {
         ] {
             assert!(diagnostics(ok).is_empty(), "{ok}: {:?}", messages(ok));
         }
+    }
+
+    #[test]
+    fn elements_pair_optional_end_and_raw_text() {
+        let pairs: Vec<(String, usize, usize)> =
+            elements("<ul><li>a<li>b</li></ul><script>x</script>").into_iter().map(|e| (e.name, e.start, e.end)).collect();
+        assert_eq!(pairs, [("li".to_string(), 9, 19), ("ul".to_string(), 0, 24), ("script".to_string(), 24, 42)]);
+    }
+
+    #[test]
+    fn unterminated_raw_text_close_does_not_swallow_next_tag() {
+        assert!(diagnostics("<script>x</script\n<div>y</div>").is_empty());
     }
 
     #[test]
