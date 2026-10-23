@@ -13,8 +13,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `<%-` / `-%>` trim markers (`syntaxes/erb.tmLanguage.json`; parser accepts them, checked with `--check`)
 - [x] `<%%` / `%%>` literal escapes (`syntaxes/erb.tmLanguage.json` `erb-literal`)
 - [x] `# comment` inside a code tag ends at `%>`, not at end of line (`syntaxes/erb.tmLanguage.json` `ruby-inner`)
-- [ ] `<%_` / `_%>` Erubi whitespace-slurp markers scoped as punctuation (the parser accepts them, but the grammar tokenizes `_` as Ruby)
-- [ ] `=%>` closing tag scoped as punctuation (the parser already accepts it; `<%=-` is already scoped via `erb-output` `<%==?-?`)
+- [x] `=%>` closing tag scoped as punctuation; `<%_`/`_%>` deliberately not supported (Erubi only allows `-`/`=` before `%>`) (`syntaxes/erb.tmLanguage.json`)
 - [ ] `trim_mode: '%'` lines (lines starting with `%` are Ruby; `%%` escapes it) for plain-Ruby ERB files
 - [ ] Diagnostic: `%>` inside a Ruby string or `<%#` comment closes the tag early (ERB ends a tag at the first `%>`)
 - [ ] Multi-line `<% ... %>` tags containing heredocs
