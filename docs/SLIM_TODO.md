@@ -16,8 +16,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] (?) Wrapped attributes spanning several lines (`a(href="/"` newline `class="x")`): not in the sample
 - [x] Splat attributes `*{...}` and `*attrs` (`syntaxes/slim.tmLanguage.json` `splat`, `test/sample.html.slim`)
 - [x] Inline tags `li: a href="/" Home` (`syntaxes/slim.tmLanguage.json` `inline-tag`, `test/sample.html.slim`)
-- [ ] (?) Whitespace modifiers on tags `a>`, `a<`, `a<>`: in the grammar (`tag` `keyword.operator.whitespace`), not in the sample
-- [ ] (?) Self-closing tag `img/`: in the grammar (`tag` `self-closing`), not in the sample
+- [ ] Whitespace modifiers on bare tags `a>`, `a<`, `a<>`: tag name loses `entity.name.tag` (tag-name lookahead in `syntaxes/slim.tmLanguage.json` `tag` lacks `<`, `>`)
+- [ ] Self-closing tag `img/`: tag name loses `entity.name.tag` (same lookahead lacks `/`)
 - [x] Control code `- ruby` (`syntaxes/slim.tmLanguage.json` `control-line`, `test/sample.html.slim`)
 - [x] Output `= ruby` and unescaped `== ruby` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
 - [ ] (?) Output with whitespace modifiers `=<`, `=>`, `==<>`: in the grammar, not in the sample
@@ -28,13 +28,15 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Text continuation lines indented under `p Some text` highlighted as text, not as tags
 - [x] Code comment `/` and its indented block (`syntaxes/slim.tmLanguage.json` `code-comment`, `test/sample.html.slim`)
 - [x] HTML comment `/!` (`syntaxes/slim.tmLanguage.json` `html-comment`, `test/sample.html.slim`)
-- [ ] (?) IE conditional comment `/[if IE]`: in the grammar (`html-comment`), not in the sample
-- [x] Interpolation `#{}` and escaped `\#{` in text, attributes and comments (`syntaxes/slim.tmLanguage.json` `interpolation`, `test/sample.html.slim`)
+- [ ] IE conditional comment `/[if IE]`: children are scoped as comment, but Slim renders them as markup (split out of `html-comment`)
+- [x] Interpolation `#{}` and escaped `\#{` in text, double-quoted attributes and comments (`syntaxes/slim.tmLanguage.json` `interpolation`, `test/sample.html.slim`)
 - [ ] Unescaped interpolation `#{{ expr }}` (grammar ends the interpolation at the first `}`)
 - [ ] Multi-line Ruby after `,` or `\` stays Ruby on the next line (snapshot shows `class: "form" do |f|` scoped as a tag: `test/__snapshots__/sample.html.slim.tokens.txt`)
 - [ ] Inline HTML lines starting with `<` (`<div class="x">`) highlighted as HTML, not plain text
-- [ ] Attribute names with `@`/`:`/`.` (Alpine/Vue: `@click`, `:class`, `x-on:click.prevent`) in the sample
+- [ ] Single-quoted attribute values interpolate `#{}` (`string-single` has no `interpolation`)
+- [ ] (?) Attribute names with `@`/`:`/`.` (Alpine/Vue: `@click`, `:class`, `x-on:click.prevent`): in the grammar (`attribute`), not in the sample
 - [ ] Custom shortcuts (`Slim::Parser` `:shortcut`, e.g. `&text` → `input type="text"`, `@` → `role`)
+- [ ] Custom `attr_list_delims` / `code_attr_delims` parser options
 - [ ] `include` directive (`slim/include`) highlighted as a keyword with its path
 - [ ] Smart text (`slim/smart`) lines starting with `>` and the implicit text it allows
 - [ ] Logic-less mode (`slim/logic_less`): `- section` / `= var` highlighted as dictionary access, not Ruby
@@ -43,7 +45,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 2. Embedded engines
 
-- [x] `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:`, `erb:` highlighted with the target grammar (`syntaxes/slim.tmLanguage.json` `embedded`, `package.json` `embeddedLanguages`)
+- [x] `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:`, `erb:` highlighted with the target grammar (`syntaxes/slim.tmLanguage.json` `embedded`; `package.json` `embeddedLanguages` for all but `erb:`)
+- [ ] `erb:` mapped in `package.json` `embeddedLanguages` so ERB language features apply inside the block
 - [x] `textile:`, `rdoc:`, `less:`, `styl:`, `stylus:`, `builder:`, `nokogiri:`, `wiki:`, `creole:`, `mediawiki:`, `asciidoc:`, `org:` as plain text with interpolation (`syntaxes/slim.tmLanguage.json` `embedded`)
 - [ ] `less:` and `stylus:` highlighted with their grammars when installed (they are plain text today)
 - [ ] `typescript:`, `livescript:`, `babel:`, `haml:` engines: accepted by the server (`server/src/indented.rs` `SLIM_ENGINES`) but no grammar rule
@@ -58,7 +61,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/main.rs` `folding_range`)
-- [x] Indent after tags, `- if/unless/...`, `do |x|`, engines, `/`, `|` lines; dedent on `- else/elsif/when/rescue/ensure/end` (`language-configuration/slim.json` `indentationRules`)
+- [x] Indent after tags, `- if/unless/...`, `do |x|`, engines (except `asciidoc:`, `org:`), `/`, `|` lines; dedent on `- else/elsif/when/rescue/ensure/end` (`language-configuration/slim.json` `indentationRules`)
 - [x] Word pattern includes `@ivar`, `$global`, `predicate?`, `kebab-case` (`language-configuration/slim.json` `wordPattern`)
 - [x] Default `tabSize: 2`, spaces, no indent detection (`package.json` `configurationDefaults["[slim]"]`)
 - [ ] `onEnterRules`: keep indent after a `,`/`\` continuation line and indent after a `|` text line
@@ -74,7 +77,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `content_for`, `yield`, `turbo_frame`, `stimulus`, `t`, `flash`, `errors` (`snippets/slim.json`)
 - [x] Engine blocks `js`, `css`, `ruby`, `md`, text `|`, HTML comment `/!` (`snippets/slim.json`)
 - [x] Snippet files validated for duplicate prefixes and stray `$` (`test/snippets.js`, CI `npm run test:snippets`)
-- [ ] Parity with ERB: `renderl`, `renderlayout`, `renderall`, `rendercomp`, `form_with_url`, `fselect`, `fcselect`, `cache`, `debug`, `content_tag`, `tag.`, `l`, `currency`, `pluralize`, `time_ago`, `meta_tags`, `assets`, `javascript_include_tag`, `favicon_link_tag`, `turbo_stream`, `ts-*`
+- [ ] Parity with ERB: `renderl`, `renderlayout`, `renderall`, `rendercomp`, `form_with_url`, `fselect`, `fcselect`, `cache`, `debug`, `content_tag`, `tag.`, `l`, `currency`, `pluralize`, `time_ago`, `meta_tags`, `assets`, `javascript_include_tag`, `favicon_link_tag`, `turbo_stream`, `ts-*`, `asset_path`, `data-action`, `turbo_script`
 - [ ] `elsif` / `else` / `when` single-line snippets
 - [ ] Strict locals magic comment `/# locals: (name:, default: nil)` (Rails scans the raw source, so it works in Slim)
 - [ ] `scss`, `sass`, `coffee`, `erb` engine block snippets and `'` text block
@@ -97,6 +100,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 6. Diagnostics (server)
 
 - [x] Mixed tabs and spaces in indentation (`server/src/indented.rs` `diagnostics`)
+- [ ] Mixed tabs and spaces reported as an error for Slim, though Slim expands tabs and accepts it (downgrade or drop)
 - [x] Inconsistent indentation step (warning for Slim) (`server/src/indented.rs` `detect_unit`; checked with `--check` on a probe file)
 - [x] Dedent to a level that never existed (`server/src/indented.rs`; `test/broken/bad.html.slim` line 11)
 - [x] Unexpected indentation at top level (`server/src/indented.rs`)
