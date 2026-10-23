@@ -17,7 +17,7 @@ enum TemplateLang { Erb, Haml, Slim }
 impl TemplateLang {
     fn from_uri_or_id(uri: &Url, language_id: Option<&str>) -> Option<Self> {
         match language_id {
-            Some("erb") => return Some(Self::Erb),
+            Some(id) if id == "erb" || id.starts_with("erb-") => return Some(Self::Erb),
             Some("haml") => return Some(Self::Haml),
             Some("slim") => return Some(Self::Slim),
             _ => {}
@@ -299,4 +299,17 @@ async fn main() {
     let stdout = tokio::io::stdout();
     let (service, socket) = LspService::new(|client| Backend { client, docs: DashMap::new() });
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn host_specific_erb_ids() {
+        let untitled = Url::parse("untitled:Untitled-1").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-js")), Some(TemplateLang::Erb));
+        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
+        let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
+    }
 }

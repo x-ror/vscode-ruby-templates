@@ -3,11 +3,7 @@ const fs = require('fs'), path = require('path');
 const vsctm = require('vscode-textmate'), onig = require('vscode-oniguruma');
 const root = path.join(__dirname, '..');
 const wasm = fs.readFileSync(path.join(root, 'node_modules/vscode-oniguruma/release/onig.wasm')).buffer;
-const grammars = {
-  'text.html.erb': 'syntaxes/erb.tmLanguage.json',
-  'text.haml': 'syntaxes/haml.tmLanguage.json',
-  'text.slim': 'syntaxes/slim.tmLanguage.json'
-};
+const grammars = Object.fromEntries(require('../package.json').contributes.grammars.map(g => [g.scopeName, g.path]));
 const registry = new vsctm.Registry({
   onigLib: onig.loadWASM(wasm).then(() => ({ createOnigScanner: s => new onig.OnigScanner(s), createOnigString: s => new onig.OnigString(s) })),
   loadGrammar: async scope => {

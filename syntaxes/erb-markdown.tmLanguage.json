@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Markdown (ERB)",
+  "scopeName": "text.html.markdown.erb",
+  "injections": {
+    "L:text.html.markdown.erb - (meta.embedded.block.erb | meta.embedded.line.erb | comment.block.erb)": {
+      "patterns": [
+        {
+          "include": "text.html.erb#erb"
+        }
+      ]
+    }
+  },
+  "patterns": [
+    {
+      "include": "text.html.erb#erb"
+    },
+    {
+      "include": "text.html.markdown"
+    }
+  ]
+}

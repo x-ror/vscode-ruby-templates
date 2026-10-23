@@ -36,7 +36,7 @@ async function startClient(context, output) {
     'Ruby Templates Language Server',
     { command, transport: TransportKind.stdio },
     {
-      documentSelector: [{ language: 'erb' }, { language: 'haml' }, { language: 'slim' }],
+      documentSelector: context.extension.packageJSON.contributes.languages.map(({ id }) => ({ language: id })),
       outputChannel: output,
       synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/app/views/**') }
     }

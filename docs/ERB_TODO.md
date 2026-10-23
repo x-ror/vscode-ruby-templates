@@ -22,18 +22,18 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [x] `.erb`, `.rhtml`, `.html.erb` map to the `erb` language id (`package.json` `contributes.languages`)
 - [x] Server picks ERB from the language id, or from `.erb`/`.rhtml` when there is none (`server/src/main.rs` `TemplateLang::from_uri_or_id`)
-- [ ] `.js.erb` gets a JavaScript host grammar (today it gets the HTML host because `.erb` matches)
-- [ ] `.css.erb` / `.scss.erb` get a CSS/SCSS host grammar
-- [ ] `.json.erb` gets a JSON host grammar
-- [ ] `.text.erb` / `.txt.erb` (mailer text parts) get a plain-text host grammar
-- [ ] `.xml.erb` / `.rss.erb` / `.atom.erb` / `.svg.erb` get an XML host grammar
-- [ ] `.md.erb` gets a Markdown host grammar
-- [ ] `.rb.erb` / `.yml.erb` (generators, `database.yml`) get Ruby/YAML host grammars
+- [x] `.js.erb` gets a JavaScript host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.css.erb` / `.scss.erb` get a CSS/SCSS host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.json.erb` gets a JSON host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.text.erb` / `.txt.erb` (mailer text parts) get a plain-text host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.xml.erb` / `.rss.erb` / `.atom.erb` / `.svg.erb` get an XML host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.md.erb` gets a Markdown host grammar (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
+- [x] `.rb.erb` / `.yml.erb` (generators, `database.yml`) get Ruby/YAML host grammars (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 - [x] `.turbo_stream.erb` gets the `erb` id and HTML host via the `.erb` suffix (`package.json`); Turbo snippets tracked separately
 - [x] `.html+variant.erb` (e.g. `show.html+phone.erb`) recognized via the `.erb` suffix (`package.json`, `server/src/main.rs`); variant-aware lookup tracked under navigation
 - [ ] `filenamePatterns: ["*.tt"]` for Rails generator templates (e.g. `Gemfile.tt`)
 - [ ] Host-specific language ids (e.g. `erb-js`) or a host-detection grammar so `editor.*` settings and comment toggling follow the host
-- [ ] Server handles the same host variants (diagnostics shouldn't assume HTML)
+- [x] Server handles the same host variants (diagnostics shouldn't assume HTML) (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 
 ## 3. Grammar and highlighting
 

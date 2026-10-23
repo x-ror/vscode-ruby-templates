@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "CSS (ERB)",
+  "scopeName": "source.css.erb",
+  "injections": {
+    "L:source.css.erb - (meta.embedded.block.erb | meta.embedded.line.erb | comment.block.erb)": {
+      "patterns": [
+        {
+          "include": "text.html.erb#erb"
+        }
+      ]
+    }
+  },
+  "patterns": [
+    {
+      "include": "text.html.erb#erb"
+    },
+    {
+      "include": "source.css"
+    }
+  ]
+}
