@@ -397,6 +397,31 @@ pub fn resolve_component(current: &Path, name: &str) -> Vec<PathBuf> {
     out
 }
 
+/// ViewComponent classes under app/components, by the constant `render` takes (`admin/user_card_component.rb` →
+/// `Admin::UserCardComponent`), with their file.
+pub fn component_classes(current: &Path) -> Vec<(String, PathBuf)> {
+    let Some(app) = app_root(current) else { return vec![] };
+    let dir = app.join("components");
+    let mut out: Vec<(String, PathBuf)> = WalkDir::new(&dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let name = rel.strip_suffix("_component.rb")?;
+            let constant: Vec<String> = format!("{name}_component").split('/').map(camel_case).collect();
+            Some((constant.join("::"), e.into_path()))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// `user_card` → `UserCard`.
+fn camel_case(s: &str) -> String {
+    s.split('_').filter(|w| !w.is_empty()).map(|w| w[..1].to_ascii_uppercase() + &w[1..]).collect()
+}
+
 pub fn snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
@@ -866,6 +891,25 @@ mod tests {
         ] {
             assert_eq!(passed(skip), None, "{skip}");
         }
+    }
+
+    #[test]
+    fn component_classes_by_constant() {
+        let root = std::env::temp_dir().join(format!("rt-components-{}", std::process::id()));
+        for f in [
+            "app/components/admin/user_card_component.rb",
+            "app/components/button_component.rb",
+            "app/components/button_component.html.erb",
+            "app/components/helpers.rb",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        std::fs::create_dir_all(root.join("app/views/home")).unwrap();
+        let names: Vec<String> = component_classes(&root.join("app/views/home/index.html.erb")).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["Admin::UserCardComponent", "ButtonComponent"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

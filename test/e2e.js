@@ -803,6 +803,20 @@ const check = (label, actual, expected) => {
       ],
     ],
   );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 8 },
+      contentChanges: [{ text: "<%= render Bad\n" }],
+    },
+    true,
+  );
+  const components = await req("textDocument/completion", streamUri, 0, 14);
+  check(
+    "component completion",
+    components.result?.map((i) => [i.label, i.textEdit.newText]),
+    [["BadgeComponent", "BadgeComponent.new($1)"]],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

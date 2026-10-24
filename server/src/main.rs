@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use haml_indent::LineRole;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -935,6 +935,11 @@ impl LanguageServer for Backend {
         if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
         }
+        if let Some(typed) = component_prefix(before).filter(|_| code_here()) {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, col - typed.len(), col);
+            return items(component_completions(path, typed, range));
+        }
 
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
         if doc.lang == TemplateLang::Haml {
@@ -1010,6 +1015,30 @@ fn stimulus_completions(path: &Path, typed: &str, range: Range) -> Vec<Completio
         .map(|id| CompletionItem {
             text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
             ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
+        })
+        .collect()
+}
+
+/// The component constant being typed after `render ` / `render(`: `Us`, `Admin::Us`.
+fn component_prefix(before: &str) -> Option<&str> {
+    static OPEN: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\brender\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*)$").unwrap());
+    Some(OPEN.captures(before)?.get(1)?.as_str())
+}
+
+/// ViewComponent classes matching `typed`, inserted as `Name.new(…)`.
+fn component_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    partials::component_classes(path)
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(typed) || name.rsplit("::").next().is_some_and(|last| last.starts_with(typed)))
+        .map(|(name, file)| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, format!("{name}.new($1)")))),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            filter_text: Some(name.clone()),
+            ..util::completion_item(
+                name,
+                CompletionItemKind::CLASS,
+                file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+            )
         })
         .collect()
 }

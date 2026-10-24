@@ -165,7 +165,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
 - [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
-- [ ] ViewComponent class names after `render `
+- [x] ViewComponent class names after `render ` (from `app/components/**/*_component.rb`, inserted as `Name.new(…)`)
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
 - [ ] Stimulus action method and target names
 - [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)

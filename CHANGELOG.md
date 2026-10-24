@@ -28,6 +28,7 @@
 - ERB: `img-missing-alt`, `duplicate-id`, `prefer-image-tag` and `unsafe-output` checks for HTML views.
 - ERB: typing a whole `<%= x %>` no longer leaves the auto-inserted ` %>` behind (`<%= x %> %>`).
 - ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.fixAll.erbSpacing`).
+- Completion of ViewComponent classes after `render ` (`Admin::UserCardComponent.new(…)`) from `app/components`.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0
