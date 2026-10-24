@@ -27,16 +27,6 @@ Status: pending
 **Recommendation:** C. Keep A until it is checked, since the worst case is a missed warning rather than a false one.
 Status: pending
 
-### D3. Extension-host smoke test (`@vscode/test-electron`)
-
-One test that launches real VS Code, opens an ERB file and checks that the server reports ready and sends a diagnostic. It would have caught the vscode-languageclient 11 startup failure, which no current test noticed. The cost is a new dev dependency and a VS Code download in CI, run under xvfb on Linux. It would also cover the restart queue and the preview escaping, which have no tests today.
-
-- **A:** add it.
-- **B:** don't add it, and keep checking by hand with F5.
-
-**Recommendation:** A, with one test only.
-Status: pending
-
 ### D5. Next template languages
 
 The plans are in `docs/*_TODO.md`:
@@ -105,6 +95,17 @@ Status: pending
 **Recommendation:** A.
 Status: pending
 
+### D11. Formats an app registers itself
+
+`KNOWN_FORMATS` (`server/src/partials.rs`) is the `Mime::SET` of a fresh Rails app. A format the app adds (`Mime::Type.register_alias "text/html", :mobile`) isn't one, so `_card.mobile.erb` isn't the partial `card`: `render "card"` warns that it's missing, and definition, completion and rename skip the file.
+
+- **A:** a setting, `rubyTemplates.extraFormats`, like `slim.extraEngines`.
+- **B:** read `Mime::Type.register` / `register_alias "…", :name` from the app's `config/initializers/*.rb`, where Rails generates `mime_types.rb`, as `db/schema.rb` and `Gemfile.lock` are read. Misses formats registered by gems or with computed names.
+- **C:** `Mime::SET.symbols` through `bin/rails runner`, as for routes: exact, but boots the app and needs Ruby and a trusted folder.
+
+**Recommendation:** B, and add A only when a gem-registered format comes up. The cost is passing the app's formats to the 19 calls of `template_format` / `template_stem` in 6 files instead of reading a constant.
+Status: pending
+
 ## Decided
 
 - **Coding rules live in `CLAUDE.md`, and the agents point to it.** Bugs go through the cycle feature-dev → refactorer → test-writer. feature-dev and test-writer run on Sonnet.
@@ -114,11 +115,11 @@ Status: pending
 - **Standard library before crates.** `once_cell` was replaced by `LazyLock`, `serde` was dropped, the minimum Rust version is 1.82, and `cargo audit` runs in CI.
 - **Partial names follow ActionView**: `name[.locale][.format][+variant].handler`. A partial must be in the view's format or have none; JS views also find HTML partials.
 - **Jbuilder and Builder keep the `ruby` language id**, because Ruby LSP owns those files. **Liquid** gets no Shopify-specific features.
-- **CI checks formatting and lints** (D4, option A plus clippy): a `lint` job runs `cargo fmt --check`, `cargo clippy -D warnings` and `npm run format:check`, and packaging waits for it. `node test/e2e.js` runs in the linux-x64 server job; `npm run test:format` (needs Ruby and the slim gem) is not in CI yet.
+- **CI checks formatting and lints** (D4, option A plus clippy): a `lint` job runs `cargo fmt --check`, `cargo clippy -D warnings` and `npm run format:check`, and packaging waits for it. `node test/e2e.js` runs in the linux-x64, darwin-arm64 and win32-x64 server jobs; `npm run test:format` (needs Ruby and the slim gem) is not in CI yet.
+- **Client behaviour is tested inside a real VS Code** (D3, beyond one test): `test/vscode/` with `@vscode/test-electron` checks commands, providers, formatters, linters and the server; CI runs it under xvfb, and checks whose tool isn't installed are skipped.
 - **On Windows, Ruby tools run through `cmd.exe`.** Arguments containing `"` are refused. A `%VAR%` in an argument would still expand.
 
 ## Open bugs
 
 - herb-lint on Windows lints nothing below the folder it runs in ("excluded by configuration patterns", `filesChecked: 0`): its exclude check gets backslash relative paths. Upstream (herb-tools); `--force` would bypass the user's excludes.
-- `KNOWN_FORMATS` is a fixed list, so a custom-registered MIME format is treated as a variant.
-- See also D7 (symlinks) and D8 (completion in plain text). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.
+- See also D7 (symlinks), D8 (completion in plain text) and D11 (app-registered formats). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.

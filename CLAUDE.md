@@ -54,7 +54,7 @@ Run the ones that cover what you changed; all of them before a release.
 - Grammars: `npm run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
 - JS: `npm run format:check`, `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
 - Slim formatter: `npm run test:format` (needs `ruby -rslim`)
-- Client in a real VS Code: `xvfb-run -a npm run test:vscode` (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
+- Client in a real VS Code: `npm run test:vscode`, under `xvfb-run -a` on Linux without a display (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
 
 ## Where tests go
 
