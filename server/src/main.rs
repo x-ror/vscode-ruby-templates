@@ -46,7 +46,7 @@ impl TemplateLang {
             Some("skim") => return Some(Self::Skim),
             _ => {}
         }
-        let path = uri.path();
+        let path = uri.path().to_ascii_lowercase();
         if path.ends_with(".erb") || path.ends_with(".rhtml") {
             Some(Self::Erb)
         } else if path.ends_with(".haml") {
@@ -125,7 +125,7 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
         // Thor templates (`*.haml.tt`) interleave column-0 ERB with the Haml, so its structure can't be checked.
-        TemplateLang::Haml if uri.path().ends_with(".tt") => vec![],
+        TemplateLang::Haml if uri.path().to_ascii_lowercase().ends_with(".tt") => vec![],
         TemplateLang::Haml => haml_indent::diagnostics(&doc.text),
         TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &slim.extra_engines),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
@@ -156,7 +156,7 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
-    let file = file_name(uri);
+    let file = file_name(uri).to_ascii_lowercase();
     if file.ends_with(".rhtml") {
         return true;
     }
@@ -165,7 +165,7 @@ fn html_host(uri: &Url) -> bool {
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
 fn slim_html_host(uri: &Url) -> bool {
-    host_format(&file_name(uri), ".slim").is_none_or(is_html_format)
+    host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
 /// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`.
@@ -952,6 +952,7 @@ mod tests {
             ("/v/users/show.html%2Bphone.erb", true),
             ("/v/users/create.turbo_stream.erb", true),
             ("/v/old.rhtml", true),
+            ("/v/users/SHOW.HTML.ERB", true),
             ("/v/users/index.js.erb", false),
             ("/v/mailer/welcome.text.erb", false),
             ("/v.html/config.yml.erb", false),
@@ -1023,6 +1024,8 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
         let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
+        let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
     }
 
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
