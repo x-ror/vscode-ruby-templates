@@ -6,7 +6,7 @@ use crate::partials::render_refs;
 use crate::ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::tags;
-use crate::util::{leading_ws, offset_to_position};
+use crate::util::{find_balanced, leading_ws, offset_to_position};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, Range, SymbolKind};
@@ -17,6 +17,9 @@ static REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#e
 // `folding.markers` from language-configuration/haml.json.
 static HAML_REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*region\b").unwrap());
 static HAML_REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*endregion\b").unwrap());
+// A literal id in `{id: "x"}`, `{:id => "x"}`, `{"id" => "x"}` or `(id="x")`; interpolated ids are skipped.
+static HAML_ATTR_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?:^|[\s,{(])(?:id:|:id\s*=>|["']id["']\s*=>|id\s*=)\s*["']([^"'#]+)["']"#).unwrap());
 
 static CONTENT_FOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*content_for\s*\(?\s*:(\w+)").unwrap());
 static FORM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
@@ -296,11 +299,34 @@ fn haml_element_name(content: &str) -> Option<String> {
     }
     let head = &content[..tag_name_len(content)];
     let tag = head.strip_prefix('%').map_or("div", |rest| &rest[..rest.find(['.', '#']).unwrap_or(rest.len())]);
-    let id = head.split_once('#').map(|(_, rest)| &rest[..rest.find(['.', '#']).unwrap_or(rest.len())]).filter(|id| !id.is_empty());
+    let shorthand = head.split_once('#').map(|(_, rest)| &rest[..rest.find(['.', '#']).unwrap_or(rest.len())]);
+    let id = shorthand.filter(|id| !id.is_empty()).or_else(|| haml_attribute_id(&content[head.len()..]));
     match id {
         Some(id) => Some(format!("{tag}#{id}")),
         None => LANDMARKS.contains(&tag).then(|| tag.to_string()),
     }
+}
+
+/// The literal top-level `id` in the `{…}` / `(…)` attribute groups right after a tag head (first line only).
+fn haml_attribute_id(mut attrs: &str) -> Option<&str> {
+    while let Some(close) = attrs.chars().next().and_then(|c| match c {
+        '{' => Some('}'),
+        '(' => Some(')'),
+        '[' => Some(']'),
+        _ => None,
+    }) {
+        let open = attrs.chars().next()?;
+        let group = &attrs[..find_balanced(attrs, open, close)?];
+        // `{data: {id: 1}}` renders `data-id`, so only depth one counts.
+        let top_level = |at: usize| group[..at].matches('{').count() <= group[..at].matches('}').count() + 1;
+        if open != '[' {
+            if let Some(m) = HAML_ATTR_ID.captures_iter(group).filter_map(|c| c.get(1)).find(|m| top_level(m.start())) {
+                return Some(m.as_str());
+            }
+        }
+        attrs = &attrs[group.len()..];
+    }
+    None
 }
 
 pub(crate) fn symbol(text: &str, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) -> DocumentSymbol {
@@ -485,6 +511,11 @@ mod tests {
             "  #not-a-tag\n",
             "- # render \"old\"\n",
             "%p{id: x}= render 'card'\n",
+            "%div{id: \"cart\", class: \"x\"}\n",
+            "%form(id='signup' method='post')\n",
+            "%aside{data: {id: \"no\"}}[@user]{:id => 'sidebar'}\n",
+            "%span{\"id\" => \"a#{b}\"}\n",
+            "%p(title=\"}\" id=\"intro\")\n",
         );
         assert_eq!(
             outline(&haml_document_symbols(text)),
@@ -492,6 +523,10 @@ mod tests {
                 "content_for :sidebar[nav[render \"shared/menu\"]]",
                 "section#main[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
                 "render \"card\"",
+                "div#cart",
+                "form#signup",
+                "aside#sidebar",
+                "p#intro",
             ]
         );
         let syms = haml_document_symbols(text);
