@@ -11,17 +11,17 @@ Where the built-in formatter (`ruby-templates format`, and the language server's
 
 ## Settings
 
-| Setting                  | `.editorconfig`                           | erb_lint                                   | haml-lint                  | slim-lint            | Default |
-| ------------------------ | ----------------------------------------- | ------------------------------------------ | -------------------------- | -------------------- | ------- |
-| Indent with spaces/tabs  | `indent_style`                            | `SpaceIndentation` → spaces                | —                          | `Tab` → spaces       | spaces  |
-| Indent width             | `indent_size` (`tab` uses `tab_width`)    | —                                          | —                          | —                    | 2       |
-| Line endings             | `end_of_line` (`lf`, `crlf`)              | —                                          | —                          | —                    | kept    |
-| Final newline            | `insert_final_newline` (`false` drops it) | `FinalNewline` (`present: false` drops it) | `FinalNewline` (`present`) | —                    | added   |
-| Trim trailing whitespace | `trim_trailing_whitespace`                | `TrailingWhitespace`                       | `TrailingWhitespace`       | `TrailingWhitespace` | on      |
-| At most one blank line   | —                                         | `ExtraNewline`                             | —                          | —                    | off     |
-| No blank lines at EOF    | —                                         | —                                          | `TrailingEmptyLines`       | —                    | off     |
+| Setting                  | `.editorconfig`                                        | erb_lint                                   | haml-lint                  | slim-lint            | Default |
+| ------------------------ | ------------------------------------------------------ | ------------------------------------------ | -------------------------- | -------------------- | ------- |
+| Indent with spaces/tabs  | `indent_style`                                         | `SpaceIndentation` → spaces                | —                          | `Tab` → spaces       | spaces  |
+| Indent width             | `indent_size` (`tab`, or unset with tabs: `tab_width`) | —                                          | —                          | —                    | 2       |
+| Line endings             | `end_of_line` (`lf`, `crlf`)                           | —                                          | —                          | —                    | kept    |
+| Final newline            | `insert_final_newline` (`false` drops it)              | `FinalNewline` (`present: false` drops it) | `FinalNewline` (`present`) | —                    | added   |
+| Trim trailing whitespace | `trim_trailing_whitespace`                             | `TrailingWhitespace`                       | `TrailingWhitespace`       | `TrailingWhitespace` | on      |
+| At most one blank line   | —                                                      | `ExtraNewline`                             | —                          | —                    | off     |
+| No blank lines at EOF    | —                                                      | `FinalNewline` (`present: true`)           | `TrailingEmptyLines`       | —                    | off     |
 
-A linter counts when the config enables it, or doesn't mention it and the tool enables it by default: haml-lint and slim-lint enable these by default; erb_lint only with `EnableDefaultLinters: true`. A linter set to `enabled: false` has no say (the next source decides), since turning a check off doesn't ask for the opposite.
+A linter counts when the config enables it, or doesn't mention it and the tool enables it by default: haml-lint and slim-lint enable these by default; erb_lint only with `EnableDefaultLinters: true`. A linter set to `enabled: false` has no say (the next source decides), since turning a check off doesn't ask for the opposite; neither has one whose settings can't be read. Booleans are read as Ruby reads YAML (`true`/`false`, `yes`/`no`, `on`/`off`). A linter's other options, `include` and `exclude` among them, are ignored: a mapped linter applies to every file of its language.
 
 What each language does with them:
 
@@ -33,7 +33,7 @@ What each language does with them:
 
 Listed by `--verbose` when present:
 
-- `.editorconfig`: `charset`, `max_line_length`, `end_of_line = cr`, and any other key.
+- `.editorconfig`: `charset`, `max_line_length`, `end_of_line = cr`, any other key, values that don't parse (`indent_size = 4 # four`), and sections whose glob can't be read.
 - erb_lint `SpaceAroundErbTag`: it changes what is inside ERB tags, which the formatter never does.
 - haml-lint `Indentation`: Haml files keep their own unit.
 - slim-lint `EmptyLines` and `TrailingBlankLines`: Slim compiles blank lines.

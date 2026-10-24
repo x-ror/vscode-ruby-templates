@@ -32,7 +32,7 @@ impl Overrides {
             indent_style: self.indent_style.unwrap_or(s.indent_style),
             indent_size: self.indent_size.unwrap_or(s.indent_size),
             end_of_line: self.end_of_line.or(s.end_of_line),
-            final_newline: self.final_newline.map_or(s.final_newline, Some),
+            final_newline: self.final_newline.or(s.final_newline),
             trim_trailing_whitespace: self.trim_trailing_whitespace.unwrap_or(s.trim_trailing_whitespace),
             collapse_blank_lines: self.collapse_blank_lines.unwrap_or(s.collapse_blank_lines),
             trim_trailing_blank_lines: self.trim_trailing_blank_lines.unwrap_or(s.trim_trailing_blank_lines),
@@ -69,27 +69,36 @@ fn linter_config(path: &Path, lang: TemplateLang) -> Option<(PathBuf, String)> {
     })
 }
 
-/// A linter we map: the setting it checks, and whether the tool enables it without being told to.
+/// A linter we map, the options of it we read, and the setting it checks.
 struct Mapped {
     name: &'static str,
-    default_on: bool,
+    options: &'static [&'static str],
     set: fn(&mut Overrides, &Yaml),
 }
 
+// erb_lint's FinalNewline also flags more than one newline at the end.
 const ERB_LINT: &[Mapped] = &[
-    Mapped { name: "FinalNewline", default_on: true, set: |o, l| o.final_newline = Some(l.flag("present").unwrap_or(true)) },
-    Mapped { name: "TrailingWhitespace", default_on: true, set: |o, _| o.trim_trailing_whitespace = Some(true) },
-    Mapped { name: "ExtraNewline", default_on: true, set: |o, _| o.collapse_blank_lines = Some(true) },
-    Mapped { name: "SpaceIndentation", default_on: true, set: |o, _| o.indent_style = Some(IndentStyle::Space) },
+    Mapped {
+        name: "FinalNewline",
+        options: &["present"],
+        set: |o, l| {
+            let present = l.flag("present").unwrap_or(true);
+            o.final_newline = Some(present);
+            o.trim_trailing_blank_lines = present.then_some(true);
+        },
+    },
+    Mapped { name: "TrailingWhitespace", options: &[], set: |o, _| o.trim_trailing_whitespace = Some(true) },
+    Mapped { name: "ExtraNewline", options: &[], set: |o, _| o.collapse_blank_lines = Some(true) },
+    Mapped { name: "SpaceIndentation", options: &[], set: |o, _| o.indent_style = Some(IndentStyle::Space) },
 ];
 const HAML_LINT: &[Mapped] = &[
-    Mapped { name: "FinalNewline", default_on: true, set: |o, l| o.final_newline = Some(l.flag("present").unwrap_or(true)) },
-    Mapped { name: "TrailingWhitespace", default_on: true, set: |o, _| o.trim_trailing_whitespace = Some(true) },
-    Mapped { name: "TrailingEmptyLines", default_on: true, set: |o, _| o.trim_trailing_blank_lines = Some(true) },
+    Mapped { name: "FinalNewline", options: &["present"], set: |o, l| o.final_newline = Some(l.flag("present").unwrap_or(true)) },
+    Mapped { name: "TrailingWhitespace", options: &[], set: |o, _| o.trim_trailing_whitespace = Some(true) },
+    Mapped { name: "TrailingEmptyLines", options: &[], set: |o, _| o.trim_trailing_blank_lines = Some(true) },
 ];
 const SLIM_LINT: &[Mapped] = &[
-    Mapped { name: "TrailingWhitespace", default_on: true, set: |o, _| o.trim_trailing_whitespace = Some(true) },
-    Mapped { name: "Tab", default_on: true, set: |o, _| o.indent_style = Some(IndentStyle::Space) },
+    Mapped { name: "TrailingWhitespace", options: &[], set: |o, _| o.trim_trailing_whitespace = Some(true) },
+    Mapped { name: "Tab", options: &[], set: |o, _| o.indent_style = Some(IndentStyle::Space) },
 ];
 
 /// Linters that sound like ours but aren't, and why.
@@ -114,7 +123,19 @@ fn linter_overrides(text: &str, lang: TemplateLang, file: &Path, notes: &mut Vec
     let linters = config.get("linters").unwrap_or(&empty);
     for m in mapped {
         let entry = linters.get(m.name);
-        let on = entry.map_or(defaults_on && m.default_on, |l| l.flag("enabled").unwrap_or(defaults_on && m.default_on));
+        // A linter whose settings can't be read has no say.
+        let on = match entry {
+            None => Some(defaults_on),
+            Some(Yaml::Scalar(value)) if !value.is_empty() => None,
+            Some(l) => l.get("enabled").map_or(Some(defaults_on), Yaml::as_bool),
+        };
+        let Some(on) = on else {
+            notes.push(format!("{shown}: ignored linters.{}: can't read its settings", m.name));
+            continue;
+        };
+        for (key, _) in entry.map_or(&[][..], Yaml::entries).iter().filter(|(k, _)| k != "enabled" && !m.options.contains(&k.as_str())) {
+            notes.push(format!("{shown}: ignored linters.{}.{key}", m.name));
+        }
         if on {
             (m.set)(&mut out, entry.unwrap_or(&empty));
             notes.push(format!("{shown}: {} applies", m.name));
@@ -161,7 +182,9 @@ impl Yaml {
             *i += 1;
             let Some((key, value)) = line.split_once(':').filter(|_| !line.starts_with('-')) else { continue };
             let value = value.trim();
-            let child = if value.is_empty() {
+            let child = if let Some(flow) = value.strip_prefix('{').and_then(|v| v.strip_suffix('}')) {
+                Self::flow(flow)
+            } else if value.is_empty() {
                 match lines.get(*i) {
                     Some(&(deeper, _)) if deeper > at => Self::block(lines, i, deeper),
                     _ => Self::Scalar(String::new()),
@@ -178,6 +201,12 @@ impl Yaml {
         Self::Map(entries)
     }
 
+    /// `{ enabled: false, present: true }`, without nesting.
+    fn flow(inner: &str) -> Self {
+        let pairs = inner.split(',').filter_map(|pair| pair.split_once(':'));
+        Self::Map(pairs.map(|(k, v)| (unquote(k.trim()).to_string(), Self::Scalar(unquote(v.trim()).to_string()))).collect())
+    }
+
     fn get(&self, key: &str) -> Option<&Yaml> {
         self.entries().iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
@@ -189,10 +218,12 @@ impl Yaml {
         }
     }
 
+    /// YAML 1.1 booleans, as Ruby's Psych reads them.
     fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Scalar(s) if s == "true" => Some(true),
-            Self::Scalar(s) if s == "false" => Some(false),
+        let Self::Scalar(s) = self else { return None };
+        match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "on" => Some(true),
+            "false" | "no" | "off" => Some(false),
             _ => None,
         }
     }
@@ -249,7 +280,10 @@ fn editorconfig_overrides(path: &Path, notes: &mut Vec<String>) -> Overrides {
         let mut read = false;
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])) {
             if let Some(glob) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                applies = section_matches(glob, &relative, &name);
+                applies = section_matches(glob, &relative, &name).unwrap_or_else(|| {
+                    notes.push(format!(".editorconfig: ignored section [{glob}]: can't read the glob"));
+                    false
+                });
                 continue;
             }
             let Some((key, value)) = line.split_once('=') else { continue };
@@ -268,16 +302,23 @@ fn editorconfig_overrides(path: &Path, notes: &mut Vec<String>) -> Overrides {
     let flag = |key: &str| get(key).and_then(|v| v.parse::<bool>().ok());
     let number = |key: &str| get(key).and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 0);
     let tab_width = number("tab_width");
+    let tabs = get("indent_style") == Some("tab");
+    // `tab_width` stands in for `indent_size` only with tabs, as the spec has it.
     let indent_size = match get("indent_size") {
         Some("tab") => tab_width,
-        _ => number("indent_size").or(tab_width),
+        Some(_) => number("indent_size"),
+        None => tab_width.filter(|_| tabs),
     };
-    let known = ["indent_style", "indent_size", "tab_width", "end_of_line", "insert_final_newline", "trim_trailing_whitespace"];
-    for (key, value) in properties.iter().filter(|(k, _)| !known.contains(&k.as_str())) {
+    let readable = |key: &str, value: &str| match key {
+        "indent_style" => matches!(value, "space" | "tab"),
+        "indent_size" => value == "tab" || number(key).is_some(),
+        "tab_width" => number(key).is_some(),
+        "end_of_line" => matches!(value, "lf" | "crlf"),
+        "insert_final_newline" | "trim_trailing_whitespace" => flag(key).is_some(),
+        _ => false,
+    };
+    for (key, value) in properties.iter().filter(|(k, v)| v != "unset" && !readable(k, v)) {
         notes.push(format!(".editorconfig: ignored {key} = {value}"));
-    }
-    if get("end_of_line") == Some("cr") {
-        notes.push(".editorconfig: ignored end_of_line = cr".into());
     }
     Overrides {
         indent_style: match get("indent_style") {
@@ -305,17 +346,23 @@ fn editorconfig_is_root(text: &str) -> bool {
 }
 
 /// A section glob without `/` matches the file name in any folder; with one, the path from the file's folder.
-fn section_matches(glob: &str, relative: &str, name: &str) -> bool {
+/// `None` when the glob can't be read.
+fn section_matches(glob: &str, relative: &str, name: &str) -> Option<bool> {
     let (glob, subject) = match glob.strip_prefix('/') {
         Some(anchored) => (anchored, relative),
         None if glob.contains('/') => (glob, relative),
         None => (glob, name),
     };
-    glob_regex(glob).is_some_and(|re| re.is_match(subject))
+    let (re, ranges) = glob_regex(glob)?;
+    let Some(found) = re.captures(subject) else { return Some(false) };
+    let in_range = |(i, &(a, b)): (usize, &(i64, i64))| found[i + 1].parse::<i64>().is_ok_and(|n| (a..=b).contains(&n));
+    Some(ranges.iter().enumerate().all(in_range))
 }
 
-/// The EditorConfig glob as an anchored regex: `*`, `**`, `?`, `[…]`, `[!…]`, `{a,b}`, `{1..9}`.
-fn glob_regex(glob: &str) -> Option<Regex> {
+/// The EditorConfig glob as an anchored regex: `*`, `**`, `?`, `[…]`, `[!…]`, `{a,b}`, `{1..9}`; each numeric
+/// range is a capture group, checked against its bounds by the caller.
+fn glob_regex(glob: &str) -> Option<(Regex, Vec<(i64, i64)>)> {
+    let mut ranges = Vec::new();
     let mut re = String::from("^");
     let chars: Vec<char> = glob.chars().collect();
     let mut i = 0;
@@ -339,8 +386,8 @@ fn glob_regex(glob: &str) -> Option<Regex> {
                 let close = chars[i..].iter().position(|&c| c == '}')? + i;
                 let inner: String = chars[i + 1..close].iter().collect();
                 if let Some((a, b)) = inner.split_once("..").and_then(|(a, b)| Some((a.parse::<i64>().ok()?, b.parse::<i64>().ok()?))) {
-                    let numbers: Vec<String> = (a.min(b)..=a.max(b)).map(|n| n.to_string()).collect();
-                    re.push_str(&format!("(?:{})", numbers.join("|")));
+                    ranges.push((a.min(b), a.max(b)));
+                    re.push_str("([+-]?[0-9]+)");
                     i = close;
                 } else if inner.contains(',') {
                     re.push_str("(?:");
@@ -364,7 +411,7 @@ fn glob_regex(glob: &str) -> Option<Regex> {
         i += 1;
     }
     re.push('$');
-    Regex::new(&re).ok()
+    Some((Regex::new(&re).ok()?, ranges))
 }
 
 #[cfg(test)]
@@ -481,8 +528,33 @@ mod tests {
     }
 
     #[test]
+    fn yaml_booleans_flow_maps_and_unreadable_linters() {
+        let haml = "linters:\n  TrailingEmptyLines: { enabled: false }\n  FinalNewline:\n    present: False\n  TrailingWhitespace: maybe\n";
+        let project = Project::new("bools", &[(".haml-lint.yml", haml), ("a.haml", "")]);
+        let resolved = project.settings("a.haml");
+        assert!(!resolved.settings.trim_trailing_blank_lines);
+        assert_eq!(resolved.settings.final_newline, Some(false));
+        assert!(resolved.notes.iter().any(|n| n.contains("ignored linters.TrailingWhitespace: can't read")), "{:?}", resolved.notes);
+        let erb = "EnableDefaultLinters: yes\nlinters:\n  TrailingWhitespace:\n    enabled: no\n    exclude:\n      - legacy/**\n";
+        let project = Project::new("bools-erb", &[(".erb_lint.yml", erb), ("a.html.erb", "")]);
+        let resolved = project.settings("a.html.erb");
+        assert!(resolved.settings.collapse_blank_lines && resolved.settings.trim_trailing_blank_lines, "defaults on, FinalNewline too");
+        assert!(resolved.notes.iter().any(|n| n.contains("ignored linters.TrailingWhitespace.exclude")), "{:?}", resolved.notes);
+    }
+
+    #[test]
+    fn editorconfig_tab_width_and_unreadable_values() {
+        let text = "[*]\nindent_style = space\ntab_width = 8\ninsert_final_newline = yes\n[x[.erb]\nindent_size = 3\n";
+        let project = Project::new("tabw", &[(".editorconfig", text), ("a.html.erb", "")]);
+        let resolved = project.settings("a.html.erb");
+        assert_eq!(resolved.settings.indent_size, 2, "tab_width is the tab's width, not the indent");
+        assert!(resolved.notes.iter().any(|n| n == ".editorconfig: ignored insert_final_newline = yes"), "{:?}", resolved.notes);
+        assert!(resolved.notes.iter().any(|n| n.contains("ignored section [x[.erb]")), "{:?}", resolved.notes);
+    }
+
+    #[test]
     fn globs() {
-        let m = |glob, path: &str| section_matches(glob, path, path.rsplit('/').next().unwrap());
+        let m = |glob, path: &str| section_matches(glob, path, path.rsplit('/').next().unwrap()).unwrap();
         assert!(m("*.erb", "app/views/a.html.erb"));
         assert!(m("*.{erb,haml}", "x/a.haml"));
         assert!(!m("*.{erb,haml}", "x/a.slim"));
@@ -491,6 +563,8 @@ mod tests {
         assert!(m("[!_]*.erb", "show.erb"));
         assert!(!m("[!_]*.erb", "_card.erb"));
         assert!(m("file{1..3}.erb", "file2.erb"));
+        assert!(!m("file{1..3}.erb", "file4.erb"));
+        assert!(m("file{0..99999999}.erb", "file12345.erb"), "a range is checked, not spelled out");
         assert!(!m("*.erb", "a.erb.tt"));
     }
 
