@@ -56,7 +56,9 @@ function activate(context) {
   sub("rubyTemplates.extractSlimPartial", extractSlimPartial);
 
   // Language server (Rust): diagnostics, go-to-partial, completions, hover.
-  const output = vscode.window.createOutputChannel("Ruby Templates");
+  const output = vscode.window.createOutputChannel("Ruby Templates", {
+    log: true,
+  });
   context.subscriptions.push(output);
   registerHamlFormatting(context, output);
   startHamlLint(context, output);
