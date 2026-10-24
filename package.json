@@ -5,8 +5,9 @@
   "version": "0.1.0",
   "publisher": "x-ror",
   "license": "MIT",
+  "type": "module",
   "engines": {
-    "vscode": "^1.91.0"
+    "vscode": "^1.100.0"
   },
   "categories": [
     "Programming Languages",

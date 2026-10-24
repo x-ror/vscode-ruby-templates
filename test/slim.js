@@ -1,11 +1,12 @@
-const assert = require("assert");
-const {
+import assert from "assert";
+import fs from "fs";
+import {
   toggleSlimMarker,
   inVerbatimBlock,
   wrapSlim,
   dedent,
   partialPath,
-} = require("../src/slim");
+} from "../src/slim.js";
 
 for (const [line, next] of [
   ["- if x", "= if x"],
@@ -77,7 +78,12 @@ assert.strictEqual(
   "/app/views/posts/_item.html.slim",
 );
 
-const { onEnterRules } = require("../language-configuration/slim.json");
+const { onEnterRules } = JSON.parse(
+  fs.readFileSync(
+    new URL("../language-configuration/slim.json", import.meta.url),
+    "utf8",
+  ),
+);
 const enterAction = (line) =>
   onEnterRules.find((r) => new RegExp(r.beforeText).test(line))?.action.indent;
 for (const [line, action] of [

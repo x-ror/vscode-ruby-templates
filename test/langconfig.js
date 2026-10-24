@@ -1,8 +1,11 @@
-const assert = require("assert");
-const {
-  onEnterRules,
-  indentationRules,
-} = require("../language-configuration/erb.json");
+import assert from "assert";
+import fs from "fs";
+const { onEnterRules, indentationRules } = JSON.parse(
+  fs.readFileSync(
+    new URL("../language-configuration/erb.json", import.meta.url),
+    "utf8",
+  ),
+);
 
 // Mirrors VS Code: the first rule whose beforeText (and afterText, if set) matches wins.
 const rules = onEnterRules.map(({ beforeText, afterText, action }) => ({

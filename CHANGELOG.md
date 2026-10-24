@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Breaking:** requires VS Code 1.91 or newer (`vscode-languageclient` 11).
+- **Breaking:** requires VS Code 1.100 or newer: the extension is now an ES module (`vscode-languageclient` 11 alone needs 1.91).
 - Partials: hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` get navigation, completion and diagnostics.
 - Partials resolve only in the view's format: `render "users/user"` from `index.html.erb` no longer offers `_user.json.jbuilder`. Format-less partials still match; JS and turbo_stream views also take HTML partials.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.

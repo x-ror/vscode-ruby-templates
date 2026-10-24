@@ -1,8 +1,7 @@
-"use strict";
-const vscode = require("vscode");
-const path = require("path");
-const fs = require("fs");
-const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+import * as vscode from "vscode";
+import path from "path";
+import fs from "fs";
+import { LanguageClient, TransportKind } from "vscode-languageclient/node";
 
 /** @type {LanguageClient | undefined} */
 let client;
@@ -107,4 +106,4 @@ async function restartClient(context, output) {
   await startClient(context, output);
 }
 
-module.exports = { startClient, stopClient, restartClient };
+export { startClient, stopClient, restartClient };

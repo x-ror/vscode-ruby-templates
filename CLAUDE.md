@@ -36,6 +36,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 - Rust: `cargo clippy` clean; borrow over `clone`; iterators where clearer; LSP positions are UTF-16.
 - JS:
+  - ES modules (`"type": "module"`, VS Code ≥ 1.100): `import`/`export`, never `require`/`module.exports`. Relative imports end in `.js`; paths from `import.meta.dirname`/`import.meta.url`; JSON via `JSON.parse(fs.readFileSync(…))`.
   - Node built-ins and the language before packages: `fs/promises`, `path`, `URL`, `child_process`, `Array`/`Object`/`Map`/`Set` methods, `structuredClone`, template literals. No lodash/underscore-style helpers.
   - `const` by default, `let` when reassigned, never `var`; `===`; optional chaining `?.` and `??` instead of manual null checks.
   - async/await over callbacks and `.then` chains; every promise awaited or its rejection handled.

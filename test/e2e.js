@@ -1,11 +1,11 @@
 // Minimal LSP smoke test against a fake Rails tree: definition, hover, completion, diagnostics, symbols, rename.
-const cp = require("child_process"),
-  fs = require("fs"),
-  path = require("path"),
-  os = require("os");
-const { isDeepStrictEqual } = require("util");
+import cp from "child_process";
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { isDeepStrictEqual } from "util";
 const bin = path.join(
-  __dirname,
+  import.meta.dirname,
   "..",
   "server",
   "target",

@@ -1,6 +1,5 @@
-"use strict";
 // Pure Slim editing helpers; kept free of `vscode` so `test/slim.js` can run them under plain Node.
-const path = require("path");
+import path from "path";
 
 // `/!` (HTML comment) and `/[` (conditional comment) are not code markers, nor is a `-#` Ruby comment.
 // Only output lines take `<`/`>` modifiers; a line-start `='x'` is Ruby `'x'` in Slim 5.
@@ -74,10 +73,4 @@ function partialPath(file, name) {
   return views ? path.join(views[1], name.slice(0, slash), partial) : null;
 }
 
-module.exports = {
-  toggleSlimMarker,
-  inVerbatimBlock,
-  wrapSlim,
-  dedent,
-  partialPath,
-};
+export { toggleSlimMarker, inVerbatimBlock, wrapSlim, dedent, partialPath };

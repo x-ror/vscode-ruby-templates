@@ -1,18 +1,17 @@
 // Usage: node test/tokenize.js                  check every sample against test/__snapshots__ (UPDATE=1 rewrites them)
 //        node test/tokenize.js <scope> <file>   print tokens for one file
-const fs = require("fs"),
-  path = require("path");
-const vsctm = require("vscode-textmate"),
-  onig = require("vscode-oniguruma");
-const root = path.join(__dirname, "..");
+import fs from "fs";
+import path from "path";
+import vsctm from "vscode-textmate";
+import onig from "vscode-oniguruma";
+const root = path.join(import.meta.dirname, "..");
 const wasm = fs.readFileSync(
   path.join(root, "node_modules/vscode-oniguruma/release/onig.wasm"),
 ).buffer;
 const grammars = Object.fromEntries(
-  require("../package.json").contributes.grammars.map((g) => [
-    g.scopeName,
-    g.path,
-  ]),
+  JSON.parse(
+    fs.readFileSync(path.join(root, "package.json"), "utf8"),
+  ).contributes.grammars.map((g) => [g.scopeName, g.path]),
 );
 const registry = new vsctm.Registry({
   onigLib: onig.loadWASM(wasm).then(() => ({
@@ -46,7 +45,7 @@ const samples = {
   "sample.json.erb": "source.json.erb",
   "sample.text.erb": "text.plain.erb",
 };
-const snapshots = path.join(__dirname, "__snapshots__");
+const snapshots = path.join(import.meta.dirname, "__snapshots__");
 const CONTEXT_LINES = 3;
 
 async function dump(scope, file) {
@@ -139,13 +138,13 @@ async function check() {
   if (process.env.UPDATE) fs.mkdirSync(snapshots, { recursive: true });
   let failed = checkSkimGrammar();
   for (const f of fs
-    .readdirSync(__dirname)
+    .readdirSync(import.meta.dirname)
     .filter((f) => f.startsWith("sample.") && !samples[f])) {
     failed++;
     console.error(`FAIL ${f}: add it to the samples map in test/tokenize.js`);
   }
   for (const [name, scope] of Object.entries(samples)) {
-    const actual = await dump(scope, path.join(__dirname, name));
+    const actual = await dump(scope, path.join(import.meta.dirname, name));
     const snap = path.join(snapshots, name + ".tokens.txt");
     const expected = fs.existsSync(snap) ? fs.readFileSync(snap, "utf8") : null;
     if (process.env.UPDATE) {

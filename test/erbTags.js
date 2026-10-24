@@ -1,5 +1,5 @@
-const assert = require("assert");
-const { toggleErbTagAt } = require("../src/erbTags");
+import assert from "assert";
+import { toggleErbTagAt } from "../src/erbTags.js";
 
 const toggle = (tag) => {
   const e = toggleErbTagAt(tag, 3);

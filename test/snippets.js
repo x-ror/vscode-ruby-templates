@@ -1,15 +1,15 @@
-const assert = require("assert");
-const fs = require("fs");
-const path = require("path");
+import assert from "assert";
+import fs from "fs";
+import path from "path";
 
-const dir = path.join(__dirname, "../snippets");
+const dir = path.join(import.meta.dirname, "../snippets");
 // An unescaped `$` that isn't a tabstop/variable silently breaks a snippet (e.g. Ruby's `$stdout`).
 const strayDollar =
   /(?<!\\)\$(?![0-9{]|TM_|CLIPBOARD|CURRENT_|RANDOM|LINE_COMMENT|BLOCK_COMMENT|WORKSPACE_)/;
 for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".json"))) {
   const seen = new Set();
   for (const [name, { prefix, body }] of Object.entries(
-    require(path.join(dir, file)),
+    JSON.parse(fs.readFileSync(path.join(dir, file), "utf8")),
   )) {
     assert(
       !seen.has(prefix),

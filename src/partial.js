@@ -1,4 +1,3 @@
-"use strict";
 // Pure part of "Extract Selection to Partial" (no vscode dependency; tested in test/haml.js).
 
 const leadingWs = (line) => /^[ \t]*/.exec(line)[0];
@@ -44,4 +43,4 @@ function partialFileName(templateName, name) {
   return `_${name}${dot < 0 ? "" : templateName.slice(dot)}`;
 }
 
-module.exports = { extractBlock, partialFileName };
+export { extractBlock, partialFileName };

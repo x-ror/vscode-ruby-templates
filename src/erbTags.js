@@ -1,5 +1,3 @@
-"use strict";
-
 // Erubi's tag syntax: openers <%, <%=, <%==, <%-, <%#, <%% (literal); closers %>, -%>, =%>.
 const ERB_RE = /<%(==|=|#|-|%)?([\s\S]*?)([-=]?)%>/g;
 
@@ -26,4 +24,4 @@ function toggleErbTagAt(text, offset) {
   return null;
 }
 
-module.exports = { toggleErbTagAt };
+export { toggleErbTagAt };

@@ -1,4 +1,3 @@
-"use strict";
 // Pure Haml text helpers (no vscode dependency, so test/haml.js can run them under plain node).
 
 const RUBY_PREFIX_RE = /^([ \t]*)(-#|[!&]?~|[!&]=(?!=)|=(?!=)|-)[ \t]?(.*)$/;
@@ -150,9 +149,4 @@ function hamlLintOffenses(json) {
   );
 }
 
-module.exports = {
-  toggleHamlPrefix,
-  toggleHamlLines,
-  reindentHaml,
-  hamlLintOffenses,
-};
+export { toggleHamlPrefix, toggleHamlLines, reindentHaml, hamlLintOffenses };

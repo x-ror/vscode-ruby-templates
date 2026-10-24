@@ -1,20 +1,19 @@
-"use strict";
-const vscode = require("vscode");
-const cp = require("child_process");
-const path = require("path");
-const fs = require("fs");
+import * as vscode from "vscode";
+import cp from "child_process";
+import path from "path";
+import fs from "fs";
 
-const { startClient, stopClient, restartClient } = require("./client");
-const { toggleErbTagAt } = require("./erbTags");
-const { toggleHamlLines, reindentHaml, hamlLintOffenses } = require("./haml");
-const { extractBlock, partialFileName } = require("./partial");
-const {
+import { startClient, stopClient, restartClient } from "./client.js";
+import { toggleErbTagAt } from "./erbTags.js";
+import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
+import { extractBlock, partialFileName } from "./partial.js";
+import {
   toggleSlimMarker,
   inVerbatimBlock,
   wrapSlim,
   dedent,
   partialPath,
-} = require("./slim");
+} from "./slim.js";
 
 const TEMPLATE_LANGS = new Set(["erb", "haml", "slim"]);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
@@ -1039,4 +1038,4 @@ function deactivate() {
   return stopClient();
 }
 
-module.exports = { activate, deactivate };
+export { activate, deactivate };

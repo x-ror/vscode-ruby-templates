@@ -1,11 +1,11 @@
-const assert = require("assert");
-const {
+import assert from "assert";
+import {
   toggleHamlPrefix,
   toggleHamlLines,
   reindentHaml,
   hamlLintOffenses,
-} = require("../src/haml");
-const { extractBlock, partialFileName } = require("../src/partial");
+} from "../src/haml.js";
+import { extractBlock, partialFileName } from "../src/partial.js";
 
 // toggleHamlPrefix: - → = → -# → -, other output prefixes become comments, == text and plain lines are left alone.
 assert.strictEqual(toggleHamlPrefix("  - x = 1"), "  = x = 1");
