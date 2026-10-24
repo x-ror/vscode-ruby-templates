@@ -3,12 +3,25 @@ import cp from "child_process";
 import path from "path";
 import fs from "fs";
 
-import { startClient, stopClient, restartClient } from "./client.js";
+import {
+  startClient,
+  stopClient,
+  restartClient,
+  onServerStarted,
+  notifyServer,
+} from "./client.js";
+import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
 import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
-import { relatedFiles, relatedDirs } from "./related.js";
+import {
+  relatedFiles,
+  relatedDirs,
+  actionSource,
+  actionLine,
+  previewPartners,
+} from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
@@ -89,6 +102,7 @@ function activate(context) {
   registerSlimLint(context, output);
   registerErbLint(context, output);
   registerHerbLint(context, output);
+  registerRoutes(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -228,7 +242,10 @@ const RENDER_CALL = {
 };
 
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
-/** Open the view's other formats (`.html.erb` ↔ `.text.erb`) or a component's class ↔ template. */
+/**
+ * Open the view's other formats (`.html.erb` ↔ `.text.erb`), its controller action, or a component's class ↔
+ * template ↔ preview.
+ */
 async function switchRelated() {
   const doc = vscode.window.activeTextEditor?.document;
   if (doc?.uri.scheme !== "file") return;
@@ -251,6 +268,10 @@ async function switchRelated() {
       ...relatedFiles(name, files).map((n) => path.join(folder, n)),
     );
   }
+  const action = await controllerAction(doc.uri.fsPath);
+  if (action) candidates.push(action);
+  for (const partner of previewPartners(doc.uri.fsPath, path.sep))
+    if (await exists(vscode.Uri.file(partner))) candidates.push(partner);
   if (!candidates.length) {
     vscode.window.showInformationMessage(`No related file for ${name}.`);
     return;
@@ -261,14 +282,40 @@ async function switchRelated() {
       : (
           await vscode.window.showQuickPick(
             candidates.map((file) => ({
-              label: path.basename(file),
+              label:
+                file === action
+                  ? `${path.basename(file)} #${actionName(doc.uri.fsPath)}`
+                  : path.basename(file),
               description: vscode.workspace.asRelativePath(path.dirname(file)),
               file,
             })),
             { placeHolder: "Related file" },
           )
         )?.file;
-  if (picked) await vscode.window.showTextDocument(vscode.Uri.file(picked));
+  if (!picked) return;
+  const editor = await vscode.window.showTextDocument(vscode.Uri.file(picked));
+  if (picked !== action) return;
+  const line = actionLine(
+    editor.document.getText(),
+    actionName(doc.uri.fsPath),
+  );
+  if (line < 0) return;
+  const at = new vscode.Position(line, 0);
+  editor.selection = new vscode.Selection(at, at);
+  editor.revealRange(
+    new vscode.Range(at, at),
+    vscode.TextEditorRevealType.InCenter,
+  );
+}
+
+const actionName = (view) => actionSource(view, path.sep)?.action;
+
+/** The controller or mailer that renders `view`, when it exists. */
+async function controllerAction(view) {
+  const source = actionSource(view, path.sep);
+  return source && (await exists(vscode.Uri.file(source.file)))
+    ? source.file
+    : undefined;
 }
 
 async function extractPartial() {
@@ -830,6 +877,126 @@ function registerErbLint(context, output) {
     }),
   );
   vscode.workspace.textDocuments.forEach(lint);
+}
+
+// ---------------------------------------------------------------- routes
+
+/**
+ * Read each Rails app's routes with `bin/rails runner` once one of its views is open, again when its routes
+ * files change, and hand them to the server for `*_path` / `*_url` completion, hover and definition.
+ */
+function registerRoutes(context, output) {
+  const cache = new Map(); // Rails root → routes
+  // Roots whose boot failed: retried on a routes file change or a settings change, not on every view opened.
+  const failed = new Set();
+  const busy = new Set();
+  const again = new Set();
+  const enabled = () => cfg().get("routes.enabled", true);
+  const send = async (root, routes) => {
+    try {
+      await notifyServer("rubyTemplates/routes", { root, routes });
+    } catch (e) {
+      output.appendLine(
+        `[routes] sending routes for ${root}: ${e?.message ?? e}`,
+      );
+    }
+  };
+
+  const load = async (root) => {
+    const r = await run(
+      cfg().get("commands.ruby", "ruby"),
+      [path.join("bin", "rails"), "runner", ROUTES_SCRIPT],
+      { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS, useBundler: false },
+    );
+    if (!enabled()) return;
+    let routes;
+    try {
+      routes = r.code === 0 ? routesFromOutput(r.stdout) : undefined;
+    } catch {
+      routes = undefined;
+    }
+    if (!routes) {
+      output.appendLine(
+        `[routes] bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
+      );
+      failed.add(root);
+      return;
+    }
+    failed.delete(root);
+    cache.set(root, routes);
+    await send(root, routes);
+  };
+
+  // A change while a load runs reloads once it finishes, so the last edit to routes.rb always counts.
+  const refresh = async (root) => {
+    if (busy.has(root)) {
+      again.add(root);
+      return;
+    }
+    busy.add(root);
+    try {
+      do {
+        again.delete(root);
+        await load(root);
+      } while (again.has(root));
+    } finally {
+      busy.delete(root);
+    }
+  };
+
+  // Booting runs the app's own code: only for an app inside a trusted workspace folder, never for a file
+  // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
+  const railsRoot = (file) => {
+    if (!enabled() || !vscode.workspace.isTrusted) return undefined;
+    const root = findUp(path.dirname(file), path.join("bin", "rails"));
+    const folder =
+      root && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+    return folder && !path.relative(folder.uri.fsPath, root).startsWith("..")
+      ? root
+      : undefined;
+  };
+  const opened = (doc) => {
+    if (doc.uri.scheme !== "file") return;
+    if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
+    const root = railsRoot(doc.uri.fsPath);
+    if (root && !cache.has(root) && !failed.has(root) && !busy.has(root))
+      void refresh(root);
+  };
+  const routesChanged = (uri) => {
+    const root = railsRoot(uri.fsPath);
+    if (root && (cache.has(root) || failed.has(root))) void refresh(root);
+  };
+
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    "**/config/{routes.rb,routes/**/*.rb}",
+  );
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidChange(routesChanged),
+    watcher.onDidCreate(routesChanged),
+    watcher.onDidDelete(routesChanged),
+    vscode.workspace.onDidOpenTextDocument(opened),
+    vscode.workspace.onDidGrantWorkspaceTrust(() =>
+      vscode.workspace.textDocuments.forEach(opened),
+    ),
+    onServerStarted(() => {
+      for (const [root, routes] of cache) void send(root, routes);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration("rubyTemplates.routes") &&
+        !e.affectsConfiguration("rubyTemplates.commands.ruby")
+      )
+        return;
+      failed.clear();
+      if (enabled()) vscode.workspace.textDocuments.forEach(opened);
+      else {
+        for (const root of cache.keys()) void send(root, []);
+        cache.clear();
+      }
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(opened);
 }
 
 // ---------------------------------------------------------------- herb-lint

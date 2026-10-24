@@ -2,6 +2,7 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 import * as vscode from "vscode";
 
 const app = process.env.RT_APP;
@@ -163,6 +164,44 @@ const checks = {
       return file?.endsWith("welcome.text.erb") && file;
     });
     assert.ok(name);
+  },
+
+  async "switch to related: controller action"() {
+    await open("app/views/orders/show.html.erb");
+    await vscode.commands.executeCommand("rubyTemplates.switchRelated");
+    const editor = await until("controller editor", () => {
+      const e = vscode.window.activeTextEditor;
+      return e?.document.fileName.endsWith("orders_controller.rb") && e;
+    });
+    await until("cursor on def show", () => editor.selection.active.line === 4);
+  },
+
+  async "route helpers from bin/rails"() {
+    if (spawnSync("ruby", ["-v"]).status !== 0) return "skipped: no ruby";
+    const editor = await open("app/views/users/routes.html.erb");
+    const at = new vscode.Position(0, 22);
+    const hover = await until("route hover", async () => {
+      const hovers = await vscode.commands.executeCommand(
+        "vscode.executeHoverProvider",
+        editor.document.uri,
+        at,
+      );
+      return hovers
+        ?.flatMap((h) => h.contents.map((c) => c.value ?? c))
+        .find((v) => v.includes("users#index"));
+    });
+    assert.ok(hover.includes("`/users`"), hover);
+    const [def] = await vscode.commands.executeCommand(
+      "vscode.executeDefinitionProvider",
+      editor.document.uri,
+      at,
+    );
+    const target = def.targetUri ?? def.uri;
+    const line = (def.targetRange ?? def.range).start.line;
+    assert.deepStrictEqual(
+      [path.relative(app, target.fsPath), line],
+      [path.join("config", "routes.rb"), 1],
+    );
   },
 
   async "ERB formatter: htmlbeautifier"() {
@@ -463,6 +502,16 @@ const checks = {
     await until("component class", () =>
       vscode.window.activeTextEditor?.document.fileName.endsWith(
         "badge_component.rb",
+      ),
+    );
+  },
+
+  async "switch to related: component preview"() {
+    await open("spec/components/previews/card_component_preview.rb");
+    await vscode.commands.executeCommand("rubyTemplates.switchRelated");
+    await until("previewed component", () =>
+      vscode.window.activeTextEditor?.document.fileName.endsWith(
+        path.join("app", "components", "card_component.rb"),
       ),
     );
   },

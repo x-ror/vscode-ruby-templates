@@ -140,13 +140,13 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `render partial: name_var` (non-literal partial name): show nothing, don't guess (`RENDER_STR` only takes string literals)
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
-- [ ] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb`
-- [ ] Template → controller action and controller action → template
-- [ ] Helper method → definition in `app/helpers/**` (and gem helpers through Ruby LSP)
-- [ ] Locals: go to where a local is passed (`render … locals:`) from its use in the partial
-- [ ] Instance variables → assignment in the controller action
+- [x] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb` (`server/src/controllers.rs`)
+- [x] Template → controller action (*Switch to Related File*, `src/related.js` `actionSource`) and controller action → template (`def show`, `render :edit`; `server/src/controllers.rs`)
+- [x] Helper method → definition in `app/helpers/**` and controllers' `helper_method`s (`server/src/helper_defs.rs`); gem helpers stay with Ruby LSP
+- [x] Locals: go to where a local is passed (`render "card", user: u`) from its use in the partial, else its strict-locals comment (`partial_rename::local_passes`)
+- [x] Instance variables → assignment in the controller action or a `before_action` callback that runs for it (`server/src/ivars.rs`)
 - [x] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path) (`server/src/i18n.rs`)
-- [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
+- [x] Route helpers `*_path` / `*_url` → `config/routes.rb` (the route's source location, Rails 7.1+; `server/src/routes.rs`)
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
 - [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
 - [x] ViewComponent: component `.rb` ↔ template file switch command, sidecar folder included (`rubyTemplates.switchRelated`, `src/related.js`)
@@ -159,11 +159,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Form builder methods after `f.` / `form.` / `ff.` / `builder.` / `fields.` (`server/src/helpers.rs` `FORM_BUILDER`)
 - [x] ~78 Rails view helpers with snippet arguments, only inside `<% %>` (`server/src/helpers.rs` `HELPERS`, `server/src/main.rs` `in_ruby_context`)
 - [x] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`) (`server/src/partials.rs` `render_candidates`; `render layout:` resolves to a partial like Rails)
-- [ ] Instance variables used in the matching controller action
+- [x] Instance variables assigned in the matching controller action and its `before_action` callbacks (`only:` / `except:`, ApplicationController's too); every action's for a partial
 - [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
-- [ ] Route helpers from `bin/rails routes` (cached)
+- [x] Route helpers from the app's routes (`bin/rails runner src/routes.rb`, cached per app, reloaded when config/routes* change; `rubyTemplates.routes.enabled`)
 - [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
 - [x] ViewComponent class names after `render ` (from `app/components/**/*_component.rb`, inserted as `Name.new(…)`)
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
@@ -178,7 +178,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Hover on a known Rails helper shows its signature (`server/src/main.rs`, `server/src/helpers.rs`)
 - [x] Partial hover shows its strict locals signature (`server/src/main.rs` `render_hover`)
 - [x] i18n key hover shows the translations (`server/src/i18n.rs`; missing locales listed)
-- [ ] Route helper hover shows verb + path
+- [x] Route helper hover shows verb + path, with every verb on that path and its controller#action
 - [x] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim) (`server/src/erb.rs` `tag_doc`)
 - [x] Helper docs link to api.rubyonrails.org (`server/src/helpers.rs` `doc_url`)
 
@@ -202,8 +202,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [x] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment (`syntaxes/erb.tmLanguage.json` `erb-strict-locals`)
 - [x] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11) (see items above)
-- [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
-- [ ] ViewComponent previews (`spec/components/previews`) navigation
+- [x] ViewComponent slots: `with_*` after `c.` in a `render X.new do |c|` block, `header` / `header?` in the component's own template (`server/src/slots.rs`)
+- [x] ViewComponent previews (`{test,spec}/components/previews`) ↔ component in *Switch to Related File* (`src/related.js` `previewPartners`)
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
 - [x] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command (`rubyTemplates.switchRelated`: any view's other formats)
 - [ ] Rails engines and `app/views` in gems found via `bundle show`

@@ -20,7 +20,27 @@ write(
 write("app/views/users/_card.html.erb", "<p>card</p>\n");
 write("app/views/user_mailer/welcome.html.erb", "<p>Hi</p>\n");
 write("app/views/user_mailer/welcome.text.erb", "Hi\n");
+write("app/views/orders/show.html.erb", "<p>Order</p>\n");
+// Stands in for `bin/rails runner routes.rb`: the client only needs its marker and JSON.
+write(
+  "bin/rails",
+  'puts "booted", "__RUBY_TEMPLATES_ROUTES__", \'[{"name":"users","verb":"GET","path":"/users(.:format)","action":"users#index","source":"config/routes.rb:2"}]\'\n',
+);
+write(
+  "config/routes.rb",
+  "Rails.application.routes.draw do\n  resources :users\nend\n",
+);
+write("app/views/users/routes.html.erb", '<%= link_to "All", users_path %>\n');
+write(
+  "app/controllers/orders_controller.rb",
+  "class OrdersController < ApplicationController\n  def index\n  end\n\n  def show\n  end\nend\n",
+);
 write("app/components/badge_component.rb", "class BadgeComponent; end\n");
+write("app/components/card_component.rb", "class CardComponent; end\n");
+write(
+  "spec/components/previews/card_component_preview.rb",
+  "class CardComponentPreview; end\n",
+);
 write(
   "app/components/badge_component.html.erb",
   "<span><%= content %></span>\n",

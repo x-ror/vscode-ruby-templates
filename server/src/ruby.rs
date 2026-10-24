@@ -204,6 +204,24 @@ pub fn ends_with_block(code: &str) -> bool {
     }
 }
 
+/// Lines of `text` with a trailing `,` or `(` joined to the next, so a call's arguments read as one line.
+pub fn logical_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut open = false;
+    for line in text.lines() {
+        match out.last_mut().filter(|_| open) {
+            Some(last) => last.push_str(line.trim_start()),
+            None => out.push(line.to_string()),
+        }
+        let end = line.trim_end();
+        open = end.ends_with(',') || end.ends_with('(');
+        if open {
+            out.last_mut().into_iter().for_each(|l| l.push(' '));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

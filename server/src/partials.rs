@@ -336,7 +336,7 @@ pub fn gem_view(views: &Path, name: &str) -> bool {
 }
 
 /// All template files matching `dir/<prefix>name.*`.
-fn matching_templates(dir: &Path, basename: &str) -> Vec<PathBuf> {
+pub fn matching_templates(dir: &Path, basename: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
     let mut found: Vec<PathBuf> = entries
         .flatten()

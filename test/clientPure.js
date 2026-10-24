@@ -1,12 +1,19 @@
 import assert from "node:assert";
 import { convertedFileName } from "../src/convert.js";
 import { windowsShellCommand } from "../src/shell.js";
-import { relatedFiles, relatedDirs } from "../src/related.js";
+import {
+  relatedFiles,
+  relatedDirs,
+  actionSource,
+  actionLine,
+  previewPartners,
+} from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
 import { herbLintReport } from "../src/herbLint.js";
+import { routesFromOutput } from "../src/routes.js";
 import { spawnSync } from "node:child_process";
 
 // convertedFileName
@@ -297,3 +304,65 @@ assert.deepStrictEqual(
   ),
   { offenses: [], error: "✗ No files found matching pattern: x.erb" },
 );
+
+// actionSource / actionLine
+assert.deepStrictEqual(actionSource("/r/app/views/admin/users/show.html.erb"), {
+  file: "/r/app/controllers/admin/users_controller.rb",
+  action: "show",
+});
+assert.deepStrictEqual(
+  actionSource("/r/app/views/user_mailer/welcome.text.erb"),
+  {
+    file: "/r/app/mailers/user_mailer.rb",
+    action: "welcome",
+  },
+);
+for (const view of [
+  "/r/app/views/users/_form.html.erb",
+  "/r/app/views/layouts/application.html.erb",
+  "/r/app/views/show.html.erb",
+  "/r/lib/views/users/show.html.erb",
+]) {
+  assert.strictEqual(actionSource(view), undefined, view);
+}
+const ordersController =
+  "class X\n  def index; end\n  def show_all\n  def show(id = nil)\nend";
+assert.strictEqual(actionLine(ordersController, "show"), 3);
+assert.strictEqual(actionLine(ordersController, "edit"), -1);
+
+// routesFromOutput
+assert.deepStrictEqual(
+  routesFromOutput(
+    'Booting\r\n\r\n__RUBY_TEMPLATES_ROUTES__\r\n[{"name":"users"}]\r\n',
+  ),
+  [{ name: "users" }],
+);
+assert.strictEqual(routesFromOutput("Puma starting\n"), undefined);
+assert.throws(() => routesFromOutput("__RUBY_TEMPLATES_ROUTES__\n{oops"));
+
+// previewPartners
+const previews = (dir) => [
+  `/r/test/components/previews/${dir}card_component_preview.rb`,
+  `/r/spec/components/previews/${dir}card_component_preview.rb`,
+];
+assert.deepStrictEqual(
+  previewPartners("/r/app/components/admin/card_component.rb"),
+  previews("admin/"),
+);
+assert.deepStrictEqual(
+  previewPartners("/r/app/components/card_component/card_component.html.erb"),
+  previews(""),
+);
+assert.deepStrictEqual(
+  previewPartners(
+    "/r/spec/components/previews/admin/card_component_preview.rb",
+  ),
+  ["/r/app/components/admin/card_component.rb"],
+);
+for (const file of [
+  "/r/app/components/helpers.rb",
+  "/r/app/views/users/show.html.erb",
+  "/r/spec/components/previews/card_preview.rb",
+]) {
+  assert.deepStrictEqual(previewPartners(file), [], file);
+}

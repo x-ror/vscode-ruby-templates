@@ -1,15 +1,19 @@
 mod assets;
+mod controllers;
 mod erb;
 mod erb_complete;
 mod haml;
 mod haml_indent;
+mod helper_defs;
 mod helpers;
 mod html;
 mod html_lint;
 mod i18n;
+mod ivars;
 mod outline;
 mod partial_rename;
 mod partials;
+mod routes;
 mod ruby;
 mod ruby_syntax;
 mod schema;
@@ -19,6 +23,7 @@ mod slim_hover;
 mod slim_indent;
 mod slim_outline;
 mod slim_parser;
+mod slots;
 mod stimulus;
 mod tags;
 mod util;
@@ -135,10 +140,14 @@ impl Options {
 struct Backend {
     client: Client,
     docs: Arc<DashMap<Url, Doc>>,
+    /// Open controllers, for navigation to their views only; no other request reads them.
+    controllers: DashMap<Url, String>,
     /// Files under each app/views root, for render completion.
     templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
     /// Parsed locale files per config/locales directory.
     locales: DashMap<PathBuf, LocaleFiles>,
+    /// Routes per Rails root, as the client last sent them.
+    routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     options: Arc<OnceLock<Options>>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
@@ -330,6 +339,15 @@ fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize
         return None;
     }
     i18n::full_key(path, &line[start..end])
+}
+
+fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
+    Some(DocumentLink {
+        range,
+        target: Some(Url::from_file_path(target).ok()?),
+        tooltip: Some(target.to_string_lossy().into_owned()),
+        data: None,
+    })
 }
 
 /// The line of `key` in each locale file that defines it.
@@ -526,8 +544,51 @@ impl Backend {
 
     /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
     /// and drive colons where `Url::from_file_path` doesn't.
+    /// `rubyTemplates/routes`: `{ root, routes }` from the client's `bin/rails runner`.
+    async fn set_routes(&self, params: serde_json::Value) {
+        let Some(root) = params.get("root").and_then(serde_json::Value::as_str).map(PathBuf::from) else { return };
+        let parsed = routes::parse(&root, params.get("routes").unwrap_or(&serde_json::Value::Null));
+        self.routes.insert(root, Arc::new(parsed));
+    }
+
+    /// Where the `@ivar` or partial local under `col` comes from: its assignments in the controller, or the
+    /// `render` calls passing the local (else the strict-locals comment declaring it).
+    fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Vec<Location> {
+        let at_line = |file: &Path, line: usize| {
+            let start = Position::new(line as u32, 0);
+            Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
+        };
+        let word = util::word_at(line, col);
+        let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
+        if before.ends_with('@') && !before.ends_with("@@") {
+            return ivars::for_view(path).into_iter().filter(|a| a.name == word).filter_map(|a| at_line(&a.file, a.line)).collect();
+        }
+        let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
+        // `link_to` or `t` is never a local; the scan below reads every view.
+        let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
+        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return vec![] };
+        let Some(views) = partials::views_root(path) else { return vec![] };
+        let sources = partial_rename::sources(&views, &self.open_texts());
+        let passes = partial_rename::local_passes(path, name, &sources, &self.options().extra_engines);
+        if !passes.is_empty() {
+            return passes;
+        }
+        let declared = partials::strict_locals(text).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
+        let comment = text.lines().position(|l| l.contains("locals:"));
+        comment.filter(|_| declared).and_then(|line| at_line(path, line)).into_iter().collect()
+    }
+
+    /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
+    fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
+        let root = partials::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
+        root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
+    }
+
     fn open_texts(&self) -> HashMap<PathBuf, String> {
-        self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect()
+        let templates = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone())));
+        // Partial and i18n references also scan controllers; their unsaved text is the current one.
+        let controllers = self.controllers.iter().filter_map(|c| Some((c.key().to_file_path().ok()?, c.value().clone())));
+        templates.chain(controllers).collect()
     }
 }
 
@@ -553,7 +614,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<"].map(String::from).to_vec()),
+                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<", "@"].map(String::from).to_vec()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -607,13 +668,24 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
-        let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else { return };
+        let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else {
+            if p.text_document.uri.to_file_path().is_ok_and(|path| controllers::controller_path(&path).is_some()) {
+                self.controllers.insert(p.text_document.uri, p.text_document.text);
+            }
+            return;
+        };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
         self.publish(p.text_document.uri).await;
     }
 
     async fn did_change(&self, p: DidChangeTextDocumentParams) {
         let version = p.text_document.version;
+        if let Some(mut text) = self.controllers.get_mut(&p.text_document.uri) {
+            for change in p.content_changes {
+                util::apply_change(&mut text, change);
+            }
+            return;
+        }
         {
             let Some(mut doc) = self.docs.get_mut(&p.text_document.uri) else { return };
             for change in p.content_changes {
@@ -637,6 +709,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
+        if self.controllers.remove(&p.text_document.uri).is_some() {
+            return;
+        }
         self.docs.remove(&p.text_document.uri);
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
     }
@@ -644,8 +719,14 @@ impl LanguageServer for Backend {
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        if let Some(text) = self.controllers.get(&uri) {
+            let (_, line, col) = util::line_at(&text, pos);
+            let found = controllers::targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default();
+            let locs: Vec<Location> = found.into_iter().filter_map(file_location).collect();
+            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        }
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
@@ -659,14 +740,40 @@ impl LanguageServer for Backend {
         } else {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
-        let locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
+            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        }
+        // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
+        {
+            let helper = helper_defs::name_at(line, col);
+            let at_line = |(file, line): (PathBuf, usize)| {
+                let start = Position::new(line as u32, 0);
+                Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
+            };
+            let route = helper.and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
+            match route {
+                Some(source) => locs.extend(at_line(source)),
+                None => locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line)),
+            }
+        }
+        if locs.is_empty() {
+            locs.extend(self.variable_definitions(&doc.text, &path, line, col));
+        }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        if let Some(text) = self.controllers.get(&uri) {
+            let links = util::lines_with_offsets(&text)
+                .enumerate()
+                .flat_map(|(i, (_, line))| controllers::targets(&path, line, None).into_iter().map(move |t| (i, line, t)))
+                .filter_map(|(i, line, (start, end, found))| file_link(util::span_range(i, line, start, end), found.first()?));
+            return Ok(Some(links.collect()));
+        }
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
@@ -676,14 +783,7 @@ impl LanguageServer for Backend {
                 .filter(|r| in_code(i, line_start, r))
                 .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
-                let Some(target) = found.into_iter().next() else { continue };
-                let Ok(t) = Url::from_file_path(&target) else { continue };
-                links.push(DocumentLink {
-                    range: util::span_range(i, line, start, end),
-                    target: Some(t),
-                    tooltip: Some(target.to_string_lossy().into_owned()),
-                    data: None,
-                });
+                links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target)));
             }
         }
         Ok(Some(links))
@@ -729,7 +829,8 @@ impl LanguageServer for Backend {
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
         }
-        Ok(None)
+        let routes = uri.to_file_path().map(|p| self.routes_for(&p)).unwrap_or_default();
+        Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
@@ -950,6 +1051,10 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
+        if let Some(found) = path.as_deref().and_then(|p| slot_setter_completions(p, &doc.text[..line_start + col])).filter(|_| code_here())
+        {
+            return items(found);
+        }
         if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
         }
@@ -993,11 +1098,27 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
+        let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
+        if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
+            let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
+            return items(ivar_completions(path, typed, range));
+        }
         if typed.is_empty() {
             return Ok(None);
         }
         let mut found = local_completions(&doc.text, typed);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        let own_slots = path.as_deref().and_then(slots::class_of_template).and_then(|class| std::fs::read_to_string(class).ok());
+        let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
+        found.extend(
+            readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
+        );
+        let routes = path.as_deref().map(|p| self.routes_for(p)).unwrap_or_default();
+        found.extend(
+            routes::completions(&routes, typed)
+                .into_iter()
+                .map(|(helper, detail)| util::completion_item(helper, CompletionItemKind::FUNCTION, detail)),
+        );
         items(found)
     }
 }
@@ -1041,6 +1162,47 @@ fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: R
             ..util::completion_item(name, kind, detail.clone())
         })
         .collect()
+}
+
+/// `@name` for the instance variables the view's controller action assigns; each replaces `range`.
+fn ivar_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    let mut seen = std::collections::HashSet::new();
+    ivars::for_view(path)
+        .into_iter()
+        .filter(|a| a.name.starts_with(typed) && seen.insert(a.name.clone()))
+        .map(|a| {
+            let label = format!("@{}", a.name);
+            let from = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+            CompletionItem {
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
+                filter_text: Some(label.clone()),
+                ..util::completion_item(label, CompletionItemKind::VARIABLE, format!("assigned in {from}:{}", a.line + 1))
+            }
+        })
+        .collect()
+}
+
+/// `with_header` … after `card.` inside `render CardComponent.new do |card|`.
+fn slot_setter_completions(path: &Path, before: &str) -> Option<Vec<CompletionItem>> {
+    let (head, typed) = before.rsplit_once('.')?;
+    let var = head.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next()?;
+    if var.is_empty() || !typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let component = slots::block_component(head, var)?;
+    let detail = format!("{component} slot");
+    let setters = slots::setters(&slots::component_slots(path, component));
+    // Not a component with slots (or a reused name like `f`): leave `f.` to the form builder completions.
+    if setters.is_empty() {
+        return None;
+    }
+    Some(
+        setters
+            .into_iter()
+            .filter(|s| s.starts_with(typed))
+            .map(|s| util::completion_item(s, CompletionItemKind::METHOD, detail.clone()))
+            .collect(),
+    )
 }
 
 /// The component constant being typed after `render ` / `render(`: `Us`, `Admin::Us`.
@@ -1178,15 +1340,19 @@ async fn main() {
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
+    let (service, socket) = LspService::build(|client| Backend {
         client,
         docs: Arc::default(),
+        controllers: DashMap::new(),
         templates: DashMap::new(),
         locales: DashMap::new(),
+        routes: DashMap::new(),
         options: Arc::default(),
         roots: OnceLock::new(),
         dynamic_formatting: OnceLock::new(),
-    });
+    })
+    .custom_method("rubyTemplates/routes", Backend::set_routes)
+    .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
@@ -1194,6 +1360,13 @@ async fn main() {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn slot_setters_leave_other_receivers_alone() {
+        let before = "<%= render CardComponent.new do |f| %><% end %>\n<%= form_with model: @user do |f| %>\n  <%= f.te";
+        assert!(slot_setter_completions(Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
+        assert!(receiver_completions(before).is_some_and(|items| !items.is_empty()));
+    }
     #[test]
     fn watched_file_events_invalidate_caches() {
         let views = Path::new("/r/app/views");

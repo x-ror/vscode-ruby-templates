@@ -799,6 +799,11 @@
           "default": "erb_lint",
           "description": "Executable for erb_lint diagnostics (gem install erb_lint)."
         },
+        "rubyTemplates.routes.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Read the app's routes with `bin/rails runner` (boots the app once, and again when config/routes.rb or config/routes/*.rb changes) for completion, hover and go to definition of `*_path` / `*_url` helpers in views."
+        },
         "rubyTemplates.herbLint.enabled": {
           "type": "boolean",
           "default": false,

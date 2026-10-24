@@ -30,7 +30,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(root, "app", "components", "badge_component.rb"),
-  "class BadgeComponent; end\n",
+  "class BadgeComponent\n  renders_one :icon\n  renders_many :links\nend\n",
 );
 fs.writeFileSync(path.join(views, "users", "_user.html.erb"), "<p></p>\n");
 fs.writeFileSync(
@@ -44,6 +44,23 @@ fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
   'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
 );
+fs.mkdirSync(path.join(root, "app", "controllers"), { recursive: true });
+fs.mkdirSync(path.join(root, "app", "helpers"), { recursive: true });
+fs.mkdirSync(path.join(views, "layouts"), { recursive: true });
+fs.writeFileSync(path.join(views, "layouts", "admin.html.erb"), "");
+fs.writeFileSync(
+  path.join(root, "app", "helpers", "users_helper.rb"),
+  "module UsersHelper\n  def format_price(x)\n  end\nend\n",
+);
+const controllerText =
+  'class UsersController < ApplicationController\n  layout "admin"\n\n  def index\n    render :index\n  end\n  before_action :set_menu\n\n  def set_menu\n    @menu = Menu.first\n  end\nend\n';
+const controllerFile = path.join(
+  root,
+  "app",
+  "controllers",
+  "users_controller.rb",
+);
+fs.writeFileSync(controllerFile, controllerText);
 fs.mkdirSync(path.join(root, "app", "mailers"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "app", "mailers", "user_mailer.rb"),
@@ -688,6 +705,184 @@ const check = (label, actual, expected) => {
       "/config/locales/en.yml 3",
       "/config/locales/uk.yml 3",
     ],
+  );
+  const controllerUri = "file://" + controllerFile;
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: controllerUri,
+        languageId: "ruby",
+        version: 1,
+        text: controllerText,
+      },
+    },
+    true,
+  );
+  check(
+    "controller action → template",
+    targets(await req("textDocument/definition", controllerUri, 3, 7)),
+    ["/app/views/users/index.html.erb"],
+  );
+  const controllerLinks = await send("textDocument/documentLink", {
+    textDocument: { uri: controllerUri },
+  });
+  check(
+    "controller links: layout and render",
+    controllerLinks.result?.map(
+      (l) => `${l.range.start.line} ${rel(l.target)}`,
+    ),
+    [
+      "1 /app/views/layouts/admin.html.erb",
+      "4 /app/views/users/index.html.erb",
+    ],
+  );
+  check(
+    "controller gets no completion",
+    (await req("textDocument/completion", controllerUri, 4, 10)).result,
+    null,
+  );
+  const helperUri = "file://" + path.join(views, "users", "helper.html.erb");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: helperUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= format_price(1) %> format_price\n",
+      },
+    },
+    true,
+  );
+  check(
+    "helper definition",
+    [
+      (await req("textDocument/definition", helperUri, 0, 6)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+      (await req("textDocument/definition", helperUri, 0, 26)).result,
+    ],
+    [["/app/helpers/users_helper.rb:1"], null],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 2 },
+      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n" }],
+    },
+    true,
+  );
+  const cardUri = "file://" + path.join(views, "users", "_card.html.slim");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: cardUri,
+        languageId: "slim",
+        version: 1,
+        text: "p = user.name\n",
+      },
+    },
+    true,
+  );
+  const at = (r) =>
+    r.result?.map(
+      (l) => `${rel(l.uri)}:${l.range.start.line}:${l.range.start.character}`,
+    );
+  check(
+    "ivars and locals",
+    [
+      (await req("textDocument/completion", helperUri, 0, 6)).result?.map(
+        (i) => [i.label, i.textEdit.range.start.character],
+      ),
+      at(await req("textDocument/definition", helperUri, 1, 6)),
+      at(await req("textDocument/definition", cardUri, 0, 5)),
+    ],
+    [
+      [["@menu", 4]],
+      ["/app/controllers/users_controller.rb:9:0"],
+      ["/app/views/users/index.html.erb:0:19"],
+    ],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 3 },
+      contentChanges: [
+        { text: "<%= render BadgeComponent.new do |b| %>\n  <% b.with_l %>\n" },
+      ],
+    },
+    true,
+  );
+  const badgeUri =
+    "file://" +
+    path.join(root, "app", "components", "badge_component.html.haml");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: badgeUri,
+        languageId: "haml",
+        version: 1,
+        text: "- if ic\n",
+      },
+    },
+    true,
+  );
+  check(
+    "ViewComponent slots",
+    [
+      labels(await req("textDocument/completion", helperUri, 1, 13)),
+      labels(await req("textDocument/completion", badgeUri, 0, 7)),
+    ],
+    [
+      ["with_link", "with_links"],
+      ["icon", "icon?"],
+    ],
+  );
+  await send(
+    "rubyTemplates/routes",
+    {
+      root,
+      routes: [
+        {
+          name: "users",
+          verb: "GET",
+          path: "/users(.:format)",
+          action: "users#index",
+          source: "config/routes.rb:2",
+        },
+        {
+          name: "",
+          verb: "POST",
+          path: "/users(.:format)",
+          action: "users#create",
+        },
+      ],
+    },
+    true,
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 4 },
+      contentChanges: [
+        { text: '<%= link_to "x", users_p %>\n<%= users_path %>\n' },
+      ],
+    },
+    true,
+  );
+  check(
+    "route helpers: completion, hover, definition",
+    [
+      labels(await req("textDocument/completion", helperUri, 0, 24)),
+      firstLine(await req("textDocument/hover", helperUri, 1, 6)),
+      (await req("textDocument/definition", helperUri, 1, 6)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+    ],
+    [["users_path"], "`users_path` → `/users`", ["/config/routes.rb:1"]],
   );
   const streamUri =
     "file://" + path.join(views, "users", "create.turbo_stream.erb");

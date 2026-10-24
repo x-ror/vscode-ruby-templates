@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import path from "path";
 import fs from "fs";
-import { LanguageClient, TransportKind } from "vscode-languageclient/node";
+import {
+  LanguageClient,
+  State,
+  TransportKind,
+} from "vscode-languageclient/node";
 
 /** @type {LanguageClient | undefined} */
 let client;
@@ -70,6 +74,12 @@ async function doStart(context, output) {
           language: "ruby",
           pattern: "**/*.{jbuilder,builder}",
         },
+        // Controllers only for go to definition / links into their views; the server ignores them otherwise.
+        {
+          scheme: "file",
+          language: "ruby",
+          pattern: "**/app/controllers/**/*_controller.rb",
+        },
       ],
       outputChannel: output,
       // Our catch below reports the failure; returning false stops the client from also showing its own.
@@ -91,6 +101,11 @@ async function doStart(context, output) {
     },
   );
   client = started;
+  // Also after the client restarts a crashed server by itself, which doesn't go through doStart.
+  started.onDidChangeState(({ newState }) => {
+    if (newState === State.Running)
+      for (const listener of startListeners) listener();
+  });
   try {
     await started.start();
   } catch (e) {
@@ -149,4 +164,21 @@ const restartClient = (context, output) =>
     await doStart(context, output);
   }, output);
 
-export { startClient, stopClient, restartClient };
+// A restarted server has lost what was sent to the previous one.
+const startListeners = new Set();
+const onServerStarted = (listener) => {
+  startListeners.add(listener);
+  return { dispose: () => startListeners.delete(listener) };
+};
+
+/** Send a notification to the running server; dropped while it is stopped (start listeners resend state). */
+const notifyServer = (method, params) =>
+  client?.isRunning() ? client.sendNotification(method, params) : undefined;
+
+export {
+  startClient,
+  stopClient,
+  restartClient,
+  onServerStarted,
+  notifyServer,
+};
