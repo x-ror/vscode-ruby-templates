@@ -50,6 +50,10 @@ export function assemble(binaries, out, version) {
       repository: manifest.repository,
       os: [os],
       cpu: [cpu],
+      // The Linux builds link glibc: musl systems get the wrapper's message instead of a loader error.
+      ...(os === "linux" && { libc: ["glibc"] }),
+      // Yarn PnP would leave the binary inside its zip.
+      preferUnplugged: true,
       files: ["bin"],
     });
     optional[name] = version;
@@ -64,10 +68,7 @@ export function assemble(binaries, out, version) {
     version,
     optionalDependencies: optional,
   });
-  fs.copyFileSync(
-    path.join(import.meta.dirname, "..", "LICENSE"),
-    path.join(dir, "LICENSE"),
-  );
+  fs.copyFileSync(license, path.join(dir, "LICENSE"));
   folders.push(dir);
   return folders;
 }

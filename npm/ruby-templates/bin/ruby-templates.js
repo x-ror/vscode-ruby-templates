@@ -7,7 +7,7 @@ import path from "path";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const { name } = JSON.parse(
+const { name, optionalDependencies } = JSON.parse(
   fs.readFileSync(path.join(import.meta.dirname, "..", "package.json"), "utf8"),
 );
 const exe =
@@ -21,10 +21,11 @@ function binary() {
     const manifest = require.resolve(`${platformPackage}/package.json`);
     return path.join(path.dirname(manifest), "bin", exe);
   } catch {
-    console.error(
-      `ruby-templates: no binary for ${process.platform}-${process.arch} (${platformPackage} is not installed). ` +
-        "Reinstall without --no-optional, or set RUBY_TEMPLATES_BINARY.",
-    );
+    const why =
+      platformPackage in optionalDependencies
+        ? `${platformPackage} is not installed; reinstall without --omit=optional`
+        : `no prebuilt binary is published for ${process.platform}-${process.arch}`;
+    console.error(`ruby-templates: ${why}, or set RUBY_TEMPLATES_BINARY.`);
     process.exit(2);
   }
 }

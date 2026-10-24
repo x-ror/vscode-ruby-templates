@@ -163,6 +163,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with: { pattern: cli-*, path: .cli }
       - run: bun npm/assemble.js .cli npm-dist
+      # Every platform the server matrix builds, plus the main package: a renamed artifact must not drop one.
+      - run: test "$(ls npm-dist | wc -l)" -eq 6
       - uses: actions/upload-artifact@v7
         with: { name: npm, path: npm-dist }
 
@@ -182,8 +184,14 @@ jobs:
         with: { name: npm, path: npm-dist }
       # Artifacts lose the executable bit.
       - run: chmod +x npm-dist/*/bin/ruby-templates*
-      - run: for dir in npm-dist/*/; do [ "$dir" = npm-dist/main/ ] || npm publish --provenance --access public "$dir"; done
-      - run: npm publish --provenance --access public npm-dist/main
+      # A version already out is skipped, so a failed run can be re-run.
+      - run: |
+          publish() {
+            spec=$(node -p "const p = require('./$1/package.json'); p.name + '@' + p.version")
+            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "$1"
+          }
+          for dir in npm-dist/*/; do [ "$dir" = npm-dist/main/ ] || publish "${dir%/}"; done
+          publish npm-dist/main
 
   # Each registry gets its own job, so one failing doesn't block the other.
   publish-marketplace:

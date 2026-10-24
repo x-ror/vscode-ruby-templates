@@ -19,13 +19,15 @@ const built =
     `ruby-templates${exe}`,
   );
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-npm-")));
-// npm is a .cmd on Windows, which spawn only runs through a shell.
+// npm and the bin are .cmd files on Windows, which spawn only runs through a shell, unquoted.
+const windows = process.platform === "win32";
+const quoted = (args) => (windows ? args.map((a) => `"${a}"`) : args);
 const npm = (args, cwd) =>
-  execFileSync("npm", args, {
+  execFileSync("npm", quoted(args), {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: windows,
   });
 
 try {
@@ -77,11 +79,11 @@ try {
     `ruby-templates${process.platform === "win32" ? ".cmd" : ""}`,
   );
   const run = (args, input) =>
-    spawnSync(bin, args, {
+    spawnSync(windows ? `"${bin}"` : bin, quoted(args), {
       cwd: project,
       input,
       encoding: "utf8",
-      shell: process.platform === "win32",
+      shell: windows,
     });
   let r = run(
     ["format", "--stdin-filepath", "app/views/users/show.html.erb"],
