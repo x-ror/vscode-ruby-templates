@@ -1,5 +1,11 @@
 const assert = require("assert");
-const { toggleSlimMarker, inVerbatimBlock, wrapSlim, dedent, partialPath } = require("../src/slim");
+const {
+  toggleSlimMarker,
+  inVerbatimBlock,
+  wrapSlim,
+  dedent,
+  partialPath,
+} = require("../src/slim");
 
 for (const [line, next] of [
   ["- if x", "= if x"],
@@ -23,21 +29,57 @@ assert.strictEqual(wrapSlim("user.name", true), "= user.name");
 assert.strictEqual(wrapSlim("user.name", false), "#{user.name}");
 assert.strictEqual(wrapSlim("| Hi name", true), "#{| Hi name}");
 
-const tree = ["javascript:", "  - x", "p", "  - y", "/ note", "  = z", "| text", "  - w", "- if a", "  = b"];
-assert.deepStrictEqual(tree.map((_, i) => inVerbatimBlock(tree, i)), [false, true, false, false, false, true, false, true, false, false]);
+const tree = [
+  "javascript:",
+  "  - x",
+  "p",
+  "  - y",
+  "/ note",
+  "  = z",
+  "| text",
+  "  - w",
+  "- if a",
+  "  = b",
+];
+assert.deepStrictEqual(
+  tree.map((_, i) => inVerbatimBlock(tree, i)),
+  [false, true, false, false, false, true, false, true, false, false],
+);
 
-assert.deepStrictEqual(dedent(["    .card", "", "      p = x", "\t"]), { indent: "    ", lines: [".card", "", "  p = x", ""] });
-assert.deepStrictEqual(dedent(["\t\tp", "    q"]), { indent: "", lines: ["\t\tp", "    q"] });
-assert.deepStrictEqual(dedent(["  \ta", "  b"]), { indent: "  ", lines: ["\ta", "b"] });
+assert.deepStrictEqual(dedent(["    .card", "", "      p = x", "\t"]), {
+  indent: "    ",
+  lines: [".card", "", "  p = x", ""],
+});
+assert.deepStrictEqual(dedent(["\t\tp", "    q"]), {
+  indent: "",
+  lines: ["\t\tp", "    q"],
+});
+assert.deepStrictEqual(dedent(["  \ta", "  b"]), {
+  indent: "  ",
+  lines: ["\ta", "b"],
+});
 
-assert.strictEqual(partialPath("/app/views/users/show.html.slim", "card"), "/app/views/users/_card.html.slim");
-assert.strictEqual(partialPath("/r/app/views/users/show.slim", "shared/ui/card"), "/r/app/views/shared/ui/_card.html.slim");
+assert.strictEqual(
+  partialPath("/app/views/users/show.html.slim", "card"),
+  "/app/views/users/_card.html.slim",
+);
+assert.strictEqual(
+  partialPath("/r/app/views/users/show.slim", "shared/ui/card"),
+  "/r/app/views/shared/ui/_card.html.slim",
+);
 assert.strictEqual(partialPath("/tmp/show.slim", "shared/card"), null);
-assert.strictEqual(partialPath("/app/views/posts/feed.xml.slim", "item"), "/app/views/posts/_item.xml.slim");
-assert.strictEqual(partialPath("/app/views/posts/show.html+phone.slim", "item"), "/app/views/posts/_item.html.slim");
+assert.strictEqual(
+  partialPath("/app/views/posts/feed.xml.slim", "item"),
+  "/app/views/posts/_item.xml.slim",
+);
+assert.strictEqual(
+  partialPath("/app/views/posts/show.html+phone.slim", "item"),
+  "/app/views/posts/_item.html.slim",
+);
 
 const { onEnterRules } = require("../language-configuration/slim.json");
-const enterAction = (line) => onEnterRules.find((r) => new RegExp(r.beforeText).test(line))?.action.indent;
+const enterAction = (line) =>
+  onEnterRules.find((r) => new RegExp(r.beforeText).test(line))?.action.indent;
 for (const [line, action] of [
   ["  | text", "indent"],
   ["' text,", "indent"],

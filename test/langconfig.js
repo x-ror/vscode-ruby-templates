@@ -1,5 +1,8 @@
 const assert = require("assert");
-const { onEnterRules, indentationRules } = require("../language-configuration/erb.json");
+const {
+  onEnterRules,
+  indentationRules,
+} = require("../language-configuration/erb.json");
 
 // Mirrors VS Code: the first rule whose beforeText (and afterText, if set) matches wins.
 const rules = onEnterRules.map(({ beforeText, afterText, action }) => ({
@@ -8,7 +11,8 @@ const rules = onEnterRules.map(({ beforeText, afterText, action }) => ({
   indent: action.indent,
 }));
 const onEnter = (before, after = "") =>
-  rules.find((r) => r.before.test(before) && (!r.after || r.after.test(after)))?.indent ?? null;
+  rules.find((r) => r.before.test(before) && (!r.after || r.after.test(after)))
+    ?.indent ?? null;
 
 const cases = [
   ["<% if user %>", "indent"],
@@ -31,7 +35,8 @@ const cases = [
   ["<%= user.name %>", null],
   ["<% do_something %>", null],
 ];
-for (const [line, expected] of cases) assert.strictEqual(onEnter(line), expected, line);
+for (const [line, expected] of cases)
+  assert.strictEqual(onEnter(line), expected, line);
 
 const inside = [
   ["<%", " %>", "indentOutdent"],
@@ -41,15 +46,22 @@ const inside = [
   ["<% x ", "%>", null],
   ["<% ", "x %>", null],
 ];
-for (const [before, after, expected] of inside) assert.strictEqual(onEnter(before, after), expected, `${before}|${after}`);
+for (const [before, after, expected] of inside)
+  assert.strictEqual(onEnter(before, after), expected, `${before}|${after}`);
 
 const increase = new RegExp(indentationRules.increaseIndentPattern);
 const decrease = new RegExp(indentationRules.decreaseIndentPattern);
 assert(increase.test("<% list.each do |x| =%>"));
 assert(!increase.test("<%# list.each do |x| %>"));
 assert(!increase.test("<% if a %>b<% end =%>"));
-assert(increase.test("<div class=\"a\">"));
+assert(increase.test('<div class="a">'));
 assert(!increase.test("<div>x</div>"), "element closed on the same line");
-for (const line of ["<% else %>", "  <% elsif x %>", "<% when 1 %>", "<%- end -%>"]) assert(decrease.test(line), line);
+for (const line of [
+  "<% else %>",
+  "  <% elsif x %>",
+  "<% when 1 %>",
+  "<%- end -%>",
+])
+  assert(decrease.test(line), line);
 
 console.log(`langconfig: ${cases.length + inside.length + 9} ok`);

@@ -25,11 +25,16 @@ const cases = [
   ["<% if a\n  b %>", "<%= if a\n  b %>"],
   ["<%% x %>", null],
 ];
-for (const [input, expected] of cases) assert.strictEqual(toggle(input), expected, input);
+for (const [input, expected] of cases)
+  assert.strictEqual(toggle(input), expected, input);
 
 // Offset picks the enclosing tag; text outside any tag is a no-op.
 const text = "<a><% a %> <%= b -%></a>";
-assert.deepStrictEqual(toggleErbTagAt(text, text.indexOf("b")), { start: 11, end: 14, replacement: "<%#" });
+assert.deepStrictEqual(toggleErbTagAt(text, text.indexOf("b")), {
+  start: 11,
+  end: 14,
+  replacement: "<%#",
+});
 assert.strictEqual(toggleErbTagAt(text, 1), null);
 assert.strictEqual(toggleErbTagAt(text, text.length - 1), null);
 
