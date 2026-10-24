@@ -100,7 +100,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 ## 9. Diagnostics and linting
 
 - [x] Mixed tabs and spaces within one line's indentation; filter and comment bodies aren't checked (`server/src/haml_indent.rs` `visit_lines`)
-- [x] Inconsistent indentation step against the file's detected unit (`server/src/haml_indent.rs` `detect_unit`; `test/broken/bad.html.haml`)
+- [x] Inconsistent indentation against the first indented line, with Haml's message (`server/src/haml_indent.rs` `check_structure`)
 - [x] Dedent to a level that never existed (`server/src/haml_indent.rs`; `test/broken/bad.html.haml`)
 - [x] Unexpected indentation at top level (`server/src/haml_indent.rs`)
 - [x] Explicit `- end` rejected (`server/src/haml_indent.rs` `check_explicit_end`; `test/broken/bad.html.haml`)

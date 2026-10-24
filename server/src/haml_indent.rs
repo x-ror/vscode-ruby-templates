@@ -160,7 +160,7 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
     // Haml measures every line against the first indented one.
     let doc_indentation =
         visits.iter().map(|v| leading_ws(lines[v.line])).find(|ws| !ws.is_empty()).filter(|ws| !(ws.contains('\t') && ws.contains(' ')));
-    let unit = detect_unit(lines, visits, doc_indentation);
+    let unit = doc_indentation.map(indent_width);
 
     for &Visit { line: line_no, indent, kind, .. } in visits {
         let raw = lines[line_no];
@@ -200,13 +200,18 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
 
         if is_child && !bad_dedent && !tab_space_mismatch {
             let step = indent - parent_indent;
-            match unit {
-                None => {}
-                Some(u) if step != u => {
-                    out.push(error(
-                        line_range(text, line_no, 0, ws.len()),
-                        format!("Inconsistent indentation: expected {} spaces, found {}", u, step),
-                    ));
+            let range = line_range(text, line_no, 0, ws.len());
+            match (unit, doc_indentation) {
+                (Some(u), Some(doc_ws)) if indent % u != 0 => out.push(error(
+                    range,
+                    format!(
+                        "Inconsistent indentation: {} used for indentation, but the rest of the document was indented using {}.",
+                        human_indentation(ws),
+                        human_indentation(doc_ws)
+                    ),
+                )),
+                (Some(u), _) if step != u => {
+                    out.push(error(range, format!("Inconsistent indentation: expected {} spaces, found {}", u, step)))
                 }
                 _ => {}
             }
@@ -293,36 +298,6 @@ fn track_block_keyword(openers: &mut Vec<Opener>, content: &str, indent: usize, 
 fn block_keyword(code: &str) -> Option<&str> {
     let caps = BLOCK_KEYWORD.captures(code)?;
     caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str())
-}
-
-/// Most common positive indentation step between a line and its parent: the file's indent unit.
-/// Lines indented with the other character than `doc_indentation` are left out; they get their own error.
-fn detect_unit(lines: &[&str], visits: &[Visit], doc_indentation: Option<&str>) -> Option<usize> {
-    let mut levels: Vec<usize> = vec![0];
-    let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
-    for &Visit { line, indent, .. } in visits {
-        let ws = leading_ws(lines[line]);
-        if doc_indentation.is_some_and(|d| !ws.is_empty() && ws.contains('\t') != d.contains('\t')) {
-            continue;
-        }
-        while levels.last().map(|l| *l > indent).unwrap_or(false) {
-            levels.pop();
-        }
-        let parent = *levels.last().unwrap_or(&0);
-        if indent > parent {
-            let step = indent - parent;
-            *counts.entry(step).or_insert(0) += 1;
-            levels.push(indent);
-        }
-    }
-    // Highest count wins; on a tie the smaller step (BTreeMap iterates ascending, so `>` keeps the first).
-    counts
-        .into_iter()
-        .fold(None, |best: Option<(usize, usize)>, (step, n)| match best {
-            Some((_, bn)) if bn >= n => best,
-            _ => Some((step, n)),
-        })
-        .map(|(step, _)| step)
 }
 
 /// Returns the line kind and how many physical lines it spans.
@@ -591,8 +566,6 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                at(2, 0, 3, "Inconsistent indentation: expected 2 spaces, found 3"),
-                at(3, 0, 2, "Indentation does not match any outer level"),
                 at(3, 0, 12, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
                 at(7, 2, 7, "`end` is not allowed: Haml closes blocks by indentation"),
                 at(8, 2, 16, "Unknown Haml filter `:unknownfilter`"),
@@ -610,6 +583,15 @@ mod tests {
         type Expected<'a> = (u32, u32, u32, &'a str);
         let cases: &[(&str, Expected)] = &[
             ("%div\n  %p\n    %b\n   %i", (3, 0, 3, "Indentation does not match any outer level")),
+            (
+                "- if x\n  %p\n   %b\n",
+                (
+                    2,
+                    0,
+                    3,
+                    "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
+                ),
+            ),
             (" %p", (0, 0, 1, "Unexpected indentation at top level")),
             ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
             (
