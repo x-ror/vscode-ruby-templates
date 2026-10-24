@@ -182,9 +182,16 @@ const notifyServer = (method, params) =>
 async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
   if (!client?.isRunning()) return null;
   const c2p = client.code2ProtocolConverter;
+  // The file options vscode-languageclient sends with its own formatting requests: only those that are on.
+  const files = vscode.workspace.getConfiguration("files", doc);
+  const fileOptions = Object.fromEntries(
+    ["trimTrailingWhitespace", "insertFinalNewline", "trimFinalNewlines"]
+      .filter((key) => files.get(key) === true)
+      .map((key) => [key, true]),
+  );
   const params = {
     textDocument: { uri: c2p.asUri(doc.uri) },
-    options: { tabSize, insertSpaces },
+    options: { tabSize, insertSpaces, ...fileOptions },
   };
   try {
     const edits = range
@@ -193,7 +200,7 @@ async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
           range: c2p.asRange(range),
         })
       : await client.sendRequest("textDocument/formatting", params);
-    return edits && client.protocol2CodeConverter.asTextEdits(edits);
+    return edits && (await client.protocol2CodeConverter.asTextEdits(edits));
   } catch (e) {
     client.outputChannel.appendLine(
       `[ruby-templates] formatting: ${e?.message ?? e}`,

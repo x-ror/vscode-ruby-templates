@@ -236,13 +236,15 @@ const checks = {
     await settings().update("erb.formatter", "builtin", global);
     const editor = await open("app/views/users/unformatted.html.erb");
     try {
-      const edits = await until("format edits", () =>
-        vscode.commands.executeCommand(
+      // Empty until the server is up.
+      const edits = await until("format edits", async () => {
+        const found = await vscode.commands.executeCommand(
           "vscode.executeFormatDocumentProvider",
           editor.document.uri,
           { tabSize: 4, insertSpaces: true },
-        ),
-      );
+        );
+        return found?.length && found;
+      });
       await applyEdits(editor, edits);
       assert.strictEqual(
         editor.document.getText(),
