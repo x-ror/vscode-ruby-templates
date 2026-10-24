@@ -97,6 +97,12 @@ pub fn byte_col(line: &str, character: u32) -> usize {
     line.len()
 }
 
+/// The byte offset in `text` and content of `pos`'s line, and `pos`'s byte column in it; past the end, an empty line.
+pub fn line_at(text: &str, pos: Position) -> (usize, &str, usize) {
+    let (line_start, line) = lines_with_offsets(text).nth(pos.line as usize).unwrap_or((text.len(), ""));
+    (line_start, line, byte_col(line, pos.character))
+}
+
 /// Byte offset of an LSP position; a column past the line end clamps to it, a line past the end is `None`.
 pub fn position_to_offset(text: &str, pos: Position) -> Option<usize> {
     let mut line_start = 0;

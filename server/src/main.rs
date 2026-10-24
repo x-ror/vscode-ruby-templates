@@ -453,11 +453,6 @@ impl Backend {
     fn open_texts(&self) -> HashMap<PathBuf, String> {
         self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect()
     }
-
-    /// The line's byte offset in `text` and its content.
-    fn line_at(text: &str, line: u32) -> (usize, &str) {
-        util::lines_with_offsets(text).nth(line as usize).unwrap_or((text.len(), ""))
-    }
 }
 
 #[tower_lsp::async_trait]
@@ -569,8 +564,7 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col) {
             let files = self.locale_files(&path);
@@ -631,8 +625,7 @@ impl LanguageServer for Backend {
                 }));
             }
         }
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
         let markdown = |value: String| {
             Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }))
         };
@@ -694,8 +687,7 @@ impl LanguageServer for Backend {
         let unresolved = p.context.diagnostics.into_iter().filter(|d| d.code == Some(NumberOrString::String(UNRESOLVED_RENDER.into())));
         let actions = unresolved
             .filter_map(|d| {
-                let (_, line) = Self::line_at(&doc.text, d.range.start.line);
-                let start = util::byte_col(line, d.range.start.character);
+                let (_, line, start) = util::line_at(&doc.text, d.range.start);
                 let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
                 let target = partials::new_template_path(&path, &r)?;
                 let create = CreateFile {
@@ -728,8 +720,7 @@ impl LanguageServer for Backend {
         let Some(views) = partials::views_root(&path) else { return Ok(None) };
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-            let (_, line) = Self::line_at(&doc.text, pos.line);
-            let col = util::byte_col(line, pos.character);
+            let (_, line, col) = util::line_at(&doc.text, pos);
             let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
             match (partials::render_ref_at(line, col), model) {
                 (Some(r), _) => partials::first_folder_only(partials::resolve(&path, &r)),
@@ -785,8 +776,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];
 
         // 1. Partial/template/layout names inside render "..."
