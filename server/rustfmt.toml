@@ -1,0 +1,3 @@
+# Matches the existing dense style; default 100 would rewrap most of the crate.
+max_width = 140
+use_small_heuristics = "Max"

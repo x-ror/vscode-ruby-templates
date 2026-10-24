@@ -24,9 +24,17 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 - Handle errors explicitly: Rust `Result`/`?`, no `unwrap` on user input; JS no swallowed promise rejections.
 - Delete dead code instead of keeping it "just in case".
 
+## Formatting
+
+- Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
+- Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). The crate isn't formatted yet; until the one-time `style: cargo fmt` commit lands, format only the lines you change and keep reformatting out of feature/fix diffs.
+- JS: no formatter dependency. Match the existing style: 2 spaces, single quotes, semicolons, lines ≤ 120.
+- JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
+- Formatting-only changes go in their own `style:` commit, never mixed with logic.
+
 ## Language idioms
 
-- Rust: `cargo fmt` and `cargo clippy` clean; borrow over `clone`; iterators where clearer; LSP positions are UTF-16.
+- Rust: `cargo clippy` clean; borrow over `clone`; iterators where clearer; LSP positions are UTF-16.
 - JS:
   - Node built-ins and the language before packages: `fs/promises`, `path`, `URL`, `child_process`, `Array`/`Object`/`Map`/`Set` methods, `structuredClone`, template literals. No lodash/underscore-style helpers.
   - `const` by default, `let` when reassigned, never `var`; `===`; optional chaining `?.` and `??` instead of manual null checks.
@@ -40,3 +48,13 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 - `cargo test --manifest-path server/Cargo.toml`
 - `npm run build:server && npm run test:server && node test/e2e.js`
 - `npm run test:tokens`
+
+## Commits
+
+[Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <summary>`.
+
+- Types: `feat`, `fix`, `refactor`, `perf`, `style`, `test`, `docs`, `build`, `ci`, `chore`.
+- Scopes (optional): `server`, `client`, `grammar`, `snippets`, `docs`, `ci`.
+- Summary: imperative, lowercase, no trailing period, ≤ 72 chars. Body explains why, not what.
+- Breaking change: `!` after the type/scope and a `BREAKING CHANGE:` footer.
+- One logical change per commit; a new dependency is justified in the body (see Dependencies).
