@@ -222,7 +222,8 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
                 if indent % unit != 0 {
                     out.push(coded(error(range, inconsistent_indentation_message(ws, doc_ws)), code::INCONSISTENT_INDENT));
                 } else if step != unit {
-                    let message = format!("Inconsistent indentation: expected {unit} spaces, found {step}");
+                    // A multiple of the unit, so whole levels; Haml's `deeper_indenting` message.
+                    let message = format!("The line was indented {} levels deeper than the previous line.", step / unit);
                     out.push(coded(error(range, message), code::INCONSISTENT_INDENT));
                 }
             }
@@ -623,7 +624,7 @@ mod tests {
                     "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
                 ),
             ),
-            ("%div\n  %p\n      %b", (2, 0, 6, "Inconsistent indentation: expected 2 spaces, found 4")),
+            ("%div\n  %p\n      %b", (2, 0, 6, "The line was indented 2 levels deeper than the previous line.")),
             (" %p", (0, 0, 1, "Unexpected indentation at top level")),
             ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
             (
@@ -685,9 +686,7 @@ mod tests {
         assert_eq!(haml("- if x\n    %p\n      %b\n    %i\n"), vec![at(2, 0, 6, four)]);
         assert_eq!(haml("%div\n    %p\n        %b\n    %i\n"), vec![]);
         assert_eq!(haml("%div\n\t%p\n\t\t%b\n\t%i\n"), vec![]);
-        // Haml: "indented 2 levels deeper"; the message differs but the line is the same.
-        let got = haml("%div\n\t%p\n\t\t\t%b\n");
-        assert_eq!(got.iter().map(|d| d.0).collect::<Vec<_>>(), [2]);
+        assert_eq!(haml("%div\n\t%p\n\t\t\t%b\n"), vec![at(2, 0, 3, "The line was indented 2 levels deeper than the previous line.")]);
     }
 
     #[test]
