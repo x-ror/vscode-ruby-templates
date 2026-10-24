@@ -51,9 +51,9 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ### 7. Finish
 
-- [ ] README, `docs/*_TODO.md`, CHANGELOG
-- [ ] Full check list from `CLAUDE.md`
-- [ ] Review of the whole branch against `main`; report below
+- [x] README, `docs/*_TODO.md`, CHANGELOG
+- [x] Full check list from `CLAUDE.md`
+- [x] Review of the whole branch against `main`; report below
 
 ## Blockers
 
@@ -88,4 +88,28 @@ None. Every tool the stages needed was available: network for the corpora and ge
 - Stage 3 review: fixed CRLF range edits, range formatting on files without a final newline, silent no-ops of _Re-indent Haml_, ASCII word characters in the Haml regexps, and the compile check skipping Haml without the slim gem.
 - Stage 4/5 review: fixed an editorconfig brace range that ran out of memory, YAML booleans and flow mappings, `tab_width` with spaces, erb_lint `FinalNewline` and extra trailing lines, unreported ignored options, and the client not sending the editor's file options for ERB/Haml.
 - Stage 6 review: fixed non-resumable publishing, a missing-artifact check, `libc`/`preferUnplugged` in platform manifests, the wrapper's message, Windows quoting in `test/npm.js`. Not done: static musl builds for npm (glibc 2.39 from ubuntu-24.04 runners is required; `libc: glibc` keeps musl systems from installing a binary that can't run); worth it if Alpine users ask. Rejected: splitting the CLAUDE.md line out of `b8dd298` (it would mean rewriting pushed history).
+- Branch review: fixed docs that over-claimed (script/style bodies and multi-line tags move as a block; Haml indentation errors are re-indented; built-in formatting needs the server; exit 2 for non-templates is `check` only), the changelog, TODO paths, dead `fixed_end`, `lang.rs` tests, the Windows binary name in `test/slim_format.js`. Kept: Slim diagnostics parse the file a second time for the render checks (linear, debounced; sharing the parse would thread it through `lsp::diagnostics`); commit messages over 72 characters, the `npm`/`build` scopes and the non-building commits before `e6b6ec4` stay, since fixing them means rewriting pushed history — squash-merge or a rebase by the owner can clean that up.
 - Corpora (outside the repo, shallow sparse clones of `app/views` and `app/components`): Forem, Mastodon, rubygems.org, Whitehall, freeats. The network allowed it.
+
+## Report
+
+**Built.** A whitespace-only formatter in the Rust server's new library target, used by three front ends: the language server (Format Document for Slim, and for ERB/Haml through the client's providers, plus Format Selection for ERB and Haml), a `ruby-templates` CLI (`check`, `format [--check|--write|--stdin-filepath] [--verbose]`, exit codes 0/1/2) and an npm package (`@x-ror/ruby-templates`, a placeholder scope) that ships the CLI binary per platform. ERB is new (`erb_format.rs` on the `tags.rs` token stream); Haml is the client's re-indenter ported to Rust (`haml_format.rs`, JS copy deleted); Slim is the existing `slim_format.rs`. Settings: editor → `.editorconfig` → mapped erb_lint/haml-lint/slim-lint linters → defaults (`config.rs`, `docs/FORMATTER_CONFIG.md`). `rubyTemplates.erb.formatter` gained `builtin` (default still `none`).
+
+**Verified, per stage.**
+
+- 0: decision D12, this plan.
+- 1: unit tests (args, folder walk), `test/cli.js` (all commands, stdin, `--write`, `--verbose`, exit codes) in CI on Linux/macOS/Windows; `ruby-templates-ls --check/--format` diffed against `main` on every sample and corpus file; `.vsix` file list unchanged (`vsce ls`).
+- 2: unit tests per construct in `erb_format.rs`; invariants on unguarded output over `test/sample.*` × 5 indentation variants × 5 settings (`format.rs` `invariants_hold_on_the_samples`) and the same over the corpora (`corpus`, ignored test); runtime guard refuses any result that changes non-whitespace, isn't stable or adds a diagnostic; `htmlbeautifier` comparison.
+- 3: Rust tests ported from the JS ones; `test/e2e.js` document and range formatting; `bun run test:format` compiles Slim and Haml fixtures with the gems before and after; all Mastodon Haml views compile the same after formatting.
+- 4: tests per source and for precedence in `config.rs`, `with_editor` test, CLI `--verbose` test.
+- 5: `test/vscode/suite.js` checks for ERB `builtin`, Haml Format Document, Re-indent Haml and Slim, under `xvfb-run` with VS Code 1.143.1.
+- 6: `test/npm.js` (assemble, `npm pack`, offline install, run through the wrapper), in the CI test jobs; publish job written, not run.
+- 7: the whole `CLAUDE.md` check list passes: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` (238), `build:server`, `test:server`, `test/e2e.js`, `test/cli.js`, `test/npm.js`, `test:tokens`, `test:unit`, `test:slim`, `test:snippets`, `test:format`, `format:check`, `build`, `test:vscode`. Nothing skipped except the VS Code checks for erb_lint, herb-lint, haml-lint and slim-lint, which skip themselves when those tools aren't installed (they aren't here). Windows and macOS were not run locally; CI covers them.
+
+**Corpus.** Forem, Mastodon, rubygems.org, Whitehall, freeats (`app/views`, `app/components`): 2,163 templates, 46,064 formatted variants, 0 invariant violations, 0 panics. Found on the way and fixed: two Slim indentation-check false positives, a `final_newline = false` instability, a js-view-as-HTML bug in `html_host`.
+
+**Intentional differences from htmlbeautifier** (1,167 of 1,425 views identical): no line breaks added or joined; continuation lines of multi-line tags keep their offset; optional-end elements without an end tag don't indent; ERB inside tags and a `>` at column 0 don't shift the nesting; trailing whitespace trimmed; files in doubt left alone. Details in Notes.
+
+**Blockers and defaults chosen.** No blockers. Defaults taken: "first line only" for multi-line tags read as "the first line gets the level, the rest move with it"; Haml keeps its own indent unit; branches that disagree keep indentation from there to the end of the file; Slim blank lines are content; in the editor our defaults (trim, final newline) apply when nothing else decides. The first npm publish needs a token or a manual publish before trusted publishing can be configured.
+
+**Where it lives.** Branch `feat/formatter` on `x-ror/vscode-ruby-templates`, pushed; draft PR opened against `main`. Nothing published, nothing merged, no tags.
