@@ -469,6 +469,10 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
             }
             break;
         }
+        if matches!(ch, '<' | '>') {
+            pos += 1;
+            continue;
+        }
         if !opener {
             break;
         }
@@ -655,7 +659,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: `p<`/`p>`/`p<>` (whitespace modifier, no text) is classified as a text block, so its children lose structure checks"]
     fn whitespace_modifier_tag_keeps_structure_checks() {
         for head in ["p<", "p>", "p<>", "p.a.b<"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
