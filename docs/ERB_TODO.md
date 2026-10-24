@@ -83,7 +83,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `render @collection` / `render partial:, locals:` / `render layout: do` (`snippets/erb.json` `renderall`/`renderl`/`renderlayout`)
 - [x] `javascript_include_tag`, `favicon_link_tag`, `turbo_include_tags`, `asset_path` (`snippets/erb.json` `turbo_include_tags` is deprecated → `turbo_script`)
 - [x] Mailer text-part skeleton snippet (`mail_to` is already a completion in `server/src/helpers.rs`) (`snippets/erb.json` `mailer_text`)
-- [ ] Snippets for ViewComponent templates (`content`, `helpers.`, slots `with_*`)
+- [x] Snippets for ViewComponent templates: `rendercompb` (render with a slot block), `slot` (`with_*`), `slot?`, `content`, in ERB, Haml and Slim (`snippets/*.json`)
 
 ## 6. Commands and editing helpers
 
