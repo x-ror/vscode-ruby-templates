@@ -4,7 +4,7 @@ use crate::ruby::{analyze, code_end, ends_with_block, BlockEffect, CodeEnd};
 use crate::util::{coded, error, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, Position, Range};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use tree_sitter::{Node, Parser, Tree};
 
 // Helpers whose block content only reaches the page through their return value.
@@ -23,6 +23,7 @@ pub mod code {
     pub const OUTPUT_CONTROL_FLOW: &str = "output-control-flow";
     pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
     pub const UNTERMINATED_STRING: &str = "unterminated-string";
+    pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
 fn node_range(text: &str, node: Node) -> Range {
@@ -75,8 +76,17 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         let mut c2 = node.walk();
         let Some(code) = node.children(&mut c2).find(|n| n.kind() == "code") else { continue };
         let snippet = &text[code.byte_range()];
-        let (effect, _, _) = analyze(snippet);
         let range = node_range(text, node);
+        // A tag left open runs on to the next one's `%>`, swallowing the tags between.
+        // One that starts a line counts even inside a string, which an unfinished `"…` usually is.
+        let line_start = |at: usize| snippet[..at].rsplit('\n').next().is_some_and(|l| l.trim().is_empty() && snippet[..at].contains('\n'));
+        let swallowed = snippet.match_indices("<%").find(|&(at, _)| line_start(at) || code_end(&snippet[..at]) == CodeEnd::Code);
+        if swallowed.is_some() {
+            let opener = Range::new(range.start, Position::new(range.start.line, u32::MAX));
+            out.push(coded(error(opener, "Unclosed ERB tag: missing `%>` before the next `<%`"), code::UNCLOSED_TAG));
+            continue;
+        }
+        let (effect, _, _) = analyze(snippet);
         match effect {
             BlockEffect::Open(n) => {
                 for _ in 0..n {
@@ -122,6 +132,10 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     for o in openers {
         let message = format!("Block `{}` is never closed: missing `<% end %>`", truncate(&o.snippet, 40));
         out.push(coded(error(o.range, message), code::UNCLOSED_BLOCK));
+    }
+    // Ruby parse errors would only repeat a broken tag or block structure, so they wait until it is sound.
+    if out.iter().all(|d| d.severity != Some(DiagnosticSeverity::ERROR)) {
+        out.extend(crate::ruby_syntax::diagnostics(text, &tree));
     }
     out
 }
@@ -206,6 +220,13 @@ mod tests {
     }
 
     #[test]
+    fn tag_left_open_before_the_next_one() {
+        let d = only("<p>é</p><%= render \"sh\n<%= link_to x %>\n");
+        assert_eq!((d.range.start, d.code), (Position::new(0, 8), Some(NumberOrString::String(code::UNCLOSED_TAG.into()))));
+        assert!(diagnostics(r#"<%= "<%" + x %>"#).is_empty());
+    }
+
+    #[test]
     fn broken_fixture() {
         let mut got: Vec<(u32, String)> = diagnostics(include_str!("../../test/broken/bad.html.erb"))
             .into_iter()
@@ -226,8 +247,9 @@ mod tests {
     fn percent_gt_inside_a_string_ends_the_tag() {
         let codes = |t: &str| diagnostics(t).into_iter().filter_map(|d| d.code).collect::<Vec<_>>();
         let unterminated = NumberOrString::String(code::UNTERMINATED_STRING.into());
-        assert_eq!(codes(r#"<%= "50%>" %>"#), [unterminated.clone()]);
-        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated.clone()]);
+        let ruby_syntax = NumberOrString::String(code::RUBY_SYNTAX.into());
+        assert_eq!(codes(r#"<%= "50%>" %>"#), [unterminated.clone(), ruby_syntax.clone()]);
+        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated.clone(), ruby_syntax]);
         for clean in [
             r#"<%= render "sh"#,
             "<%= link_to 'x\n<p>%></p>",

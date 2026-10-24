@@ -117,7 +117,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Modifier `if`, `x = if … end`, `while … do`, keywords in strings/comments/symbol keys ignored (`server/src/ruby.rs` tests)
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/main.rs`)
 - [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
-- [ ] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): via Prism or tree-sitter-ruby over the compiled source
+- [x] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): tree-sitter-ruby over the tags joined like Erubi, offsets kept (`server/src/ruby_syntax.rs`); runs once tag and block structure is sound, first 3 errors. No false positives on the Forem / rubygems.org / Mastodon / diaspora corpus (1082 ERB views). A tag left open before the next `<%` is reported at its own opener (`unclosed-tag`)
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)

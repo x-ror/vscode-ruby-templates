@@ -688,6 +688,7 @@
               "output-control-flow",
               "silent-output-helper",
               "unterminated-string",
+              "ruby-syntax",
               "unexpected-close-tag",
               "mismatched-close-tag",
               "unclosed-element",

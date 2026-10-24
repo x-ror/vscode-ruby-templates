@@ -9,6 +9,7 @@ mod outline;
 mod partial_rename;
 mod partials;
 mod ruby;
+mod ruby_syntax;
 mod slim_complete;
 mod slim_format;
 mod slim_hover;

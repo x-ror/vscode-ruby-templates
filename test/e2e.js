@@ -338,7 +338,10 @@ const check = (label, actual, expected) => {
         )
       : "none";
   };
+  // Lines 4 and 13 are tags left open for the completion checks; each swallows the tags up to the next `%>`.
   check("diagnostics", diagnostics(uri), [
+    "4: Unclosed ERB tag: missing `%>` before the next `<%`",
+    "13: Unclosed ERB tag: missing `%>` before the next `<%`",
     "7: Partial `shared/missing` not found",
   ]);
 
