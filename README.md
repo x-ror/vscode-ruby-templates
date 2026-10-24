@@ -35,9 +35,9 @@ The binary for your platform is bundled in `bin/<platform>/`. To build it yourse
 |---|---|---|
 | Toggle ERB Tag | `Ctrl+Alt+E` | Cycles the tag under the cursor: `<% %>` → `<%= %>` → `<%# %>` |
 | Wrap Selection in ERB Output Tag | `Ctrl+Alt+W` | `foo` → `<%= foo %>` |
-| Toggle Slim Line | `Ctrl+Alt+E` | Cycles the marker of each selected line: `-` → `=` → `==` → `/` |
-| Wrap Selection in Slim Output | `Ctrl+Alt+W` | A whole line becomes `= foo`, part of a line `#{foo}` |
-| Extract Selection to Slim Partial | | Moves the selected lines (dedented) to `_name.html.slim` and leaves `= render "name"`; `dir/name` goes under `app/views/dir/` |
+| Toggle Slim Line | `Ctrl+Alt+E` | Cycles the marker of each selected line: `-` → `=` → `==` → `/`; lines inside engine, comment and text blocks are left alone |
+| Wrap Selection in Slim Output | `Ctrl+Alt+W` | A whole plain line becomes `= foo`; part of a line, or a line starting with a marker, `#{foo}` |
+| Extract Selection to Slim Partial | | Moves the selected lines (dedented) to `_name.<format>.slim` (the file's format, else `html`) and leaves `= render "name"`; `dir/name` goes under `app/views/dir/` |
 | Preview Rendered HTML | `Ctrl+Alt+P` | Renders the current file with `slimrb` / `haml` / `erb` in a side panel, refreshes on save |
 | Show Compiled Ruby Source | | Shows the Ruby code the engine generates (great for debugging Slim/Haml) |
 | Convert ERB → Haml | | Runs `html2haml --erb` |
@@ -54,7 +54,7 @@ gem install html2slim haml2slim  # ERB → Slim, Haml → Slim
 
 Executable paths are configurable under `rubyTemplates.commands.*`. Set `rubyTemplates.preview.useBundler` to run them through `bundle exec` in projects with a Gemfile.
 
-Note that a standalone render has no Rails helpers (`link_to`, `render`, …). The preview is most useful for layout fragments and plain-Ruby templates. Set `rubyTemplates.preview.useRails` to render through the app instead: when a `bin/rails` is found above the file, the preview runs `bin/rails runner` with `ApplicationController.render(inline: source, type: :slim)` (or `:erb` / `:haml`), so helpers and routes work. It boots the app on each refresh and gives up after 60 seconds; relative `render "x"` calls resolve against `application/`, as in any inline render. Set `rubyTemplates.slim.compileForRails` to show the Slim compiled source as Rails compiles it (`slimrb --rails`: ActionView output buffer, no capture).
+Note that a standalone render has no Rails helpers (`link_to`, `render`, …). The preview is most useful for layout fragments and plain-Ruby templates. Set `rubyTemplates.preview.useRails` to render through the app instead: when a `bin/rails` is found above the file, the preview runs `bin/rails runner` with `ApplicationController.render(inline: source, type: :slim)` (or `:erb` / `:haml`), so helpers and routes work. It boots the app on each refresh and gives up after 60 seconds; the render runs on a controller whose path is the template's directory under `app/views`, so a bare `render "card"` finds the partial next to the file, as in a request. Set `rubyTemplates.slim.compileForRails` to show the Slim compiled source as Rails compiles it (`slimrb --rails`: ActionView output buffer, no capture).
 
 ## Tips
 

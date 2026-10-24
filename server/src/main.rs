@@ -116,22 +116,29 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
-    let path = uri.path();
-    if path.ends_with(".rhtml") {
+    let file = file_name(uri);
+    if file.ends_with(".rhtml") {
         return true;
     }
-    host_format(path, ".erb").is_some_and(is_html_format)
+    host_format(&file, ".erb").is_some_and(is_html_format)
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
 fn slim_html_host(uri: &Url) -> bool {
-    host_format(uri.path(), ".slim").is_none_or(is_html_format)
+    host_format(&file_name(uri), ".slim").is_none_or(is_html_format)
 }
 
-/// The `format` of `name.format.ext`; `None` when the path doesn't end in `ext` or has no format part.
-fn host_format<'a>(path: &'a str, ext: &str) -> Option<&'a str> {
-    let file = path.strip_suffix(ext)?.rsplit('/').next()?;
-    file.rsplit_once('.').map(|(_, format)| format)
+/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`.
+fn file_name(uri: &Url) -> String {
+    uri.to_file_path()
+        .ok()
+        .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
+        .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
+}
+
+/// The `format` of `name.format.ext`; `None` when `file` doesn't end in `ext` or has no format part.
+fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
+    file.strip_suffix(ext)?.rsplit_once('.').map(|(_, format)| format)
 }
 
 fn is_html_format(format: &str) -> bool {
@@ -481,6 +488,7 @@ mod tests {
         for (path, html) in [
             ("/v/users/show.html.erb", true),
             ("/v/users/show.html+phone.erb", true),
+            ("/v/users/show.html%2Bphone.erb", true),
             ("/v/users/create.turbo_stream.erb", true),
             ("/v/old.rhtml", true),
             ("/v/users/index.js.erb", false),
@@ -504,6 +512,8 @@ mod tests {
         for (path, html) in [
             ("file:///v/show.html.slim", true),
             ("file:///v/show.html+phone.slim", true),
+            ("file:///v/show.html%2Bphone.slim", true),
+            ("file:///v/show.xml%2Bfeed.slim", false),
             ("file:///v/show.slim", true),
             ("untitled:Untitled-1", true),
             ("file:///v/feed.xml.slim", false),
