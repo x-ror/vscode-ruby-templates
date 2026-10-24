@@ -38,3 +38,13 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
 pub fn leading_ws(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
 }
+
+/// `text.lines()` paired with each line's byte offset in `text`.
+pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.split_inclusive('\n').scan(0, |start, raw| {
+        let offset = *start;
+        *start += raw.len();
+        let line = raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l));
+        Some((offset, line))
+    })
+}

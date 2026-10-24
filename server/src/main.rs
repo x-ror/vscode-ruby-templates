@@ -50,8 +50,9 @@ fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
         out.extend(tags::diagnostics(&doc.text, partial));
     }
     if let Ok(path) = uri.to_file_path() {
-        out.extend(unresolved_renders(doc.lang, &path, &doc.text));
-        out.extend(strict_locals_mismatches(doc.lang, &path, &doc.text));
+        let spans = erb::code_spans(&doc.text);
+        out.extend(unresolved_renders(doc.lang, &path, &doc.text, &spans));
+        out.extend(strict_locals_mismatches(doc.lang, &path, &doc.text, &spans));
     }
     out
 }
@@ -69,15 +70,13 @@ fn html_host(uri: &Url) -> bool {
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
+fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str, spans: &[(usize, usize)]) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
+    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         if !ruby_line(lang, line) { continue; }
         for r in partials::render_refs(line) {
-            // `render layout: "x"` inside a view looks up a partial; skip rather than guess.
-            if r.kind == partials::RenderKind::Layout { continue; }
-            if !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
+            if !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, text, spans, line_start + r.start) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
@@ -87,13 +86,14 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
 }
 
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(lang: TemplateLang, path: &Path, text: &str, spans: &[(usize, usize)]) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
+    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         if !ruby_line(lang, line) { continue; }
         for r in partials::render_refs(line) {
-            if !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, line, r.start) { continue; }
+            // A partial's layout gets the partial's locals, which this check can't see.
+            if r.from_layout || !in_app_views_dir(&views, &r.name) || !in_ruby_context(lang, text, spans, line_start + r.start) { continue; }
             let Some(passed) = partials::passed_locals(line, &r) else { continue };
             // Several variants/formats: which one Rails picks depends on the request.
             let found = partials::resolve(path, &r);
@@ -149,6 +149,14 @@ fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
     md
 }
 
+fn helper_hover(h: &helpers::Helper) -> String {
+    let signature = format!("```ruby\n{}\n```", h.detail);
+    match h.doc_url() {
+        Some(url) => format!("{signature}\n\n[API docs]({url})"),
+        None => signature,
+    }
+}
+
 /// The current template's own strict locals, as completions.
 fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
     let Some(sig) = partials::strict_locals(text) else { return vec![] };
@@ -169,8 +177,9 @@ impl Backend {
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 
-    fn line_at(text: &str, line: u32) -> &str {
-        text.lines().nth(line as usize).unwrap_or("")
+    /// The line's byte offset in `text` and its content.
+    fn line_at(text: &str, line: u32) -> (usize, &str) {
+        util::lines_with_offsets(text).nth(line as usize).unwrap_or((text.len(), ""))
     }
 
     fn byte_col(line: &str, character: u32) -> usize {
@@ -236,7 +245,7 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let line = Self::line_at(&doc.text, pos.line);
+        let (_, line) = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
 
         let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
@@ -280,21 +289,22 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let line = Self::line_at(&doc.text, pos.line);
+        let (_, line) = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
-        if let Ok(path) = uri.to_file_path() {
-            if let Some(r) = partials::render_ref_at(line, col) {
-                let md = render_hover(&path, &r);
-                return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: md }), range: None }));
+        let markdown = |value: String| Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }));
+        if doc.lang == TemplateLang::Erb {
+            if let Some(md) = erb::tag_doc(line, col) {
+                return markdown(md.to_string());
             }
         }
-        // Helper signature hover.
+        if let Ok(path) = uri.to_file_path() {
+            if let Some(r) = partials::render_ref_at(line, col) {
+                return markdown(render_hover(&path, &r));
+            }
+        }
         let word = word_at(line, col);
         if let Some(h) = helpers::HELPERS.iter().find(|h| h.name == word) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: format!("```ruby\n{}\n```", h.detail) }),
-                range: None,
-            }));
+            return markdown(helper_hover(h));
         }
         Ok(None)
     }
@@ -322,14 +332,14 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let line = Self::line_at(&doc.text, pos.line);
+        let (line_start, line) = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
         let before = &line[..col.min(line.len())];
 
-        // 1. Partial names inside render "..."
-        if let Some(prefix) = partials::render_string_prefix(line, col) {
+        // 1. Partial/template/layout names inside render "..."
+        if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Ok(path) = uri.to_file_path() else { return Ok(None) };
-            let items: Vec<CompletionItem> = partials::partial_candidates(&path)
+            let items: Vec<CompletionItem> = partials::render_candidates(&path, kind)
                 .into_iter()
                 .filter(|(name, _)| name.starts_with(&prefix) || prefix.is_empty())
                 .map(|(name, file)| CompletionItem {
@@ -359,7 +369,7 @@ impl LanguageServer for Backend {
         }
 
         // 3. Rails helpers, only when we're in a Ruby context.
-        if !in_ruby_context(doc.lang, line, col) { return Ok(None); }
+        if !in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col) { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }
         let mut items = local_completions(&doc.text, typed);
@@ -376,7 +386,7 @@ impl LanguageServer for Backend {
 }
 
 fn kind_name(k: partials::RenderKind) -> &'static str {
-    match k { partials::RenderKind::Partial => "Partial", partials::RenderKind::Template => "Template", partials::RenderKind::Layout => "Layout" }
+    match k { partials::RenderKind::Partial => "Partial", partials::RenderKind::Template => "Template" }
 }
 
 fn word_at(line: &str, col: usize) -> &str {
@@ -402,17 +412,16 @@ fn ruby_comment_before(code: &str) -> bool {
     false
 }
 
-fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
-    let before = &line[..col.min(line.len())];
+/// Is byte `offset` of `text` in Ruby: inside an ERB code tag (`spans` from `erb::code_spans`, may cross lines)
+/// or on a Haml/Slim Ruby line.
+fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, usize)], offset: usize) -> bool {
+    let offset = offset.min(text.len());
+    let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
     match lang {
-        TemplateLang::Erb => {
-            let open = before.rfind("<%");
-            let close = before.rfind("%>");
-            matches!((open, close), (Some(o), None) | (Some(o), Some(_)) if close.map(|c| c < o).unwrap_or(true))
-                && !before[open.unwrap()..].starts_with("<%#")
-                && !ruby_comment_before(&before[open.unwrap() + 2..])
-        }
+        // A Ruby `#` comment ends at the newline, so only this line of the tag matters.
+        TemplateLang::Erb => erb::span_at(spans, offset).is_some_and(|code| !ruby_comment_before(&text[code.max(line_start)..offset])),
         TemplateLang::Haml | TemplateLang::Slim => {
+            let before = &text[line_start..offset];
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
@@ -474,6 +483,29 @@ mod tests {
     }
 
     #[test]
+    fn ruby_context_spans_erb_lines() {
+        let text = "<%= link_to \"x\",\n  user_path(u) %> after <%# note %>\n<% # c\n  x %>";
+        let at = |needle: &str| text.find(needle).unwrap();
+        let spans = erb::code_spans(text);
+        assert!(in_ruby_context(TemplateLang::Erb, text, &spans, at("user_path")));
+        assert!(!in_ruby_context(TemplateLang::Erb, text, &spans, at("after")));
+        assert!(!in_ruby_context(TemplateLang::Erb, text, &spans, at("note")));
+        assert!(!in_ruby_context(TemplateLang::Erb, text, &spans, at("# c") + 2));
+        assert!(in_ruby_context(TemplateLang::Erb, text, &spans, at("  x") + 2));
+        let haml = "%p\n= link_to";
+        assert!(in_ruby_context(TemplateLang::Haml, haml, &[], haml.len()));
+        assert!(!in_ruby_context(TemplateLang::Haml, haml, &[], 2));
+    }
+
+    #[test]
+    fn helper_hover_links_docs() {
+        let link_to = helpers::HELPERS.iter().find(|h| h.name == "link_to").unwrap();
+        assert!(helper_hover(link_to).ends_with("[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)"));
+        let params = helpers::HELPERS.iter().find(|h| h.name == "params").unwrap();
+        assert!(!helper_hover(params).contains("API docs"));
+    }
+
+    #[test]
     fn unresolved_render_warnings() {
         let root = std::env::temp_dir().join(format!("rt-unresolved-{}", std::process::id()));
         let users = root.join("app/views/users");
@@ -485,24 +517,28 @@ mod tests {
             "é<%= render \"users/nope\" %>\n",
             "<%= render \"bare\" %> <%= render \"devise/shared/links\" %> <% # render \"users/old\" %>\n",
             "<%= render @users %> <%= render \"a/#{b}\" %> <%= render layout: \"box\" do %>\n",
+            "<%= render layout: \"users/frame\" do %> <%= render partial: \"users/card\", layout: \"users/card\" %>\n",
             "<p>we render \"prose\"</p>\n",
         );
-        let diags = unresolved_renders(TemplateLang::Erb, &file, text);
+        let diags = unresolved_renders(TemplateLang::Erb, &file, text, &erb::code_spans(text));
         let got: Vec<(String, Range)> = diags.iter().map(|d| (d.message.clone(), d.range)).collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         assert_eq!(got, vec![
             ("Partial `users/missing` not found".to_string(), at(0, 42, 55)),
             ("Partial `users/nope` not found".to_string(), at(1, 13, 23)),
+            ("Partial `users/frame` not found".to_string(), at(4, 20, 31)),
         ]);
+        let card = partials::render_refs(r#"<%= render layout: "card" do %>"#);
+        assert_eq!(partials::resolve(&file, &card[0]), vec![users.join("_card.html.erb")]);
         assert!(diags.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
 
         let layouts = root.join("app/views/layouts");
         std::fs::create_dir_all(&layouts).unwrap();
-        assert!(unresolved_renders(TemplateLang::Erb, &layouts.join("application.html.erb"), "<%= render \"header\" %>").is_empty());
-        assert!(unresolved_renders(TemplateLang::Erb, Path::new("/tmp/x.html.erb"), "<%= render \"users/nope\" %>").is_empty());
+        assert!(unresolved_renders(TemplateLang::Erb, &layouts.join("application.html.erb"), "<%= render \"header\" %>", &erb::code_spans("<%= render \"header\" %>")).is_empty());
+        assert!(unresolved_renders(TemplateLang::Erb, Path::new("/tmp/x.html.erb"), "<%= render \"users/nope\" %>", &erb::code_spans("<%= render \"users/nope\" %>")).is_empty());
         let haml = users.join("show.html.haml");
-        assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
-        assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")", &[]).is_empty());
+        assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"", &[]).len(), 1);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -537,8 +573,9 @@ mod tests {
             "<%= render \"users/card\", size: :lg, colour: 1 %>\n",
             "<%= render partial: \"users/card\", locals: { user: u } %> <%= render \"users/card\", **opts %>\n",
             "<%= render \"users/card\", Card::DEFAULTS %> <%= render \"card\" %> <%= render \"users/multi\" %>\n",
+            "<%= render partial: \"users/plain\", locals: { a: 1 }, layout: \"users/card\" %>\n",
         );
-        let got: Vec<(String, Range)> = strict_locals_mismatches(TemplateLang::Erb, &file, text).into_iter().map(|d| (d.message, d.range)).collect();
+        let got: Vec<(String, Range)> = strict_locals_mismatches(TemplateLang::Erb, &file, text, &erb::code_spans(text)).into_iter().map(|d| (d.message, d.range)).collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         assert_eq!(got, vec![
             ("Partial `users/card` requires locals: `user`".to_string(), at(1, 12, 22)),

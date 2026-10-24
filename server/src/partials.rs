@@ -8,6 +8,11 @@ use walkdir::WalkDir;
 static RENDER_STR: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
 });
+// `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
+// After a bare `render "y", layout: …` it's just a local.
+static RENDER_LAYOUT_KEY: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
+});
 // ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
 static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
 // `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
@@ -16,7 +21,7 @@ static RENDER_COMPONENT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderKind { Partial, Template, Layout }
+pub enum RenderKind { Partial, Template }
 
 #[derive(Debug, Clone)]
 pub struct RenderRef {
@@ -25,19 +30,26 @@ pub struct RenderRef {
     /// Byte range of the string literal (without quotes) inside the line.
     pub start: usize,
     pub end: usize,
+    /// The `layout:` of a `render partial:|template:` call; it receives that call's locals.
+    pub from_layout: bool,
 }
 
-/// Every `render "..."` reference on a line.
+/// Every `render "..."` reference on a line, in order.
+/// ActionView 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
+/// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
-    RENDER_STR.captures_iter(line).filter_map(|cap| {
-        let m = cap.get(2)?;
-        let kind = match cap.get(1).map(|k| k.as_str()) {
-            Some("template") => RenderKind::Template,
-            Some("layout") => RenderKind::Layout,
-            _ => RenderKind::Partial,
-        };
-        Some(RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end() })
-    }).collect()
+    let render_ref = |kind: Option<regex::Match>, m: regex::Match, from_layout| {
+        let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
+        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), from_layout }
+    };
+    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(1), cap.get(2)?, false)));
+    // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
+    let layouts = RENDER_LAYOUT_KEY.captures_iter(line)
+        .filter(|cap| split_args(&cap[2]).is_some())
+        .filter_map(|cap| Some(render_ref(cap.get(1), cap.get(3)?, true)));
+    let mut refs: Vec<RenderRef> = calls.chain(layouts).collect();
+    refs.sort_by_key(|r| r.start);
+    refs
 }
 
 /// Find a render reference whose string spans `col` (byte column) on `line`.
@@ -101,8 +113,6 @@ pub fn resolve(current: &Path, r: &RenderRef) -> Vec<PathBuf> {
     };
     let mut dirs: Vec<PathBuf> = Vec::new();
     match (&dir, &views, r.kind) {
-        (Some(d), Some(v), RenderKind::Layout) => dirs.push(v.join("layouts").join(d)),
-        (None, Some(v), RenderKind::Layout) => dirs.push(v.join("layouts")),
         (Some(d), Some(v), _) => dirs.push(v.join(d)),
         (Some(d), None, _) => {
             if let Some(p) = current.parent() { dirs.push(p.join(d)); }
@@ -146,48 +156,63 @@ fn snake_case(s: &str) -> String {
     out
 }
 
-/// Partial names available for completion: same-directory partials first (bare name),
-/// then every partial under app/views as `dir/name`.
-pub fn partial_candidates(current: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    if let Some(dir) = current.parent() {
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if let Some(name) = partial_name(&p) {
-                    out.push((name, p));
-                }
-            }
+/// Names `render` can complete for `kind`: partials (same-dir bare names, then `dir/name` under app/views)
+/// or non-partial templates as `dir/name`.
+pub fn render_candidates(current: &Path, kind: RenderKind) -> Vec<(String, PathBuf)> {
+    let views = views_root(current);
+    let mut out = match (kind, &views) {
+        (RenderKind::Partial, _) => {
+            let mut out: Vec<_> = current.parent().map(|d| templates_under(d, true, 1)).unwrap_or_default();
+            out.extend(views.iter().flat_map(|v| templates_under(v, true, 6)).filter(|(name, _)| name.contains('/')));
+            out
         }
-    }
-    if let Some(views) = views_root(current) {
-        for e in WalkDir::new(&views).min_depth(1).max_depth(6).into_iter().flatten() {
-            let p = e.path();
-            if !p.is_file() { continue; }
-            let Some(name) = partial_name(p) else { continue };
-            let rel_dir = p.parent().and_then(|d| d.strip_prefix(&views).ok()).map(|d| d.to_string_lossy().replace('\\', "/")).unwrap_or_default();
-            if rel_dir.is_empty() { continue; }
-            out.push((format!("{}/{}", rel_dir, name), p.to_path_buf()));
-        }
-    }
+        (RenderKind::Template, Some(v)) => templates_under(v, false, 6).into_iter().filter(|(name, _)| name.contains('/')).collect(),
+        (RenderKind::Template, None) => vec![],
+    };
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out.dedup_by(|a, b| a.0 == b.0);
     out
 }
 
-fn partial_name(p: &Path) -> Option<String> {
-    if !p.is_file() { return None; }
-    let fname = p.file_name()?.to_str()?;
-    let stem = fname.strip_prefix('_')?;
-    let name = stem.split('.').next()?;
-    if name.is_empty() { None } else { Some(name.to_string()) }
+/// Partials (`_x.*`) or non-partial templates under `root`, named `dir/x` relative to `root`.
+fn templates_under(root: &Path, partial: bool, max_depth: usize) -> Vec<(String, PathBuf)> {
+    WalkDir::new(root).min_depth(1).max_depth(max_depth).into_iter().flatten().filter_map(|e| {
+        let p = e.path();
+        let name = template_name(p, partial)?;
+        let rel_dir = p.parent()?.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
+        let full = if rel_dir.is_empty() { name } else { format!("{rel_dir}/{name}") };
+        Some((full, p.to_path_buf()))
+    }).collect()
 }
 
-/// Is the cursor inside the string of a `render "..."` call? Returns the typed prefix.
-pub fn render_string_prefix(line: &str, col: usize) -> Option<String> {
-    static OPEN: Lazy<Regex> = Lazy::new(|| Regex::new(r#"render\s*\(?\s*(?:(?:partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]*)$"#).unwrap());
+fn template_name(p: &Path, partial: bool) -> Option<String> {
+    if !p.is_file() { return None; }
+    let fname = p.file_name()?.to_str()?;
+    let stem = match fname.strip_prefix('_') {
+        Some(stem) if partial => stem,
+        None if !partial => fname,
+        _ => return None,
+    };
+    let name = stem.split('.').next()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Is the cursor inside the string of a `render "..."` call?
+/// Returns what the string names (see `render_refs` for `layout:`) and the typed prefix.
+pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
+    static OPEN: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(concat!(
+            r#"(?:render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?"#,
+            r#"|render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
+        )).unwrap()
+    });
     let before = line.get(..col.min(line.len()))?;
-    OPEN.captures(before).map(|c| c[1].to_string())
+    let cap = OPEN.captures(before)?;
+    if cap.get(3).is_some_and(|between| split_args(between.as_str()).is_none()) {
+        return None;
+    }
+    let kind = if cap.get(1).or(cap.get(2)).is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
+    Some((kind, cap[4].to_string()))
 }
 
 /// A template's `locals: (…)` magic comment.
@@ -290,8 +315,44 @@ mod tests {
         assert_eq!(r.name, "row");
         assert_eq!(render_ref_at("= render template: 'a/b'", 22).unwrap().kind, RenderKind::Template);
         assert_eq!(component_ref_at("= render Users::CardComponent.new(user: u)", 12).unwrap(), "Users::CardComponent");
-        assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), "us");
+        assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), (RenderKind::Partial, "us".to_string()));
+        assert_eq!(render_string_prefix(r#"render template: "a/"#, 20).unwrap(), (RenderKind::Template, "a/".to_string()));
+        assert_eq!(render_string_prefix(r#"render partial: "x", layout: 'ad"#, 32).unwrap(), (RenderKind::Partial, "ad".to_string()));
+        assert_eq!(render_string_prefix(r#"render layout: "ad"#, 18).unwrap(), (RenderKind::Partial, "ad".to_string()));
+        assert_eq!(render_string_prefix(r#"render template: "a", layout: "la"#, 33).unwrap(), (RenderKind::Template, "la".to_string()));
+        assert!(render_string_prefix(r#"render partial: "x", locals: { layout: "ad"#, 41).is_none());
+        assert!(render_string_prefix(r#"render "x", layout: "ad"#, 23).is_none());
+        assert!(render_string_prefix(r#"page_layout "ad"#, 15).is_none());
         assert_eq!(snake_case("CardComponent"), "card_component");
+        let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.kind, r.name)).collect::<Vec<_>>();
+        let p = |n: &str| (RenderKind::Partial, n.to_string());
+        assert_eq!(refs(r#"<%= render layout: "box" do %>"#), [p("box")]);
+        assert_eq!(refs(r#"<%= render partial: "row", layout: "box", locals: { a: 1 } %>"#), [p("row"), p("box")]);
+        assert_eq!(refs(r#"<%= render template: "a/b", layout: "layouts/x" %>"#), [
+            (RenderKind::Template, "a/b".to_string()),
+            (RenderKind::Template, "layouts/x".to_string()),
+        ]);
+        assert_eq!(refs(r#"<%= render "row", layout: "box" %>"#), [p("row")]);
+        assert_eq!(refs(r#"<%= render partial: "row", locals: { a: 1, layout: "gone" } %>"#), [p("row")]);
+        assert_eq!(refs(r#"<%= render partial: "row", locals: [{ a: 1 }], layout: "box" %>"#), [p("row"), p("box")]);
+        assert!(render_refs(r#"render partial: "row", layout: "box""#)[1].from_layout);
+    }
+
+    #[test]
+    fn candidates_per_render_kind() {
+        let root = std::env::temp_dir().join(format!("rt-candidates-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in ["users/index.html.erb", "users/index.json.jbuilder", "users/_card.html.erb", "layouts/application.html.erb",
+                  "layouts/admin/base.html.erb", "layouts/_nav.html.erb", "layouts/.keep"] {
+            let p = views.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let current = views.join("users/show.html.erb");
+        let names = |kind| render_candidates(&current, kind).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        assert_eq!(names(RenderKind::Partial), ["card", "layouts/nav", "users/card"]);
+        assert_eq!(names(RenderKind::Template), ["layouts/admin/base", "layouts/application", "users/index"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

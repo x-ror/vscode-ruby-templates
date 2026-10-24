@@ -157,7 +157,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial names inside `render "…"` (`server/src/partials.rs` `partial_candidates`, `server/src/main.rs`)
 - [x] Form builder methods after `f.` / `form.` / `ff.` / `builder.` / `fields.` (`server/src/helpers.rs` `FORM_BUILDER`)
 - [x] ~78 Rails view helpers with snippet arguments, only inside `<% %>` (`server/src/helpers.rs` `HELPERS`, `server/src/main.rs` `in_ruby_context`)
-- [ ] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`)
+- [x] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`) (`server/src/partials.rs` `render_candidates`; `render layout:` resolves to a partial like Rails)
 - [ ] Instance variables used in the matching controller action
 - [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
@@ -168,7 +168,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Stimulus controller / action / target names in `data-*` attributes
 - [ ] Turbo stream actions after `turbo_stream.`
 - [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
-- [ ] `in_ruby_context` handles tags spanning several lines (it only looks at the current line)
+- [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
 ## 11. Hover
 
@@ -177,8 +177,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial hover shows its strict locals signature (`server/src/main.rs` `render_hover`)
 - [ ] i18n key hover shows the translations
 - [ ] Route helper hover shows verb + path
-- [ ] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim)
-- [ ] Helper docs link to api.rubyonrails.org
+- [x] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim) (`server/src/erb.rs` `tag_doc`)
+- [x] Helper docs link to api.rubyonrails.org (`server/src/helpers.rs` `doc_url`)
 
 ## 12. Rename, references, symbols
 

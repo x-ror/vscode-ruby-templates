@@ -10,7 +10,7 @@ fs.writeFileSync(path.join(views, 'users', '_card.html.slim'), '.card = user.nam
 fs.writeFileSync(path.join(views, 'shared', '_footer.html.erb'), '<footer></footer>\n');
 fs.writeFileSync(path.join(root, 'app', 'components', 'badge_component.rb'), 'class BadgeComponent; end\n');
 const file = path.join(views, 'users', 'index.html.erb');
-const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n';
+const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n<%= render template: "us\n<%= link_to "x",\n  link_ %>\n';
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
 
@@ -52,6 +52,14 @@ const rel = p => p.replace(root, '');
   console.log('completion f.text_     →', (c2.result || []).map(i => i.label));
   const c3 = await send('textDocument/completion', { textDocument: { uri }, position: { line: 5, character: 11 } });
   console.log('completion link_to     →', (c3.result || []).map(i => i.label));
+  const c4 = await send('textDocument/completion', { textDocument: { uri }, position: { line: 12, character: 24 } });
+  console.log('completion template: "us →', (c4.result || []).map(i => i.label));
+  const c5 = await send('textDocument/completion', { textDocument: { uri }, position: { line: 14, character: 7 } });
+  console.log('completion 2nd tag line →', (c5.result || []).map(i => i.label));
+  const hov2 = await send('textDocument/hover', { textDocument: { uri }, position: { line: 0, character: 2 } });
+  console.log('hover <%=              →', hov2.result && hov2.result.contents.value);
+  const hov3 = await send('textDocument/hover', { textDocument: { uri }, position: { line: 5, character: 6 } });
+  console.log('hover link_to          →', hov3.result && hov3.result.contents.value.split('\n').pop());
   const links = await send('textDocument/documentLink', { textDocument: { uri } });
   console.log('documentLinks          →', (links.result || []).map(l => rel(l.target)));
   const folds = await send('textDocument/foldingRange', { textDocument: { uri } });
