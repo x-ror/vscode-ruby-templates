@@ -1,7 +1,7 @@
 // Pure part of the route helpers (no vscode dependency; tested in test/clientPure.js).
 import path from "node:path";
 
-const ROUTES_SCRIPT = path.join(import.meta.dirname, "routes.rb");
+const ROUTES_SCRIPT = path.join(import.meta.dirname, "..", "ruby", "routes.rb");
 const MARKER = "__RUBY_TEMPLATES_ROUTES__";
 
 /** The routes `routes.rb` printed after its marker, or undefined when the output has none. */

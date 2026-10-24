@@ -14,6 +14,6 @@ if [ -n "$partial" ]; then
   exit 1
 fi
 
-[ -n "$js" ] && npx --no-install prettier --write $js >/dev/null
+[ -n "$js" ] && bunx prettier --write $js >/dev/null
 [ -n "$rs" ] && rustfmt --edition 2021 $rs
 git add $js $rs

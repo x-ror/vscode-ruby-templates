@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "x-ror",
   "license": "MIT",
+  "packageManager": "bun@1.4.4",
   "type": "module",
   "engines": {
     "vscode": "^1.100.0"
@@ -22,7 +23,7 @@
     "slim",
     "template"
   ],
-  "main": "./src/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [
     "workspaceContains:**/*.{jbuilder,builder}"
   ],
@@ -861,17 +862,18 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
-    "package": "npx @vscode/vsce package",
-    "test:tokens": "node test/tokenize.js",
-    "test:snippets": "node test/snippets.js",
-    "test:unit": "node test/erbTags.js && node test/langconfig.js && node test/haml.js && node test/clientPure.js",
-    "test:slim": "node test/slim.js",
-    "test:format": "node test/slim_format.js",
-    "test:vscode": "node test/vscode/run.js",
-    "build:server": "cargo build --release --manifest-path server/Cargo.toml && node server/install-bin.js",
-    "test:server": "cargo test --manifest-path server/Cargo.toml && node server/check-samples.js",
-    "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\"",
-    "format:check": "prettier --check \"src/**/*.js\" \"test/**/*.js\""
+    "build": "bun build src/extension.js --target=node --format=esm --external vscode --minify-syntax --minify-whitespace --outfile dist/extension.js",
+    "package": "bun run build && bunx @vscode/vsce package --no-dependencies",
+    "test:tokens": "bun test/tokenize.js",
+    "test:snippets": "bun test/snippets.js",
+    "test:unit": "bun test/erbTags.js && bun test/langconfig.js && bun test/haml.js && bun test/clientPure.js",
+    "test:slim": "bun test/slim.js",
+    "test:format": "bun test/slim_format.js",
+    "test:vscode": "bun run build && bun test/vscode/run.js",
+    "build:server": "cargo build --release --manifest-path server/Cargo.toml && bun server/install-bin.js",
+    "test:server": "cargo test --manifest-path server/Cargo.toml && bun server/check-samples.js",
+    "format": "bunx prettier --write \"src/**/*.js\" \"test/**/*.js\"",
+    "format:check": "bunx prettier --check \"src/**/*.js\" \"test/**/*.js\""
   },
   "devDependencies": {
     "@vscode/test-electron": "3.1.0",

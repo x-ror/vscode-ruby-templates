@@ -76,7 +76,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Links/forms: `link_to`, `link_tob`, `button_to`, `image_tag`, `form_with`, `ff`, `flf`, `fsubmit`, `fields_for` (`snippets/slim.json`)
 - [x] `content_for`, `yield`, `turbo_frame`, `stimulus`, `t`, `flash`, `errors` (`snippets/slim.json`)
 - [x] Engine blocks `js`, `css`, `ruby`, `md`, text `|`, HTML comment `/!` (`snippets/slim.json`)
-- [x] Snippet files validated for duplicate prefixes and stray `$` (`test/snippets.js`, CI `npm run test:snippets`)
+- [x] Snippet files validated for duplicate prefixes and stray `$` (`test/snippets.js`, CI `bun run test:snippets`)
 - [x] Parity with ERB: `renderl`, `renderlayout`, `renderall`, `rendercomp`, `form_with_url`, `fselect`, `fcselect`, `cache`, `debug`, `content_tag`, `tag.`, `l`, `currency`, `pluralize`, `time_ago`, `meta_tags`, `assets`, `javascript_include_tag`, `favicon_link_tag`, `turbo_stream`, `ts-*`, `asset_path`, `data-action`, `turbo_script` (`snippets/slim.json`; `erb` engine and ERB-only `pe`/`pc`/`pend` left out)
 - [x] `elsif` / `else` / `when` single-line snippets (`snippets/slim.json` `elsif`, `else`, `when`)
 - [x] Strict locals magic comment `/# locals: (name:, default: nil)` (Rails scans the raw source, so it works in Slim) (`snippets/slim.json` `locals`)
@@ -150,13 +150,13 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 10. Tests
 
-- [x] Token snapshot for the Slim sample (`test/sample.html.slim`, `test/__snapshots__/sample.html.slim.tokens.txt`, CI `npm run test:tokens`)
+- [x] Token snapshot for the Slim sample (`test/sample.html.slim`, `test/__snapshots__/sample.html.slim.tokens.txt`, CI `bun run test:tokens`)
 - [x] Broken-file fixture (`test/broken/bad.html.slim`)
 - [x] Slim sample passes `--check` in CI (`.github/workflows/build.yml`)
 - [x] Unit tests in `server/src/slim_indent.rs` (it has no `#[cfg(test)]` module), one per Slim diagnostic with positions (`server/src/slim_indent.rs` `mod tests`)
 - [x] Assert the expected diagnostics for `test/broken/bad.html.slim` (today nothing checks its output) (`server/src/slim_indent.rs` `broken_fixture`)
 - [x] `test/e2e.js` opens `.slim` documents: diagnostics, definition, hover, completion, formatting (`test/e2e.js`)
-- [x] Slim formatter keeps the slim gem's compiled output, and is idempotent (`test/slim_format.js`, `test/format/`, `npm run test:format`)
+- [x] Slim formatter keeps the slim gem's compiled output, and is idempotent (`test/slim_format.js`, `test/format/`, `bun run test:format`)
 - [x] Sample lines for every `(?)` item in sections 1 and 2 (`test/sample.html.slim`, parsed with Slim 5.2.2 except the plugin-only `include` and `>` lines)
 - [x] Fixture corpus of real-world Slim views with no false-positive diagnostics. Checked by hand with `--check` on the `app/views` of Mastodon, diaspora (Haml), Ruby Toolbox (Slim), Forem and rubygems.org (ERB): the false positives found (`=begin` blocks, multi-line `<% %>` with `if` on its own line, `key: if …`, gem view folders, `.rss`/`.atom`) are fixed with unit tests; the rest are real template bugs or app-registered formats (`:mobile`). The Slim formatter keeps the compiled output of all 86 Ruby Toolbox views, re-indented to 4 spaces first.
 

@@ -115,7 +115,8 @@ Status: pending
 - **Standard library before crates.** `once_cell` was replaced by `LazyLock`, `serde` was dropped, the minimum Rust version is 1.82, and `cargo audit` runs in CI.
 - **Partial names follow ActionView**: `name[.locale][.format][+variant].handler`. A partial must be in the view's format or have none; JS views also find HTML partials.
 - **Jbuilder and Builder keep the `ruby` language id**, because Ruby LSP owns those files. **Liquid** gets no Shopify-specific features.
-- **CI checks formatting and lints** (D4, option A plus clippy): a `lint` job runs `cargo fmt --check`, `cargo clippy -D warnings` and `npm run format:check`, and packaging waits for it. `node test/e2e.js` runs in the linux-x64, darwin-arm64 and win32-x64 server jobs; `npm run test:format` (needs Ruby and the slim gem) is not in CI yet.
+- **CI checks formatting and lints** (D4, option A plus clippy): a `lint` job runs `cargo fmt --check`, `cargo clippy -D warnings` and `bun run format:check`, and packaging waits for it. `bun test/e2e.js` runs in the linux-x64, darwin-arm64 and win32-x64 server jobs; `bun run test:format` (needs Ruby and the slim gem) is not in CI yet.
+- **Bun is the JS toolchain**: `bun install` (`bun.lock`, version in `packageManager`), scripts and tests through `bun`, and `bun build` bundles `src/` into `dist/extension.js`, the only JS in the `.vsix`. The extension itself still runs in VS Code's Node. Prettier runs through `bunx`, since Windows Smart App Control blocks the unsigned `node_modules/.bin/*.exe` shims Bun writes.
 - **Client behaviour is tested inside a real VS Code** (D3, beyond one test): `test/vscode/` with `@vscode/test-electron` checks commands, providers, formatters, linters and the server; CI runs it under xvfb, and checks whose tool isn't installed are skipped.
 - **On Windows, Ruby tools run through `cmd.exe`.** Arguments containing `"` are refused. A `%VAR%` in an argument would still expand.
 

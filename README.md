@@ -45,7 +45,7 @@ A small language server written in Rust (`server/`, built on tower-lsp and tree-
 - Slim formatting (*Format Document*): re-indents each Slim line to the editor's tab size in spaces, moves text blocks, engine bodies and continuation lines with their line (keeping their relative indentation), and strips trailing whitespace except where it is part of the output (`|`/`'` text, inline text, quoted attribute values, engine bodies). A file Slim would reject (or that uses `slim/smart` `>` lines) is left unchanged, and so is any file when the editor indents with tabs (`editor.insertSpaces: false`): the formatter only writes spaces. A byte order mark and whitespace-only lines at the end of the file are kept, since Slim compiles them. Format on save: `"[slim]": { "editor.formatOnSave": true }`. The formatter is registered for Slim and Skim only, through dynamic registration, so ERB and Haml keep their own formatters (clients without dynamic registration get no formatter).
 - `ruby-templates-ls --check file.slim …` runs the same diagnostics from the command line (exit code 1 on errors), handy for CI. `ruby-templates-ls --format file.slim` prints the file formatted with 2 spaces (exit code 1 if it can't be formatted safely).
 
-The binary for your platform is bundled in `bin/<platform>/`. To build it yourself: `npm run build:server` (needs a Rust toolchain). Settings: `rubyTemplates.server.enabled`, `rubyTemplates.server.path`. Command: *Ruby Templates: Restart Language Server*.
+The binary for your platform is bundled in `bin/<platform>/`. To build it yourself: `bun run build:server` (needs a Rust toolchain and [Bun](https://bun.sh)). Settings: `rubyTemplates.server.enabled`, `rubyTemplates.server.path`. Command: *Ruby Templates: Restart Language Server*.
 
 **Commands** (Command Palette, right-click menu, or keybinding)
 
@@ -106,17 +106,18 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 ## Development
 
 ```sh
-npm install           # also enables .githooks (pre-commit formats staged JS and Rust)
-npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
-npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
-npm run test:server   # cargo test + diagnostics check on the samples
-npm run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
-npm run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
-node test/e2e.js      # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
-npm run test:slim     # Slim editing helpers and onEnterRules
-npm run test:vscode   # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)
-npm run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
-npm run package       # build the .vsix
+bun install           # also enables .githooks (pre-commit formats staged JS and Rust)
+bun run build:server  # cargo build --release, copies the binary into bin/<platform>/
+bun run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
+bun run test:server   # cargo test + diagnostics check on the samples
+bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
+bun run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
+bun test/e2e.js       # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
+bun run test:slim     # Slim editing helpers and onEnterRules
+bun run test:vscode   # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)
+bun run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
+bun run build         # bundle the client into dist/extension.js (what VS Code loads)
+bun run package       # bundle, then build the .vsix
 ```
 
 Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (`erb.rs`, `haml_indent.rs` and `slim_indent.rs` for Haml/Slim structure, `slim_parser.rs` (a port of `Slim::Parser` used by Slim completion, hover and formatting), `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux, macOS and Windows and packages one `.vsix` per platform.
