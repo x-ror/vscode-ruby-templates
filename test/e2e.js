@@ -774,6 +774,35 @@ const check = (label, actual, expected) => {
     'hreflang="$1"',
   ]);
   check("html close completion", await html(3, 4), ["section>"]);
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 7 },
+      contentChanges: [{ text: "<p><%=foo%></p>\n<%= ok %>\n" }],
+    },
+    true,
+  );
+  const spacing = await send("textDocument/codeAction", {
+    textDocument: { uri: streamUri },
+    range: { start: { line: 0, character: 5 }, end: { line: 0, character: 5 } },
+    context: { diagnostics: [] },
+  });
+  check(
+    "codeAction ERB tag spacing",
+    spacing.result?.map((a) => [
+      a.title,
+      a.kind,
+      a.edit.changes[streamUri].map((e) => e.newText),
+    ]),
+    [
+      ["Add spaces inside this ERB tag", "refactor.rewrite", ["<%= foo %>"]],
+      [
+        "Add spaces inside every ERB tag",
+        "source.fixAll.erbSpacing",
+        ["<%= foo %>"],
+      ],
+    ],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

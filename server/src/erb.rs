@@ -36,6 +36,29 @@ pub fn parse(text: &str) -> Option<Tree> {
     parser.parse(text, None)
 }
 
+/// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
+pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
+    let Some(tree) = parse(text) else { return vec![] };
+    let mut cursor = tree.root_node().walk();
+    let mut out = Vec::new();
+    for tag in tree.root_node().children(&mut cursor) {
+        if tag.kind() != "directive" && tag.kind() != "output_directive" {
+            continue;
+        }
+        let mut inner = tag.walk();
+        let Some(code) = tag.children(&mut inner).find(|n| n.kind() == "code") else { continue };
+        let source = &text[code.byte_range()];
+        if source.contains('\n') || source.trim().is_empty() || !text[..tag.end_byte()].ends_with("%>") {
+            continue;
+        }
+        let spaced = format!("{} {} {}", &text[tag.start_byte()..code.start_byte()], source.trim(), &text[code.end_byte()..tag.end_byte()]);
+        if spaced != text[tag.byte_range()] {
+            out.push((tag.start_byte(), tag.end_byte(), spaced));
+        }
+    }
+    out
+}
+
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let Some(tree) = parse(text) else { return out };
@@ -224,6 +247,13 @@ mod tests {
         let d = only("<p>é</p><%= render \"sh\n<%= link_to x %>\n");
         assert_eq!((d.range.start, d.code), (Position::new(0, 8), Some(NumberOrString::String(code::UNCLOSED_TAG.into()))));
         assert!(diagnostics(r#"<%= "<%" + x %>"#).is_empty());
+    }
+
+    #[test]
+    fn tag_spacing() {
+        let fixed = |t: &str| spacing_edits(t).into_iter().map(|(_, _, tag)| tag).collect::<Vec<_>>();
+        assert_eq!(fixed("<%=foo%>é<%if a-%><%==  raw %><%- x =%>"), ["<%= foo %>", "<% if a -%>", "<%== raw %>"]);
+        assert!(fixed("<%= ok %><% x = 1 %><%# note %><%%= literal %>\n<% a\n  b %><%= x").is_empty());
     }
 
     #[test]

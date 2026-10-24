@@ -427,6 +427,38 @@ fn render_filter<'a>(
     }
 }
 
+/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it.
+const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.fixAll.erbSpacing");
+
+/// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file as a source action.
+fn spacing_actions(uri: &Url, text: &str, range: Range) -> Vec<CodeActionOrCommand> {
+    let edits: Vec<(Range, TextEdit)> = erb::spacing_edits(text)
+        .into_iter()
+        .map(|(s, e, tag)| {
+            let r = Range::new(util::offset_to_position(text, s), util::offset_to_position(text, e));
+            (r, TextEdit::new(r, tag))
+        })
+        .collect();
+    let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
+        CodeActionOrCommand::CodeAction(CodeAction {
+            title: title.into(),
+            kind: Some(kind),
+            edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), edits)])), ..Default::default() }),
+            ..Default::default()
+        })
+    };
+    let touching: Vec<TextEdit> =
+        edits.iter().filter(|(r, _)| r.start <= range.end && range.start <= r.end).map(|(_, e)| e.clone()).collect();
+    let mut out = Vec::new();
+    if !touching.is_empty() {
+        out.push(action("Add spaces inside this ERB tag", CodeActionKind::REFACTOR_REWRITE, touching));
+    }
+    if !edits.is_empty() {
+        out.push(action("Add spaces inside every ERB tag", ERB_SPACING, edits.into_iter().map(|(_, e)| e).collect()));
+    }
+    out
+}
+
 fn file_location(file: impl AsRef<Path>) -> Option<Location> {
     Some(Location::new(Url::from_file_path(file).ok()?, Range::default()))
 }
@@ -524,7 +556,7 @@ impl LanguageServer for Backend {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX, CodeActionKind::REFACTOR_REWRITE, ERB_SPACING]),
                     ..Default::default()
                 })),
                 workspace: Some(WorkspaceServerCapabilities {
@@ -724,31 +756,34 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+        if doc.lang == TemplateLang::Erb {
+            actions.extend(spacing_actions(&uri, &doc.text, p.range));
+        }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
-        let actions = unresolved
-            .filter_map(|d| {
-                let (_, line, start) = util::line_at(&doc.text, d.range.start);
-                let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
-                let target = partials::new_template_path(&path, &r)?;
-                let create = CreateFile {
-                    uri: Url::from_file_path(&target).ok()?,
-                    options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
-                    annotation_id: None,
-                };
-                let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
-                Some(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![d]),
-                    edit: Some(WorkspaceEdit {
-                        document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
-                        ..Default::default()
-                    }),
-                    is_preferred: Some(true),
+        let quick_fixes = unresolved.filter_map(|d| {
+            let (_, line, start) = util::line_at(&doc.text, d.range.start);
+            let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
+            let target = partials::new_template_path(&path, &r)?;
+            let create = CreateFile {
+                uri: Url::from_file_path(&target).ok()?,
+                options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
+                annotation_id: None,
+            };
+            let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d]),
+                edit: Some(WorkspaceEdit {
+                    document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
                     ..Default::default()
-                }))
-            })
-            .collect();
+                }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }))
+        });
+        actions.extend(quick_fixes);
         Ok(Some(actions))
     }
 
