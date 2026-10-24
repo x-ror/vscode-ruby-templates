@@ -3,6 +3,7 @@ import cp from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
 // CI builds per target (`server/target/<triple>/release`) and passes the binary in.
 const bin =
@@ -15,7 +16,10 @@ const bin =
     "release",
     "ruby-templates-ls",
   );
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-"));
+// Node escapes `~` (8.3 names such as RUNNER~1 on CI); the server, like VS Code, leaves it as is.
+const fileUri = (p) => pathToFileURL(p).href.replaceAll("%7E", "~");
+// macOS puts tmpdir under the /var symlink; one spelling of each path keeps built and returned URIs equal.
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-")));
 const views = path.join(root, "app", "views");
 fs.mkdirSync(path.join(views, "users"), { recursive: true });
 fs.mkdirSync(path.join(views, "shared"), { recursive: true });
@@ -90,7 +94,7 @@ const file = path.join(views, "users", "index.html.erb");
 const text =
   '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n<%= render template: "us\n<%= link_to "x",\n  link_ %>\n<%= render @users %>\n<div data-controller="hello"></div>\n<%= image_tag "logo.png", alt: "Logo" %>\n<%= t(".title") %>\n';
 fs.writeFileSync(file, text);
-const uri = "file://" + file;
+const uri = fileUri(file);
 const hamlFile = path.join(views, "users", "show.html.haml");
 const hamlText = [
   "- content_for :aside do",
@@ -114,22 +118,22 @@ const hamlText = [
   "",
 ].join("\n");
 fs.writeFileSync(hamlFile, hamlText);
-const hamlUri = "file://" + hamlFile;
+const hamlUri = fileUri(hamlFile);
 const slimFile = path.join(views, "users", "show.html.slim");
 const slimText =
   'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
 fs.writeFileSync(slimFile, slimText);
-const slimUri = "file://" + slimFile;
+const slimUri = fileUri(slimFile);
 const outlineFile = path.join(views, "users", "outline.html.slim");
 const outlineText =
   'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
 fs.writeFileSync(outlineFile, outlineText);
-const outlineUri = "file://" + outlineFile;
+const outlineUri = fileUri(outlineFile);
 // Unsaved text differs from disk; VS Code sends `+` percent-encoded.
 const phoneFile = path.join(views, "users", "edit.html+phone.slim");
 fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
 const phoneText = '= render "card"\n';
-const phoneUri = "file://" + phoneFile.replace("+", "%2B");
+const phoneUri = fileUri(phoneFile).replace("+", "%2B");
 
 const proc = cp.spawn(bin);
 let id = 0,
@@ -163,7 +167,7 @@ const send = (method, params, isNote) =>
     proc.stdin.write(`Content-Length: ${Buffer.byteLength(s)}\r\n\r\n${s}`);
     if (isNote) res();
   });
-const rel = (p) => p.replace("file://" + root, "");
+const rel = (p) => p.replace(fileUri(root), "");
 let failures = 0;
 const check = (label, actual, expected) => {
   const ok = isDeepStrictEqual(actual, expected);
@@ -174,7 +178,7 @@ const check = (label, actual, expected) => {
 (async () => {
   const init = await send("initialize", {
     processId: null,
-    rootUri: "file://" + root,
+    rootUri: fileUri(root),
     capabilities: {},
     initializationOptions: {
       slim: { extraEngines: ["mjml"], disabledDiagnostics: ["explicit-end"] },
@@ -291,7 +295,7 @@ const check = (label, actual, expected) => {
     "[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)",
   );
   // Hover right after a multibyte char once killed the server (byte slice inside `’`).
-  const quoteUri = "file://" + path.join(views, "users", "quote.html.erb");
+  const quoteUri = fileUri(path.join(views, "users", "quote.html.erb"));
   await send(
     "textDocument/didOpen",
     {
@@ -525,7 +529,7 @@ const check = (label, actual, expected) => {
     ],
   );
 
-  const editUri = "file://" + path.join(views, "users", "edit.html.slim");
+  const editUri = fileUri(path.join(views, "users", "edit.html.slim"));
   const editText =
     'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n    p Hi #{link_\n    = render "card"\n';
   await send(
@@ -706,7 +710,7 @@ const check = (label, actual, expected) => {
       "/config/locales/uk.yml 3",
     ],
   );
-  const controllerUri = "file://" + controllerFile;
+  const controllerUri = fileUri(controllerFile);
   await send(
     "textDocument/didOpen",
     {
@@ -742,7 +746,7 @@ const check = (label, actual, expected) => {
     (await req("textDocument/completion", controllerUri, 4, 10)).result,
     null,
   );
-  const helperUri = "file://" + path.join(views, "users", "helper.html.erb");
+  const helperUri = fileUri(path.join(views, "users", "helper.html.erb"));
   await send(
     "textDocument/didOpen",
     {
@@ -773,7 +777,7 @@ const check = (label, actual, expected) => {
     },
     true,
   );
-  const cardUri = "file://" + path.join(views, "users", "_card.html.slim");
+  const cardUri = fileUri(path.join(views, "users", "_card.html.slim"));
   await send(
     "textDocument/didOpen",
     {
@@ -815,9 +819,9 @@ const check = (label, actual, expected) => {
     },
     true,
   );
-  const badgeUri =
-    "file://" +
-    path.join(root, "app", "components", "badge_component.html.haml");
+  const badgeUri = fileUri(
+    path.join(root, "app", "components", "badge_component.html.haml"),
+  );
   await send(
     "textDocument/didOpen",
     {
@@ -884,8 +888,9 @@ const check = (label, actual, expected) => {
     ],
     [["users_path"], "`users_path` → `/users`", ["/config/routes.rb:1"]],
   );
-  const streamUri =
-    "file://" + path.join(views, "users", "create.turbo_stream.erb");
+  const streamUri = fileUri(
+    path.join(views, "users", "create.turbo_stream.erb"),
+  );
   await send(
     "textDocument/didOpen",
     {
@@ -1056,8 +1061,7 @@ const check = (label, actual, expected) => {
     ],
     [["greet"], ["name"]],
   );
-  const jbuilderUri =
-    "file://" + path.join(views, "users", "index.json.jbuilder");
+  const jbuilderUri = fileUri(path.join(views, "users", "index.json.jbuilder"));
   await send(
     "textDocument/didOpen",
     {
@@ -1094,8 +1098,8 @@ const check = (label, actual, expected) => {
   const renamed = await send("workspace/willRenameFiles", {
     files: [
       {
-        oldUri: "file://" + card,
-        newUri: "file://" + card.replace("_card", "_tile"),
+        oldUri: fileUri(card),
+        newUri: fileUri(card.replace("_card", "_tile")),
       },
     ],
   });
