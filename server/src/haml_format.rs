@@ -8,12 +8,12 @@ use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::DiagnosticSeverity;
 
-// Lines nested under these aren't Haml structure: filter bodies and `-#` comment bodies.
-static VERBATIM_HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(:\w+\s*$|-#)").unwrap());
-static TAG_HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[%.#][\w:.#-]*").unwrap());
+// Word characters are ASCII, as in Haml's Ruby regexps. Lines nested under these aren't Haml structure: filter bodies and `-#` comment bodies.
+static VERBATIM_HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(:[A-Za-z0-9_]+\s*$|-#)").unwrap());
+static TAG_HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[%.#][A-Za-z0-9_:.#-]*").unwrap());
 static RUBY_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([-=~]|[!&][=~])").unwrap());
 static MULTILINE_PIPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s\|\s*$").unwrap());
-static BLOCK_PARAMS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdo\s*\|[^|]*\|\s*$").unwrap());
+static BLOCK_PARAMS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|[^A-Za-z0-9_])do\s*\|[^|]*\|\s*$").unwrap());
 static TRAILING_COMMA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r",\s*$").unwrap());
 static CONTINUED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(,|\s\|)\s*$").unwrap());
 static OUTPUT_AFTER_GROUPS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[<>&!]*=").unwrap());

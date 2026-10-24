@@ -219,6 +219,12 @@ async function reindentActiveHaml() {
     insertSpaces: insertSpaces === true,
   };
   const edits = await serverFormatEdits(doc, options, range);
+  if (!edits) {
+    vscode.window.showInformationMessage(
+      "Re-indent Haml: the language server is not running, or left this file unchanged (the reason is in the Ruby Templates output).",
+    );
+    return;
+  }
   await ed.edit((eb) =>
     edits.forEach(({ range, newText }) => eb.replace(range, newText)),
   );
@@ -1359,6 +1365,9 @@ function registerErbAutoClose(context) {
   );
 }
 
+const formatWithServer = async (doc, options, range) =>
+  (await serverFormatEdits(doc, options, range)) ?? [];
+
 /** Registered only while a formatter is chosen, so another extension's ERB formatter isn't shadowed. */
 function registerErbFormatting(context, output) {
   let registration;
@@ -1370,11 +1379,11 @@ function registerErbFormatting(context, output) {
       registration = vscode.Disposable.from(
         vscode.languages.registerDocumentFormattingEditProvider("erb", {
           provideDocumentFormattingEdits: (doc, options) =>
-            serverFormatEdits(doc, options),
+            formatWithServer(doc, options),
         }),
         vscode.languages.registerDocumentRangeFormattingEditProvider("erb", {
           provideDocumentRangeFormattingEdits: (doc, range, options) =>
-            serverFormatEdits(doc, options, range),
+            formatWithServer(doc, options, range),
         }),
       );
       return;
@@ -1436,11 +1445,11 @@ function registerHamlFormatting(context, output) {
       provideDocumentFormattingEdits: (doc, options) =>
         cfg().get("haml.formatter", "reindent") === "haml-lint"
           ? formatWithHamlLint(doc, output)
-          : serverFormatEdits(doc, options),
+          : formatWithServer(doc, options),
     }),
     vscode.languages.registerDocumentRangeFormattingEditProvider("haml", {
       provideDocumentRangeFormattingEdits: (doc, range, options) =>
-        serverFormatEdits(doc, options, range),
+        formatWithServer(doc, options, range),
     }),
   );
 }

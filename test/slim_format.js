@@ -22,42 +22,42 @@ const compile = (source) =>
 const format = (file) =>
   spawnSync(bin, ["--format", file], { encoding: "utf8" });
 
-if (spawnSync("ruby", ["-rslim", "-e", ""]).status !== 0) {
-  console.log("slim formatting: skipped (`ruby -rslim` unavailable)");
-  process.exit(0);
-}
-
 const dir = path.join(import.meta.dirname, "format");
-for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".slim"))) {
-  const file = path.join(dir, name);
-  const source = fs.readFileSync(file, "utf8");
-  const run = format(file);
-  assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
-  assert.notStrictEqual(
-    run.stdout,
-    source,
-    `${name}: fixture should need formatting`,
-  );
-  assert.strictEqual(
-    compile(run.stdout),
-    compile(source),
-    `${name}: compiled output changed`,
-  );
-  const again = path.join(dir, `.${name}.formatted`);
-  fs.writeFileSync(again, run.stdout);
-  try {
-    assert.strictEqual(
-      format(again).stdout,
-      run.stdout,
-      `${name}: not idempotent`,
-    );
-  } finally {
-    fs.rmSync(again);
-  }
-}
-console.log("slim formatting keeps compiled output ok");
+const hasGem = (gem) => spawnSync("ruby", [`-r${gem}`, "-e", ""]).status === 0;
 
-const haml = path.join(
+// `ruby-templates-ls --format`, which the Slim half also keeps covered.
+function checkSlim() {
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".slim"))) {
+    const file = path.join(dir, name);
+    const source = fs.readFileSync(file, "utf8");
+    const run = format(file);
+    assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
+    assert.notStrictEqual(
+      run.stdout,
+      source,
+      `${name}: fixture should need formatting`,
+    );
+    assert.strictEqual(
+      compile(run.stdout),
+      compile(source),
+      `${name}: compiled output changed`,
+    );
+    const again = path.join(dir, `.${name}.formatted`);
+    fs.writeFileSync(again, run.stdout);
+    try {
+      assert.strictEqual(
+        format(again).stdout,
+        run.stdout,
+        `${name}: not idempotent`,
+      );
+    } finally {
+      fs.rmSync(again);
+    }
+  }
+  console.log("slim formatting keeps compiled output ok");
+}
+
+const cli = path.join(
   import.meta.dirname,
   "..",
   "server",
@@ -77,32 +77,35 @@ const compileHaml = (source) =>
     { input: source, encoding: "utf8" },
   );
 const formatHaml = (name, source) =>
-  spawnSync(haml, ["format", "--stdin-filepath", name], {
+  spawnSync(cli, ["format", "--stdin-filepath", name], {
     input: source,
     encoding: "utf8",
   });
-if (spawnSync("ruby", ["-rhaml", "-e", ""]).status !== 0) {
-  console.log("haml formatting: skipped (`ruby -rhaml` unavailable)");
-  process.exit(0);
+function checkHaml() {
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".haml"))) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    const run = formatHaml(name, source);
+    assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
+    assert.notStrictEqual(
+      run.stdout,
+      source,
+      `${name}: fixture should need formatting`,
+    );
+    assert.strictEqual(
+      compileHaml(run.stdout),
+      compileHaml(source),
+      `${name}: compiled output changed`,
+    );
+    assert.strictEqual(
+      formatHaml(name, run.stdout).stdout,
+      run.stdout,
+      `${name}: not idempotent`,
+    );
+  }
+  console.log("haml formatting keeps compiled output ok");
 }
-for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".haml"))) {
-  const source = fs.readFileSync(path.join(dir, name), "utf8");
-  const run = formatHaml(name, source);
-  assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
-  assert.notStrictEqual(
-    run.stdout,
-    source,
-    `${name}: fixture should need formatting`,
-  );
-  assert.strictEqual(
-    compileHaml(run.stdout),
-    compileHaml(source),
-    `${name}: compiled output changed`,
-  );
-  assert.strictEqual(
-    formatHaml(name, run.stdout).stdout,
-    run.stdout,
-    `${name}: not idempotent`,
-  );
-}
-console.log("haml formatting keeps compiled output ok");
+
+if (hasGem("slim")) checkSlim();
+else console.log("slim formatting: skipped (`ruby -rslim` unavailable)");
+if (hasGem("haml")) checkHaml();
+else console.log("haml formatting: skipped (`ruby -rhaml` unavailable)");

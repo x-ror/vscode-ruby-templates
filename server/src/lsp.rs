@@ -349,8 +349,8 @@ pub(crate) fn render_filter<'a>(
 /// Edits replacing each line in `lines` that differs between `text` and `formatted`; `None` when formatting added or
 /// removed lines, which a line range can't express.
 fn line_edits(text: &str, formatted: &str, lines: std::ops::RangeInclusive<usize>) -> Option<Vec<TextEdit>> {
-    let old: Vec<&str> = text.split('\n').collect();
-    let new: Vec<&str> = formatted.split('\n').collect();
+    let old: Vec<&str> = text.lines().collect();
+    let new: Vec<&str> = formatted.lines().collect();
     if old.len() != new.len() {
         return None;
     }
@@ -411,10 +411,15 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
 
 impl Backend {
     /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is.
-    async fn formatted(&self, uri: &Url, options: &FormattingOptions) -> Option<(String, String)> {
+    /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
+    async fn formatted(&self, uri: &Url, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
         let (lang, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.text.clone()))?;
         let path = uri.to_file_path().ok();
-        let settings = path.map_or_else(format::Settings::default, |path| config::settings_for(&path, lang).settings).with_editor(options);
+        let mut settings =
+            path.map_or_else(format::Settings::default, |path| config::settings_for(&path, lang).settings).with_editor(options);
+        if lines_only {
+            settings = format::Settings { final_newline: None, collapse_blank_lines: false, trim_trailing_blank_lines: false, ..settings };
+        }
         match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
             Ok(formatted) => Some((text, formatted.text)),
             Err(skipped) => {
@@ -912,7 +917,7 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options).await else { return Ok(None) };
+        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options, false).await else { return Ok(None) };
         if formatted == text {
             return Ok(Some(vec![]));
         }
@@ -923,7 +928,7 @@ impl LanguageServer for Backend {
     /// Only the lines in the range change, with nesting read from the whole document; not advertised, the client's
     /// Haml provider asks for it.
     async fn range_formatting(&self, p: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options).await else { return Ok(None) };
+        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options, true).await else { return Ok(None) };
         Ok(line_edits(&text, &formatted, p.range.start.line as usize..=p.range.end.line as usize))
     }
 
@@ -1256,6 +1261,13 @@ mod tests {
         let locales = Path::new("/r/config/locales");
         assert!(stale(locales, &event("/r/config/locales/en.yml", FileChangeType::CHANGED), true));
         assert!(!stale(locales, &[], true));
+    }
+
+    #[test]
+    fn line_edits_leave_line_endings_alone() {
+        let edits = line_edits("%div\r\n    %p\r\n  %i\r\n", "%div\r\n    %p\r\n    %i\r\n", 0..=2).unwrap();
+        assert_eq!(edits, [TextEdit::new(Range::new(Position::new(2, 0), Position::new(2, 4)), "    %i".into())]);
+        assert!(line_edits("a\nb", "a\nb\nc", 0..=1).is_none());
     }
 
     #[test]
