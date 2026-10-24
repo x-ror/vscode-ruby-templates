@@ -632,6 +632,16 @@ const check = (label, actual, expected) => {
     targets(await req("textDocument/definition", jbuilderUri, 1, 18)),
     ["/app/views/users/_user.json.jbuilder"],
   );
+  check(
+    "jbuilder completion",
+    labels(
+      await send("textDocument/completion", {
+        textDocument: { uri: jbuilderUri },
+        position: { line: 1, character: 21 },
+      }),
+    ),
+    ["users/user"],
+  );
   const card = path.join(views, "users", "_card.html.slim");
   const renamed = await send("workspace/willRenameFiles", {
     files: [

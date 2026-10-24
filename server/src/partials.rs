@@ -371,7 +371,8 @@ pub fn render_candidates(current: &Path, kind: RenderKind, files: &[PathBuf]) ->
     let same_dir =
         current.parent().filter(|_| partial).into_iter().flat_map(|d| templates_in(d, files, true)).filter(|(name, _)| !name.contains('/'));
     let nested = views.iter().flat_map(|v| templates_in(v, files, partial)).filter(|(name, _)| name.contains('/'));
-    let mut out: Vec<_> = same_dir.chain(nested).collect();
+    // Same filter as `resolve`: a name it would not find isn't worth offering.
+    let mut out: Vec<_> = same_dir.chain(nested).filter(|(_, p)| renders_format(current, p)).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out.dedup_by(|a, b| a.0 == b.0);
     out
@@ -697,6 +698,7 @@ mod tests {
             "users/index.html.erb",
             "users/index.json.jbuilder",
             "users/_card.html.erb",
+            "users/_row.json.jbuilder",
             "layouts/application.html.erb",
             "layouts/admin/base.html.erb",
             "layouts/_nav.html.erb",
