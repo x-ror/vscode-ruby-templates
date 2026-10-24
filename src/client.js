@@ -70,6 +70,12 @@ async function doStart(context, output) {
           language: "ruby",
           pattern: "**/*.{jbuilder,builder}",
         },
+        // Controllers only for go to definition / links into their views; the server ignores them otherwise.
+        {
+          scheme: "file",
+          language: "ruby",
+          pattern: "**/app/controllers/**/*_controller.rb",
+        },
       ],
       outputChannel: output,
       // Our catch below reports the failure; returning false stops the client from also showing its own.

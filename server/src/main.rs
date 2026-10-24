@@ -1,8 +1,10 @@
 mod assets;
+mod controllers;
 mod erb;
 mod erb_complete;
 mod haml;
 mod haml_indent;
+mod helper_defs;
 mod helpers;
 mod html;
 mod html_lint;
@@ -135,6 +137,8 @@ impl Options {
 struct Backend {
     client: Client,
     docs: Arc<DashMap<Url, Doc>>,
+    /// Open controllers, for navigation to their views only; no other request reads them.
+    controllers: DashMap<Url, String>,
     /// Files under each app/views root, for render completion.
     templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
     /// Parsed locale files per config/locales directory.
@@ -332,6 +336,15 @@ fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize
     i18n::full_key(path, &line[start..end])
 }
 
+fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
+    Some(DocumentLink {
+        range,
+        target: Some(Url::from_file_path(target).ok()?),
+        tooltip: Some(target.to_string_lossy().into_owned()),
+        data: None,
+    })
+}
+
 /// The line of `key` in each locale file that defines it.
 fn translation_locations(files: &[(PathBuf, Vec<i18n::Translation>)], key: &str) -> Vec<Location> {
     let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
@@ -527,7 +540,10 @@ impl Backend {
     /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
     /// and drive colons where `Url::from_file_path` doesn't.
     fn open_texts(&self) -> HashMap<PathBuf, String> {
-        self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect()
+        let templates = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone())));
+        // Partial and i18n references also scan controllers; their unsaved text is the current one.
+        let controllers = self.controllers.iter().filter_map(|c| Some((c.key().to_file_path().ok()?, c.value().clone())));
+        templates.chain(controllers).collect()
     }
 }
 
@@ -607,13 +623,24 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
-        let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else { return };
+        let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else {
+            if p.text_document.uri.to_file_path().is_ok_and(|path| controllers::controller_path(&path).is_some()) {
+                self.controllers.insert(p.text_document.uri, p.text_document.text);
+            }
+            return;
+        };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
         self.publish(p.text_document.uri).await;
     }
 
     async fn did_change(&self, p: DidChangeTextDocumentParams) {
         let version = p.text_document.version;
+        if let Some(mut text) = self.controllers.get_mut(&p.text_document.uri) {
+            for change in p.content_changes {
+                util::apply_change(&mut text, change);
+            }
+            return;
+        }
         {
             let Some(mut doc) = self.docs.get_mut(&p.text_document.uri) else { return };
             for change in p.content_changes {
@@ -637,6 +664,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
+        if self.controllers.remove(&p.text_document.uri).is_some() {
+            return;
+        }
         self.docs.remove(&p.text_document.uri);
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
     }
@@ -644,8 +674,14 @@ impl LanguageServer for Backend {
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        if let Some(text) = self.controllers.get(&uri) {
+            let (_, line, col) = util::line_at(&text, pos);
+            let found = controllers::targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default();
+            let locs: Vec<Location> = found.into_iter().filter_map(file_location).collect();
+            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        }
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
@@ -659,14 +695,30 @@ impl LanguageServer for Backend {
         } else {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
-        let locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        if locs.is_empty() {
+            let helper =
+                helper_defs::name_at(line, col).filter(|_| code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines));
+            let at_line = |(file, line): (PathBuf, usize)| {
+                let start = Position::new(line as u32, 0);
+                Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
+            };
+            locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line));
+        }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        if let Some(text) = self.controllers.get(&uri) {
+            let links = util::lines_with_offsets(&text)
+                .enumerate()
+                .flat_map(|(i, (_, line))| controllers::targets(&path, line, None).into_iter().map(move |t| (i, line, t)))
+                .filter_map(|(i, line, (start, end, found))| file_link(util::span_range(i, line, start, end), found.first()?));
+            return Ok(Some(links.collect()));
+        }
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
@@ -676,14 +728,7 @@ impl LanguageServer for Backend {
                 .filter(|r| in_code(i, line_start, r))
                 .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
-                let Some(target) = found.into_iter().next() else { continue };
-                let Ok(t) = Url::from_file_path(&target) else { continue };
-                links.push(DocumentLink {
-                    range: util::span_range(i, line, start, end),
-                    target: Some(t),
-                    tooltip: Some(target.to_string_lossy().into_owned()),
-                    data: None,
-                });
+                links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target)));
             }
         }
         Ok(Some(links))
@@ -1181,6 +1226,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         docs: Arc::default(),
+        controllers: DashMap::new(),
         templates: DashMap::new(),
         locales: DashMap::new(),
         options: Arc::default(),

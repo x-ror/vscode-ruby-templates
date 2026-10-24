@@ -33,6 +33,9 @@
 - Find All References on a `t("…")` key: the calls with the same full key anywhere in `app/` and `lib/`, and its locale entries.
 - ERB preview and *Show Compiled Ruby Source* use Erubi like Rails (`<%=` escapes, `<%==` is raw), through `rubyTemplates.commands.ruby`; stdlib ERB when the `erubi` gem is missing. **Breaking:** the `rubyTemplates.commands.erb` setting is gone.
 - herb-lint diagnostics on open and save on HTML views (`rubyTemplates.herbLint.enabled`), from the project's `node_modules/.bin` or `PATH`.
+- Controllers: go to definition from `def show` to its templates, and links from `layout "admin"` and `render :edit` / `render "x"` to their views.
+- Go to definition on a helper call in a view opens its `def` in `app/helpers` or a controller's `helper_method`.
+- *Switch to Related File* from a view also offers its controller or mailer, at the action's `def`.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

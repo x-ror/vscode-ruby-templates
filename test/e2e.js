@@ -44,6 +44,23 @@ fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
   'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
 );
+fs.mkdirSync(path.join(root, "app", "controllers"), { recursive: true });
+fs.mkdirSync(path.join(root, "app", "helpers"), { recursive: true });
+fs.mkdirSync(path.join(views, "layouts"), { recursive: true });
+fs.writeFileSync(path.join(views, "layouts", "admin.html.erb"), "");
+fs.writeFileSync(
+  path.join(root, "app", "helpers", "users_helper.rb"),
+  "module UsersHelper\n  def format_price(x)\n  end\nend\n",
+);
+const controllerText =
+  'class UsersController < ApplicationController\n  layout "admin"\n\n  def index\n    render :index\n  end\nend\n';
+const controllerFile = path.join(
+  root,
+  "app",
+  "controllers",
+  "users_controller.rb",
+);
+fs.writeFileSync(controllerFile, controllerText);
 fs.mkdirSync(path.join(root, "app", "mailers"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "app", "mailers", "user_mailer.rb"),
@@ -688,6 +705,65 @@ const check = (label, actual, expected) => {
       "/config/locales/en.yml 3",
       "/config/locales/uk.yml 3",
     ],
+  );
+  const controllerUri = "file://" + controllerFile;
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: controllerUri,
+        languageId: "ruby",
+        version: 1,
+        text: controllerText,
+      },
+    },
+    true,
+  );
+  check(
+    "controller action → template",
+    targets(await req("textDocument/definition", controllerUri, 3, 7)),
+    ["/app/views/users/index.html.erb"],
+  );
+  const controllerLinks = await send("textDocument/documentLink", {
+    textDocument: { uri: controllerUri },
+  });
+  check(
+    "controller links: layout and render",
+    controllerLinks.result?.map(
+      (l) => `${l.range.start.line} ${rel(l.target)}`,
+    ),
+    [
+      "1 /app/views/layouts/admin.html.erb",
+      "4 /app/views/users/index.html.erb",
+    ],
+  );
+  check(
+    "controller gets no completion",
+    (await req("textDocument/completion", controllerUri, 4, 10)).result,
+    null,
+  );
+  const helperUri = "file://" + path.join(views, "users", "helper.html.erb");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: helperUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= format_price(1) %> format_price\n",
+      },
+    },
+    true,
+  );
+  check(
+    "helper definition",
+    [
+      (await req("textDocument/definition", helperUri, 0, 6)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+      (await req("textDocument/definition", helperUri, 0, 26)).result,
+    ],
+    [["/app/helpers/users_helper.rb:1"], null],
   );
   const streamUri =
     "file://" + path.join(views, "users", "create.turbo_stream.erb");

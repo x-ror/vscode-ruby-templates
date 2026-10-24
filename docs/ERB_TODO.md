@@ -140,9 +140,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `render partial: name_var` (non-literal partial name): show nothing, don't guess (`RENDER_STR` only takes string literals)
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
-- [ ] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb`
-- [ ] Template → controller action and controller action → template
-- [ ] Helper method → definition in `app/helpers/**` (and gem helpers through Ruby LSP)
+- [x] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb` (`server/src/controllers.rs`)
+- [x] Template → controller action (*Switch to Related File*, `src/related.js` `actionSource`) and controller action → template (`def show`, `render :edit`; `server/src/controllers.rs`)
+- [x] Helper method → definition in `app/helpers/**` and controllers' `helper_method`s (`server/src/helper_defs.rs`); gem helpers stay with Ruby LSP
 - [ ] Locals: go to where a local is passed (`render … locals:`) from its use in the partial
 - [ ] Instance variables → assignment in the controller action
 - [x] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path) (`server/src/i18n.rs`)
