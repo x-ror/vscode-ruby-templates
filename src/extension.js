@@ -808,17 +808,25 @@ async function convert(target) {
     return;
   }
 
-  // index.html → index.html.haml; show.html.erb → show.html.haml; show.html.slim → show.html.erb
+  // index.html → index.html.haml; show.html.erb → show.html.haml; show.html.haml.tt → show.html.slim.tt
+  const fileName = ed.document.fileName;
+  const renamed = fileName.replace(
+    /\.(erb|haml|rhtml|slim)(\.tt)?$/i,
+    `.${target}$2`,
+  );
   const newName =
-    from === "html"
-      ? `${ed.document.fileName}.${target}`
-      : ed.document.fileName.replace(/\.(erb|haml|rhtml|slim)$/, `.${target}`);
+    from !== "html" && renamed !== fileName ? renamed : `${fileName}.${target}`;
+  const canSave = ed.document.uri.scheme === "file";
   const choice = await vscode.window.showQuickPick(
     [
-      {
-        label: `Save as ${path.basename(newName)} next to the original`,
-        id: "save",
-      },
+      ...(canSave
+        ? [
+            {
+              label: `Save as ${path.basename(newName)} next to the original`,
+              id: "save",
+            },
+          ]
+        : []),
       { label: "Open as untitled document", id: "untitled" },
       { label: "Replace contents of the current file", id: "replace" },
     ],
@@ -836,7 +844,8 @@ async function convert(target) {
       viewColumn: vscode.ViewColumn.Beside,
     });
   } else if (choice.id === "save") {
-    if (fs.existsSync(newName)) {
+    const newUri = vscode.Uri.file(newName);
+    if (await exists(newUri)) {
       const ok = await vscode.window.showWarningMessage(
         `${path.basename(newName)} exists. Overwrite?`,
         { modal: true },
@@ -844,11 +853,13 @@ async function convert(target) {
       );
       if (ok !== "Overwrite") return;
     }
-    fs.writeFileSync(newName, r.stdout);
-    await vscode.window.showTextDocument(
-      await vscode.workspace.openTextDocument(newName),
-      { viewColumn: vscode.ViewColumn.Beside },
+    await vscode.workspace.fs.writeFile(
+      newUri,
+      new TextEncoder().encode(r.stdout),
     );
+    await vscode.window.showTextDocument(newUri, {
+      viewColumn: vscode.ViewColumn.Beside,
+    });
   } else {
     const full = new vscode.Range(
       ed.document.positionAt(0),

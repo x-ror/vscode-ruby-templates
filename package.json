@@ -489,7 +489,7 @@
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "(editorLangId =~ /^erb/ || editorLangId == haml) && editorHasSelection",
+          "when": "(editorLangId =~ /^erb/ || editorLangId == haml) && editorHasSelection && resourceScheme == file",
           "group": "rubyTemplates@2"
         },
         {
@@ -543,7 +543,7 @@
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "editorLangId =~ /^erb/ || editorLangId == haml"
+          "when": "(editorLangId =~ /^erb/ || editorLangId == haml) && resourceScheme == file"
         },
         {
           "command": "rubyTemplates.toggleHamlPrefix",
