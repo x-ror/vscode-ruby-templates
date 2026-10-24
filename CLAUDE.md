@@ -27,7 +27,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 ## Formatting
 
 - Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
-- Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). The crate isn't formatted yet; until the one-time `style: cargo fmt` commit lands, format only the lines you change and keep reformatting out of feature/fix diffs.
+- Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
 - JS: no formatter dependency. Match the existing style: 2 spaces, single quotes, semicolons, lines ≤ 120.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
@@ -45,6 +45,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 ## Checks
 
+- `cargo fmt --manifest-path server/Cargo.toml --check`
 - `cargo test --manifest-path server/Cargo.toml`
 - `npm run build:server && npm run test:server && node test/e2e.js`
 - `npm run test:tokens`
