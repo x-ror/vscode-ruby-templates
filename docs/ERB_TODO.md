@@ -188,7 +188,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Rename a local across a partial and its callers
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
 - [x] Breadcrumbs follow the symbol tree (VS Code builds them from `textDocument/documentSymbol`)
-- [ ] Find all references to an i18n key
+- [x] Find all references to an i18n key: `t("…")` calls with the same full key (lazy `.x` keys resolved per view) plus its locale entries (`partial_rename::i18n_references`)
 
 ## 13. Embedded HTML/CSS/JS language features
 

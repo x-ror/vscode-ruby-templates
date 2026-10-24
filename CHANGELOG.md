@@ -30,6 +30,7 @@
 - ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.fixAll.erbSpacing`).
 - Completion of ViewComponent classes after `render ` (`Admin::UserCardComponent.new(…)`) from `app/components`.
 - Completion of Stimulus action methods after `hello#` in `data-action` and of `static targets` names in `data-hello-target` / `hello_target:`, read from the controller file.
+- Find All References on a `t("…")` key: the calls with the same full key in views, controllers, helpers and components, and its locale entries.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

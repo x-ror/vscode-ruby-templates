@@ -32,6 +32,11 @@ pub fn key_at(line: &str, col: usize) -> Option<(usize, usize)> {
         .find(|&(s, e)| (s.saturating_sub(1)..=e + 1).contains(&col))
 }
 
+/// Every key literal on a line: (call start, key start, key end).
+pub fn key_calls(line: &str) -> Vec<(usize, usize, usize)> {
+    KEY_CALL.captures_iter(line).filter_map(|cap| Some((cap.get(0)?.start(), cap.get(1)?.start(), cap.get(1)?.end()))).collect()
+}
+
 /// Byte range of the key literal the cursor is typing in (through its end after the cursor) and the text typed so far.
 pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)> {
     let m = KEY_OPEN.captures(line.get(..col)?)?.get(1)?;

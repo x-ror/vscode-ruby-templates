@@ -669,6 +669,20 @@ const check = (label, actual, expected) => {
     refs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
     ["/app/views/users/index.html.erb 1", "/app/views/users/show.html.haml 3"],
   );
+  const keyRefs = await send("textDocument/references", {
+    textDocument: { uri },
+    position: { line: 18, character: 8 },
+    context: { includeDeclaration: true },
+  });
+  check(
+    "references i18n key",
+    keyRefs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
+    [
+      "/app/views/users/index.html.erb 18",
+      "/config/locales/en.yml 3",
+      "/config/locales/uk.yml 3",
+    ],
+  );
   const streamUri =
     "file://" + path.join(views, "users", "create.turbo_stream.erb");
   await send(

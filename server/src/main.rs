@@ -332,6 +332,14 @@ fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize
     i18n::full_key(path, &line[start..end])
 }
 
+/// The line of `key` in each locale file that defines it.
+fn translation_locations(files: &[(PathBuf, Vec<i18n::Translation>)], key: &str) -> Vec<Location> {
+    let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
+    i18n::lookup(files, key)
+        .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start(t), start(t)))))
+        .collect()
+}
+
 /// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
 fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> bool {
     match lang {
@@ -637,15 +645,7 @@ impl LanguageServer for Backend {
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
-            let files = self.locale_files(&path);
-            let locs: Vec<Location> = i18n::lookup(&files, &key)
-                .filter_map(|(file, t)| {
-                    Some(Location::new(
-                        Url::from_file_path(file).ok()?,
-                        Range::new(Position::new(t.line as u32, 0), Position::new(t.line as u32, 0)),
-                    ))
-                })
-                .collect();
+            let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
@@ -793,6 +793,19 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position.position;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         let Some(views) = partials::views_root(&path) else { return Ok(None) };
+        let extra_engines = self.options().extra_engines.clone();
+        let i18n_key = {
+            let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+            let (line_start, line, col) = util::line_at(&doc.text, pos);
+            i18n_key_at(&doc, &path, line_start, line, col, &extra_engines)
+        };
+        if let Some(key) = i18n_key {
+            let mut locations = partial_rename::i18n_references(&key, &partial_rename::sources(&views, &self.open_texts()), &extra_engines);
+            if p.context.include_declaration {
+                locations.extend(translation_locations(&self.locale_files(&path), &key));
+            }
+            return Ok(Some(locations));
+        }
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             let (_, line, col) = util::line_at(&doc.text, pos);
@@ -807,7 +820,7 @@ impl LanguageServer for Backend {
             }
         };
         let sources = partial_rename::sources(&views, &self.open_texts());
-        let mut locations = partial_rename::references(&files, &sources, &self.options().extra_engines);
+        let mut locations = partial_rename::references(&files, &sources, &extra_engines);
         if p.context.include_declaration {
             locations.extend(files.iter().filter_map(file_location));
         }
