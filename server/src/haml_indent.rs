@@ -176,7 +176,11 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
         let known_levels: Vec<usize> = std::iter::once(0).chain(stack.iter().map(|f| f.indent)).collect();
         let bad_dedent = indent < *known_levels.last().unwrap_or(&0) && !known_levels.contains(&indent);
         if bad_dedent {
-            out.push(error(line_range(text, line_no, 0, ws.len()), "Indentation does not match any outer level"));
+            let message = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
+                Some(doc_ws) => inconsistent_indentation_message(ws, doc_ws),
+                None => "Indentation does not match any outer level".to_string(),
+            };
+            out.push(error(line_range(text, line_no, 0, ws.len()), message));
         }
 
         // Pop to the parent level.
@@ -577,7 +581,15 @@ mod tests {
     fn messages_and_ranges() {
         type Expected<'a> = (u32, u32, u32, &'a str);
         let cases: &[(&str, Expected)] = &[
-            ("%div\n  %p\n    %b\n   %i", (3, 0, 3, "Indentation does not match any outer level")),
+            (
+                "%div\n  %p\n    %b\n   %i",
+                (
+                    3,
+                    0,
+                    3,
+                    "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
+                ),
+            ),
             (
                 "- if x\n  %p\n   %b\n",
                 (
@@ -655,7 +667,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: a dedent to a non-multiple of the indent unit reports bad-dedent; Haml 6 says \"Inconsistent indentation: …\" on that line"]
     fn off_unit_dedent_uses_haml_message() {
         let cases = [
             (
