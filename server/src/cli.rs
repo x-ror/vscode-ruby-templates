@@ -227,7 +227,12 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
     };
     let mut code = OK;
     let formatted = match result {
-        Ok(formatted) => formatted,
+        Ok(formatted) => {
+            if args.verbose {
+                formatted.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
+            }
+            formatted.text
+        }
         Err(skipped) => {
             // Folders hold plenty of views the formatter never handles; only doubts and bugs are news there.
             if named || args.verbose || skipped.kind != SkipKind::NotHandled {
