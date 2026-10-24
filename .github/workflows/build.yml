@@ -29,10 +29,9 @@ jobs:
         with: { workspaces: server }
       - run: cargo fmt --manifest-path server/Cargo.toml --check
       - run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
-      - uses: actions/setup-node@v7
-        with: { node-version: 26, cache: npm }
-      - run: npm ci
-      - run: npm run format:check
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
 
   server:
     strategy:
@@ -66,12 +65,11 @@ jobs:
         if: matrix.test
         shell: bash
         run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
-      - uses: actions/setup-node@v7
+      - uses: oven-sh/setup-bun@v2
         if: matrix.test
-        with: { node-version: 26 }
       - name: LSP end to end
         if: matrix.test
-        run: node test/e2e.js
+        run: bun test/e2e.js
         env:
           RUBY_TEMPLATES_LS: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
       - uses: actions/upload-artifact@v7
@@ -84,27 +82,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with: { node-version: 26, cache: npm }
       - uses: oven-sh/setup-bun@v2
       # One .pkg/server-<platform>/ per build; artifacts lose the executable bit.
       - uses: actions/download-artifact@v8
         with: { pattern: server-*, path: .pkg }
       - run: chmod +x .pkg/*/* && mkdir -p bin && cp -r .pkg/server-linux-x64 bin/linux-x64
-      - run: npm ci
-      - run: npm run test:tokens
-      - run: npm run test:snippets
-      - run: npm run test:unit
-      - run: npm run test:slim
+      - run: bun install --frozen-lockfile
+      - run: bun run test:tokens
+      - run: bun run test:snippets
+      - run: bun run test:unit
+      - run: bun run test:slim
       # Commands and the language server inside a downloaded VS Code; tools that aren't installed are skipped.
-      - run: xvfb-run -a npm run test:vscode
+      - run: xvfb-run -a bun run test:vscode
       - name: Package one .vsix per platform
         # vsce packs all of bin/, so it holds only the target's binary while that target is packaged.
         run: |
+          bun run build
           for d in .pkg/server-*; do
             plat=${d#.pkg/server-}
             rm -rf bin && mkdir -p bin && cp -r $d bin/$plat
-            npx @vscode/vsce package --no-dependencies --target $plat --out ruby-templates-$plat.vsix
+            bunx @vscode/vsce package --no-dependencies --target $plat --out ruby-templates-$plat.vsix
           done
       - uses: actions/upload-artifact@v7
         with: { name: vsix, path: '*.vsix' }

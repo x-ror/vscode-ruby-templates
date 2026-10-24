@@ -15,4 +15,4 @@ test/**
 .gitattributes
 .gitignore
 CLAUDE.md
-package-lock.json
+bun.lock
