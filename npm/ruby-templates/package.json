@@ -1,0 +1,28 @@
+{
+  "name": "@x-ror/ruby-templates",
+  "version": "0.0.0",
+  "description": "Whitespace-only formatter and checks for ERB, Haml and Slim templates",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/x-ror/vscode-ruby-templates"
+  },
+  "keywords": [
+    "erb",
+    "haml",
+    "slim",
+    "rails",
+    "formatter"
+  ],
+  "type": "module",
+  "bin": {
+    "ruby-templates": "bin/ruby-templates.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "optionalDependencies": {}
+}

@@ -8,6 +8,7 @@
 artifacts/**
 docs/**
 images/screenshots/**
+npm/**
 node_modules/**
 server/**
 src/**

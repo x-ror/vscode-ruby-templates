@@ -54,7 +54,8 @@ Run the ones that cover what you changed; all of them before a release.
 - Server end to end: `bun run build:server && bun run test:server && bun test/e2e.js && bun test/cli.js` (each asserts and exits non-zero on a mismatch)
 - Grammars: `bun run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
 - JS: `bun run format:check`, `bun run test:unit`, `bun run test:slim`, `bun run test:snippets`, `bun run build` (the bundle VS Code loads); any JS file: `bun build --no-bundle <file>`
-- Slim formatter: `bun run test:format` (needs `ruby -rslim`)
+- Slim/Haml formatters: `bun run test:format` (needs `ruby -rslim` / `ruby -rhaml`)
+- npm package: `bun test/npm.js` (after `cargo build --release`; packs and installs offline)
 - Client in a real VS Code: `bun run test:vscode`, under `xvfb-run -a` on Linux without a display (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
 
 ## Where tests go
