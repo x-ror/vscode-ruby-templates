@@ -414,6 +414,19 @@ function findUp(dir, rel) {
   return undefined;
 }
 
+const WINDOWS_COMMAND_NOT_FOUND = 9009; // cmd.exe's exit code for an unknown command
+
+// RubyGems installs .bat shims on Windows, which execFile can't run directly (Node refuses .bat without a shell).
+// ponytail: `%VAR%` inside an argument still expands in cmd.exe; none of our callers pass one.
+function windowsShellCommand(bin, args) {
+  const quote = (a) => `"${a.replace(/"/g, '\\"')}"`;
+  return [
+    "cmd.exe",
+    ["/d", "/s", "/c", `"${[bin, ...args].map(quote).join(" ")}"`],
+    { windowsVerbatimArguments: true },
+  ];
+}
+
 function run(
   cmd,
   args,
@@ -421,26 +434,39 @@ function run(
   input,
 ) {
   return new Promise((resolve) => {
-    const full =
+    const [bin, binArgs] =
       useBundler && findUp(options.cwd, "Gemfile") !== undefined
         ? ["bundle", ["exec", cmd, ...args]]
         : [cmd, args];
-    const child = cp.execFile(
-      full[0],
-      full[1],
-      { ...options, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        resolve({
-          code: err ? (err.code ?? 1) : 0,
-          stdout: String(stdout || ""),
-          stderr: String(stderr || ""),
-          err,
-        });
-      },
-    );
-    if (input !== undefined && child.stdin) {
-      child.stdin.on("error", () => {});
-      child.stdin.end(input);
+    const windows = process.platform === "win32";
+    const [file, fileArgs, spawnOptions] = windows
+      ? windowsShellCommand(bin, binArgs)
+      : [bin, binArgs, {}];
+    try {
+      const child = cp.execFile(
+        file,
+        fileArgs,
+        { ...options, ...spawnOptions, maxBuffer: 16 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          // Callers detect a missing tool by ENOENT, which a shell can't report.
+          if (windows && err?.code === WINDOWS_COMMAND_NOT_FOUND) {
+            err.code = "ENOENT";
+            err.path = bin;
+          }
+          resolve({
+            code: err ? (err.code ?? 1) : 0,
+            stdout: String(stdout || ""),
+            stderr: String(stderr || ""),
+            err,
+          });
+        },
+      );
+      if (input !== undefined && child.stdin) {
+        child.stdin.on("error", () => {});
+        child.stdin.end(input);
+      }
+    } catch (err) {
+      resolve({ code: err.code ?? 1, stdout: "", stderr: err.message, err });
     }
   });
 }
