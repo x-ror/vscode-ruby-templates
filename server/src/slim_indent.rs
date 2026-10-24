@@ -1,6 +1,7 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
 use crate::ruby::{analyze, ends_with_block};
+use crate::slim_parser;
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
 use tower_lsp::lsp_types::Diagnostic;
 
@@ -60,13 +61,15 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
-    let unit: Option<usize> = detect_unit(&lines);
+    let roles = slim_parser::parse(text, extra_engines).lines;
+    let unit: Option<usize> = detect_unit(&lines, &roles);
     let mut i = 0usize;
 
     while i < lines.len() {
         let raw = lines[i];
         let line_no = i;
-        if raw.trim().is_empty() {
+        // Continuations the parser knows and this loop doesn't (`a [href=x` + newline + `class=y]`) belong to their line.
+        if raw.trim().is_empty() || roles.get(i).is_some_and(|l| matches!(l.role, slim_parser::Role::Inner { .. })) {
             i += 1;
             continue;
         }
@@ -188,11 +191,13 @@ fn nested_branch_openers(keyword: &str) -> &'static [&'static str] {
 }
 
 /// Most common positive indentation step between a line and its parent: the file's indent unit.
-fn detect_unit(lines: &[&str]) -> Option<usize> {
+/// The most common indentation step between Slim lines; text, engine bodies and continuations don't count, as
+/// their indentation is free.
+fn detect_unit(lines: &[&str], roles: &[slim_parser::LineInfo]) -> Option<usize> {
     let mut levels: Vec<usize> = vec![0];
     let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
-    for raw in lines {
-        if raw.trim().is_empty() {
+    for (raw, info) in lines.iter().zip(roles) {
+        if raw.trim().is_empty() || !matches!(info.role, slim_parser::Role::Structural { .. }) {
             continue;
         }
         let indent = indent_width(leading_ws(raw));
@@ -628,6 +633,9 @@ mod tests {
     #[test]
     fn inconsistent_indent() {
         assert_eq!(slim("div\n  p\n  p\n    a\n  ul\n   li\n"), one(code::INCONSISTENT_INDENT, 5, 0, WARNING));
+        // Engine bodies and continuations don't set the unit: this file is indented by 4.
+        assert!(slim("ruby:\n  a =\n    b ||\n      c\n= f x,\n  y\ndiv\n    p\n    span\n        b\n").is_empty());
+        assert!(slim("head\n    link [rel=\"a\"\n      href=\"b\"]\n    meta\n").is_empty(), "a bracket continuation is no child");
     }
 
     #[test]
