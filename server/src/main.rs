@@ -8,7 +8,6 @@ mod tags;
 mod util;
 
 use dashmap::DashMap;
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tower_lsp::jsonrpc::Result;
@@ -39,17 +38,42 @@ impl TemplateLang {
 struct Doc { lang: TemplateLang, text: String }
 
 /// `initializationOptions.slim`, from the `rubyTemplates.slim.*` settings.
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Default, Debug, PartialEq)]
 struct SlimOptions {
     extra_engines: Vec<String>,
     disabled_diagnostics: Vec<String>,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct InitOptions {
-    slim: SlimOptions,
+impl SlimOptions {
+    /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
+    fn from_init(init: Option<&serde_json::Value>) -> (Self, Vec<String>) {
+        let slim = init.and_then(|v| v.get("slim"));
+        let mut ignored = Vec::new();
+        let mut strings = |name: &str| -> Vec<String> {
+            let Some(value) = slim.and_then(|s| s.get(name)) else {
+                return vec![];
+            };
+            let Some(items) = value.as_array() else {
+                ignored.push(format!("slim.{name}: expected an array, got {value}"));
+                return vec![];
+            };
+            items
+                .iter()
+                .filter_map(|item| {
+                    let s = item.as_str().map(String::from);
+                    if s.is_none() {
+                        ignored.push(format!("slim.{name}: expected a string, got {item}"));
+                    }
+                    s
+                })
+                .collect()
+        };
+        let options = Self {
+            extra_engines: strings("extraEngines"),
+            disabled_diagnostics: strings("disabledDiagnostics"),
+        };
+        (options, ignored)
+    }
 }
 
 struct Backend {
@@ -78,7 +102,9 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
         out.extend(unresolved_renders(doc.lang, &path, &doc.text));
     }
     if matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
-        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c)));
+        out.retain(|d| {
+            !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c))
+        });
     }
     out
 }
@@ -118,7 +144,11 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
-            out.push(util::coded(util::warning(util::line_range(text, i, r.start, r.end), message), "unresolved-render"));
+            let range = util::line_range(text, i, r.start, r.end);
+            out.push(util::coded(
+                util::warning(range, message),
+                "unresolved-render",
+            ));
         }
     }
     out
@@ -150,15 +180,12 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let options = match params.initialization_options.map(serde_json::from_value::<InitOptions>) {
-            Some(Ok(options)) => options,
-            Some(Err(e)) => {
-                self.client.log_message(MessageType::WARNING, format!("ignoring invalid initializationOptions: {e}")).await;
-                InitOptions::default()
-            }
-            None => InitOptions::default(),
-        };
-        let _ = self.slim.set(options.slim);
+        let (slim, ignored) = SlimOptions::from_init(params.initialization_options.as_ref());
+        for message in ignored {
+            let message = format!("ignoring initializationOptions.{message}");
+            self.client.log_message(MessageType::WARNING, message).await;
+        }
+        let _ = self.slim.set(slim);
         Ok(InitializeResult {
             server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
@@ -419,7 +446,11 @@ async fn main() {
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend { client, docs: DashMap::new(), slim: OnceLock::new() });
+    let (service, socket) = LspService::new(|client| Backend {
+        client,
+        docs: DashMap::new(),
+        slim: OnceLock::new(),
+    });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
@@ -440,6 +471,21 @@ mod tests {
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
+    }
+
+    #[test]
+    fn slim_options_keep_valid_fields() {
+        let init = serde_json::json!({
+            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] }
+        });
+        let (options, ignored) = SlimOptions::from_init(Some(&init));
+        let expected = SlimOptions {
+            extra_engines: vec![],
+            disabled_diagnostics: vec!["bad-dedent".into()],
+        };
+        assert_eq!(options, expected);
+        assert_eq!(ignored.len(), 2, "{ignored:?}");
+        assert_eq!(SlimOptions::from_init(None), (SlimOptions::default(), vec![]));
     }
 
     #[test]
