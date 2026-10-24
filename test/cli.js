@@ -48,7 +48,7 @@ try {
     "folders yield templates only",
   );
   r = run(["check", notes]);
-  assert.strictEqual(r.status, 1);
+  assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /notes\.txt: unknown template type/);
 
   r = run(["format", messy]);
@@ -64,6 +64,8 @@ try {
   assert.strictEqual(r.status, 1);
   assert.deepStrictEqual(r.stdout.trim().split("\n"), [messy]);
   assert.match(r.stderr, /broken\.html\.slim: left unchanged: /);
+  assert.doesNotMatch(r.stderr, /notes|index/, "only doubts are reported");
+  assert.strictEqual(run(["format", views]).status, 2, "stdout takes one file");
 
   r = run(["format", "--stdin-filepath", "x.html.slim", "-"], "ul\n    li\n");
   assert.strictEqual(r.status, 0, r.stderr);
