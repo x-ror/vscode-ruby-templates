@@ -142,12 +142,12 @@ fn template_suffix<'a>(fname: &'a str, basename: &str) -> Option<Option<&'a str>
     }
     let rest = fname.strip_prefix(basename)?.strip_prefix('.')?;
     let (middle, _handler) = rest.rsplit_once('.').unwrap_or(("", rest));
-    let as_format = |segment: &'a str| {
-        let format = segment.split('+').next().unwrap_or("");
-        (format.is_empty() || KNOWN_FORMATS.contains(&format)).then_some((!format.is_empty()).then_some(format))
+    let as_format = |segment: &'a str| match segment.split('+').next().unwrap_or("") {
+        "" => Some(None),
+        format if KNOWN_FORMATS.contains(&format) => Some(Some(format)),
+        _ => None,
     };
     match middle.split_once('.') {
-        _ if middle.is_empty() => Some(None),
         Some((locale, format)) if is_locale(locale) => as_format(format),
         Some(_) => None,
         None if is_locale(middle) && !KNOWN_FORMATS.contains(&middle) => Some(None),
@@ -157,8 +157,7 @@ fn template_suffix<'a>(fname: &'a str, basename: &str) -> Option<Option<&'a str>
 
 /// `user` of `user.en.html.erb`, `user.v2` of `user.v2.html.erb`.
 pub fn template_stem(fname: &str) -> &str {
-    let first = fname.split('.').next().unwrap_or(fname);
-    fname.match_indices('.').map(|(i, _)| &fname[..i]).find(|stem| template_suffix(fname, stem).is_some()).unwrap_or(first)
+    fname.match_indices('.').map(|(i, _)| &fname[..i]).find(|stem| template_suffix(fname, stem).is_some()).unwrap_or(fname)
 }
 
 /// `html` of `show.html+phone.erb` (variant dropped); `None` for `show.erb` and locale-only `show.de.erb`.
@@ -602,6 +601,34 @@ mod tests {
             assert!(model_renders(query).is_empty(), "{query}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn template_file_names() {
+        let cases = [
+            ("user.html.erb", "user", Some(Some("html"))),
+            ("user.html+phone.erb", "user", Some(Some("html"))),
+            ("user.+phone.erb", "user", Some(None)),
+            ("user.de.erb", "user", Some(None)),
+            ("user.pt-BR.html.erb", "user", Some(Some("html"))),
+            ("user.de_AT.erb", "user", Some(None)),
+            ("user.js.erb", "user", Some(Some("js"))),
+            ("user.erb", "user", Some(None)),
+            ("user", "user", Some(None)),
+            ("user.v2.html.erb", "user", None),
+            ("user.en.v2.erb", "user", None),
+            ("users.html.erb", "user", None),
+            ("user.v2.html.erb", "user.v2", Some(Some("html"))),
+        ];
+        for (fname, basename, suffix) in cases {
+            assert_eq!(template_suffix(fname, basename), suffix, "{fname} as {basename}");
+        }
+        let stems = [("user.en.html.erb", "user"), ("user.v2.html.erb", "user.v2"), ("user", "user"), ("a.b.c.d", "a.b.c"), (".erb", "")];
+        for (fname, stem) in stems {
+            assert_eq!(template_stem(fname), stem, "{fname}");
+        }
+        assert_eq!(template_format(Path::new("show.de.erb")), None);
+        assert_eq!(template_format(Path::new("show.en.html.erb")), Some("html"));
     }
 
     #[test]
