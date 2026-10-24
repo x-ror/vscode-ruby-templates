@@ -112,17 +112,25 @@ fn model_refs(line: &str) -> Vec<RenderRef> {
         .collect()
 }
 
+/// `_card.html.slim` → `card` for each partial among `files`.
+fn partial_stems<'a>(files: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a str> {
+    files.into_iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(template_stem)).collect()
+}
+
+/// Whether a reference to `name` can name a partial with one of `stems`; lets callers skip `resolve`, a directory listing.
+fn may_name(stems: &[&str], name: &str) -> bool {
+    stems.contains(&name.rsplit('/').next().unwrap_or(name))
+}
+
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
 pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
-    // Skip `resolve` (a directory listing) for references that can't name one of `files`.
-    let stems: Vec<&str> = files.iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(template_stem)).collect();
-    let may_match = |name: &str| stems.contains(&name.rsplit('/').next().unwrap_or(name));
+    let stems = partial_stems(files);
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let named = code_refs(source, extra_engines, render_refs)
             .into_iter()
-            .filter(|(start, _, r)| may_match(&r.name) && ref_targets(source, *start, r).iter().any(|t| files.contains(t)));
+            .filter(|(start, _, r)| may_name(&stems, &r.name) && ref_targets(source, *start, r).iter().any(|t| files.contains(t)));
         let models = code_refs(source, extra_engines, model_refs)
             .into_iter()
             .filter(|(_, _, r)| resolve_model(&source.path, &r.name).iter().any(|t| files.contains(t)));
@@ -163,16 +171,14 @@ pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
 /// Edits for every partial reference that resolves only to renamed files that all agree on the new name;
 /// a reference also matching a file left in place (another format or variant) is not touched.
 pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_engines: &[String]) -> HashMap<Url, Vec<TextEdit>> {
-    // Skip `resolve` (a directory listing) for references that can't name a renamed partial.
     let folder_renamed = renames.iter().any(|(old, _)| old.is_dir());
-    let stems: Vec<&str> = renames.iter().filter_map(|(old, _)| old.file_name()?.to_str()?.strip_prefix('_').map(template_stem)).collect();
-    let may_match = |name: &str| folder_renamed || stems.contains(&name.rsplit('/').next().unwrap_or(name));
+    let stems = partial_stems(renames.iter().map(|(old, _)| old));
 
     let mut out = HashMap::new();
     for source in sources {
         let mut edits = Vec::new();
         for (start, end, r) in code_refs(source, extra_engines, render_refs) {
-            if !may_match(&r.name) {
+            if !folder_renamed && !may_name(&stems, &r.name) {
                 continue;
             }
             let names: Option<Vec<String>> =
