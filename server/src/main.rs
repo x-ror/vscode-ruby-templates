@@ -564,7 +564,9 @@ impl Backend {
             return ivars::for_view(path).into_iter().filter(|a| a.name == word).filter_map(|a| at_line(&a.file, a.line)).collect();
         }
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
-        let Some(name) = helper_defs::name_at(line, col).filter(|_| is_partial) else { return vec![] };
+        // `link_to` or `t` is never a local; the scan below reads every view.
+        let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
+        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return vec![] };
         let Some(views) = partials::views_root(path) else { return vec![] };
         let sources = partial_rename::sources(&views, &self.open_texts());
         let passes = partial_rename::local_passes(path, name, &sources, &self.options().extra_engines);
@@ -739,13 +741,12 @@ impl LanguageServer for Backend {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
-        let in_code = || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
-        if locs.is_empty() && in_code() {
-            locs.extend(self.variable_definitions(&doc.text, &path, line, col));
+        if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
+            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
-        if locs.is_empty() {
-            let helper =
-                helper_defs::name_at(line, col).filter(|_| code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines));
+        // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
+        {
+            let helper = helper_defs::name_at(line, col);
             let at_line = |(file, line): (PathBuf, usize)| {
                 let start = Position::new(line as u32, 0);
                 Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
@@ -755,6 +756,9 @@ impl LanguageServer for Backend {
                 Some(source) => locs.extend(at_line(source)),
                 None => locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line)),
             }
+        }
+        if locs.is_empty() {
+            locs.extend(self.variable_definitions(&doc.text, &path, line, col));
         }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
@@ -1188,6 +1192,10 @@ fn slot_setter_completions(path: &Path, before: &str) -> Option<Vec<CompletionIt
     let component = slots::block_component(head, var)?;
     let detail = format!("{component} slot");
     let setters = slots::setters(&slots::component_slots(path, component));
+    // Not a component with slots (or a reused name like `f`): leave `f.` to the form builder completions.
+    if setters.is_empty() {
+        return None;
+    }
     Some(
         setters
             .into_iter()
@@ -1352,6 +1360,13 @@ async fn main() {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn slot_setters_leave_other_receivers_alone() {
+        let before = "<%= render CardComponent.new do |f| %><% end %>\n<%= form_with model: @user do |f| %>\n  <%= f.te";
+        assert!(slot_setter_completions(Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
+        assert!(receiver_completions(before).is_some_and(|items| !items.is_empty()));
+    }
     #[test]
     fn watched_file_events_invalidate_caches() {
         let views = Path::new("/r/app/views");

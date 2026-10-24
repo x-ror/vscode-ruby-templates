@@ -157,7 +157,8 @@ pub fn local_passes(partial: &Path, local: &str, sources: &[Source], extra_engin
                 continue;
             }
             // The key itself, `user:` after the partial name; the call's start when it's spelled another way.
-            let at = line[r.end..].find(&format!("{local}:")).map_or(r.call, |i| r.end + i);
+            let key = Regex::new(&format!(r"(?:^|[^\w]){}:", regex::escape(local))).ok();
+            let at = key.and_then(|k| k.find(&line[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
             let position = offset_to_position(&source.text, line_start + at);
             out.push(Location::new(uri.clone(), Range::new(position, position)));
         }
@@ -414,7 +415,11 @@ mod tests {
     fn local_passes_find_callers() {
         let t = Tree::new("locals", &["app/views/users/_card.html.erb"]);
         let sources = [
-            t.source("app/views/users/index.html.erb", ERB, "<%= render \"card\", user: u, size: 1 %>\n<%= render \"card\", size: 2 %>\n"),
+            t.source(
+                "app/views/users/index.html.erb",
+                ERB,
+                "<%= render \"card\", current_user: cu, user: u, size: 1 %>\n<%= render \"card\", size: 2 %>\n",
+            ),
             t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\", user: current_user\n"),
             t.source("app/views/home/other.html.erb", ERB, "<%= render \"other\", user: u %>\n"),
         ];
@@ -424,7 +429,7 @@ mod tests {
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
         got.sort();
-        assert_eq!(got, [("app/views/home/show.html.slim".into(), 0, 23), ("app/views/users/index.html.erb".into(), 0, 19)]);
+        assert_eq!(got, [("app/views/home/show.html.slim".into(), 0, 23), ("app/views/users/index.html.erb".into(), 0, 37)]);
         assert!(local_passes(&card, "missing", &sources, &[]).is_empty());
     }
 

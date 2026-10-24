@@ -1,6 +1,7 @@
 //! A helper called in a view → its `def` in app/helpers, or in a controller that exposes it with `helper_method`.
 
 use crate::partials::app_root;
+use crate::ruby::logical_lines;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -22,11 +23,13 @@ pub fn name_at(line: &str, col: usize) -> Option<&str> {
 /// Files and 0-based lines defining helper `name`.
 pub fn definitions(current: &Path, name: &str) -> Vec<(PathBuf, usize)> {
     let Some(app) = app_root(current) else { return vec![] };
-    let def = Regex::new(&format!(r"^\s*def\s+(?:self\.)?{}\s*(?:$|[(;=#])", regex::escape(name))).unwrap();
+    // `helper_method def current_user` defines and exposes it in one line.
+    let def = Regex::new(&format!(r"^\s*(?:helper_method\s+)?def\s+(?:self\.)?{}\s*(?:$|[(;=#])", regex::escape(name))).unwrap();
     let exposed = |text: &str| {
-        text.lines()
-            .filter_map(|l| HELPER_METHOD.captures(l))
-            .any(|cap| cap[1].split([',', ' ', '(', ')']).any(|a| a == format!(":{name}")))
+        logical_lines(text).iter().filter_map(|l| HELPER_METHOD.captures(l)).any(|cap| {
+            let args = &cap[1];
+            args.trim_start().starts_with("def ") || args.split([',', ' ', '(', ')']).any(|a| a == format!(":{name}"))
+        })
     };
     let mut out = Vec::new();
     for (dir, needs_helper_method) in [("helpers", false), ("controllers", true)] {
@@ -71,6 +74,7 @@ mod tests {
             "class ApplicationController\n  helper_method :current_user, :admin?\n\n  def current_user\n  end\nend\n",
         );
         write("app/controllers/users_controller.rb", "class UsersController\n  def current_user; end\nend\n");
+        write("app/controllers/sessions_controller.rb", "class SessionsController\n  helper_method :a,\n    :signed_in?\n\n  def signed_in?\n  end\n\n  helper_method def theme\n  end\nend\n");
         let view = root.join("app/views/orders/index.html.erb");
         let rel = |name: &str| -> Vec<(String, usize)> {
             definitions(&view, name)
@@ -81,6 +85,8 @@ mod tests {
         assert_eq!(rel("format_price"), [("app/helpers/orders_helper.rb".to_string(), 1)]);
         assert_eq!(rel("current_user"), [("app/controllers/application_controller.rb".to_string(), 3)]);
         assert!(rel("missing").is_empty());
+        assert_eq!(rel("signed_in?"), [("app/controllers/sessions_controller.rb".to_string(), 4)]);
+        assert_eq!(rel("theme"), [("app/controllers/sessions_controller.rb".to_string(), 7)]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
