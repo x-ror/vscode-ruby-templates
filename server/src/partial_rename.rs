@@ -23,7 +23,7 @@ pub struct Source {
 /// `app/views/users/_card.html.slim` → `users/card`; `None` for non-partials and files outside a views dir.
 fn qualified_name(views: &Path, file: &Path) -> Option<String> {
     let dir = file.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
-    let name = file.file_name()?.to_str()?.strip_prefix('_')?.split('.').next()?;
+    let name = crate::partials::template_stem(file.file_name()?.to_str()?.strip_prefix('_')?);
     (!dir.is_empty() && !name.is_empty()).then(|| format!("{dir}/{name}"))
 }
 
@@ -119,7 +119,8 @@ pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
 pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_engines: &[String]) -> HashMap<Url, Vec<TextEdit>> {
     // Skip `resolve` (a directory listing) for references that can't name a renamed partial.
     let folder_renamed = renames.iter().any(|(old, _)| old.is_dir());
-    let stems: Vec<&str> = renames.iter().filter_map(|(old, _)| old.file_name()?.to_str()?.strip_prefix('_')?.split('.').next()).collect();
+    let stems: Vec<&str> =
+        renames.iter().filter_map(|(old, _)| old.file_name()?.to_str()?.strip_prefix('_').map(crate::partials::template_stem)).collect();
     let may_match = |name: &str| folder_renamed || stems.contains(&name.rsplit('/').next().unwrap_or(name));
 
     let mut out = HashMap::new();

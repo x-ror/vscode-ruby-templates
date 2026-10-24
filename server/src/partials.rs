@@ -96,11 +96,75 @@ pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `html` of `show.html+phone.erb` (the segment before the handler, variant dropped); `None` for `show.erb`.
+const KNOWN_FORMATS: [&str; 28] = [
+    "html",
+    "text",
+    "js",
+    "css",
+    "ics",
+    "csv",
+    "vcf",
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "tiff",
+    "svg",
+    "webp",
+    "avif",
+    "mpeg",
+    "mp4",
+    "webm",
+    "ogg",
+    "mp3",
+    "wav",
+    "pdf",
+    "zip",
+    "gzip",
+    "json",
+    "xml",
+    "yaml",
+    "turbo_stream",
+];
+
+/// Rails locale shape: `en`, `pt-BR`, `de_AT`.
+fn is_locale(segment: &str) -> bool {
+    let b = segment.as_bytes();
+    let region = |r: &[u8]| matches!(r, [b'-' | b'_', x, y] if x.is_ascii_uppercase() && y.is_ascii_uppercase());
+    b.len() >= 2 && b[..2].iter().all(u8::is_ascii_lowercase) && (b.len() == 2 || region(&b[2..]))
+}
+
+/// Does `fname` name template `basename` (`name[.locale][.format][+variant][.handler]`)?
+/// `Some(format)` when it does (`None` inside: matches any format); `_user.v2.html.erb` is not `_user`.
+fn template_suffix<'a>(fname: &'a str, basename: &str) -> Option<Option<&'a str>> {
+    if fname == basename {
+        return Some(None);
+    }
+    let rest = fname.strip_prefix(basename)?.strip_prefix('.')?;
+    let (middle, _handler) = rest.rsplit_once('.').unwrap_or(("", rest));
+    let as_format = |segment: &'a str| {
+        let format = segment.split('+').next().unwrap_or("");
+        (format.is_empty() || KNOWN_FORMATS.contains(&format)).then_some((!format.is_empty()).then_some(format))
+    };
+    match middle.split_once('.') {
+        _ if middle.is_empty() => Some(None),
+        Some((locale, format)) if is_locale(locale) => as_format(format),
+        Some(_) => None,
+        None if is_locale(middle) && !KNOWN_FORMATS.contains(&middle) => Some(None),
+        None => as_format(middle),
+    }
+}
+
+/// `user` of `user.en.html.erb`, `user.v2` of `user.v2.html.erb`.
+pub fn template_stem(fname: &str) -> &str {
+    let first = fname.split('.').next().unwrap_or(fname);
+    fname.match_indices('.').map(|(i, _)| &fname[..i]).find(|stem| template_suffix(fname, stem).is_some()).unwrap_or(first)
+}
+
+/// `html` of `show.html+phone.erb` (variant dropped); `None` for `show.erb` and locale-only `show.de.erb`.
 fn template_format(path: &Path) -> Option<&str> {
-    let (rest, _handler) = path.file_name()?.to_str()?.rsplit_once('.')?;
-    let (_, format) = rest.rsplit_once('.')?;
-    format.split('+').next()
+    let fname = path.file_name()?.to_str()?;
+    template_suffix(fname, template_stem(fname))?
 }
 
 /// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
@@ -203,7 +267,7 @@ fn matching_templates(dir: &Path, basename: &str) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
-            fname == basename || fname.starts_with(&format!("{}.", basename))
+            template_suffix(fname, basename).is_some()
         })
         .filter(|p| p.is_file())
         .collect();
@@ -321,7 +385,7 @@ fn template_name(p: &Path, partial: bool) -> Option<String> {
         None if !partial => fname,
         _ => return None,
     };
-    let name = stem.split('.').next()?;
+    let name = template_stem(stem);
     (!name.is_empty()).then(|| name.to_string())
 }
 
