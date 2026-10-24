@@ -2,7 +2,7 @@
 //! `tab_size` spaces per nesting level, text and engine blocks and continuations move with their
 //! owner line, and trailing whitespace goes where Slim ignores it.
 
-use crate::slim_parser::{indent_width, parse, Role};
+use crate::slim_parser::{indent_width, parse, Role, BOM};
 
 /// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0).
 pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<String> {
@@ -13,11 +13,23 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
     if !parsed.valid {
         return None;
     }
-    let mut shift = vec![0isize; parsed.lines.len()];
+    let body = text.strip_prefix(BOM).unwrap_or(text);
     let mut out = String::with_capacity(text.len());
-    for (i, (raw, info)) in text.split('\n').zip(&parsed.lines).enumerate() {
+    out.push_str(&text[..text.len() - body.len()]);
+    // Slim keeps whitespace-only lines at the end (as newlines in the compiled code) but drops empty ones.
+    let lines: Vec<&str> = body.split('\n').collect();
+    let tail = lines
+        .iter()
+        .rposition(|l| !l.trim().is_empty())
+        .map_or(0, |i| i + 1);
+    let mut shift = vec![0isize; parsed.lines.len()];
+    for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).enumerate() {
         if i > 0 {
             out.push('\n');
+        }
+        if i >= tail {
+            out.push_str(raw);
+            continue;
         }
         let (line, cr) = raw.strip_suffix('\r').map_or((raw, ""), |l| (l, "\r"));
         let (ws, content) = line.split_at(line.len() - line.trim_start_matches([' ', '\t']).len());
@@ -31,9 +43,14 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
             Role::Inner { owner } => width + shift[owner],
         };
         // A text block measured from a raw column counts a tab as one character: spaces would move it.
-        if new_width < 0 || (info.raw_column && ws.contains('\t')) {
+        if info.raw_column && ws.contains('\t') {
             return None;
         }
+        let new_width = match new_width {
+            w if w >= 0 => w as usize,
+            _ if info.free_indent || content.trim().is_empty() => 0,
+            _ => return None,
+        };
         // A trailing `,` or `\` before the whitespace would turn into a continuation once stripped.
         let stripped = content.trim_end_matches(|c: char| c.is_ascii_whitespace());
         let content = if info.keeps_trailing || stripped.ends_with([',', '\\']) {
@@ -42,7 +59,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
             stripped
         };
         if !content.is_empty() {
-            out.push_str(&" ".repeat(new_width as usize));
+            out.push_str(&" ".repeat(new_width));
             out.push_str(content);
         }
         out.push_str(cr);
@@ -105,6 +122,19 @@ mod tests {
             "`x,` + space ends the value"
         );
         assert_eq!(fmt("p title=\"a  \n  b\""), "p title=\"a  \n  b\"");
+    }
+
+    #[test]
+    fn continuations_left_of_zero_clamp() {
+        let text = "div\n    = f(1,\n  2)\n    a(href=x\n\nclass=y) t\n";
+        assert_eq!(fmt(text), "div\n  = f(1,\n2)\n  a(href=x\n\nclass=y) t\n");
+    }
+
+    #[test]
+    fn keeps_byte_order_mark_and_trailing_blank_lines() {
+        assert_eq!(fmt("\u{feff}div\n    p\n"), "\u{feff}div\n  p\n");
+        assert_eq!(fmt("p  \n\n   \n \n"), "p\n\n   \n \n");
+        assert_eq!(fmt("p\n   \nq"), "p\n\nq");
     }
 
     #[test]

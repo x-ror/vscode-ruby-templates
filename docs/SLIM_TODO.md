@@ -16,7 +16,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Wrapped attributes spanning several lines (`syntaxes/slim.tmLanguage.json` `wrapped-attributes`, `test/sample.html.slim` `a(href="/"`)
 - [x] Splat attributes `*{...}` and `*attrs` (`syntaxes/slim.tmLanguage.json` `splat`, `test/sample.html.slim`)
 - [x] Inline tags `li: a href="/" Home` (`syntaxes/slim.tmLanguage.json` `inline-tag`, `test/sample.html.slim`)
-- [x] Whitespace modifiers on bare tags `a>`, `a<`, `a<>` and legacy `a'`, also before wrapped attributes `a>(...)` and output `a>= x` (`syntaxes/slim.tmLanguage.json` `tag`, `tag-line-with-text`, `test/sample.html.slim`)
+- [x] Whitespace modifiers on bare tags `a>`, `a<`, `a<>` and legacy `a'`, also before wrapped attributes `a>(...)`, output `a>= x` and text `a>text`; a `'` after a quoted value is text, as in Slim (`p title='it''= x`) (`syntaxes/slim.tmLanguage.json` `tag`, `tag-line-with-text`, `test/sample.html.slim`)
 - [x] Self-closing tag `img/` (`syntaxes/slim.tmLanguage.json` `tag`, `test/sample.html.slim`)
 - [x] Control code `- ruby` (`syntaxes/slim.tmLanguage.json` `control-line`, `test/sample.html.slim`)
 - [x] Output `= ruby` and unescaped `== ruby` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
@@ -30,7 +30,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] HTML comment `/!` (`syntaxes/slim.tmLanguage.json` `html-comment`, `test/sample.html.slim`)
 - [x] IE conditional comment `/[if IE]`: own rule, children use the top-level patterns (`syntaxes/slim.tmLanguage.json` `conditional-comment`, `test/sample.html.slim`)
 - [x] Interpolation `#{}` and escaped `\#{` in text, double-quoted attributes and comments (`syntaxes/slim.tmLanguage.json` `interpolation`, `test/sample.html.slim`)
-- [x] Unescaped interpolation `#{{ expr }}`, only when the whole body is `{...}` on the line, as Slim's `Interpolation` checks; `#{{a: 1}.to_json}` stays escaped (`syntaxes/slim.tmLanguage.json` `interpolation-unescaped`, `test/sample.html.slim`)
+- [x] Unescaped interpolation `#{{ expr }}`, only when the whole body is `{...}` on the line (one level of inner braces, `#{{ {a: 1}.to_json }}`), as Slim's `Interpolation` checks; `#{{a: 1}.to_json}` stays escaped. Balanced braces inside `#{}` and `*{}` stay Ruby (`ruby-braces`) (`syntaxes/slim.tmLanguage.json` `interpolation-unescaped`, `test/sample.html.slim`)
 - [x] Multi-line Ruby after `,` or `\` stays Ruby on the next line: the end lookbehind also rejects the `\n` vscode-textmate appends (`syntaxes/slim.tmLanguage.json` `control-line`, `output-line`, `inline-output`; `test/__snapshots__/sample.html.slim.tokens.txt` `class: "form" do |f|`). A `,` followed by trailing spaces still ends the line
 - [x] Inline HTML lines starting with `<` highlighted as tags, attributes, strings and `#{}`; quotes count only inside `<...>` and never carry past the line (`<p>Don't</p>`) (`syntaxes/slim.tmLanguage.json` `inline-html`, `test/sample.html.slim`)
 - [x] Single-quoted attribute values interpolate `#{}` (`syntaxes/slim.tmLanguage.json` `string-single`, `test/sample.html.slim`)
@@ -57,7 +57,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 3. File types and language configuration
 
 - [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `unmatched-branch`, `silent-output-helper`) (`server/src/main.rs` `TemplateLang::from_uri_or_id`, `diagnostics`, test `skim_skips_ruby_checks`; `server/src/indented.rs` `code::RUBY`)
+- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/main.rs` `TemplateLang::from_uri_or_id`, `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/indented.rs` `code::RUBY`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/main.rs` `folding_range`)
@@ -66,7 +66,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Default `tabSize: 2`, spaces, no indent detection (`package.json` `configurationDefaults["[slim]"]`)
 - [x] `onEnterRules`: indent after a `|`/`'` text line, keep indent after a `-`/`=`/`tag =` line ending in `,`/`\` (`language-configuration/slim.json`, shared by `skim`; regexes checked in `test/slim.js`). The line after the last continuation line still keeps the continued indent
 - [x] (?) Emmet in Slim: VS Code's Emmet lists `slim` among its native modes (Slim-syntax output); `skim` mapped to it (`package.json` `emmet.includeLanguages`), documented (`README.md` Tips). Not exercised in an editor here
-- [x] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) open as `slim` (`.slim` extension), and `void-children` only runs for HTML hosts, bare `.slim` and untitled (`server/src/main.rs` `slim_html_host`, test `void_children_only_for_html_slim`). Slim itself renders `img` children (`<img>x</img>`), so that is the only HTML-only Slim check; `doctype-children` is a Slim parse error in every host
+- [x] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) open as `slim` (`.slim` extension), and `void-children` only runs for HTML hosts, bare `.slim` and untitled (`server/src/main.rs` `slim_html_host`, `file_name` decodes `%2B`; test `void_children_only_for_html_slim`). Slim itself renders `img` children (`<img>x</img>`), so that is the only HTML-only Slim check; `doctype-children` is a Slim parse error in every host
 
 ## 4. Snippets
 
@@ -92,10 +92,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Convert ERB → Slim (`erb2slim`) and Haml → Slim (`haml2slim`) (`src/extension.js` `convert`, `package.json` commands/menus)
 - [x] Convert Slim → ERB with `slimrb --erb` (Slim 5.2.2 `Slim::ERBConverter`) (`src/extension.js` `convert`, `package.json` `rubyTemplates.convertToErb`). Output keeps `::Temple::Utils.escape_html`, documented as double-escaping under Rails (`README.md`)
 - [x] Compile with `slimrb --rails` behind `rubyTemplates.slim.compileForRails` (`src/extension.js` `compileToRuby`). `--rails` implies `--compile` in Slim 5.2.2, so it can't drive the HTML preview; the Rails preview below covers that
-- [x] Preview inside a Rails app: `rubyTemplates.preview.useRails` runs `ruby bin/rails runner` with `ApplicationController.render(inline: $stdin, type:)` from the nearest `bin/rails`, 60 s timeout, errors in the preview panel (`src/extension.js` `renderInRails`; checked against a stub `bin/rails`, not a real app)
-- [x] Toggle Slim Line: cycles `-` → `=` → `==` → `/` on every selected line, keeps `<`/`>` between `=` and `==`, skips `/!` and `/[` (`src/slim.js` `toggleSlimMarker`, `src/extension.js` `toggleSlimTag`, `Ctrl+Alt+E` for `slim`; `test/slim.js`). Inline `p = x` markers are not toggled
-- [x] Wrap selection for Slim: a whole line's content becomes `= x`, part of a line `#{x}`, empty selection inserts `#{}` (`src/slim.js` `wrapSlim`, `src/extension.js` `wrapInSlim`, `Ctrl+Alt+W` for `slim`). Multi-line selections are left alone
-- [x] Extract selection to partial: whole selected lines, dedented, to `_name.html.slim` next to the file (or `app/views/dir/_name.html.slim` for `dir/name`), replaced by `= render "name"`; refuses to overwrite (`src/slim.js` `dedent`, `partialPath`, `src/extension.js` `extractSlimPartial`; `test/slim.js`). ERB has no extract command to mirror
+- [x] Preview inside a Rails app: `rubyTemplates.preview.useRails` runs `ruby bin/rails runner` with `render(inline: $stdin, type:)` from the nearest `bin/rails` on an `ApplicationController` subclass whose `controller_path` is the template's `app/views` directory (so bare `render "card"` resolves next to the file), 60 s timeout, errors in the preview panel (`src/extension.js` `renderInRails`; checked against a stub `bin/rails`, not a real app)
+- [x] Toggle Slim Line: cycles `-` → `=` → `==` → `/` on every selected line, keeps `<`/`>` between `=` and `==`, skips `/!`, `/[`, `-#` and lines inside engine/comment/text blocks; a selection ending at column 0 leaves that line out (`src/slim.js` `toggleSlimMarker`, `inVerbatimBlock`, `src/extension.js` `toggleSlimTag`, `Ctrl+Alt+E` for `slim`; `test/slim.js`). Inline `p = x` markers are not toggled
+- [x] Wrap selection for Slim: a whole plain line's content becomes `= x`; part of a line, or a line starting with `-`/`=`/`|`/`'`/`/`/`<`/`>`, becomes `#{x}`; empty selection inserts `#{}` (`src/slim.js` `wrapSlim`, `src/extension.js` `wrapInSlim`, `Ctrl+Alt+W` for `slim`). Multi-line selections are skipped with a message
+- [x] Extract selection to partial: whole selected lines, dedented by their common whitespace prefix, to `_name.<format>.slim` (the file's format without `+variant`, else `html`) next to the file (or under `app/views/dir/` for `dir/name`), replaced by `= render "name"` in one `WorkspaceEdit`; refuses to overwrite and reports a failed edit (`src/slim.js` `dedent`, `partialPath`, `src/extension.js` `extractSlimPartial`; `test/slim.js`). ERB has no extract command to mirror
 
 ## 6. Diagnostics (server)
 
@@ -129,11 +129,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Document links on render strings (`server/src/main.rs` `document_link`; checked on a `.slim` document)
 - [x] Hover on render shows resolved files; hover on Rails helpers shows the signature (`server/src/main.rs` `hover`; checked on a `.slim` document)
 - [x] Completion: partial names, form builder methods, Rails helpers on `-`/`=` lines (`server/src/main.rs` `completion`, `in_ruby_context`; checked on a `.slim` document)
-- [ ] `in_ruby_context` for Slim: exact Ruby spans (attribute values, `#{}`, wrapped attributes) instead of the `"= "` / `(` / `{` heuristic
-- [ ] Completion of embedded engine names at line start (`javascript:`, `css:`, ...)
-- [ ] HTML tag and attribute completion in tag position
-- [ ] Locals, instance variables, block variables, i18n keys, route helpers (same as ERB TODO sections 9-11)
-- [ ] Hover on Slim line markers explaining them (`==` unescaped, `=>` trailing space, `/!` HTML comment)
+- [x] Exact Ruby spans for Slim completion and unresolved-render warnings: `-`/`=`/`==` (also `p= x`), `attr=ruby` in inline and wrapped attributes, splats, `#{}` in text, quoted values and interpolating engines, `ruby:` bodies, `,`/`\` continuations; Skim never counts as Ruby (`server/src/slim_parser.rs` `parse`, `in_ruby`, a port of `Slim::Parser`; `server/src/main.rs` `completion`, `unresolved_renders`). An unclosed `#{` before the cursor counts as Ruby for completion only (`in_open_interpolation`)
+- [x] Completion of embedded engine names (Slim 5 engines plus `rubyTemplates.slim.extraEngines`) where a tag starts (`server/src/slim_complete.rs`, `test/e2e.js`)
+- [x] HTML tag and attribute completion where a tag or attribute name may start (`server/src/slim_complete.rs`, `server/src/html.rs`; a modest static list, ERB has none to reuse)
+- [ ] Locals, instance variables, block variables, i18n keys, route helpers (same as ERB TODO sections 9-11). Nothing to port: ERB has none of these yet
+- [x] Hover on Slim line markers: `-`, `=`, `==` with `<`/`>`, `/`, `/!`, `/[if]`, `|`, `'`, engines (`server/src/slim_hover.rs`, `test/e2e.js`)
 
 ## 8. Outline, folding, symbols, rename
 
@@ -144,9 +144,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 9. Formatting and semantic tokens
 
-- [ ] Document formatting provider for Slim (no mature standalone formatter; at least normalize indentation and attribute spacing)
-- [ ] Format on save via the provider
-- [ ] Semantic tokens from the server for Ruby spans the TextMate grammar can't delimit (continuations, nested brackets)
+- [x] Document formatting provider for Slim/Skim: indentation to the tab size in spaces, blocks and continuations moved with their line, trailing whitespace stripped only where Slim ignores it; files Slim rejects and `insertSpaces: false` are left alone (`server/src/slim_format.rs`; `test/slim_format.js` compiles `test/format/*.slim` with the slim gem before and after). Attribute spacing is not normalized: `p a = b` is an attribute but `b = c` is output, so the rewrite isn't safe without more parsing than it is worth
+- [x] Format on save via the provider (`README.md`; registered dynamically for slim/skim only, `server/src/main.rs` `initialized`)
+- [ ] Semantic tokens from the server for Ruby spans the TextMate grammar can't delimit (continuations, nested brackets). Skipped: there is no semantic tokens provider, and one token type per span would override the TextMate Ruby colours instead of adding to them; useful tokens need a Ruby lexer. `slim_parser::parse` already has the spans
 
 ## 10. Tests
 
@@ -155,7 +155,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Slim sample passes `--check` in CI (`.github/workflows/build.yml`)
 - [ ] Unit tests in `server/src/indented.rs` (it has no `#[cfg(test)]` module), one per Slim diagnostic with positions
 - [ ] Assert the expected diagnostics for `test/broken/bad.html.slim` (today nothing checks its output)
-- [ ] `test/e2e.js` opens a `.slim` document (definition, hover, completion, diagnostics); today it only opens ERB
+- [x] `test/e2e.js` opens `.slim` documents: diagnostics, definition, hover, completion, formatting (`test/e2e.js`)
+- [x] Slim formatter keeps the slim gem's compiled output, and is idempotent (`test/slim_format.js`, `test/format/`, `npm run test:format`)
 - [x] Sample lines for every `(?)` item in sections 1 and 2 (`test/sample.html.slim`, parsed with Slim 5.2.2 except the plugin-only `include` and `>` lines)
 - [ ] Fixture corpus of real-world Slim views with no false-positive diagnostics
 

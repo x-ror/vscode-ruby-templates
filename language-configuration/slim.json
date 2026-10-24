@@ -15,7 +15,7 @@
     "decreaseIndentPattern": "^\\s*-\\s*(end|else|elsif|when|rescue|ensure)\\b"
   },
   "onEnterRules": [
-    { "beforeText": "^\\s*[|']", "action": { "indent": "indent" } },
+    { "beforeText": "^\\s*[|'][<>]*(\\s|$)", "action": { "indent": "indent" } },
     { "beforeText": "^\\s*([-=]|\\S.*?\\s==?[<>]*\\s).*[,\\\\]$", "action": { "indent": "none" } }
   ],
   "wordPattern": "(-?\\d*\\.\\d\\w*)|([A-Za-z_@$][\\w-]*[?!]?)"

@@ -4,10 +4,9 @@
 
 use crate::indented::SLIM_ENGINES;
 use crate::ruby::comment_before;
-use crate::util::position_to_offset;
 use std::ops::Range;
-use tower_lsp::lsp_types::Position;
 
+pub const BOM: &str = "\u{feff}";
 /// Slim::Parser default `tabsize`.
 const TABSIZE: usize = 4;
 /// Engines that run `#{}` through Slim's interpolation: TagEngine without a Tilt engine, and InterpolateTiltEngine.
@@ -40,6 +39,8 @@ pub struct LineInfo {
     pub keeps_trailing: bool,
     /// A text block's base indentation is this line's raw character column, where a tab counts as one.
     pub raw_column: bool,
+    /// A Ruby or attribute continuation: Slim strips its indentation.
+    pub free_indent: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,8 @@ pub struct Parsed {
     /// Byte offsets where an attribute name may start.
     pub attr_slots: Vec<usize>,
     pub markers: Vec<(Range<usize>, Marker)>,
+    /// Byte ranges of text that interpolates `#{}`, one per line.
+    pub text: Vec<Range<usize>>,
     /// No Slim syntax error was found.
     pub valid: bool,
 }
@@ -80,23 +83,46 @@ struct Engine<'a> {
 }
 
 /// Whether the UTF-16 position `pos` is in Ruby code, outside a `#` comment.
-pub fn in_ruby(text: &str, pos: Position, extra_engines: &[String]) -> bool {
-    let Some(offset) = position_to_offset(text, pos) else {
-        return false;
-    };
+/// Whether byte `offset` is in Ruby code, outside a `#` comment.
+pub fn in_ruby(text: &str, parsed: &Parsed, offset: usize) -> bool {
     let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    parse(text, extra_engines).ruby.iter().any(|r| {
+    parsed.ruby.iter().any(|r| {
         r.start <= offset
             && offset <= r.end
             && !comment_before(&text[r.start.max(line_start)..offset])
     })
 }
 
+/// Whether byte `offset` follows a `#{` that is still open in interpolated text. Slim treats it as
+/// static text, but while typing it is where Ruby is about to go.
+pub fn in_open_interpolation(text: &str, parsed: &Parsed, offset: usize) -> bool {
+    let Some(segment) = parsed
+        .text
+        .iter()
+        .find(|r| r.start <= offset && offset <= r.end)
+    else {
+        return false;
+    };
+    let before = &text[segment.start..offset];
+    let Some(open) = before.rfind("#{") else {
+        return false;
+    };
+    let escaped = before[..open].ends_with('\\');
+    let code = &before[open + 2..];
+    let depth = code.chars().fold(1i32, |d, c| match c {
+        '{' => d + 1,
+        '}' => d - 1,
+        _ => d,
+    });
+    !escaped && depth > 0
+}
+
 pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
     let mut starts = Vec::new();
     let mut lines = Vec::new();
-    let mut start = 0;
-    for line in text.split('\n') {
+    // Slim drops a byte order mark before parsing.
+    let mut start = if text.starts_with(BOM) { BOM.len() } else { 0 };
+    for line in text[start..].split('\n') {
         starts.push(start);
         start += line.len() + 1;
         lines.push(line.strip_suffix('\r').unwrap_or(line));
@@ -110,6 +136,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         role: Role::Blank,
         keeps_trailing: false,
         raw_column: false,
+        free_indent: false,
     };
     let mut p = Parser {
         out: Parsed {
@@ -118,6 +145,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             tag_slots: Vec::new(),
             attr_slots: Vec::new(),
             markers: Vec::new(),
+            text: Vec::new(),
             valid: true,
         },
         lines,
@@ -234,22 +262,24 @@ fn text_modifiers(after: &str) -> &str {
     }
 }
 
-/// Length of the `{…}` group at the start of `s`, braces only (Slim's interpolation regex ignores strings).
-fn braced_len(s: &str) -> Option<usize> {
-    let mut depth = 0;
+/// For each byte offset of a `{` in `s`, the offset just past its matching `}`. Counting depth from a
+/// given `{` (Slim's interpolation regex, braces only) finds the same `}` as one stack pass, without
+/// rescanning the line for every unclosed `#{`.
+fn matching_braces(s: &str) -> Vec<Option<usize>> {
+    let mut closers = vec![None; s.len()];
+    let mut open = Vec::new();
     for (i, c) in s.char_indices() {
         match c {
-            '{' => depth += 1,
+            '{' => open.push(i),
             '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i + 1);
+                if let Some(o) = open.pop() {
+                    closers[o] = Some(i + 1);
                 }
             }
             _ => {}
         }
     }
-    None
+    closers
 }
 
 struct Parser<'a> {
@@ -312,6 +342,7 @@ impl<'a> Parser<'a> {
             return false;
         }
         self.enter(self.i + 1);
+        self.out.lines[self.i].free_indent = true;
         true
     }
 
@@ -730,6 +761,9 @@ impl<'a> Parser<'a> {
     /// Ruby spans of the `#{…}` in columns `from..to` of the current line; `\#{` is literal.
     fn interpolate(&mut self, from: usize, to: usize) {
         let s = &self.lines[self.i][from..to];
+        let base = self.starts[self.i];
+        self.out.text.push(base + from..base + to);
+        let closers = matching_braces(s);
         let mut k = 0;
         while k < s.len() {
             let r = &s[k..];
@@ -738,7 +772,8 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if r.starts_with("#{") {
-                if let Some(len) = braced_len(&r[1..]) {
+                if let Some(close) = closers[k + 1] {
+                    let len = close - k - 1;
                     let inner = &r[2..len];
                     // `#{{x}}` is unescaped output of `x`.
                     let unescaped =
@@ -761,6 +796,8 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::position_to_offset;
+    use tower_lsp::lsp_types::Position;
 
     /// The Ruby source of every span, in order.
     fn ruby(text: &str) -> Vec<&str> {
@@ -820,7 +857,11 @@ mod tests {
     #[test]
     fn in_ruby_positions() {
         let text = "p= link_\n- # note\n| a #{b} c\na href=x Text\né= y";
-        let at = |line, character| in_ruby(text, Position::new(line, character), &[]);
+        let parsed = parse(text, &[]);
+        let at = |line, character| {
+            position_to_offset(text, Position::new(line, character))
+                .is_some_and(|o| in_ruby(text, &parsed, o))
+        };
         assert!(at(0, 8), "end of `p= link_`");
         assert!(!at(0, 1));
         assert!(!at(1, 7), "inside a Ruby comment");
@@ -828,6 +869,38 @@ mod tests {
         assert!(at(3, 8) && !at(3, 12));
         assert!(at(4, 4), "UTF-16 column after `é`");
         assert!(!at(9, 0), "past the end");
+    }
+
+    #[test]
+    fn open_interpolation_while_typing() {
+        let open = |text: &str| {
+            let offset = text.find('^').unwrap();
+            let text = text.replacen('^', "", 1);
+            let parsed = parse(&text, &[]);
+            !in_ruby(&text, &parsed, offset) && in_open_interpolation(&text, &parsed, offset)
+        };
+        assert!(open("p Hi #{user.na^"));
+        assert!(open("a title=\"#{t(^\" x"));
+        assert!(open("| a #{x} #{h({^"));
+        assert!(!open("p Hi \\#{user^"));
+        assert!(!open("p Hi #{a} b^"));
+        assert!(!open("- x = \"#{a^"), "inside Ruby already");
+    }
+
+    #[test]
+    fn byte_order_mark_is_skipped() {
+        let text = "\u{feff}doctype html\np= x";
+        let p = parse(text, &[]);
+        assert!(p.valid);
+        assert_eq!(ruby(text), ["x"]);
+    }
+
+    #[test]
+    fn many_unclosed_interpolations_stay_linear() {
+        let text = format!("p {}", "#{{".repeat(200_000));
+        let started = std::time::Instant::now();
+        assert!(parse(&text, &[]).ruby.is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]

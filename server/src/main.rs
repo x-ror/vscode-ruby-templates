@@ -3,16 +3,19 @@ mod helpers;
 mod html;
 mod indented;
 mod outline;
+mod partial_rename;
 mod partials;
 mod ruby;
 mod slim_complete;
 mod slim_format;
 mod slim_hover;
+mod slim_outline;
 mod slim_parser;
 mod tags;
 mod util;
 
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tower_lsp::jsonrpc::Result;
@@ -86,7 +89,8 @@ struct Backend {
     docs: DashMap<Url, Doc>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     slim: OnceLock<SlimOptions>,
-    /// The client registers formatting per language, so ERB/Haml keep their own formatters.
+    /// Formatting is registered for Slim/Skim only, and only when the client supports dynamic registration:
+    /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
 }
 
@@ -123,22 +127,29 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
-    let path = uri.path();
-    if path.ends_with(".rhtml") {
+    let file = file_name(uri);
+    if file.ends_with(".rhtml") {
         return true;
     }
-    host_format(path, ".erb").is_some_and(is_html_format)
+    host_format(&file, ".erb").is_some_and(is_html_format)
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
 fn slim_html_host(uri: &Url) -> bool {
-    host_format(uri.path(), ".slim").is_none_or(is_html_format)
+    host_format(&file_name(uri), ".slim").is_none_or(is_html_format)
 }
 
-/// The `format` of `name.format.ext`; `None` when the path doesn't end in `ext` or has no format part.
-fn host_format<'a>(path: &'a str, ext: &str) -> Option<&'a str> {
-    let file = path.strip_suffix(ext)?.rsplit('/').next()?;
-    file.rsplit_once('.').map(|(_, format)| format)
+/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`.
+fn file_name(uri: &Url) -> String {
+    uri.to_file_path()
+        .ok()
+        .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
+        .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
+}
+
+/// The `format` of `name.format.ext`; `None` when `file` doesn't end in `ext` or has no format part.
+fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
+    file.strip_suffix(ext)?.rsplit_once('.').map(|(_, format)| format)
 }
 
 fn is_html_format(format: &str) -> bool {
@@ -148,6 +159,7 @@ fn is_html_format(format: &str) -> bool {
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
 fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
+    let slim = (lang == TemplateLang::Slim).then(|| slim_parser::parse(text, extra_engines));
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         for r in partials::render_refs(line) {
@@ -165,7 +177,11 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str, extra_engines
                 _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
             };
             let range = util::line_range(text, i, r.start, r.end);
-            if !ruby_line || !in_ruby_context(lang, text, range.start, extra_engines) || !partials::resolve(path, &r).is_empty() {
+            let in_code = match &slim {
+                Some(parsed) => util::position_to_offset(text, range.start).is_some_and(|o| slim_parser::in_ruby(text, parsed, o)),
+                None => in_ruby_context(lang, line, r.start),
+            };
+            if !ruby_line || !in_code || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
@@ -178,10 +194,21 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str, extra_engines
     out
 }
 
+fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
+    FileOperationFilter {
+        scheme: Some("file".into()),
+        pattern: FileOperationPattern { glob: glob.into(), matches: Some(matches), options: None },
+    }
+}
+
 impl Backend {
+    fn slim_options(&self) -> &SlimOptions {
+        self.slim.get_or_init(SlimOptions::default)
+    }
+
     async fn publish(&self, uri: Url) {
         let diags = match self.docs.get(&uri) {
-            Some(doc) => diagnostics(&uri, &doc, self.slim.get_or_init(SlimOptions::default)),
+            Some(doc) => diagnostics(&uri, &doc, self.slim_options()),
             None => vec![],
         };
         self.client.publish_diagnostics(uri, diags, None).await;
@@ -231,7 +258,18 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
-                document_formatting_provider: (!dynamic_formatting).then_some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: None,
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![
+                                rename_filter("**/_*.{erb,haml,slim,skim}", FileOperationPatternKind::File),
+                                rename_filter("**/app/views/**", FileOperationPatternKind::Folder),
+                            ],
+                        }),
+                        ..Default::default()
+                    }),
+                }),
                 ..Default::default()
             },
         })
@@ -324,8 +362,7 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         if doc.lang == TemplateLang::Slim {
-            let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
-            let parsed = slim_parser::parse(&doc.text, engines);
+            let parsed = slim_parser::parse(&doc.text, &self.slim_options().extra_engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
             if let Some(value) = marker {
                 return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }));
@@ -359,20 +396,39 @@ impl LanguageServer for Backend {
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
-        // what folds Haml/Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
-        if doc.lang != TemplateLang::Erb || !html_host(&p.text_document.uri) {
-            return Ok(None);
+        // what folds Haml, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
+        match doc.lang {
+            TemplateLang::Slim | TemplateLang::Skim => Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines))),
+            TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
+            _ => Ok(None),
         }
-        Ok(Some(outline::folding_ranges(&doc.text)))
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        if doc.lang != TemplateLang::Erb {
-            return Ok(None);
+        let symbols = match doc.lang {
+            TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
+            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.slim_options().extra_engines),
+            TemplateLang::Haml => return Ok(None),
+        };
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
+        let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
+        let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| partials::views_root(old)).collect();
+        roots.sort();
+        roots.dedup();
+        // Keyed by path: VS Code's URIs percent-encode `+`, `@` and drive colons where `Url::from_file_path` doesn't.
+        let open: HashMap<PathBuf, String> = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect();
+        let mut changes = HashMap::new();
+        for views in roots {
+            let sources = partial_rename::sources(&views, &open);
+            changes.extend(partial_rename::render_edits(&renames, &sources, &self.slim_options().extra_engines));
         }
-        Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
+        Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -380,7 +436,11 @@ impl LanguageServer for Backend {
         if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
             return Ok(None);
         }
-        let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
+        // Indentation is always spaces; a tab-indented file is left as it is.
+        if !p.options.insert_spaces {
+            return Ok(None);
+        }
+        let engines = &self.slim_options().extra_engines;
         let Some(formatted) = slim_format::format(&doc.text, p.options.tab_size as usize, engines) else { return Ok(None) };
         if formatted == doc.text {
             return Ok(Some(vec![]));
@@ -429,18 +489,20 @@ impl LanguageServer for Backend {
             }
         }
 
-        let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
-        // 3. Slim tag, engine and attribute names.
-        if doc.lang == TemplateLang::Slim {
+        // 3. Slim tag, engine and attribute names; 4. Rails helpers, only when we're in a Ruby context.
+        let in_code = if doc.lang == TemplateLang::Slim {
+            let engines = &self.slim_options().extra_engines;
             let parsed = slim_parser::parse(&doc.text, engines);
-            let items = util::position_to_offset(&doc.text, pos).and_then(|o| slim_complete::items(&doc.text, o, &parsed, engines));
-            if let Some(items) = items {
+            let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
+            if let Some(items) = slim_complete::items(&doc.text, offset, &parsed, engines) {
                 return Ok(Some(CompletionResponse::Array(items)));
             }
-        }
-
-        // 4. Rails helpers, only when we're in a Ruby context.
-        if !in_ruby_context(doc.lang, &doc.text, pos, engines) { return Ok(None); }
+            // An unclosed `#{` being typed is Ruby too, for completion only.
+            slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
+        } else {
+            in_ruby_context(doc.lang, line, col)
+        };
+        if !in_code { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }
         let items: Vec<CompletionItem> = helpers::HELPERS.iter().filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
@@ -466,9 +528,8 @@ fn word_at(line: &str, col: usize) -> &str {
     &line[start..end]
 }
 
-fn in_ruby_context(lang: TemplateLang, text: &str, pos: Position, extra_engines: &[String]) -> bool {
-    let line = Backend::line_at(text, pos.line);
-    let before = &line[..Backend::byte_col(line, pos.character)];
+fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
+    let before = &line[..col.min(line.len())];
     match lang {
         TemplateLang::Erb => {
             let open = before.rfind("<%");
@@ -477,14 +538,14 @@ fn in_ruby_context(lang: TemplateLang, text: &str, pos: Position, extra_engines:
                 && !before[open.unwrap()..].starts_with("<%#")
                 && !ruby::comment_before(&before[open.unwrap() + 2..])
         }
-        TemplateLang::Haml => {
+        // Skim code is CoffeeScript: no Rails helpers, renders or form builders.
+        TemplateLang::Skim => false,
+        // Slim documents go through `slim_parser` where the whole text is at hand.
+        TemplateLang::Haml | TemplateLang::Slim => {
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
         }
-        TemplateLang::Slim => slim_parser::in_ruby(text, pos, extra_engines),
-        // Skim code is CoffeeScript.
-        TemplateLang::Skim => false,
     }
 }
 
@@ -535,6 +596,7 @@ mod tests {
         for (path, html) in [
             ("/v/users/show.html.erb", true),
             ("/v/users/show.html+phone.erb", true),
+            ("/v/users/show.html%2Bphone.erb", true),
             ("/v/users/create.turbo_stream.erb", true),
             ("/v/old.rhtml", true),
             ("/v/users/index.js.erb", false),
@@ -558,6 +620,8 @@ mod tests {
         for (path, html) in [
             ("file:///v/show.html.slim", true),
             ("file:///v/show.html+phone.slim", true),
+            ("file:///v/show.html%2Bphone.slim", true),
+            ("file:///v/show.xml%2Bfeed.slim", false),
             ("file:///v/show.slim", true),
             ("untitled:Untitled-1", true),
             ("file:///v/feed.xml.slim", false),
@@ -587,7 +651,7 @@ mod tests {
     fn skim_skips_ruby_checks() {
         let uri = Url::parse("untitled:Untitled-1").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
-        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n  p\n    a\n   span\n";
+        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n- end = start + 10\n  p\n    a\n   span\n";
         let codes = |lang| -> Vec<String> {
             diagnostics(&uri, &Doc { lang, text: text.into() }, &SlimOptions::default())
                 .into_iter()
@@ -638,6 +702,9 @@ mod tests {
         let haml = users.join("show.html.haml");
         assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")", &[]).is_empty());
         assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"", &[]).len(), 1);
+        assert!(unresolved_renders(TemplateLang::Skim, &users.join("show.skim"), "= render \"users/x\"", &[]).is_empty());
+        assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", 10));
+        assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", 10));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -1,4 +1,5 @@
 // Minimal LSP smoke test against a fake Rails tree: definition, hover, completion, diagnostics.
+const assert = require('assert');
 const cp = require('child_process'), fs = require('fs'), path = require('path'), os = require('os');
 const bin = path.join(__dirname, '..', 'server', 'target', 'release', 'ruby-templates-ls');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-e2e-'));
@@ -17,6 +18,15 @@ const slimFile = path.join(views, 'users', 'show.html.slim');
 const slimText = 'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
 fs.writeFileSync(slimFile, slimText);
 const slimUri = 'file://' + slimFile;
+const outlineFile = path.join(views, 'users', 'outline.html.slim');
+const outlineText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+fs.writeFileSync(outlineFile, outlineText);
+const outlineUri = 'file://' + outlineFile;
+// Unsaved text differs from disk; VS Code sends `+` percent-encoded.
+const phoneFile = path.join(views, 'users', 'edit.html+phone.slim');
+fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
+const phoneText = '= render "card"\n';
+const phoneUri = 'file://' + phoneFile.replace('+', '%2B');
 
 const proc = cp.spawn(bin);
 let id = 0, buf = Buffer.alloc(0); const pending = new Map(); const notes = [];
@@ -39,7 +49,7 @@ const send = (method, params, isNote) => new Promise(res => {
 });
 const rel = p => p.replace(root, '');
 (async () => {
-  await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {},
+  const init = await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {},
     initializationOptions: { slim: { extraEngines: ['mjml'], disabledDiagnostics: ['explicit-end'] } } });
   await send('initialized', {}, true);
   await send('textDocument/didOpen', { textDocument: { uri, languageId: 'erb', version: 1, text } }, true);
@@ -64,6 +74,19 @@ const rel = p => p.replace(root, '');
   const syms = await send('textDocument/documentSymbol', { textDocument: { uri } });
   const tree = s => s.children ? `${s.name} [${s.children.map(tree).join(', ')}]` : s.name;
   console.log('documentSymbols        →', (syms.result || []).map(tree));
+  await send('textDocument/didOpen', { textDocument: { uri: outlineUri, languageId: 'slim', version: 1, text: outlineText } }, true);
+  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: outlineUri } });
+  console.log('slim documentSymbols   →', slimSyms.result.map(tree));
+  assert.deepStrictEqual(slimSyms.result.map(tree), ['main#page [content_for :aside [nav [render "card"]]]', 'javascript:']);
+  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: outlineUri } });
+  const slimRanges = slimFolds.result.map(f => `${f.startLine}-${f.endLine}`);
+  console.log('slim foldingRanges     →', slimRanges);
+  assert.deepStrictEqual(slimRanges, ['0-5', '1-2', '3-5', '7-8']);
+  await send('textDocument/didOpen', { textDocument: { uri: phoneUri, languageId: 'slim', version: 1, text: phoneText } }, true);
+  const renamed = await send('workspace/willRenameFiles', { files: [{ oldUri: 'file://' + path.join(views, 'users', '_card.html.slim'), newUri: 'file://' + path.join(views, 'users', '_tile.html.slim') }] });
+  const renameEdits = Object.entries(renamed.result.changes).map(([u, es]) => `${rel(decodeURIComponent(new URL(u).pathname))}: ${es.map(e => `${e.range.start.line}:${e.range.start.character} ${e.newText}`).join(', ')}`).sort();
+  console.log('willRenameFiles _card  →', renameEdits);
+  assert.deepStrictEqual(renameEdits, ['/app/views/users/edit.html+phone.slim: 0:10 tile', '/app/views/users/index.html.erb: 0:12 tile, 9:12 tile', '/app/views/users/outline.html.slim: 2:18 tile']);
   await new Promise(r => setTimeout(r, 200));
   const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics' && n.params.uri === uri);
   console.log('diagnostics            →', diag ? diag.params.diagnostics.map(d => `${d.range.start.line + 1}: ${d.message}`) : 'none');
@@ -76,7 +99,7 @@ const rel = p => p.replace(root, '');
   if (JSON.stringify(slimGot) !== JSON.stringify(slimWant)) { console.error('expected', slimWant); process.exit(1); }
 
   const editUri = 'file://' + path.join(views, 'users', 'edit.html.slim');
-  const editText = 'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n';
+  const editText = 'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n    p Hi #{link_\n    = render "card"\n';
   await send('textDocument/didOpen', { textDocument: { uri: editUri, languageId: 'slim', version: 1, text: editText } }, true);
   const expect = (what, ok, got) => { console.log(`${what.padEnd(25)}→`, got); if (!ok) { console.error('unexpected', what); process.exit(1); } };
   const complete = async (line, character) =>
@@ -89,12 +112,21 @@ const rel = p => p.replace(root, '');
   expect('slim completion jav', engines.includes('javascript:'), engines.filter(l => l.startsWith('jav')));
   const inText = await complete(5, 14);
   expect('slim completion in text', inText.length === 0, inText);
+  const openInterpolation = await complete(6, 16);
+  expect('slim completion #{link_', openInterpolation.includes('link_to'), openInterpolation.slice(0, 3));
+  const slimDef = ((await send('textDocument/definition', { textDocument: { uri: editUri }, position: { line: 7, character: 15 } })).result || []).map(l => rel(l.uri));
+  expect('slim definition "card"', slimDef.length === 1 && slimDef[0].endsWith('_card.html.slim'), slimDef);
   const markerHover = await send('textDocument/hover', { textDocument: { uri: editUri }, position: { line: 4, character: 5 } });
   const markerDoc = markerHover.result?.contents.value ?? '';
   expect('slim hover ==', markerDoc.includes('unescaped output'), markerDoc.split('\n')[0]);
   const edits = (await send('textDocument/formatting', { textDocument: { uri: editUri }, options: { tabSize: 2, insertSpaces: true } })).result || [];
-  const formatted = 'div\n  p= link_\n  a hr\n  jav\n  == raw x\n  | text lin\n';
+  const formatted = 'div\n  p= link_\n  a hr\n  jav\n  == raw x\n  | text lin\n  p Hi #{link_\n  = render "card"\n';
   expect('slim formatting', edits.length === 1 && edits[0].newText === formatted, JSON.stringify(edits[0]?.newText));
+  const tabs = await send('textDocument/formatting', { textDocument: { uri: editUri }, options: { tabSize: 2, insertSpaces: false } });
+  expect('slim formatting, tabs', tabs.result === null, tabs.result);
+  // Without dynamic registration nothing is advertised, so ERB/Haml never see a formatter that does nothing.
+  const staticFormatting = init.result.capabilities.documentFormattingProvider;
+  expect('no static formatter', staticFormatting === undefined, staticFormatting);
   await send('shutdown', {}); await send('exit', {}, true);
   fs.rmSync(root, { recursive: true, force: true });
   process.exit(0);

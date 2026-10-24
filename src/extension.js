@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 
 const { startClient, stopClient, restartClient } = require('./client');
-const { toggleSlimMarker, wrapSlim, dedent, partialPath } = require('./slim');
+const { toggleSlimMarker, inVerbatimBlock, wrapSlim, dedent, partialPath } = require('./slim');
 
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
@@ -124,13 +124,18 @@ async function wrapInErb() {
 
 // ---------------------------------------------------------------- Slim editing
 
+/** Last line a selection covers; one ending at column 0 of a later line doesn't take that line along. */
+const lastSelectedLine = ({ start, end }) => (end.character === 0 && end.line > start.line ? end.line - 1 : end.line);
+
 async function toggleSlimTag() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
-  const lines = new Set(ed.selections.flatMap(({ start, end }) =>
-    Array.from({ length: end.line - start.line + 1 }, (_, i) => start.line + i)));
+  const text = ed.document.getText().split(/\r?\n/);
+  const lines = new Set(ed.selections.flatMap(sel =>
+    Array.from({ length: lastSelectedLine(sel) - sel.start.line + 1 }, (_, i) => sel.start.line + i)));
   await ed.edit(eb => {
     for (const n of lines) {
+      if (inVerbatimBlock(text, n)) continue;
       const line = ed.document.lineAt(n);
       const next = toggleSlimMarker(line.text);
       if (next !== null) eb.replace(line.range, next);
@@ -142,6 +147,9 @@ async function wrapInSlim() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   const doc = ed.document;
+  if (ed.selections.some(s => !s.isSingleLine)) {
+    vscode.window.showInformationMessage('Wrap in Slim Output skips selections that span several lines.');
+  }
   await ed.edit(eb => {
     for (const sel of ed.selections.filter(s => s.isSingleLine)) {
       const line = doc.lineAt(sel.start.line);
@@ -164,10 +172,8 @@ async function extractSlimPartial() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.selection.isEmpty || ed.document.uri.scheme !== 'file') return;
   const doc = ed.document;
-  const { start, end } = ed.selection;
-  // A selection ending at column 0 doesn't take that line along.
-  const last = end.character === 0 && end.line > start.line ? end.line - 1 : end.line;
-  const range = new vscode.Range(start.line, 0, last, doc.lineAt(last).text.length);
+  const last = lastSelectedLine(ed.selection);
+  const range = new vscode.Range(ed.selection.start.line, 0, last, doc.lineAt(last).text.length);
 
   const name = await vscode.window.showInputBox({
     prompt: 'Partial name, rendered as `= render "name"` (`card`, `shared/card`)',
@@ -179,15 +185,34 @@ async function extractSlimPartial() {
     vscode.window.showErrorMessage(`"${name}" renders from app/views, but this file isn't under app/views.`);
     return;
   }
-  if (fs.existsSync(target)) {
+  const targetUri = vscode.Uri.file(target);
+  if (await exists(targetUri)) {
     vscode.window.showErrorMessage(`${path.basename(target)} already exists.`);
     return;
   }
   const eol = doc.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
   const { indent, lines } = dedent(doc.getText(range).split(/\r?\n/));
-  await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(target)));
-  await vscode.workspace.fs.writeFile(vscode.Uri.file(target), Buffer.from(lines.join(eol) + eol));
-  await ed.edit(eb => eb.replace(range, `${indent}= render "${name}"`));
+  // One edit, so a single undo restores the selection and a failed create leaves the template alone.
+  const edit = new vscode.WorkspaceEdit();
+  edit.createFile(targetUri, { overwrite: false, ignoreIfExists: false });
+  edit.insert(targetUri, new vscode.Position(0, 0), lines.join(eol) + eol);
+  edit.replace(doc.uri, range, `${indent}= render "${name}"`);
+  if (!(await vscode.workspace.applyEdit(edit))) {
+    vscode.window.showErrorMessage(`Couldn't create ${path.basename(target)}.`);
+    return;
+  }
+  // Text edits leave the new partial open and unsaved.
+  await (await vscode.workspace.openTextDocument(targetUri)).save();
+}
+
+async function exists(uri) {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch (e) {
+    if (e instanceof vscode.FileSystemError && e.code === 'FileNotFound') return false;
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------- rendering
@@ -230,7 +255,7 @@ async function renderToHtml(doc) {
   const railsRoot = cfg().get('preview.useRails', false) && doc.uri.scheme === 'file'
     ? findUp(path.dirname(doc.uri.fsPath), path.join('bin', 'rails'))
     : undefined;
-  if (railsRoot) return renderInRails(railsRoot, lang, src);
+  if (railsRoot) return renderInRails(railsRoot, viewDir(railsRoot, doc.uri.fsPath), lang, src);
   if (lang === 'slim') {
     const bin = cfg().get('commands.slimrb', 'slimrb');
     return run(bin, ['--pretty'], { cwd }, src);
@@ -250,9 +275,23 @@ async function renderToHtml(doc) {
   return { code: 1, stdout: '', stderr: `Unsupported language: ${lang}` };
 }
 
-/** Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. */
-async function renderInRails(root, lang, src) {
-  const script = `print ApplicationController.render(inline: $stdin.read, type: :${lang})`;
+/** `users` for `<root>/app/views/users/show.html.slim`; undefined outside app/views. */
+function viewDir(root, file) {
+  const rel = path.relative(path.join(root, 'app', 'views'), path.dirname(file));
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : undefined;
+}
+
+const rubyString = s => `'${s.replace(/[\\']/g, '\\$&')}'`;
+
+/**
+ * Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. A controller
+ * whose path is the template's directory makes a bare `render "card"` find `<dir>/_card`, as in a request.
+ */
+async function renderInRails(root, dir, lang, src) {
+  const controller = dir
+    ? `Class.new(ApplicationController) { define_singleton_method(:controller_path) { ${rubyString(dir)} } }`
+    : 'ApplicationController';
+  const script = `print ${controller}.render(inline: $stdin.read, type: :${lang})`;
   const r = await run('ruby', [path.join('bin', 'rails'), 'runner', script], { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS }, src);
   if (r.err?.killed) return { ...r, code: 1, stderr: `bin/rails runner timed out after ${RAILS_RENDER_TIMEOUT_MS / 1000}s.\n${r.stderr}` };
   return r;
