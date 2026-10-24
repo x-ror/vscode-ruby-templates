@@ -112,4 +112,4 @@ None. Every tool the stages needed was available: network for the corpora and ge
 
 **Blockers and defaults chosen.** No blockers. Defaults taken: "first line only" for multi-line tags read as "the first line gets the level, the rest move with it"; Haml keeps its own indent unit; branches that disagree keep indentation from there to the end of the file; Slim blank lines are content; in the editor our defaults (trim, final newline) apply when nothing else decides. The first npm publish needs a token or a manual publish before trusted publishing can be configured.
 
-**Where it lives.** Branch `feat/formatter` on `x-ror/vscode-ruby-templates`, pushed; draft PR opened against `main`. Nothing published, nothing merged, no tags.
+**Where it lives.** Branch `feat/formatter` on `x-ror/vscode-ruby-templates`, pushed; draft PR https://github.com/x-ror/vscode-ruby-templates/pull/17 against `main`. Nothing published, nothing merged, no tags.
