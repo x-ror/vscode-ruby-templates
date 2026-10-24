@@ -4,14 +4,17 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { isDeepStrictEqual } from "util";
-const bin = path.join(
-  import.meta.dirname,
-  "..",
-  "server",
-  "target",
-  "release",
-  "ruby-templates-ls",
-);
+// CI builds per target (`server/target/<triple>/release`) and passes the binary in.
+const bin =
+  process.env.RUBY_TEMPLATES_LS ??
+  path.join(
+    import.meta.dirname,
+    "..",
+    "server",
+    "target",
+    "release",
+    "ruby-templates-ls",
+  );
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-"));
 const views = path.join(root, "app", "views");
 fs.mkdirSync(path.join(views, "users"), { recursive: true });

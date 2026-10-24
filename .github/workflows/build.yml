@@ -41,6 +41,15 @@ jobs:
         if: ${{ !matrix.cross }}
         shell: bash
         run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
+      - uses: actions/setup-node@v4
+        if: matrix.dir == 'linux-x64'
+        with: { node-version: 22 }
+      # e2e builds `file://` URIs from POSIX temp paths; macOS's /var symlink and Windows paths are untested.
+      - name: LSP end to end
+        if: matrix.dir == 'linux-x64'
+        run: node test/e2e.js
+        env:
+          RUBY_TEMPLATES_LS: server/target/${{ matrix.target }}/release/ruby-templates-ls
       - uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.dir }}

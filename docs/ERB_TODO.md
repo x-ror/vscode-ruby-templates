@@ -230,8 +230,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] CI builds the server for 5 targets, runs `cargo test` on 4 (skipped for cross-built linux-arm64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
 - [x] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text) (`server/src/erb.rs` tests)
 - [x] `test/e2e.js` asserts results and exits non-zero on a mismatch
-- [ ] `test/e2e.js` runs in CI (its npm steps are `test:tokens`, `test:snippets`, `test:unit`, `test:slim`)
-- [ ] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`broken_fixture`); today nothing reads it
+- [x] `test/e2e.js` runs in CI on linux-x64 against the job's own build (`.github/workflows/build.yml`, `RUBY_TEMPLATES_LS`)
+- [x] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`server/src/erb.rs` `broken_fixture`)
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
 - [ ] Extension-host tests (`@vscode/test-electron`) for commands: toggle, wrap, convert

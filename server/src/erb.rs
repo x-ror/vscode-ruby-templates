@@ -206,6 +206,17 @@ mod tests {
     }
 
     #[test]
+    fn broken_fixture() {
+        let mut got: Vec<(u32, String)> = diagnostics(include_str!("../../test/broken/bad.html.erb"))
+            .into_iter()
+            .map(|d| (d.range.start.line, crate::util::code(&d).unwrap_or_default().to_string()))
+            .collect();
+        got.sort();
+        let want = [(5, code::OUTPUT_CONTROL_FLOW), (8, code::STRAY_END), (9, code::UNCLOSED_TAG)];
+        assert_eq!(got, want.map(|(line, code)| (line, code.to_string())));
+    }
+
+    #[test]
     fn balanced_if_expression_in_output_tag_is_fine() {
         assert!(diagnostics("<%= if a\n  b\nelse\n  c\nend %>").is_empty());
         assert_eq!(only("<%= if a %>x<% end %>").code, Some(NumberOrString::String(code::OUTPUT_CONTROL_FLOW.into())));
