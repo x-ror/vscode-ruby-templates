@@ -169,7 +169,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
 - [ ] Stimulus action method and target names
 - [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
-- [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
+- [x] HTML tag/attribute completion in ERB: elements after `<`, the open element after `</`, attributes (with `data-*`/`aria-*`) in a start tag, outside ERB tags of HTML-host views (`server/src/erb_complete.rs`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
 ## 11. Hover

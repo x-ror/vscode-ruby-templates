@@ -1,5 +1,6 @@
 mod assets;
 mod erb;
+mod erb_complete;
 mod haml;
 mod haml_indent;
 mod helpers;
@@ -506,7 +507,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "("].map(String::from).to_vec()),
+                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<"].map(String::from).to_vec()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -881,6 +882,11 @@ impl LanguageServer for Backend {
         let roles = line_roles(doc.lang, &doc.text);
         let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
         let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
+            if let Some(context) = erb_complete::context(&doc.text, line_start + col) {
+                return items(erb_complete::items(context, &doc.text, line_start + col));
+            }
+        }
         if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };

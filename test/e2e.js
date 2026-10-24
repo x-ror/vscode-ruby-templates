@@ -756,6 +756,24 @@ const check = (label, actual, expected) => {
     (await req("textDocument/hover", streamUri, 1, 16)).result ?? null,
     null,
   );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 6 },
+      contentChanges: [{ text: "<section>\n  <butt\n  <a hre\n  </\n" }],
+    },
+    true,
+  );
+  const html = async (line, character) =>
+    (
+      await req("textDocument/completion", streamUri, line, character)
+    ).result?.map((i) => i.insertText ?? i.label);
+  check("html element completion", await html(1, 7), ["button"]);
+  check("html attribute completion", await html(2, 8), [
+    'href="$1"',
+    'hreflang="$1"',
+  ]);
+  check("html close completion", await html(3, 4), ["section>"]);
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(
