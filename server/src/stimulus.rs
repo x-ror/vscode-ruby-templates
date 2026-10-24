@@ -6,18 +6,17 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
-static ATTR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
+static ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
 static TARGET_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r"data-([\w-]+)-target\b").unwrap());
 // `data: { controller: "x", action: "…", x_target: "…" }` in helpers and Haml.
 static DATA_HASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bdata:\s*\{([^}]*)\}").unwrap());
-static HASH_KEY: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"\b(?:(controller|action):\s*["']([^"']*)["']|(\w+)_target:)"#).unwrap());
+static HASH_KEY: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\b(?:(controller|action):\s*["']([^"']*)["']|(\w+)_target:)"#).unwrap());
 
 /// Every controller identifier on `line`: its byte range and the identifier Stimulus would register.
 pub fn identifiers(line: &str) -> Vec<(usize, usize, String)> {
     let named = |(s, e): (usize, usize)| (s, e, line[s..e].to_string());
-    let mut out: Vec<_> = ATTR.captures_iter(line)
+    let mut out: Vec<_> = ATTR
+        .captures_iter(line)
         .flat_map(|cap| cap.get(2).map(|value| value_identifiers(&cap[1], value)).unwrap_or_default())
         .chain(TARGET_ATTR.captures_iter(line).filter_map(|cap| cap.get(1)).map(|m| (m.start(), m.end())))
         .map(named)
@@ -54,7 +53,9 @@ fn value_identifiers(key: &str, value: regex::Match) -> Vec<(usize, usize)> {
             let Some(hash) = token.find('#') else { continue };
             (token[..hash].rfind("->").map_or(0, |i| i + 2), hash)
         };
-        if s < e { out.push((offset + start + s, offset + start + e)); }
+        if s < e {
+            out.push((offset + start + s, offset + start + e));
+        }
     }
     out
 }
@@ -70,8 +71,12 @@ pub fn resolve(current: &Path, identifier: &str) -> Vec<PathBuf> {
     let rel = identifier.replace("--", "/");
     let mut out = Vec::new();
     for name in [rel.replace('-', "_"), rel] {
-        for file in ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].map(|suffix| dir.join(format!("{name}{suffix}"))) {
-            if file.is_file() && !out.contains(&file) { out.push(file); }
+        for file in
+            ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].map(|suffix| dir.join(format!("{name}{suffix}")))
+        {
+            if file.is_file() && !out.contains(&file) {
+                out.push(file);
+            }
         }
     }
     out
@@ -84,11 +89,15 @@ mod tests {
     #[test]
     fn identifiers_in_attributes_and_hashes() {
         let ids = |line: &str| identifiers(line).into_iter().map(|(_, _, id)| id).collect::<Vec<_>>();
-        assert_eq!(ids(r#"<div data-controller="admin--users hello" data-action="click->hello#greet keydown.enter->x#y:prevent z#w">"#),
-                   ["admin--users", "hello", "hello", "x", "z"]);
+        assert_eq!(
+            ids(r#"<div data-controller="admin--users hello" data-action="click->hello#greet keydown.enter->x#y:prevent z#w">"#),
+            ["admin--users", "hello", "hello", "x", "z"]
+        );
         assert_eq!(ids(r#"<input data-date-picker-target="name">"#), ["date-picker"]);
-        assert_eq!(ids(r#"<%= tag.div data: { controller: "hello", action: "hello#go", date_picker_target: "x" } do %>"#),
-                   ["hello", "hello", "date-picker"]);
+        assert_eq!(
+            ids(r#"<%= tag.div data: { controller: "hello", action: "hello#go", date_picker_target: "x" } do %>"#),
+            ["hello", "hello", "date-picker"]
+        );
         let line = r#"<p data: { date_picker_target: "x" }>"#;
         let (s, e, _) = identifiers(line)[0];
         assert_eq!(&line[s..e], "date_picker");
@@ -104,7 +113,13 @@ mod tests {
         let controllers = root.join("app/javascript/controllers");
         std::fs::create_dir_all(controllers.join("admin")).unwrap();
         std::fs::create_dir_all(root.join("app/views/users")).unwrap();
-        for f in ["hello_controller.js", "admin/users_controller.ts", "date_picker_controller.js", "color-picker_controller.js", "tab-list-controller.ts"] {
+        for f in [
+            "hello_controller.js",
+            "admin/users_controller.ts",
+            "date_picker_controller.js",
+            "color-picker_controller.js",
+            "tab-list-controller.ts",
+        ] {
             std::fs::write(controllers.join(f), "").unwrap();
         }
         let current = root.join("app/views/users/index.html.erb");

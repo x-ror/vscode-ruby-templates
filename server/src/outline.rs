@@ -3,9 +3,9 @@
 use crate::erb;
 use crate::haml_indent::{haml_code_start, haml_structure, is_haml_tag, tag_name_len};
 use crate::partials::render_refs;
+use crate::ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::tags;
-use crate::ruby;
 use crate::util::{leading_ws, offset_to_position};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -27,7 +27,13 @@ pub(crate) static ID_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\sid\s*=\s*(
 pub(crate) const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
 
 /// A `<% %>`, `<%= %>` or `<%# %>` tag as byte offsets; `code` is empty for comments.
-struct ErbTag<'a> { start: usize, end: usize, comment: bool, code_start: usize, code: &'a str }
+struct ErbTag<'a> {
+    start: usize,
+    end: usize,
+    comment: bool,
+    code_start: usize,
+    code: &'a str,
+}
 
 fn erb_tags(text: &str) -> Vec<ErbTag<'_>> {
     let Some(tree) = erb::parse(text) else { return vec![] };
@@ -37,7 +43,13 @@ fn erb_tags(text: &str) -> Vec<ErbTag<'_>> {
     tags.map(|node| {
         let mut c = node.walk();
         let code = node.children(&mut c).find(|n| n.kind() == "code").map_or(node.end_byte()..node.end_byte(), |n| n.byte_range());
-        ErbTag { start: node.start_byte(), end: node.end_byte(), comment: node.kind() == "comment_directive", code_start: code.start, code: &text[code] }
+        ErbTag {
+            start: node.start_byte(),
+            end: node.end_byte(),
+            comment: node.kind() == "comment_directive",
+            code_start: code.start,
+            code: &text[code],
+        }
     })
     .collect()
 }
@@ -97,7 +109,11 @@ pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
 /// groups whose continuation lines aren't indented deeper.
 pub fn haml_folding_ranges(text: &str) -> Vec<FoldingRange> {
     let mut out = region_folds(text, &HAML_REGION_START, &HAML_REGION_END);
-    out.extend(indentation_folds(text, true).into_iter().map(|(start_line, end_line)| FoldingRange { start_line, end_line, ..Default::default() }));
+    out.extend(indentation_folds(text, true).into_iter().map(|(start_line, end_line)| FoldingRange {
+        start_line,
+        end_line,
+        ..Default::default()
+    }));
     let starts: std::collections::HashSet<u32> = out.iter().map(|r| r.start_line).collect();
     for (line, span) in haml_structure(text) {
         let (start_line, end_line) = (line as u32, (line + span - 1) as u32);
@@ -166,7 +182,6 @@ pub(crate) fn indent_level(line: &str) -> Option<i64> {
     }
     None
 }
-
 
 /// Outline: `content_for`, forms, Turbo Frames, `render` calls and, with an HTML host, landmark/`id` elements.
 pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
@@ -291,7 +306,16 @@ fn haml_element_name(content: &str) -> Option<String> {
 pub(crate) fn symbol(text: &str, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) -> DocumentSymbol {
     let to_range = |(start, end)| Range::new(offset_to_position(text, start), offset_to_position(text, end));
     #[allow(deprecated)]
-    DocumentSymbol { name, detail: None, kind, tags: None, deprecated: None, range: to_range(range), selection_range: to_range(selection), children: None }
+    DocumentSymbol {
+        name,
+        detail: None,
+        kind,
+        tags: None,
+        deprecated: None,
+        range: to_range(range),
+        selection_range: to_range(selection),
+        children: None,
+    }
 }
 
 /// Nest symbols by byte-range containment; partially overlapping ones become siblings.
@@ -333,35 +357,38 @@ mod tests {
     #[test]
     fn folds_erb_branches_elements_comments_regions() {
         let text = concat!(
-            "<% if a %>\n",           // 0
-            "  x\n",                  // 1
-            "<% elsif b %>\n",        // 2
-            "  y\n",                  // 3
-            "<% else %>\n",           // 4
-            "  z\n",                  // 5
-            "<% end %>\n",            // 6
-            "<div>\n",                // 7
-            "  <ul><li>\n",           // 8
-            "    a</li>\n",           // 9
-            "  </ul>\n",              // 10
-            "</div><%# one %>\n",     // 11
-            "<%# two\n",              // 12
-            "lines %>\n",             // 13
-            "<%# region Head %>\n",   // 14
-            "<script>\n",             // 15
-            "</script>\n",            // 16
-            "<%# endregion %>\n",     // 17
+            "<% if a %>\n",                       // 0
+            "  x\n",                              // 1
+            "<% elsif b %>\n",                    // 2
+            "  y\n",                              // 3
+            "<% else %>\n",                       // 4
+            "  z\n",                              // 5
+            "<% end %>\n",                        // 6
+            "<div>\n",                            // 7
+            "  <ul><li>\n",                       // 8
+            "    a</li>\n",                       // 9
+            "  </ul>\n",                          // 10
+            "</div><%# one %>\n",                 // 11
+            "<%# two\n",                          // 12
+            "lines %>\n",                         // 13
+            "<%# region Head %>\n",               // 14
+            "<script>\n",                         // 15
+            "</script>\n",                        // 16
+            "<%# endregion %>\n",                 // 17
             "<% items.each do |i| %><% end %>\n", // 18
         );
-        assert_eq!(folds(text), vec![
-            (0, 1, None),
-            (2, 3, None),
-            (4, 5, None),
-            (7, 10, None),
-            (8, 9, None),
-            (12, 13, Some(FoldingRangeKind::Comment)),
-            (14, 17, Some(FoldingRangeKind::Region)),
-        ]);
+        assert_eq!(
+            folds(text),
+            vec![
+                (0, 1, None),
+                (2, 3, None),
+                (4, 5, None),
+                (7, 10, None),
+                (8, 9, None),
+                (12, 13, Some(FoldingRangeKind::Comment)),
+                (14, 17, Some(FoldingRangeKind::Region)),
+            ]
+        );
     }
 
     #[test]
@@ -425,16 +452,22 @@ mod tests {
             "</section>\n",
             "<%= turbo_frame_tag dom_id(@x), src: y %>\n",
         );
-        assert_eq!(outline(&document_symbols(text, true)), [
-            "content_for :sidebar[nav[render \"shared/menu\"]]",
-            "section#main-<%= x %>[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
-            "turbo_frame_tag dom_id(@x)",
-        ]);
-        assert_eq!(outline(&document_symbols(text, false)), [
-            "content_for :sidebar[render \"shared/menu\"]",
-            "turbo_frame_tag \"cart\"[form_with model: @cart]",
-            "turbo_frame_tag dom_id(@x)",
-        ]);
+        assert_eq!(
+            outline(&document_symbols(text, true)),
+            [
+                "content_for :sidebar[nav[render \"shared/menu\"]]",
+                "section#main-<%= x %>[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
+                "turbo_frame_tag dom_id(@x)",
+            ]
+        );
+        assert_eq!(
+            outline(&document_symbols(text, false)),
+            [
+                "content_for :sidebar[render \"shared/menu\"]",
+                "turbo_frame_tag \"cart\"[form_with model: @cart]",
+                "turbo_frame_tag dom_id(@x)",
+            ]
+        );
     }
 
     #[test]
@@ -453,11 +486,14 @@ mod tests {
             "- # render \"old\"\n",
             "%p{id: x}= render 'card'\n",
         );
-        assert_eq!(outline(&haml_document_symbols(text)), [
-            "content_for :sidebar[nav[render \"shared/menu\"]]",
-            "section#main[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
-            "render \"card\"",
-        ]);
+        assert_eq!(
+            outline(&haml_document_symbols(text)),
+            [
+                "content_for :sidebar[nav[render \"shared/menu\"]]",
+                "section#main[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
+                "render \"card\"",
+            ]
+        );
         let syms = haml_document_symbols(text);
         assert_eq!(syms[0].range, Range::new(Position::new(0, 0), Position::new(1, 28)));
         assert_eq!(syms[1].selection_range, Range::new(Position::new(3, 0), Position::new(3, 18)));
@@ -472,26 +508,23 @@ mod tests {
     #[test]
     fn haml_folds_indentation_regions_and_continuations() {
         let text = concat!(
-            "%div\n",               // 0
-            "  %p x\n",             // 1
-            "\n",                   // 2
-            "-# region Form\n",     // 3
-            "%a{href: \"x\",\n",    // 4
-            "title: \"y\"} z\n",    // 5
-            "= \"a\" + |\n",          // 6
-            "\"b\" |\n",              // 7
-            "-# endregion\n",       // 8
-            "%b{c: 1,\n",           // 9
-            "   d: 2}\n",           // 10
-            "  %i\n",               // 11
+            "%div\n",            // 0
+            "  %p x\n",          // 1
+            "\n",                // 2
+            "-# region Form\n",  // 3
+            "%a{href: \"x\",\n", // 4
+            "title: \"y\"} z\n", // 5
+            "= \"a\" + |\n",     // 6
+            "\"b\" |\n",         // 7
+            "-# endregion\n",    // 8
+            "%b{c: 1,\n",        // 9
+            "   d: 2}\n",        // 10
+            "  %i\n",            // 11
         );
-        assert_eq!(haml_folds(text), vec![
-            (0, 1, None),
-            (3, 8, Some(FoldingRangeKind::Region)),
-            (4, 5, None),
-            (6, 7, None),
-            (9, 11, None),
-        ]);
+        assert_eq!(
+            haml_folds(text),
+            vec![(0, 1, None), (3, 8, Some(FoldingRangeKind::Region)), (4, 5, None), (6, 7, None), (9, 11, None),]
+        );
     }
 
     #[test]

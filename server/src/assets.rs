@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 // `#` keeps interpolated strings out.
 static ASSET_CALL: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"\b(image_tag|image_path|asset_path|stylesheet_link_tag|javascript_include_tag|favicon_link_tag)\s*\(?\s*["']([^"'#]+)["']"#).unwrap()
+    Regex::new(
+        r#"\b(image_tag|image_path|asset_path|stylesheet_link_tag|javascript_include_tag|favicon_link_tag)\s*\(?\s*["']([^"'#]+)["']"#,
+    )
+    .unwrap()
 });
 const ASSET_DIRS: [&str; 6] =
     // Sources before app/assets/builds, so `javascript_include_tag "application"` opens what was written, not the bundle.
@@ -23,15 +26,20 @@ pub struct AssetRef<'a> {
 
 // ponytail: only the first argument; `stylesheet_link_tag "a", "b"` links `a`.
 pub fn asset_refs(line: &str) -> Vec<AssetRef<'_>> {
-    ASSET_CALL.captures_iter(line).filter_map(|cap| {
-        let (helper, path) = (cap.get(1)?.as_str(), cap.get(2)?);
-        Some(AssetRef { helper, path: path.as_str(), start: path.start(), end: path.end() })
-    }).collect()
+    ASSET_CALL
+        .captures_iter(line)
+        .filter_map(|cap| {
+            let (helper, path) = (cap.get(1)?.as_str(), cap.get(2)?);
+            Some(AssetRef { helper, path: path.as_str(), start: path.start(), end: path.end() })
+        })
+        .collect()
 }
 
 /// Asset directories for relative paths, public/ for `/absolute` ones; nothing for URLs or paths leaving those dirs.
 pub fn resolve(current: &Path, r: &AssetRef) -> Vec<PathBuf> {
-    if r.path.starts_with("//") || r.path.contains(':') || r.path.split(['/', '\\']).any(|s| s == "..") { return vec![] }
+    if r.path.starts_with("//") || r.path.contains(':') || r.path.split(['/', '\\']).any(|s| s == "..") {
+        return vec![];
+    }
     let Some(rails) = app_root(current).and_then(|app| app.parent().map(Path::to_path_buf)) else { return vec![] };
     let (dirs, rel) = match r.path.strip_prefix('/') {
         Some(rel) => (vec![rails.join("public")], rel),
@@ -56,9 +64,18 @@ mod tests {
     #[test]
     fn resolves_asset_helper_paths() {
         let root = std::env::temp_dir().join(format!("rt-assets-{}", std::process::id()));
-        for f in ["app/assets/images/logo.png", "app/assets/stylesheets/application.scss", "app/assets/builds/application.css",
-                  "app/javascript/app.js", "app/javascript/application.js", "app/assets/builds/application.js", "public/favicon.ico",
-                  "config/master.key", "public/robots.txt", "app/views/home/index.html.erb"] {
+        for f in [
+            "app/assets/images/logo.png",
+            "app/assets/stylesheets/application.scss",
+            "app/assets/builds/application.css",
+            "app/javascript/app.js",
+            "app/javascript/application.js",
+            "app/assets/builds/application.js",
+            "public/favicon.ico",
+            "config/master.key",
+            "public/robots.txt",
+            "app/views/home/index.html.erb",
+        ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "").unwrap();
@@ -70,8 +87,10 @@ mod tests {
             r##"<%= image_tag "https://x.io/a.png" %> <%= image_tag "//cdn/logo.png" %> <%= image_tag "/logo.png" %> <%= image_tag "#{x}.png" %>"##,
         );
         let refs = asset_refs(line);
-        assert_eq!(refs.iter().map(|r| r.path).collect::<Vec<_>>(),
-                   ["logo.png", "application", "app", "favicon.ico", "/robots.txt", "https://x.io/a.png", "//cdn/logo.png", "/logo.png"]);
+        assert_eq!(
+            refs.iter().map(|r| r.path).collect::<Vec<_>>(),
+            ["logo.png", "application", "app", "favicon.ico", "/robots.txt", "https://x.io/a.png", "//cdn/logo.png", "/logo.png"]
+        );
         assert_eq!(&line[refs[0].start..refs[0].end], "logo.png");
         let found: Vec<Vec<PathBuf>> = refs.iter().map(|r| resolve(&current, r)).collect();
         assert_eq!(found[0], [root.join("app/assets/images/logo.png")]);
@@ -81,8 +100,10 @@ mod tests {
         assert_eq!(found[4], [root.join("public/robots.txt")]);
         assert!(found[5..].iter().all(Vec::is_empty));
         let at = |helper, path| resolve(&current, &AssetRef { helper, path, start: 0, end: 0 });
-        assert_eq!(at("javascript_include_tag", "application"),
-                   [root.join("app/javascript/application.js"), root.join("app/assets/builds/application.js")]);
+        assert_eq!(
+            at("javascript_include_tag", "application"),
+            [root.join("app/javascript/application.js"), root.join("app/assets/builds/application.js")]
+        );
         for escape in ["../../config/master.key", "/../config/master.key", "..\\..\\config\\master.key", "x/../../../config/master.key"] {
             assert!(at("asset_path", escape).is_empty(), "{escape}");
         }

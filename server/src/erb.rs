@@ -49,7 +49,10 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     }
 
     // Ruby block balance across all code tags.
-    struct Opener { range: Range, snippet: String }
+    struct Opener {
+        range: Range,
+        snippet: String,
+    }
     let mut openers: Vec<Opener> = Vec::new();
     let mut cursor = root.walk();
     for node in root.children(&mut cursor) {
@@ -89,7 +92,10 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
                 out.push(warning(range, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?"));
             }
         } else if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
-            out.push(warning(range, format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1])));
+            out.push(warning(
+                range,
+                format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1]),
+            ));
         }
     }
     for o in openers {
@@ -99,7 +105,11 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
 }
 
 pub fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
+    if s.chars().count() > n {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    } else {
+        s.to_string()
+    }
 }
 
 /// Ruby code of each ERB tag as sorted `(start, end)` byte bounds: `start` is just after `<%`, `end` the `>` of
@@ -150,10 +160,12 @@ pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
         tokens.iter().find(|(t, _)| rest.starts_with(t)).filter(|(t, _)| (start..start + t.len()).contains(&col)).map(|&(_, doc)| doc)
     };
     let opener = line.match_indices("<%").find_map(|(i, _)| token_at(i, OPENERS));
-    opener.or_else(|| line.match_indices("%>").find_map(|(i, _)| {
-        let start = if i > 0 && matches!(line.as_bytes()[i - 1], b'-' | b'=') { i - 1 } else { i };
-        token_at(start, CLOSERS)
-    }))
+    opener.or_else(|| {
+        line.match_indices("%>").find_map(|(i, _)| {
+            let start = if i > 0 && matches!(line.as_bytes()[i - 1], b'-' | b'=') { i - 1 } else { i };
+            token_at(start, CLOSERS)
+        })
+    })
 }
 
 #[cfg(test)]

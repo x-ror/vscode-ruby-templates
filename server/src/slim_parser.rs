@@ -2,22 +2,15 @@
 //! physical lines start a Slim line, which belong to another line's block or continuation, and
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
-use crate::slim_indent::SLIM_ENGINES;
 use crate::ruby::comment_before;
+use crate::slim_indent::SLIM_ENGINES;
 use std::ops::Range;
 
 pub const BOM: &str = "\u{feff}";
 /// Slim::Parser default `tabsize`.
 const TABSIZE: usize = 4;
 /// Engines that run `#{}` through Slim's interpolation: TagEngine without a Tilt engine, and InterpolateTiltEngine.
-const INTERPOLATING_ENGINES: &[&str] = &[
-    "javascript",
-    "css",
-    "markdown",
-    "textile",
-    "rdoc",
-    "asciidoc",
-];
+const INTERPOLATING_ENGINES: &[&str] = &["javascript", "css", "markdown", "textile", "rdoc", "asciidoc"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -86,21 +79,13 @@ struct Engine<'a> {
 /// Whether byte `offset` is in Ruby code, outside a `#` comment.
 pub fn in_ruby(text: &str, parsed: &Parsed, offset: usize) -> bool {
     let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    parsed.ruby.iter().any(|r| {
-        r.start <= offset
-            && offset <= r.end
-            && !comment_before(&text[r.start.max(line_start)..offset])
-    })
+    parsed.ruby.iter().any(|r| r.start <= offset && offset <= r.end && !comment_before(&text[r.start.max(line_start)..offset]))
 }
 
 /// Whether byte `offset` follows a `#{` that is still open in interpolated text. Slim treats it as
 /// static text, but while typing it is where Ruby is about to go.
 pub fn in_open_interpolation(text: &str, parsed: &Parsed, offset: usize) -> bool {
-    let Some(segment) = parsed
-        .text
-        .iter()
-        .find(|r| r.start <= offset && offset <= r.end)
-    else {
+    let Some(segment) = parsed.text.iter().find(|r| r.start <= offset && offset <= r.end) else {
         return false;
     };
     let before = &text[segment.start..offset];
@@ -127,17 +112,8 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         start += line.len() + 1;
         lines.push(line.strip_suffix('\r').unwrap_or(line));
     }
-    let engines = SLIM_ENGINES
-        .iter()
-        .copied()
-        .chain(extra_engines.iter().map(String::as_str))
-        .collect();
-    let blank = LineInfo {
-        role: Role::Blank,
-        keeps_trailing: false,
-        raw_column: false,
-        free_indent: false,
-    };
+    let engines = SLIM_ENGINES.iter().copied().chain(extra_engines.iter().map(String::as_str)).collect();
+    let blank = LineInfo { role: Role::Blank, keeps_trailing: false, raw_column: false, free_indent: false };
     let mut p = Parser {
         out: Parsed {
             lines: vec![blank; lines.len()],
@@ -186,15 +162,7 @@ fn trim_start(s: &str) -> &str {
 
 /// `get_indent`: a tab advances to the next multiple of `TABSIZE`.
 pub fn indent_width(line: &str) -> usize {
-    line.chars()
-        .take_while(|c| matches!(c, ' ' | '\t'))
-        .fold(0, |col, c| {
-            if c == '\t' {
-                (col / TABSIZE + 1) * TABSIZE
-            } else {
-                col + 1
-            }
-        })
+    line.chars().take_while(|c| matches!(c, ' ' | '\t')).fold(0, |col, c| if c == '\t' { (col / TABSIZE + 1) * TABSIZE } else { col + 1 })
 }
 
 fn closer(open: char) -> Option<char> {
@@ -208,8 +176,7 @@ fn closer(open: char) -> Option<char> {
 
 /// Length of an attribute name: anything but whitespace, NUL, quotes, `<>/=` and brackets.
 fn attr_name_len(s: &str) -> usize {
-    s.find(|c: char| is_space(c) || "\0\"'></=()[]{}".contains(c))
-        .unwrap_or(s.len())
+    s.find(|c: char| is_space(c) || "\0\"'></=()[]{}".contains(c)).unwrap_or(s.len())
 }
 
 /// `@tag_re`: `Some((len, named))`; `.class`, `#id` and `*splat` tags consume nothing.
@@ -219,33 +186,22 @@ fn match_tag(r: &str) -> Option<(usize, bool)> {
         return Some((0, false));
     }
     if first == '*' {
-        return r[1..]
-            .chars()
-            .next()
-            .filter(|c| !is_space(*c))
-            .map(|_| (0, false));
+        return r[1..].chars().next().filter(|c| !is_space(*c)).map(|_| (0, false));
     }
     if !is_word(first) {
         return None;
     }
-    let run = r
-        .find(|c: char| !(is_word(c) || c == ':' || c == '-'))
-        .unwrap_or(r.len());
+    let run = r.find(|c: char| !(is_word(c) || c == ':' || c == '-')).unwrap_or(r.len());
     Some((r[..run].trim_end_matches([':', '-']).len(), true))
 }
 
 fn is_doctype(r: &str) -> bool {
-    r.strip_prefix("doctype")
-        .is_some_and(|rest| !rest.starts_with(is_word))
+    r.strip_prefix("doctype").is_some_and(|rest| !rest.starts_with(is_word))
 }
 
 /// `$2` of `\A([\|'])([<>]{1,2}(?: |\z)| ?)`, given the text after `|`/`'`.
 fn text_modifiers(after: &str) -> &str {
-    let arrows = after
-        .bytes()
-        .take(2)
-        .take_while(|b| matches!(b, b'<' | b'>'))
-        .count();
+    let arrows = after.bytes().take(2).take_while(|b| matches!(b, b'<' | b'>')).count();
     for n in (1..=arrows).rev() {
         let rest = &after[n..];
         if rest.is_empty() {
@@ -383,9 +339,7 @@ impl<'a> Parser<'a> {
         }
         self.expecting = false;
         self.owner = self.i;
-        self.out.lines[self.i].role = Role::Structural {
-            depth: self.indents.len() - 1,
-        };
+        self.out.lines[self.i].role = Role::Structural { depth: self.indents.len() - 1 };
         self.pos = line.len() - trim_start(line).len();
         self.end = line.len();
         self.parse_line_indicators();
@@ -397,12 +351,8 @@ impl<'a> Parser<'a> {
             self.marker(2, Marker::HtmlComment);
             self.skip(2 + usize::from(after.starts_with(' ')));
             self.text_block(Body::Interpolated, false);
-        } else if r.len() > 2 && r.starts_with("/[") && r.trim_end_matches(is_space).ends_with(']')
-        {
-            self.marker(
-                r.trim_end_matches(is_space).len(),
-                Marker::ConditionalComment,
-            );
+        } else if r.len() > 2 && r.starts_with("/[") && r.trim_end_matches(is_space).ends_with(']') {
+            self.marker(r.trim_end_matches(is_space).len(), Marker::ConditionalComment);
             self.expecting = true;
         } else if r.starts_with('/') {
             self.marker(1, Marker::Comment);
@@ -457,11 +407,7 @@ impl<'a> Parser<'a> {
         let attrs_end = self.pos + name.len() + colon;
         let attrs_start = attrs_end - trim_start(&after[..colon]).len();
         let body = self.pos + r.len() - trim_start(&after[colon + 1..]).len();
-        Some(Engine {
-            name,
-            attrs: attrs_start..attrs_end,
-            body,
-        })
+        Some(Engine { name, attrs: attrs_start..attrs_end, body })
     }
 
     fn embedded(&mut self, engine: Engine) {
@@ -500,10 +446,7 @@ impl<'a> Parser<'a> {
             loop {
                 let s = &r[n..];
                 let Some(c) = s.chars().next() else { break };
-                let word_run = |t: &str| {
-                    t.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
-                        .unwrap_or(t.len())
-                };
+                let word_run = |t: &str| t.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(t.len());
                 let digits = |t: &str| t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
                 if is_word(c) || c == '-' {
                     n += c.len_utf8();
@@ -518,11 +461,7 @@ impl<'a> Parser<'a> {
             self.skip(n);
         }
         let r = self.rest();
-        self.skip(
-            r.bytes()
-                .take_while(|b| matches!(b, b'<' | b'>' | b'\''))
-                .count(),
-        );
+        self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
         self.parse_attributes();
 
         let r = self.rest();
@@ -593,12 +532,7 @@ impl<'a> Parser<'a> {
                 }
             }
             let Some(close) = close else { break };
-            if name > 0
-                && t[name..]
-                    .chars()
-                    .next()
-                    .is_none_or(|c| is_space(c) || c == close)
-            {
+            if name > 0 && t[name..].chars().next().is_none_or(|c| is_space(c) || c == close) {
                 self.skip(ws + name);
             } else if t.starts_with(close) {
                 self.skip(ws + 1);
@@ -697,11 +631,7 @@ impl<'a> Parser<'a> {
             let code = self.rest();
             self.ruby(self.pos, self.end);
             // An empty line still continues: Slim tests `/[,\\]\Z/` and `\Z` also matches before a final newline.
-            continues = if code.is_empty() {
-                !previous_empty
-            } else {
-                code.ends_with([',', '\\'])
-            };
+            continues = if code.is_empty() { !previous_empty } else { code.ends_with([',', '\\']) };
             previous_empty = code.is_empty();
         }
         self.pos = self.end;
@@ -776,13 +706,8 @@ impl<'a> Parser<'a> {
                     let len = close - k - 1;
                     let inner = &r[2..len];
                     // `#{{x}}` is unescaped output of `x`.
-                    let unescaped =
-                        inner.len() >= 2 && inner.starts_with('{') && inner.ends_with('}');
-                    let (a, b) = if unescaped {
-                        (k + 3, k + len - 1)
-                    } else {
-                        (k + 2, k + len)
-                    };
+                    let unescaped = inner.len() >= 2 && inner.starts_with('{') && inner.ends_with('}');
+                    let (a, b) = if unescaped { (k + 3, k + len - 1) } else { (k + 2, k + len) };
                     self.ruby(from + a, from + b);
                     k += 1 + len;
                     continue;
@@ -801,12 +726,7 @@ mod tests {
 
     /// The Ruby source of every span, in order.
     fn ruby(text: &str) -> Vec<&str> {
-        parse(text, &[])
-            .ruby
-            .iter()
-            .map(|r| &text[r.clone()])
-            .filter(|s| !s.is_empty())
-            .collect()
+        parse(text, &[]).ruby.iter().map(|r| &text[r.clone()]).filter(|s| !s.is_empty()).collect()
     }
 
     #[test]
@@ -814,32 +734,20 @@ mod tests {
         let cases: &[(&str, &[&str])] = &[
             ("- if x\n  = y\n== z", &["if x", "y", "z"]),
             ("=< a\n=> b\n==<> c\n=' s'", &["a", "b", "c", "' s'"]),
-            (
-                "p= x\np==y\na>= z\na(href=\"/\")= w\np =' v",
-                &["x", "y", "z", "w", "v"],
-            ),
-            (
-                "a href=user_path(u, x: 1) class=\"c #{k}\" title='#{t}' Text",
-                &["user_path(u, x: 1)", "k", "t"],
-            ),
+            ("p= x\np==y\na>= z\na(href=\"/\")= w\np =' v", &["x", "y", "z", "w", "v"]),
+            ("a href=user_path(u, x: 1) class=\"c #{k}\" title='#{t}' Text", &["user_path(u, x: 1)", "k", "t"]),
             ("a href=\"/\" = link", &["link"]),
             ("a(href=foo[1] disabled) x #{y}", &["foo[1]", "y"]),
             ("a[x=a(1) y=\"#{b}\"]", &["a(1)", "b"]),
             ("div{data=h} t", &["h"]),
-            (
-                "div *{role: \"row\"} *attrs text",
-                &["{role: \"row\"}", "attrs"],
-            ),
+            ("div *{role: \"row\"} *attrs text", &["{role: \"row\"}", "attrs"]),
             ("*{tag: :a} x", &["{tag: :a}"]),
             ("| Hi #{name} \\#{not} #{{raw}}", &["name", "raw"]),
             ("p Text\n  more #{x}\n'  y #{z}", &["x", "z"]),
             ("/! c #{x}\n/ c #{no}\n  #{no}", &["x"]),
             ("<div id=\"#{d}\">", &["d"]),
             ("ruby:\n  x = 1\n  y = 2\np", &["x = 1", "y = 2"]),
-            (
-                "javascript:\n  var a = #{j};\nsass:\n  .a\n    b: #{c}\ncoffee:\n  x = \"#{y}\"",
-                &["j"],
-            ),
+            ("javascript:\n  var a = #{j};\nsass:\n  .a\n    b: #{c}\ncoffee:\n  x = \"#{y}\"", &["j"]),
             ("li: a href=h Home", &["h"]),
             ("= link_to a,\n    b\np c", &["link_to a,", "b"]),
             ("- x = [1,\n\n  2]", &["x = [1,", "2]"]),
@@ -858,10 +766,7 @@ mod tests {
     fn in_ruby_positions() {
         let text = "p= link_\n- # note\n| a #{b} c\na href=x Text\né= y";
         let parsed = parse(text, &[]);
-        let at = |line, character| {
-            position_to_offset(text, Position::new(line, character))
-                .is_some_and(|o| in_ruby(text, &parsed, o))
-        };
+        let at = |line, character| position_to_offset(text, Position::new(line, character)).is_some_and(|o| in_ruby(text, &parsed, o));
         assert!(at(0, 8), "end of `p= link_`");
         assert!(!at(0, 1));
         assert!(!at(1, 7), "inside a Ruby comment");
@@ -934,15 +839,7 @@ mod tests {
             ]
         );
         assert!(p.lines[2].keeps_trailing && p.lines[2].raw_column && !p.lines[5].keeps_trailing);
-        for invalid in [
-            "p\n    a\n  b",
-            "doctype html\n  p",
-            "a(href=x",
-            "p title=\"x",
-            "> smart",
-            "img/ x",
-            "- a,",
-        ] {
+        for invalid in ["p\n    a\n  b", "doctype html\n  p", "a(href=x", "p title=\"x", "> smart", "img/ x", "- a,"] {
             assert!(!parse(invalid, &[]).valid, "{invalid:?}");
         }
     }
@@ -955,18 +852,7 @@ mod tests {
         for word in ["href", "cl", "type", "che"] {
             assert!(p.attr_slots.contains(&text.find(word).unwrap()), "{word}");
         }
-        let markers: Vec<(&str, Marker)> = p
-            .markers
-            .iter()
-            .map(|(r, m)| (&text[r.clone()], *m))
-            .collect();
-        assert_eq!(
-            markers,
-            [
-                ("==<", Marker::Output),
-                ("/!", Marker::HtmlComment),
-                ("|>", Marker::Text)
-            ]
-        );
+        let markers: Vec<(&str, Marker)> = p.markers.iter().map(|(r, m)| (&text[r.clone()], *m)).collect();
+        assert_eq!(markers, [("==<", Marker::Output), ("/!", Marker::HtmlComment), ("|>", Marker::Text)]);
     }
 }

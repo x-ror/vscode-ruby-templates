@@ -25,7 +25,9 @@ pub struct Translation {
 
 /// Byte range of the key literal (without quotes) under `col`.
 pub fn key_at(line: &str, col: usize) -> Option<(usize, usize)> {
-    KEY_CALL.captures_iter(line).filter_map(|cap| cap.get(1))
+    KEY_CALL
+        .captures_iter(line)
+        .filter_map(|cap| cap.get(1))
         .map(|m| (m.start(), m.end()))
         .find(|&(s, e)| (s.saturating_sub(1)..=e + 1).contains(&col))
 }
@@ -47,7 +49,11 @@ pub fn lazy_scope(current: &Path) -> Option<String> {
 
 /// `.title` → `users.index.title` in users/index; other keys as written.
 pub fn full_key(current: &Path, key: &str) -> Option<String> {
-    if key.starts_with('.') { Some(format!("{}{key}", lazy_scope(current)?)) } else { Some(key.to_string()) }
+    if key.starts_with('.') {
+        Some(format!("{}{key}", lazy_scope(current)?))
+    } else {
+        Some(key.to_string())
+    }
 }
 
 /// The Rails app's `config/locales`, which need not exist yet.
@@ -56,7 +62,10 @@ pub fn locales_dir(current: &Path) -> Option<PathBuf> {
 }
 
 pub fn locale_files(dir: &Path) -> Vec<(PathBuf, Vec<Translation>)> {
-    WalkDir::new(dir).sort_by_file_name().into_iter().flatten()
+    WalkDir::new(dir)
+        .sort_by_file_name()
+        .into_iter()
+        .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "yml" || x == "yaml"))
         .filter_map(|e| Some((e.path().to_path_buf(), parse(&std::fs::read_to_string(e.path()).ok()?))))
         .collect()
@@ -69,9 +78,18 @@ pub fn lookup<'a>(files: &'a [(PathBuf, Vec<Translation>)], key: &'a str) -> imp
 /// Markdown with each locale's value of `key` and the locales missing it.
 pub fn hover(files: &[(PathBuf, Vec<Translation>)], key: &str) -> Option<String> {
     let found: Vec<&Translation> = lookup(files, key).map(|(_, t)| t).collect();
-    if found.is_empty() { return None; }
-    let values: Vec<String> = found.iter()
-        .map(|t| format!("- **{}**: {}", t.locale, t.value.as_deref().map_or_else(|| "{…}".to_string(), |v| inline_code(&truncate(v, VALUE_PREVIEW)))))
+    if found.is_empty() {
+        return None;
+    }
+    let values: Vec<String> = found
+        .iter()
+        .map(|t| {
+            format!(
+                "- **{}**: {}",
+                t.locale,
+                t.value.as_deref().map_or_else(|| "{…}".to_string(), |v| inline_code(&truncate(v, VALUE_PREVIEW)))
+            )
+        })
         .collect();
     let mut md = format!("`{key}`\n\n{}", values.join("\n"));
     let locales: BTreeSet<&str> = files.iter().flat_map(|(_, keys)| keys.iter().map(|t| t.locale.as_str())).collect();
@@ -114,7 +132,9 @@ pub fn parse(text: &str) -> Vec<Translation> {
     let mut scalar: Option<(usize, Option<char>)> = None;
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim_start();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         let indent = raw.len() - line.len();
         if let Some((i, quote)) = scalar.filter(|&(i, _)| indent > i) {
             // A sequence's parent key is a mapping (no value), so item lines append nothing.
@@ -123,26 +143,36 @@ pub fn parse(text: &str) -> Vec<Translation> {
                     Some(q) => unquote(q, line.trim_end()),
                     None => (line.trim_end().to_string(), false),
                 };
-                if !value.is_empty() { value.push(' '); }
+                if !value.is_empty() {
+                    value.push(' ');
+                }
                 value.push_str(&more);
                 scalar = Some((i, quote.filter(|_| open)));
             }
             continue;
         }
         scalar = None;
-        if line.starts_with('#') || line.starts_with("---") { continue; }
+        if line.starts_with('#') || line.starts_with("---") {
+            continue;
+        }
         if line.starts_with('-') {
             scalar = Some((indent, None));
             continue;
         }
         let Some((key, rest)) = split_key(line) else { continue };
-        while path.last().is_some_and(|(i, _)| *i >= indent) { path.pop(); }
+        while path.last().is_some_and(|(i, _)| *i >= indent) {
+            path.pop();
+        }
         path.push((indent, key.to_string()));
         let value = scalar_value(rest);
-        if let Some((_, open)) = &value { scalar = Some((indent, *open)); }
+        if let Some((_, open)) = &value {
+            scalar = Some((indent, *open));
+        }
         let value = value.map(|(v, _)| v);
         // `I18n.t` splits on `.`, so a key containing one can never be looked up.
-        if path.len() < 2 || key == "<<" || path.iter().any(|(_, k)| k.contains('.')) { continue; }
+        if path.len() < 2 || key == "<<" || path.iter().any(|(_, k)| k.contains('.')) {
+            continue;
+        }
         let key = path[1..].iter().map(|(_, k)| k.as_str()).collect::<Vec<_>>().join(".");
         out.push(Translation { locale: path[0].1.clone(), key, line: n, value });
     }
@@ -167,8 +197,12 @@ fn scalar_value(rest: &str) -> Option<(String, Option<char>)> {
     if rest.starts_with('&') {
         rest = rest.split_once(char::is_whitespace).map_or("", |(_, r)| r.trim_start());
     }
-    if rest.is_empty() || rest.starts_with('#') { return None; }
-    if rest.starts_with(['|', '>']) { return Some((String::new(), None)); }
+    if rest.is_empty() || rest.starts_with('#') {
+        return None;
+    }
+    if rest.starts_with(['|', '>']) {
+        return Some((String::new(), None));
+    }
     if let Some(q) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') {
         let (value, open) = unquote(q, &rest[1..]);
         return Some((value, open.then_some(q)));
@@ -183,7 +217,10 @@ fn unquote(q: char, s: &str) -> (String, bool) {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
-            '\'' if q == '\'' && chars.peek() == Some(&'\'') => { chars.next(); out.push('\''); }
+            '\'' if q == '\'' && chars.peek() == Some(&'\'') => {
+                chars.next();
+                out.push('\'');
+            }
             '\\' if q == '"' => match chars.next() {
                 Some('n') => out.push('\n'),
                 Some(other) => out.push(other),
@@ -203,7 +240,10 @@ mod tests {
     #[test]
     fn finds_key_literals() {
         let keys = |line: &str| KEY_CALL.captures_iter(line).map(|c| c[1].to_string()).collect::<Vec<_>>();
-        assert_eq!(keys(r#"<%= t("a.b") %> <%= t '.title' %> <%= I18n.t("x") %> <%= translate("y", count: 1) %>"#), ["a.b", ".title", "x", "y"]);
+        assert_eq!(
+            keys(r#"<%= t("a.b") %> <%= t '.title' %> <%= I18n.t("x") %> <%= translate("y", count: 1) %>"#),
+            ["a.b", ".title", "x", "y"]
+        );
         assert!(keys(r##"<%= t("a.#{b}") %> <%= post.t("x") %> <%= link_to "x" %> <%= at("x") %> <%= t(:sym) %>"##).is_empty());
         let line = r#"<%= t(".title") %>"#;
         assert_eq!(key_at(line, 8), Some((7, 13)));
@@ -243,25 +283,30 @@ mod tests {
         );
         let got: Vec<(String, usize, Option<String>)> = parse(yml).into_iter().map(|t| (t.key, t.line, t.value)).collect();
         let s = |v: &str| Some(v.to_string());
-        assert_eq!(got, vec![
-            ("defaults".into(), 3, None),
-            ("defaults.ok".into(), 4, s("OK")),
-            ("users".into(), 5, None),
-            ("users.index".into(), 7, None),
-            ("users.index.title".into(), 8, s("Hello")),
-            ("users.index.body".into(), 10, s("Line one # not a comment")),
-            ("users.index.after".into(), 14, s("*alias")),
-            ("users.index.days".into(), 15, None),
-            ("users.index.folded".into(), 18, s("a b")),
-            ("users.index.url".into(), 21, s("http://x.io/a#b")),
-            ("users.index.c".into(), 22, s("Hello \"x\"")),
-            ("users.index.list".into(), 23, None),
-            ("users.index.wrapped".into(), 27, s("first second")),
-            ("users.index.plain".into(), 29, s("last")),
-        ]);
+        assert_eq!(
+            got,
+            vec![
+                ("defaults".into(), 3, None),
+                ("defaults.ok".into(), 4, s("OK")),
+                ("users".into(), 5, None),
+                ("users.index".into(), 7, None),
+                ("users.index.title".into(), 8, s("Hello")),
+                ("users.index.body".into(), 10, s("Line one # not a comment")),
+                ("users.index.after".into(), 14, s("*alias")),
+                ("users.index.days".into(), 15, None),
+                ("users.index.folded".into(), 18, s("a b")),
+                ("users.index.url".into(), 21, s("http://x.io/a#b")),
+                ("users.index.c".into(), 22, s("Hello \"x\"")),
+                ("users.index.list".into(), 23, None),
+                ("users.index.wrapped".into(), 27, s("first second")),
+                ("users.index.plain".into(), 29, s("last")),
+            ]
+        );
         assert!(parse(yml).iter().all(|t| t.locale == "en"));
-        assert_eq!(parse("\u{feff}en:\n  a: 'It''s'\n  b: \"x\\ny\"\n").into_iter().map(|t| (t.locale, t.value)).collect::<Vec<_>>(),
-                   [("en".to_string(), s("It's")), ("en".to_string(), s("x\ny"))]);
+        assert_eq!(
+            parse("\u{feff}en:\n  a: 'It''s'\n  b: \"x\\ny\"\n").into_iter().map(|t| (t.locale, t.value)).collect::<Vec<_>>(),
+            [("en".to_string(), s("It's")), ("en".to_string(), s("x\ny"))]
+        );
     }
 
     #[test]
@@ -270,7 +315,8 @@ mod tests {
         let locales = root.join("config/locales");
         std::fs::create_dir_all(locales.join("models")).unwrap();
         std::fs::create_dir_all(root.join("app/views/users")).unwrap();
-        std::fs::write(locales.join("en.yml"), "en:\n  hello: Hello\n  html: \"<b>`x`</b>\"\n  users:\n    form:\n      title: New user\n").unwrap();
+        std::fs::write(locales.join("en.yml"), "en:\n  hello: Hello\n  html: \"<b>`x`</b>\"\n  users:\n    form:\n      title: New user\n")
+            .unwrap();
         std::fs::write(locales.join("uk.yml"), "uk:\n  hello: Привіт\n").unwrap();
         std::fs::write(locales.join("models/de.yaml"), "de:\n  users:\n    form:\n      title: Neu\n").unwrap();
         let partial = root.join("app/views/users/_form.html.erb");

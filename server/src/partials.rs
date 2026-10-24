@@ -5,24 +5,24 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-static RENDER_STR: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
-});
+static RENDER_STR: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
 // After a bare `render "y", layout: …` it's just a local.
-static RENDER_LAYOUT_KEY: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
-});
+static RENDER_LAYOUT_KEY: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
 // ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
 static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
 // `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
 static KEYWORD_ARG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
-static RENDER_COMPONENT: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
+static RENDER_COMPONENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 static RENDER_MODEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderKind { Partial, Template }
+pub enum RenderKind {
+    Partial,
+    Template,
+}
 
 #[derive(Debug, Clone)]
 pub struct RenderRef {
@@ -45,7 +45,8 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     };
     let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(1), cap.get(2)?, false)));
     // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
-    let layouts = RENDER_LAYOUT_KEY.captures_iter(line)
+    let layouts = RENDER_LAYOUT_KEY
+        .captures_iter(line)
         .filter(|cap| split_args(&cap[2]).is_some())
         .filter_map(|cap| Some(render_ref(cap.get(1), cap.get(3)?, true)));
     let mut refs: Vec<RenderRef> = calls.chain(layouts).collect();
@@ -71,11 +72,16 @@ pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
 /// `render @user` / `@users` / `@post.comments`: byte range of the expression and the name its partial follows.
 /// Longer chains and calls (`@posts.page(1)`, `@post.comments.order(:id)`) name a query, not a model.
 pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
-    RENDER_MODEL.captures_iter(line).filter_map(|cap| {
-        let m = cap.get(1)?;
-        if line[m.end()..].starts_with(['.', '(']) { return None; }
-        Some((m.start(), m.end(), m.as_str().rsplit(['.', '@']).next()?))
-    }).collect()
+    RENDER_MODEL
+        .captures_iter(line)
+        .filter_map(|cap| {
+            let m = cap.get(1)?;
+            if line[m.end()..].starts_with(['.', '(']) {
+                return None;
+            }
+            Some((m.start(), m.end(), m.as_str().rsplit(['.', '@']).next()?))
+        })
+        .collect()
 }
 
 /// `user`/`users` → app/views/users/_user.* (`to_partial_path`); nothing when the inflection finds no file.
@@ -88,8 +94,16 @@ pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
 
 // Suffix-matched like ActiveSupport's irregulars, so `sales_person` → `sales_people`.
 const IRREGULAR: [(&str, &str); 10] = [
-    ("person", "people"), ("child", "children"), ("movie", "movies"), ("status", "statuses"), ("alias", "aliases"),
-    ("cookie", "cookies"), ("hero", "heroes"), ("quiz", "quizzes"), ("cache", "caches"), ("analysis", "analyses"),
+    ("person", "people"),
+    ("child", "children"),
+    ("movie", "movies"),
+    ("status", "statuses"),
+    ("alias", "aliases"),
+    ("cookie", "cookies"),
+    ("hero", "heroes"),
+    ("quiz", "quizzes"),
+    ("cache", "caches"),
+    ("analysis", "analyses"),
 ];
 const UNCOUNTABLE: [&str; 9] = ["equipment", "information", "rice", "money", "species", "series", "fish", "sheep", "news"];
 
@@ -103,20 +117,32 @@ fn ends_with_consonant_y(word: &str) -> bool {
 }
 
 fn pluralize(word: &str) -> String {
-    if uncountable(word) { return word.to_string(); }
+    if uncountable(word) {
+        return word.to_string();
+    }
     if let Some((stem, plural)) = IRREGULAR.iter().find_map(|(s, p)| Some((word.strip_suffix(s)?, p))) {
         return format!("{stem}{plural}");
     }
-    if ends_with_consonant_y(word) { return format!("{}ies", &word[..word.len() - 1]); }
-    if ["s", "x", "z", "ch", "sh"].iter().any(|e| word.ends_with(e)) { return format!("{word}es"); }
+    if ends_with_consonant_y(word) {
+        return format!("{}ies", &word[..word.len() - 1]);
+    }
+    if ["s", "x", "z", "ch", "sh"].iter().any(|e| word.ends_with(e)) {
+        return format!("{word}es");
+    }
     format!("{word}s")
 }
 
 fn singularize(word: &str) -> String {
-    if uncountable(word) { return word.to_string(); }
+    if uncountable(word) {
+        return word.to_string();
+    }
     for (singular, plural) in IRREGULAR {
-        if let Some(stem) = word.strip_suffix(plural) { return format!("{stem}{singular}"); }
-        if word.ends_with(singular) { return word.to_string(); }
+        if let Some(stem) = word.strip_suffix(plural) {
+            return format!("{stem}{singular}");
+        }
+        if word.ends_with(singular) {
+            return word.to_string();
+        }
     }
     if let Some(stem) = word.strip_suffix("ies").filter(|s| ends_with_consonant_y(&format!("{s}y"))) {
         return format!("{stem}y");
@@ -179,11 +205,17 @@ pub fn resolve(current: &Path, r: &RenderRef) -> Vec<PathBuf> {
     match (&dir, &views, r.kind) {
         (Some(d), Some(v), _) => dirs.push(v.join(d)),
         (Some(d), None, _) => {
-            if let Some(p) = current.parent() { dirs.push(p.join(d)); }
+            if let Some(p) = current.parent() {
+                dirs.push(p.join(d));
+            }
         }
         (None, _, _) => {
-            if let Some(p) = current.parent() { dirs.push(p.to_path_buf()); }
-            if let Some(v) = &views { dirs.push(v.join("application")); }
+            if let Some(p) = current.parent() {
+                dirs.push(p.to_path_buf());
+            }
+            if let Some(v) = &views {
+                dirs.push(v.join("application"));
+            }
         }
     }
     let mut out = Vec::new();
@@ -200,7 +232,9 @@ pub fn resolve_component(current: &Path, name: &str) -> Vec<PathBuf> {
     let base = app.join("components").join(&rel);
     let mut out = Vec::new();
     let rb = base.with_extension("rb");
-    if rb.exists() { out.push(rb); }
+    if rb.exists() {
+        out.push(rb);
+    }
     if let (Some(dir), Some(stem)) = (base.parent(), base.file_name().and_then(|s| s.to_str())) {
         out.extend(matching_templates(dir, stem).into_iter().filter(|p| p.extension().map(|e| e != "rb").unwrap_or(true)));
     }
@@ -211,7 +245,9 @@ fn snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
         if ch.is_uppercase() {
-            if i > 0 { out.push('_'); }
+            if i > 0 {
+                out.push('_');
+            }
             out.extend(ch.to_lowercase());
         } else {
             out.push(ch);
@@ -222,9 +258,15 @@ fn snake_case(s: &str) -> String {
 
 /// Every file under `root`; the listing `render_candidates` names come from.
 pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
-    WalkDir::new(root).min_depth(1).max_depth(max_depth).into_iter().flatten()
+    WalkDir::new(root)
+        .min_depth(1)
+        .max_depth(max_depth)
+        .into_iter()
+        .flatten()
         // `path().is_file()` follows symlinks; walkdir's file_type() doesn't.
-        .filter(|e| e.path().is_file()).map(walkdir::DirEntry::into_path).collect()
+        .filter(|e| e.path().is_file())
+        .map(walkdir::DirEntry::into_path)
+        .collect()
 }
 
 /// Names `render` can complete for `kind`: partials (same-dir bare names, then `dir/name` under app/views)
@@ -232,7 +274,8 @@ pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
 pub fn render_candidates(current: &Path, kind: RenderKind, files: &[PathBuf]) -> Vec<(String, PathBuf)> {
     let views = views_root(current);
     let partial = kind == RenderKind::Partial;
-    let same_dir = current.parent().filter(|_| partial).into_iter().flat_map(|d| templates_in(d, files, true)).filter(|(name, _)| !name.contains('/'));
+    let same_dir =
+        current.parent().filter(|_| partial).into_iter().flat_map(|d| templates_in(d, files, true)).filter(|(name, _)| !name.contains('/'));
     let nested = views.iter().flat_map(|v| templates_in(v, files, partial)).filter(|(name, _)| name.contains('/'));
     let mut out: Vec<_> = same_dir.chain(nested).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -268,7 +311,8 @@ pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, Strin
         Regex::new(concat!(
             r#"(?:render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?"#,
             r#"|render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
-        )).unwrap()
+        ))
+        .unwrap()
     });
     let before = line.get(..col.min(line.len()))?;
     let cap = OPEN.captures(before)?;
@@ -319,7 +363,9 @@ fn split_args(s: &str) -> Option<Vec<&str>> {
     let mut chars = s.char_indices();
     while let Some((i, c)) = chars.next() {
         match (quote, c) {
-            (Some(_), '\\') => { chars.next(); }
+            (Some(_), '\\') => {
+                chars.next();
+            }
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '\'') => quote = Some(c),
@@ -392,10 +438,10 @@ mod tests {
         let p = |n: &str| (RenderKind::Partial, n.to_string());
         assert_eq!(refs(r#"<%= render layout: "box" do %>"#), [p("box")]);
         assert_eq!(refs(r#"<%= render partial: "row", layout: "box", locals: { a: 1 } %>"#), [p("row"), p("box")]);
-        assert_eq!(refs(r#"<%= render template: "a/b", layout: "layouts/x" %>"#), [
-            (RenderKind::Template, "a/b".to_string()),
-            (RenderKind::Template, "layouts/x".to_string()),
-        ]);
+        assert_eq!(
+            refs(r#"<%= render template: "a/b", layout: "layouts/x" %>"#),
+            [(RenderKind::Template, "a/b".to_string()), (RenderKind::Template, "layouts/x".to_string()),]
+        );
         assert_eq!(refs(r#"<%= render "row", layout: "box" %>"#), [p("row")]);
         assert_eq!(refs(r#"<%= render partial: "row", locals: { a: 1, layout: "gone" } %>"#), [p("row")]);
         assert_eq!(refs(r#"<%= render partial: "row", locals: [{ a: 1 }], layout: "box" %>"#), [p("row"), p("box")]);
@@ -404,11 +450,28 @@ mod tests {
 
     #[test]
     fn inflection_round_trips() {
-        for (singular, plural) in [("user", "users"), ("category", "categories"), ("day", "days"), ("address", "addresses"),
-                                   ("box", "boxes"), ("match", "matches"), ("person", "people"), ("sales_person", "sales_people"),
-                                   ("child", "children"), ("movie", "movies"), ("status", "statuses"), ("news", "news"), ("line_item", "line_items"),
-                                   ("price", "prices"), ("cookie", "cookies"), ("hero", "heroes"), ("quiz", "quizzes"),
-                                   ("cache", "caches"), ("analysis", "analyses"), ("daily_news", "daily_news")] {
+        for (singular, plural) in [
+            ("user", "users"),
+            ("category", "categories"),
+            ("day", "days"),
+            ("address", "addresses"),
+            ("box", "boxes"),
+            ("match", "matches"),
+            ("person", "people"),
+            ("sales_person", "sales_people"),
+            ("child", "children"),
+            ("movie", "movies"),
+            ("status", "statuses"),
+            ("news", "news"),
+            ("line_item", "line_items"),
+            ("price", "prices"),
+            ("cookie", "cookies"),
+            ("hero", "heroes"),
+            ("quiz", "quizzes"),
+            ("cache", "caches"),
+            ("analysis", "analyses"),
+            ("daily_news", "daily_news"),
+        ] {
             assert_eq!(pluralize(singular), plural);
             assert_eq!(singularize(plural), singular);
             assert_eq!(singularize(singular), singular);
@@ -439,7 +502,12 @@ mod tests {
         assert_eq!(found[3], [views.join("people/_person.html.haml")]);
         assert_eq!(found[4], [views.join("categories/_category.html.erb")]);
         assert!(found[5..].iter().all(Vec::is_empty));
-        for query in ["render @products.page(params[:page])", "render @post.comments.order(:id)", "render @users.map(&:x)", "render @users.first.posts"] {
+        for query in [
+            "render @products.page(params[:page])",
+            "render @post.comments.order(:id)",
+            "render @users.map(&:x)",
+            "render @users.first.posts",
+        ] {
             assert!(model_renders(query).is_empty(), "{query}");
         }
         std::fs::remove_dir_all(&root).unwrap();
@@ -449,8 +517,15 @@ mod tests {
     fn candidates_per_render_kind() {
         let root = std::env::temp_dir().join(format!("rt-candidates-{}", std::process::id()));
         let views = root.join("app/views");
-        for f in ["users/index.html.erb", "users/index.json.jbuilder", "users/_card.html.erb", "layouts/application.html.erb",
-                  "layouts/admin/base.html.erb", "layouts/_nav.html.erb", "layouts/.keep"] {
+        for f in [
+            "users/index.html.erb",
+            "users/index.json.jbuilder",
+            "users/_card.html.erb",
+            "layouts/application.html.erb",
+            "layouts/admin/base.html.erb",
+            "layouts/_nav.html.erb",
+            "layouts/.keep",
+        ] {
             let p = views.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, "").unwrap();
@@ -467,11 +542,14 @@ mod tests {
     fn strict_locals_signature() {
         let sig = strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>").unwrap();
         assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
-        assert_eq!(sig.locals, vec![
-            ("title".to_string(), None),
-            ("items".to_string(), Some("[1, 2]".to_string())),
-            ("label".to_string(), Some("t(\"a, b\")".to_string())),
-        ]);
+        assert_eq!(
+            sig.locals,
+            vec![
+                ("title".to_string(), None),
+                ("items".to_string(), Some("[1, 2]".to_string())),
+                ("label".to_string(), Some("t(\"a, b\")".to_string())),
+            ]
+        );
         assert!(sig.rest);
         let none = strict_locals("<%# locals: () -%>").unwrap();
         assert!(none.locals.is_empty() && !none.rest);
@@ -490,7 +568,9 @@ mod tests {
 
     #[test]
     fn literal_render_locals() {
-        fn passed(line: &str) -> Option<Vec<&str>> { passed_locals(line, &render_refs(line)[0]) }
+        fn passed(line: &str) -> Option<Vec<&str>> {
+            passed_locals(line, &render_refs(line)[0])
+        }
         assert_eq!(passed(r#"<%= render "card", title: "a, b", n: f(1, 2) %>"#), Some(vec!["title", "n"]));
         assert_eq!(passed(r#"<%= render("card", user:) -%>"#), Some(vec!["user"]));
         assert_eq!(passed(r#"<%= render "card" %>"#), Some(vec![]));

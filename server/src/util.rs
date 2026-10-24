@@ -22,13 +22,7 @@ pub fn span_range(line: usize, line_text: &str, start_col: usize, end_col: usize
 }
 
 pub fn diag(range: Range, severity: DiagnosticSeverity, message: impl Into<String>) -> Diagnostic {
-    Diagnostic {
-        range,
-        severity: Some(severity),
-        source: Some("ruby-templates".into()),
-        message: message.into(),
-        ..Default::default()
-    }
+    Diagnostic { range, severity: Some(severity), source: Some("ruby-templates".into()), message: message.into(), ..Default::default() }
 }
 
 pub fn error(range: Range, message: impl Into<String>) -> Diagnostic {
@@ -95,7 +89,9 @@ pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
 pub fn byte_col(line: &str, character: u32) -> usize {
     let mut units = 0u32;
     for (idx, ch) in line.char_indices() {
-        if units >= character { return idx; }
+        if units >= character {
+            return idx;
+        }
         units += ch.len_utf16() as u32;
     }
     line.len()

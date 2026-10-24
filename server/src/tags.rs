@@ -10,21 +10,36 @@ use tower_lsp::lsp_types::{Diagnostic, Range};
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
 const OPTIONAL_END: &[&str] = &[
-    "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "optgroup", "html", "head", "body",
+    "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "optgroup", "html", "head",
+    "body",
 ];
 const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
 
 // Block helpers whose body is JS/CSS, not HTML; the source has no literal `<script>` to skip.
-static RAW_BLOCK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
+static RAW_BLOCK: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
 
 #[derive(Clone)]
-struct Tag { name: String, start: usize, end: usize }
+struct Tag {
+    name: String,
+    start: usize,
+    end: usize,
+}
 
 /// An open ERB block: the tag stack on entry and the tag names each finished branch left open.
 /// `in_branch` is false between `case x` and its first `when`, which is not a branch.
-struct Block { entry: Vec<Tag>, branch_ends: Vec<Vec<String>>, has_else: bool, in_branch: bool }
+struct Block {
+    entry: Vec<Tag>,
+    branch_ends: Vec<Vec<String>>,
+    has_else: bool,
+    in_branch: bool,
+}
 
-struct ErbEvent<'a> { at: usize, effect: BlockEffect, keyword: &'a str }
+struct ErbEvent<'a> {
+    at: usize,
+    effect: BlockEffect,
+    keyword: &'a str,
+}
 
 fn names(stack: &[Tag]) -> Vec<String> {
     stack.iter().map(|t| t.name.clone()).collect()
@@ -48,7 +63,9 @@ fn tag_end(html: &[u8], from: usize) -> Option<(usize, bool)> {
             _ if prev == b'=' => unquoted = true,
             _ => {}
         }
-        if !b.is_ascii_whitespace() { prev = b; }
+        if !b.is_ascii_whitespace() {
+            prev = b;
+        }
         i += 1;
     }
     None
@@ -121,7 +138,13 @@ fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Block>) -> boo
 }
 
 /// A matched `<name …>…</name>` pair, as byte offsets.
-pub struct Element { pub name: String, pub start: usize, pub open_end: usize, pub close_start: usize, pub end: usize }
+pub struct Element {
+    pub name: String,
+    pub start: usize,
+    pub open_end: usize,
+    pub close_start: usize,
+    pub end: usize,
+}
 
 /// `partial`: split-wrapper partials (`_header` opens a `<div>` that `_footer` closes) are legitimate,
 /// so only mismatches are reported there.
@@ -167,7 +190,8 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         if !html.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
             continue;
         }
-        let name_len = html[name_start..].iter().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
+        let name_len =
+            html[name_start..].iter().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
         let name = String::from_utf8_lossy(&html[name_start..name_start + name_len]).into_owned();
         let Some((end, self_closing)) = tag_end(&html, name_start + name_len) else { return };
         i = end;
@@ -202,7 +226,10 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
             // Self-closing (`<svg … />`, custom elements in XHTML style).
         } else if RAW_TEXT.contains(&name.as_str()) {
             let close = format!("</{name}");
-            let Some(close_start) = find(&html, end, close.as_bytes()) else { i = html.len(); continue };
+            let Some(close_start) = find(&html, end, close.as_bytes()) else {
+                i = html.len();
+                continue;
+            };
             i = close_start + close.len();
             let close_end = i + (html.get(i) == Some(&b'>')) as usize;
             elements.push(Element { name, start, open_end: end, close_start, end: close_end });
@@ -240,7 +267,10 @@ mod tests {
         assert_eq!(messages("<section><div></div>"), ["`<section>` is never closed"]);
         // Tags crossing a block boundary inconsistently with the outside are still caught.
         assert_eq!(messages("<% if a %><div><% else %><div><% end %></span>"), ["Closing tag `</span>` doesn't match `<div>` (line 1)"]);
-        assert_eq!(messages("<% case x %>\n<% when 1 %><a><% else %><a><% end %></span>"), ["Closing tag `</span>` doesn't match `<a>` (line 2)"]);
+        assert_eq!(
+            messages("<% case x %>\n<% when 1 %><a><% else %><a><% end %></span>"),
+            ["Closing tag `</span>` doesn't match `<a>` (line 2)"]
+        );
         assert_eq!(messages("<% items.each do |i| %><div><% end %></div>"), Vec::<String>::new());
         assert_eq!(messages("<ul><% items.each do |i| %><li><%= i %><% end %>"), ["`<ul>` is never closed"]);
     }

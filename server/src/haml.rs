@@ -12,11 +12,7 @@ pub enum Completion<'a> {
     /// `%sec` at line start.
     Tag(&'a str),
     /// A key position in a tag's `{}` hash, or a name position in its `()`. `rocket`: an old-style `:key =>` key.
-    Attribute {
-        typed: &'a str,
-        place: AttrPlace,
-        rocket: bool,
-    },
+    Attribute { typed: &'a str, place: AttrPlace, rocket: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,17 +36,12 @@ pub fn in_ruby(line: &str, col: usize) -> bool {
         return false;
     }
     if let Some(rel) = col.checked_sub(ws).filter(|_| is_haml_tag(content)) {
-        if let Some(g) = tag_attr_groups(content)
-            .into_iter()
-            .find(|g| inside(g, rel))
-        {
+        if let Some(g) = tag_attr_groups(content).into_iter().find(|g| inside(g, rel)) {
             return g.open != '(';
         }
     }
     let before = &line[..col];
-    before
-        .rfind("#{")
-        .is_some_and(|open| !before[open..].contains('}'))
+    before.rfind("#{").is_some_and(|open| !before[open..].contains('}'))
 }
 
 fn inside(group: &AttrGroup, col: usize) -> bool {
@@ -60,10 +51,7 @@ fn inside(group: &AttrGroup, col: usize) -> bool {
 pub fn completion_context(line: &str, col: usize) -> Option<Completion<'_>> {
     let ws = leading_ws(line).len();
     let before = line.get(ws..col)?;
-    let name_chars = |s: &str, extra: &[char]| {
-        s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || extra.contains(&c))
-    };
+    let name_chars = |s: &str, extra: &[char]| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || extra.contains(&c));
     if let Some(typed) = before.strip_prefix(':').filter(|t| name_chars(t, &[])) {
         return Some(Completion::Filter(typed));
     }
@@ -80,14 +68,8 @@ pub fn completion_context(line: &str, col: usize) -> Option<Completion<'_>> {
         '(' => (html_attr_name(inner)?, AttrPlace::Html),
         _ => return None,
     };
-    let (typed, rocket) = typed
-        .strip_prefix(':')
-        .map_or((typed, false), |t| (t, true));
-    Some(Completion::Attribute {
-        typed,
-        place,
-        rocket,
-    })
+    let (typed, rocket) = typed.strip_prefix(':').map_or((typed, false), |t| (t, true));
+    Some(Completion::Attribute { typed, place, rocket })
 }
 
 /// The partial key being typed in an attribute hash (with its `:` if old-style), and which hash (`data:`, `aria:` or the tag's own).
@@ -123,27 +105,16 @@ fn hash_key(inner: &str) -> Option<(&str, AttrPlace)> {
         return None;
     }
     let typed = inner[segment?..].trim_start();
-    if !typed
-        .strip_prefix(':')
-        .unwrap_or(typed)
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !typed.strip_prefix(':').unwrap_or(typed).chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return None;
     }
     if open.len() == 1 {
         return Some((typed, AttrPlace::Hash));
     }
     let owner = inner[..after - 1].trim_end();
-    let place = if ["data:", ":data =>", ":data=>", "\"data\":"]
-        .iter()
-        .any(|k| owner.ends_with(k))
-    {
+    let place = if ["data:", ":data =>", ":data=>", "\"data\":"].iter().any(|k| owner.ends_with(k)) {
         AttrPlace::DataHash
-    } else if ["aria:", ":aria =>", ":aria=>", "\"aria\":"]
-        .iter()
-        .any(|k| owner.ends_with(k))
-    {
+    } else if ["aria:", ":aria =>", ":aria=>", "\"aria\":"].iter().any(|k| owner.ends_with(k)) {
         AttrPlace::AriaHash
     } else {
         return None;
@@ -177,13 +148,19 @@ fn html_attr_name(inner: &str) -> Option<&str> {
 const FILTER_DOCS: &[(&str, &str)] = &[
     ("plain", "Plain text, not parsed as Haml. `#{}` is interpolated and **not** escaped."),
     ("escaped", "Plain text, HTML-escaped (interpolated `#{}` values too)."),
-    ("preserve", "Plain text with newlines turned into `&#x000A;`, so later indentation can't change it. `#{}` is interpolated, not escaped."),
+    (
+        "preserve",
+        "Plain text with newlines turned into `&#x000A;`, so later indentation can't change it. `#{}` is interpolated, not escaped.",
+    ),
     ("cdata", "Wraps the text in `<![CDATA[ … ]]>`. `#{}` is interpolated, not escaped."),
     ("javascript", "Wraps the text in `<script>`. `#{}` is interpolated and **not** escaped: use `#{j value}` or `#{value.to_json}`."),
     ("css", "Wraps the text in `<style>`. `#{}` is interpolated, not escaped."),
     ("ruby", "Runs the Ruby code; nothing is output unless the code writes to the buffer."),
     ("erb", "Renders the text as ERB (via Tilt)."),
-    ("markdown", "Renders Markdown to HTML via Tilt; needs a Markdown gem (`redcarpet`, `kramdown`, `commonmarker`, …). `#{}` is interpolated."),
+    (
+        "markdown",
+        "Renders Markdown to HTML via Tilt; needs a Markdown gem (`redcarpet`, `kramdown`, `commonmarker`, …). `#{}` is interpolated.",
+    ),
     ("sass", "Compiles indented Sass into `<style>` via Tilt; needs `sass-embedded` (or `sassc`). `#{}` is interpolated."),
     ("scss", "Compiles SCSS into `<style>` via Tilt; needs `sass-embedded` (or `sassc`). `#{}` is interpolated."),
     ("less", "Compiles Less into `<style>` via Tilt; needs the `less` gem. `#{}` is interpolated."),
@@ -219,9 +196,7 @@ pub fn hover(line: &str, col: usize) -> Option<String> {
     let content = &line[ws..];
     if let Some(name) = content.strip_prefix(':').map(str::trim_end) {
         let (name, doc) = FILTER_DOCS.iter().find(|(f, _)| *f == name)?;
-        return (ws..ws + 1 + name.len())
-            .contains(&col)
-            .then(|| format!("**Haml filter** `:{name}`\n\n{doc}"));
+        return (ws..ws + 1 + name.len()).contains(&col).then(|| format!("**Haml filter** `:{name}`\n\n{doc}"));
     }
     let mut at = ws;
     if is_haml_tag(content) {
@@ -229,14 +204,8 @@ pub fn hover(line: &str, col: usize) -> Option<String> {
         let after_head = &line[at..];
         let removal_len = after_head.len() - after_head.trim_start_matches(['<', '>']).len();
         if (at..at + removal_len).contains(&col) {
-            let doc = WHITESPACE_DOCS
-                .iter()
-                .find(|(c, _)| line[col..].starts_with(*c))?
-                .1;
-            return Some(format!(
-                "**Haml whitespace removal** `{}`\n\n{doc}",
-                &line[col..col + 1]
-            ));
+            let doc = WHITESPACE_DOCS.iter().find(|(c, _)| line[col..].starts_with(*c))?.1;
+            return Some(format!("**Haml whitespace removal** `{}`\n\n{doc}", &line[col..col + 1]));
         }
         at += removal_len;
     } else if content.starts_with("!!!") {
@@ -249,13 +218,10 @@ pub fn hover(line: &str, col: usize) -> Option<String> {
         return None;
     }
     // Haml reads `&`/`!` as a prefix only before a space or `#{` (`&amp;` is text).
-    if matches!(*prefix, "&" | "!") && !(rest[1..].starts_with(' ') || rest[1..].starts_with("#{"))
-    {
+    if matches!(*prefix, "&" | "!") && !(rest[1..].starts_with(' ') || rest[1..].starts_with("#{")) {
         return None;
     }
-    (at..at + prefix.len())
-        .contains(&col)
-        .then(|| format!("**Haml** `{prefix}`\n\n{doc}"))
+    (at..at + prefix.len()).contains(&col).then(|| format!("**Haml** `{prefix}`\n\n{doc}"))
 }
 
 #[cfg(test)]
@@ -297,20 +263,8 @@ mod tests {
     #[test]
     fn completion_contexts() {
         use AttrPlace::*;
-        let attr = |typed, place| {
-            Some(Completion::Attribute {
-                typed,
-                place,
-                rocket: false,
-            })
-        };
-        let rocket = |typed, place| {
-            Some(Completion::Attribute {
-                typed,
-                place,
-                rocket: true,
-            })
-        };
+        let attr = |typed, place| Some(Completion::Attribute { typed, place, rocket: false });
+        let rocket = |typed, place| Some(Completion::Attribute { typed, place, rocket: true });
         for (src, want) in [
             (":jav|", Some(Completion::Filter("jav"))),
             ("  :|", Some(Completion::Filter(""))),
@@ -348,10 +302,7 @@ mod tests {
     #[test]
     fn every_position_of_the_sample_is_safe() {
         let sample = include_str!("../../test/sample.html.haml");
-        for line in sample
-            .lines()
-            .chain(["%a{x: \"é", "  %p(é", "é:css", "%p<é"])
-        {
+        for line in sample.lines().chain(["%a{x: \"é", "  %p(é", "é:css", "%p<é"]) {
             for (col, _) in line.char_indices().chain([(line.len(), ' ')]) {
                 in_ruby(line, col);
                 completion_context(line, col);
@@ -374,10 +325,7 @@ mod tests {
             let (line, col) = split(src);
             hover(&line, col).map(|md| md.lines().next().unwrap_or("").to_string())
         };
-        assert_eq!(
-            head(":java|script").as_deref(),
-            Some("**Haml filter** `:javascript`")
-        );
+        assert_eq!(head(":java|script").as_deref(), Some("**Haml filter** `:javascript`"));
         assert_eq!(head("  |:css").as_deref(), Some("**Haml filter** `:css`"));
         assert_eq!(head(":unknown|"), None);
         assert_eq!(head("|&= x").as_deref(), Some("**Haml** `&=`"));
@@ -389,14 +337,8 @@ mod tests {
         assert_eq!(head("|&#{x}").as_deref(), Some("**Haml** `&`"));
         assert_eq!(head("|&amp; x"), None);
         assert_eq!(head("|!important"), None);
-        assert_eq!(
-            head("%p{a: 1}<|>= x").as_deref(),
-            Some("**Haml whitespace removal** `>`")
-        );
-        assert_eq!(
-            head("%p|<= x").as_deref(),
-            Some("**Haml whitespace removal** `<`")
-        );
+        assert_eq!(head("%p{a: 1}<|>= x").as_deref(), Some("**Haml whitespace removal** `>`"));
+        assert_eq!(head("%p|<= x").as_deref(), Some("**Haml whitespace removal** `<`"));
         assert_eq!(head("%p<>|!= x").as_deref(), Some("**Haml** `!=`"));
         assert_eq!(head("%p|- x"), None);
         assert_eq!(head("|!!! 5"), None);

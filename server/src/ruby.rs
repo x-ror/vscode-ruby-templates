@@ -17,31 +17,46 @@ pub fn strip(code: &str) -> String {
         let mut cut = line.len();
         let b = line.as_bytes();
         for i in 0..b.len() {
-            if b[i] == b'#' && b.get(i + 1) != Some(&b'{') { cut = i; break; }
+            if b[i] == b'#' && b.get(i + 1) != Some(&b'{') {
+                cut = i;
+                break;
+            }
         }
         out.push_str(&line[..cut]);
-        if cut < line.len() && line.ends_with('\n') { out.push('\n'); }
+        if cut < line.len() && line.ends_with('\n') {
+            out.push('\n');
+        }
     }
     out
 }
 
 /// Where a Ruby snippet ends up: in code, inside a `"…"`/`'…'` string, or after a `#` (not `#{`) comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodeEnd { Code, String, Comment }
+pub enum CodeEnd {
+    Code,
+    String,
+    Comment,
+}
 
 pub fn code_end(code: &str) -> CodeEnd {
     let mut quote = None;
     let mut chars = code.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
-            (Some(_), '\\') => { chars.next(); }
+            (Some(_), '\\') => {
+                chars.next();
+            }
             (Some(q), c) if c == q => quote = None,
             (None, '"' | '\'') => quote = Some(c),
             (None, '#') if chars.peek() != Some(&'{') => return CodeEnd::Comment,
             _ => {}
         }
     }
-    if quote.is_some() { CodeEnd::String } else { CodeEnd::Code }
+    if quote.is_some() {
+        CodeEnd::String
+    } else {
+        CodeEnd::Code
+    }
 }
 
 /// The rest of the line after `code` is a Ruby comment.
@@ -62,7 +77,10 @@ pub enum BlockEffect {
 
 const OPENERS: &[&str] = &["if", "unless", "while", "until", "case", "begin", "def", "class", "module", "for", "do"];
 const CONTINUERS: &[&str] = &["else", "elsif", "when", "rescue", "ensure", "in"];
-const PREFIX_OK: &[&str] = &["=", "(", ",", ";", "&&", "||", "and", "or", "not", "!", "return", "then", "else", "[", "{", "?", ":", "=>", "|", "<<", "+=", "-=", "||="];
+const PREFIX_OK: &[&str] = &[
+    "=", "(", ",", ";", "&&", "||", "and", "or", "not", "!", "return", "then", "else", "[", "{", "?", ":", "=>", "|", "<<", "+=", "-=",
+    "||=",
+];
 
 /// Net block effect of a Ruby snippet. `end` count and opener count are also returned.
 pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
@@ -77,7 +95,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
         let prev = if i > 0 { tokens[i - 1] } else { "" };
         let next = tokens.get(i + 1).copied().unwrap_or("");
         // `obj.class`, `foo.if`, `class: "x"`, `:if` are not keywords.
-        if prev == "." || prev == "&." || (next == ":" ) || prev == ":" || prev == "def" {
+        if prev == "." || prev == "&." || (next == ":") || prev == ":" || prev == "def" {
             continue;
         }
         match tok {

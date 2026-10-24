@@ -18,10 +18,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
     out.push_str(&text[..text.len() - body.len()]);
     // Slim keeps whitespace-only lines at the end (as newlines in the compiled code) but drops empty ones.
     let lines: Vec<&str> = body.split('\n').collect();
-    let tail = lines
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .map_or(0, |i| i + 1);
+    let tail = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
     let mut shift = vec![0isize; parsed.lines.len()];
     for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).enumerate() {
         if i > 0 {
@@ -53,11 +50,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
         };
         // A trailing `,` or `\` before the whitespace would turn into a continuation once stripped.
         let stripped = content.trim_end_matches(|c: char| c.is_ascii_whitespace());
-        let content = if info.keeps_trailing || stripped.ends_with([',', '\\']) {
-            content
-        } else {
-            stripped
-        };
+        let content = if info.keeps_trailing || stripped.ends_with([',', '\\']) { content } else { stripped };
         if !content.is_empty() {
             out.push_str(&" ".repeat(new_width));
             out.push_str(content);
@@ -73,24 +66,14 @@ mod tests {
 
     fn fmt(text: &str) -> String {
         let once = format(text, 2, &[]).expect("formattable");
-        assert_eq!(
-            format(&once, 2, &[]).as_deref(),
-            Some(once.as_str()),
-            "idempotent"
-        );
+        assert_eq!(format(&once, 2, &[]).as_deref(), Some(once.as_str()), "idempotent");
         once
     }
 
     #[test]
     fn reindents_structure() {
-        assert_eq!(
-            fmt("html\n    body\n        p x  \n    \n\tfooter"),
-            "html\n  body\n    p x  \n\n  footer"
-        );
-        assert_eq!(
-            format("ul\n  li\n", 4, &[]).as_deref(),
-            Some("ul\n    li\n")
-        );
+        assert_eq!(fmt("html\n    body\n        p x  \n    \n\tfooter"), "html\n  body\n    p x  \n\n  footer");
+        assert_eq!(format("ul\n  li\n", 4, &[]).as_deref(), Some("ul\n    li\n"));
         assert_eq!(fmt("- if a   \r\n    = b \r\n"), "- if a\r\n  = b\r\n");
     }
 
@@ -104,23 +87,13 @@ mod tests {
     #[test]
     fn continuations_move_with_their_line() {
         let text = "div\n    = link_to a,\n          b\n    a(href=\"/\"\n      class=\"x\") t\n";
-        assert_eq!(
-            fmt(text),
-            "div\n  = link_to a,\n        b\n  a(href=\"/\"\n    class=\"x\") t\n"
-        );
+        assert_eq!(fmt(text), "div\n  = link_to a,\n        b\n  a(href=\"/\"\n    class=\"x\") t\n");
     }
 
     #[test]
     fn trailing_whitespace_only_where_ignored() {
-        assert_eq!(
-            fmt("p  \n| t  \n' u  \na href=x  \n/ c  \n<b>  \np Text  "),
-            "p\n| t  \n' u  \na href=x\n/ c\n<b>  \np Text  "
-        );
-        assert_eq!(
-            fmt("a href=x,  \n  y"),
-            "a href=x,  \n  y",
-            "`x,` + space ends the value"
-        );
+        assert_eq!(fmt("p  \n| t  \n' u  \na href=x  \n/ c  \n<b>  \np Text  "), "p\n| t  \n' u  \na href=x\n/ c\n<b>  \np Text  ");
+        assert_eq!(fmt("a href=x,  \n  y"), "a href=x,  \n  y", "`x,` + space ends the value");
         assert_eq!(fmt("p title=\"a  \n  b\""), "p title=\"a  \n  b\"");
     }
 
@@ -140,11 +113,7 @@ mod tests {
     #[test]
     fn refuses_what_it_cannot_keep() {
         assert_eq!(format("p\n    a\n  b", 2, &[]), None);
-        assert_eq!(
-            format("\tp Text\n\t\t  more", 2, &[]),
-            None,
-            "text column counts the tab as one"
-        );
+        assert_eq!(format("\tp Text\n\t\t  more", 2, &[]), None, "text column counts the tab as one");
         assert!(format("\tp Text\n\tp", 2, &[]).is_some());
         assert_eq!(format("p", 0, &[]), None);
     }
