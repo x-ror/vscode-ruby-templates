@@ -37,20 +37,6 @@ One test that launches real VS Code, opens an ERB file and checks that the serve
 **Recommendation:** A, with one test only.
 Status: pending
 
-### D4. More checks in CI
-
-These run locally but not in CI:
-- `cargo fmt --check` and `npm run format:check`: seconds each.
-- `node test/e2e.js`: needs the built server, which the `server` job already produces.
-- `npm run test:format`: needs Ruby and the slim gem.
-
-- **A:** add `fmt --check`, `format:check` and e2e now. Add `test:format` with `ruby/setup-ruby` later.
-- **B:** add all four now.
-- **C:** none.
-
-**Recommendation:** A.
-Status: pending
-
 ### D5. Next template languages
 
 The plans are in `docs/*_TODO.md`:
@@ -128,6 +114,7 @@ Status: pending
 - **Standard library before crates.** `once_cell` was replaced by `LazyLock`, `serde` was dropped, the minimum Rust version is 1.82, and `cargo audit` runs in CI.
 - **Partial names follow ActionView**: `name[.locale][.format][+variant].handler`. A partial must be in the view's format or have none; JS views also find HTML partials.
 - **Jbuilder and Builder keep the `ruby` language id**, because Ruby LSP owns those files. **Liquid** gets no Shopify-specific features.
+- **CI checks formatting and lints** (D4, option A plus clippy): a `lint` job runs `cargo fmt --check`, `cargo clippy -D warnings` and `npm run format:check`, and packaging waits for it. `node test/e2e.js` runs in the linux-x64 server job; `npm run test:format` (needs Ruby and the slim gem) is not in CI yet.
 - **On Windows, Ruby tools run through `cmd.exe`.** Arguments containing `"` are refused. A `%VAR%` in an argument would still expand.
 
 ## Open bugs
