@@ -227,10 +227,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Rust unit tests for render refs and block analysis (`server/src/partials.rs`, `server/src/ruby.rs`)
 - [x] LSP end-to-end test: definition, hover, completion, diagnostics on a fake Rails tree (`test/e2e.js`)
 - [x] Broken-file fixture (`test/broken/bad.html.erb`)
-- [x] CI builds the server for 5 targets, runs `cargo test` on 4 (skipped for cross-built linux-arm64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
+- [x] CI builds the server for 5 targets, runs `cargo test` on 3 (skipped for cross-built linux-arm64 and darwin-x64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
 - [x] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text) (`server/src/erb.rs` tests)
 - [x] `test/e2e.js` asserts results and exits non-zero on a mismatch
-- [x] `test/e2e.js` runs in CI on linux-x64 against the job's own build (`.github/workflows/build.yml`, `RUBY_TEMPLATES_LS`)
+- [x] `test/e2e.js` runs in CI on linux-x64, darwin-arm64 and win32-x64 against each job's own build (`.github/workflows/build.yml`, `RUBY_TEMPLATES_LS`)
 - [x] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`server/src/erb.rs` `broken_fixture`)
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
