@@ -28,7 +28,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 - Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
-- JS: no formatter dependency. Match the existing style: 2 spaces, single quotes, semicolons, lines ≤ 120.
+- JS: no formatter dependency. 2 spaces, single quotes, semicolons, lines ≤ 140 (same as Rust). Several `test/*.js` still use double quotes; don't mix styles inside a file, convert in a `style:` commit.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
 
@@ -45,10 +45,21 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 ## Checks
 
-- `cargo fmt --manifest-path server/Cargo.toml --check`
-- `cargo test --manifest-path server/Cargo.toml`
-- `npm run build:server && npm run test:server && node test/e2e.js`
-- `npm run test:tokens`
+Run the ones that cover what you changed; all of them before a release.
+
+- Rust: `cargo fmt --manifest-path server/Cargo.toml --check`, `cargo clippy --manifest-path server/Cargo.toml`, `cargo test --manifest-path server/Cargo.toml` (also asserts `test/broken/bad.html.{haml,slim}`)
+- Server end to end: `npm run build:server && npm run test:server && node test/e2e.js` (e2e asserts and exits non-zero on a mismatch)
+- Grammars: `npm run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
+- JS helpers: `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
+- Slim formatter: `npm run test:format` (needs `ruby -rslim`)
+
+## Where tests go
+
+- Rust logic: `#[cfg(test)] mod tests` in the same file; file-system cases on a temp dir (see `partials.rs` `model_render_partials`).
+- LSP behaviour through the real server: a case in `test/e2e.js`.
+- Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).
+- JS helpers: the matching `test/*.js` run by `test:unit`/`test:slim`/`test:snippets`, with `assert`.
+- Broken-input diagnostics: `test/broken/*`, asserted from Rust via `include_str!` (`broken_fixture`); a fixture nothing reads isn't a test.
 
 ## Commits
 

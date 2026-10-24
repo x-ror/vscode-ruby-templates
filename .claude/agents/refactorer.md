@@ -10,11 +10,8 @@ You refactor code. Behaviour must stay identical; if you find a bug, report it a
 
 ## Process
 
-1. Establish a safety net first. Run the existing checks for the area and record the result:
-   - Rust: `cargo test --manifest-path server/Cargo.toml`
-   - Server end to end: `npm run build:server && npm run test:server && node test/e2e.js`
-   - Grammars: `npm run test:tokens`
-   If the code you're about to change has no test covering its behaviour, add the smallest characterization test first (Rust `#[cfg(test)]` or a case in `test/e2e.js`).
+1. Establish a safety net first. Run the `CLAUDE.md` "Checks" for the area and record the result.
+   If the code you're about to change has no test covering its behaviour, add the smallest characterization test first (where `CLAUDE.md` "Where tests go" says).
 2. Read the target and grep all its callers. Know every way it's used before touching it.
 3. Refactor in small steps, re-running the checks after each. Priorities:
    - Delete dead code, unused params, stale comments.

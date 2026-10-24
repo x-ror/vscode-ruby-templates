@@ -21,10 +21,7 @@ Skip: getters/trivial wrappers, code that only forwards to a library, restating 
 
 ## Where tests go in this repo
 
-- Rust logic: `#[cfg(test)] mod tests` at the bottom of the same file in `server/src/`. Plain `assert_eq!`, no test frameworks.
-- LSP behaviour end to end: a case in `test/e2e.js` (spawns the real server against a fake Rails tree).
-- Grammar/highlighting: a line in the matching `test/sample.html.{erb,haml,slim}`, checked by `npm run test:tokens`.
-- Broken-input diagnostics: files in `test/broken/`.
+As `CLAUDE.md` "Where tests go" says. Rust: plain `assert_eq!`, no test frameworks; JS: Node's `assert`.
 
 Do not add a test framework or dependency.
 
@@ -37,6 +34,6 @@ Do not add a test framework or dependency.
 
 ## Verify and report
 
-Run the relevant suite (`cargo test --manifest-path server/Cargo.toml`, `node test/e2e.js` after `npm run build:server`, `npm run test:tokens`).
+Run the `CLAUDE.md` "Checks" that cover the tests you added.
 
 Report: each test added, the bug it guards against, and that you saw it fail. List candidates you rejected and why, one line each.
