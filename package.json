@@ -656,7 +656,6 @@
             "enum": [
               "inconsistent-indent",
               "bad-dedent",
-              "top-level-indent",
               "doctype-children",
               "void-children",
               "unknown-engine",
