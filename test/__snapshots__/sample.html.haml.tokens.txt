@@ -81,8 +81,8 @@
    " user"                     meta.tag > meta.attributes.hash > source.ruby
    "."                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.method.ruby
    "id"                        meta.tag > meta.attributes.hash > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "}"                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.scope.end.ruby
    "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
-   "}"                         meta.tag
 "        %a(href=user.url class=\"name\")= user.name"
    "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
    "a"                         meta.tag > entity.name.tag
@@ -552,4 +552,82 @@
    "p"                         meta.tag > entity.name.tag
    "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
    "n"                         meta.tag > meta.embedded.line.ruby > source.ruby
+"%button{aria: {label: \"Close\", expanded: false}} x"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "button"                    meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "aria"                      meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "{"                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.scope.begin.ruby
+   "label"                     meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "\""                        meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby > punctuation.definition.string.begin.ruby
+   "Close"                     meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby
+   "\""                        meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby > punctuation.definition.string.end.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   "expanded"                  meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "false"                     meta.tag > meta.attributes.hash > source.ruby > constant.language.boolean.ruby
+   "}"                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.scope.end.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+   "x"                         meta.tag > string.unquoted.text
+"%div{attrs_hash}"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "div"                       meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "attrs_hash"                meta.tag > meta.attributes.hash > source.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+"%a{href: \"/\"}(title=\"t\" target=\"_blank\") link"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "a"                         meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "href"                      meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "\""                        meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby > punctuation.definition.string.begin.ruby
+   "/"                         meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby
+   "\""                        meta.tag > meta.attributes.hash > source.ruby > string.quoted.double.interpolated.ruby > punctuation.definition.string.end.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+   "("                         meta.tag > meta.attributes.html > punctuation.section.attributes.begin
+   "title"                     meta.tag > meta.attributes.html > entity.other.attribute-name.html
+   "="                         meta.tag > meta.attributes.html > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   "t"                         meta.tag > meta.attributes.html > string.quoted.double
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   "target"                    meta.tag > meta.attributes.html > entity.other.attribute-name.html
+   "="                         meta.tag > meta.attributes.html > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   "_blank"                    meta.tag > meta.attributes.html > string.quoted.double
+   "\""                        meta.tag > meta.attributes.html > string.quoted.double
+   ")"                         meta.tag > meta.attributes.html > punctuation.section.attributes.end
+   "link"                      meta.tag > string.unquoted.text
+"%p{class: [a, b], id: [:x, 1], data: false, hidden: true} y"
+   "%"                         meta.tag > entity.name.tag > punctuation.definition.tag
+   "p"                         meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.begin
+   "class"                     meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "["                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.array.begin.ruby
+   "a"                         meta.tag > meta.attributes.hash > source.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   " b"                        meta.tag > meta.attributes.hash > source.ruby
+   "]"                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.array.end.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   "id"                        meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "["                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.array.begin.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.ruby > punctuation.definition.constant.ruby
+   "x"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   "1"                         meta.tag > meta.attributes.hash > source.ruby > constant.numeric.ruby
+   "]"                         meta.tag > meta.attributes.hash > source.ruby > punctuation.section.array.end.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   "data"                      meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "false"                     meta.tag > meta.attributes.hash > source.ruby > constant.language.boolean.ruby
+   ","                         meta.tag > meta.attributes.hash > source.ruby > punctuation.separator.object.ruby
+   "hidden"                    meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby
+   ":"                         meta.tag > meta.attributes.hash > source.ruby > constant.language.symbol.hashkey.ruby > punctuation.definition.constant.hashkey.ruby
+   "true"                      meta.tag > meta.attributes.hash > source.ruby > constant.language.boolean.ruby
+   "}"                         meta.tag > meta.attributes.hash > punctuation.section.attributes.end
+   "y"                         meta.tag > string.unquoted.text
 ""

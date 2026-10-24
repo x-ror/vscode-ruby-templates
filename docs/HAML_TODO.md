@@ -31,14 +31,14 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 - [x] Ruby hash `{}` with Ruby 1.9 `key: v`, `"data-x": v`, and hashrocket `:a => v` (embedded `source.ruby`) (`syntaxes/haml.tmLanguage.json` `hash-attributes`)
 - [x] Nested `data: {…}` hash (`test/sample.html.haml`)
-- [ ] (?) Nested `aria: {…}` hash: same rule as `data:`, not in the sample
+- [x] Nested `aria: {…}` / `data: {…}` hashes keep the attribute hash open past their `}` (`syntaxes/haml.tmLanguage.json` `ruby-braces`, also in `(…)` values and `#{}`; `test/sample.html.haml`)
 - [x] Multiline `{}` attribute hash spanning lines (`syntaxes/haml.tmLanguage.json` begin/end region; server joins lines in `server/src/haml_indent.rs` `skip_tag_head`)
 - [x] HTML-style `(name="v" other=ruby_expr)` attributes (`syntaxes/haml.tmLanguage.json` `html-attributes`, `test/sample.html.haml`)
 - [x] `#{}` inside double-quoted `()` attribute values (`syntaxes/haml.tmLanguage.json` `string-double`)
 - [x] Boolean attributes in `()` without a value (`%input(checked type="x")`) (`syntaxes/haml.tmLanguage.json` `html-attributes`; `test/sample.html.haml`)
 - [x] Object reference `[@user, :prefix]` (`syntaxes/haml.tmLanguage.json` `object-ref`)
-- [ ] (?) Attribute methods `%div{attrs_hash}` and combined `{…}(…)` on one tag: plain Ruby, not in the sample
-- [ ] (?) `class: [a, b]` / `id: [a, b]` arrays and `data: false`-style boolean values: plain Ruby, not in the sample
+- [x] Attribute methods `%div{attrs_hash}` and combined `{…}(…)` on one tag (`test/sample.html.haml`)
+- [x] `class: [a, b]` / `id: [a, b]` arrays and `data: false`-style boolean values (`test/sample.html.haml`)
 
 ## 3. Filters
 

@@ -89,3 +89,7 @@
   Data #{1}
 - [1, 2].each do | n |
   %p= n
+%button{aria: {label: "Close", expanded: false}} x
+%div{attrs_hash}
+%a{href: "/"}(title="t" target="_blank") link
+%p{class: [a, b], id: [:x, 1], data: false, hidden: true} y
