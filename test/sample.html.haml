@@ -9,9 +9,83 @@
   %body.main#page
     - @users.each do |user|
       .user{class: user.role, data: {id: user.id}}
-        %a(href=user_path(user) class="name")= user.name
+        %a(href=user.url class="name")= user.name
         %span.badge Admin #{user.role}
         %p
           Plain text here
     = render "footer"
     \= escaped text
+-# locals: (title:, user: nil)
+-# region Haml syntax
+%div
+  /[if IE]
+    %p Old browser
+  %br/
+  %img{src: "a.png"}/
+  %p< inner
+  %p> outer
+  %p<> both
+  %article[user, :card]
+    %h2 Card
+  %input(checked type="checkbox" value=user.id)
+  %a{href: "/x",
+    title: "y"} Multiline hash
+  %p= link_to "x", "/x",
+    class: "y"
+  = render "card",
+    user: user
+  - if title
+    %p= title
+  - elsif user
+    %p Hi
+  - else
+    %p Nobody
+  %p Dear Sir,
+  %p
+    Dear Sir,
+  %p= "a" + |
+    "b" |
+  %hr
+  Plain text that |
+  spans lines |
+  & escaped #{"<b>"}
+  ! raw #{"<b>"}
+  &= "<b>"
+  != "<b>"
+  ~ "pre"
+  %p& escaped #{"<b>"}
+  %p! raw #{"<b>"}
+  %p== Hi #{user}
+  %p&== Hi #{user}
+  %p!== Hi #{user}
+  == Top #{user}
+-# endregion
+:css
+  a { color: #{"red"}; }
+:less
+  @c: #{"red"};
+:scss
+  a { color: #{"red"}; }
+:sass
+  a
+    color: #{"red"}
+:coffee
+  x = #{1}
+:coffeescript
+  y = #{2}
+:markdown
+  # Title #{1}
+:ruby
+  x = "#{1}"
+:erb
+  <%= x %>
+:plain
+  Plain #{1} \#{not}
+:preserve
+  Kept #{1}
+:escaped
+  <b>#{1}</b>
+:cdata
+  Data #{1}
+- [1, 2].each do | n |
+  %p= n

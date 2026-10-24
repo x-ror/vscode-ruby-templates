@@ -6,6 +6,8 @@ const fs = require('fs');
 
 const { startClient, stopClient, restartClient } = require('./client');
 const { toggleErbTagAt } = require('./erbTags');
+const { toggleHamlLines, reindentHaml, hamlLintOffenses } = require('./haml');
+const { extractBlock, partialFileName } = require('./partial');
 
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
@@ -25,10 +27,16 @@ function activate(context) {
   sub('rubyTemplates.showRenderedSource', showCompiledSource);
   sub('rubyTemplates.convertToHaml', () => convert('haml'));
   sub('rubyTemplates.convertToSlim', () => convert('slim'));
+  sub('rubyTemplates.convertToErb', () => convert('erb'));
+  sub('rubyTemplates.extractPartial', extractPartial);
+  sub('rubyTemplates.toggleHamlPrefix', toggleActiveHamlLines);
+  sub('rubyTemplates.reindentHaml', reindentActiveHaml);
 
   // Language server (Rust): diagnostics, go-to-partial, completions, hover.
   const output = vscode.window.createOutputChannel('Ruby Templates');
   context.subscriptions.push(output);
+  registerHamlFormatting(context, output);
+  startHamlLint(context, output);
   sub('rubyTemplates.restartServer', () => restartClient(context, output));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
     if (e.affectsConfiguration('rubyTemplates.server')) restartClient(context, output);
@@ -94,6 +102,85 @@ async function wrapInErb() {
   }
 }
 
+// ---------------------------------------------------------------- Haml editing
+
+/** Line numbers a selection covers, leaving out a last line it only touches at column 0. */
+function selectedLines(sel) {
+  const last = sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line - 1 : sel.end.line;
+  return Array.from({ length: last - sel.start.line + 1 }, (_, i) => sel.start.line + i);
+}
+
+const documentLines = doc => Array.from({ length: doc.lineCount }, (_, i) => doc.lineAt(i).text);
+
+async function toggleActiveHamlLines() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed) return;
+  const edits = toggleHamlLines(documentLines(ed.document), new Set(ed.selections.flatMap(selectedLines)));
+  await ed.edit(eb => edits.forEach(([n, text]) => eb.replace(ed.document.lineAt(n).range, text)));
+}
+
+/** Edits re-indenting Haml lines `from`..`to`; nesting is computed over the whole document. */
+function reindentEdits(doc, tabSize, from = 0, to = doc.lineCount - 1) {
+  const lines = documentLines(doc);
+  const fixed = reindentHaml(lines, tabSize);
+  const edits = [];
+  for (let i = from; i <= to; i++) {
+    if (fixed[i] !== lines[i]) edits.push(vscode.TextEdit.replace(doc.lineAt(i).range, fixed[i]));
+  }
+  return edits;
+}
+
+async function reindentActiveHaml() {
+  const ed = vscode.window.activeTextEditor;
+  if (ed?.document.languageId !== 'haml') return;
+  const { selection, document: doc } = ed;
+  const lines = selection.isEmpty ? [0, doc.lineCount - 1] : selectedLines(selection);
+  const edits = reindentEdits(doc, Number(ed.options.tabSize), lines[0], lines.at(-1));
+  await ed.edit(eb => edits.forEach(({ range, newText }) => eb.replace(range, newText)));
+}
+
+// ---------------------------------------------------------------- partials
+
+const PARTIAL_NAME_RE = /^\w+$/;
+const RENDER_CALL = {
+  erb: p => `<%= render "${p}" %>`,
+  haml: p => `= render "${p}"`,
+  slim: p => `= render "${p}"`
+};
+
+/** Move the selection into `_name.<ext>` next to the template and render it in its place. */
+async function extractPartial() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed || ed.selection.isEmpty) return;
+  const doc = ed.document;
+  const lang = engineOf(doc.languageId);
+  if (!RENDER_CALL[lang]) return;
+  if (doc.isUntitled) { vscode.window.showInformationMessage('Save the template before extracting a partial.'); return; }
+  // Haml and Slim nest by indentation, so only whole lines can move.
+  const block = extractBlock(documentLines(doc), ed.selection, lang !== 'erb');
+  if (!block) return;
+  const name = await vscode.window.showInputBox({
+    prompt: 'Partial name (without the leading _ and the extension)',
+    validateInput: v => PARTIAL_NAME_RE.test(v) ? null : 'Use letters, digits and _ only.'
+  });
+  if (!name) return;
+
+  const { start, end } = block.range;
+  const range = new vscode.Range(start.line, start.character, end.line, end.character);
+  const partial = vscode.Uri.joinPath(doc.uri, '..', partialFileName(path.basename(doc.uri.path), name));
+  const viewDir = /\/app\/views\/(.+)\/[^/]+$/.exec(doc.uri.path)?.[1];
+  const renderPath = viewDir ? `${viewDir}/${name}` : name;
+
+  const exists = await vscode.workspace.fs.stat(partial).then(() => true, () => false);
+  if (exists) {
+    const ok = await vscode.window.showWarningMessage(`${path.basename(partial.path)} exists. Overwrite?`, { modal: true }, 'Overwrite');
+    if (ok !== 'Overwrite') return;
+  }
+  await vscode.workspace.fs.writeFile(partial, new TextEncoder().encode(block.text));
+  await ed.edit(eb => eb.replace(range, `${block.indent}${RENDER_CALL[lang](renderPath)}`));
+  await vscode.window.showTextDocument(partial, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+}
+
 // ---------------------------------------------------------------- rendering
 
 function workspaceFolderFor(doc) {
@@ -111,10 +198,9 @@ function hasGemfile(dir) {
   return false;
 }
 
-function run(cmd, args, options, input) {
+function run(cmd, args, { useBundler = cfg().get('preview.useBundler', false), ...options }, input) {
   return new Promise(resolve => {
-    const useBundler = cfg().get('preview.useBundler', false) && hasGemfile(options.cwd);
-    const full = useBundler ? ['bundle', ['exec', cmd, ...args]] : [cmd, args];
+    const full = useBundler && hasGemfile(options.cwd) ? ['bundle', ['exec', cmd, ...args]] : [cmd, args];
     const child = cp.execFile(full[0], full[1], { ...options, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || ''), err });
     });
@@ -123,6 +209,16 @@ function run(cmd, args, options, input) {
       child.stdin.end(input);
     }
   });
+}
+
+/** `haml <subcommand> -` (Haml 6+), falling back to the Haml < 6 CLI, which has no subcommands and reads stdin. */
+async function runHaml(bin, subcommand, legacyArgs, cwd, src) {
+  const r = await run(bin, [subcommand, '-'], { cwd }, src);
+  // Haml < 6 opens the subcommand name as the input file.
+  if (r.code !== 0 && r.stderr.includes('ENOENT') && r.stderr.includes(` - ${subcommand}`)) return run(bin, legacyArgs, { cwd }, src);
+  // Thor reports usage errors on stderr but exits 0.
+  if (r.code === 0 && !r.stdout && r.stderr) return { ...r, code: 1 };
+  return r;
 }
 
 /** Render a template document to HTML with the matching CLI. */
@@ -135,12 +231,7 @@ async function renderToHtml(doc) {
     return run(bin, ['--pretty'], { cwd }, src);
   }
   if (lang === 'haml') {
-    const bin = cfg().get('commands.haml', 'haml');
-    return run(bin, ['render', '--'], { cwd }, src).then(async r => {
-      if (r.code === 0) return r;
-      // Haml < 6 CLI: `haml` reads stdin, no `render` subcommand.
-      return run(bin, [], { cwd }, src);
-    });
+    return runHaml(cfg().get('commands.haml', 'haml'), 'render', [], cwd, src);
   }
   if (lang === 'erb') {
     const bin = cfg().get('commands.erb', 'erb');
@@ -156,9 +247,7 @@ async function compileToRuby(doc) {
   const src = doc.getText();
   if (lang === 'slim') return run(cfg().get('commands.slimrb', 'slimrb'), ['--compile'], { cwd }, src);
   if (lang === 'haml') {
-    const bin = cfg().get('commands.haml', 'haml');
-    const r = await run(bin, ['compile', '--'], { cwd }, src);
-    return r.code === 0 ? r : run(bin, ['--debug'], { cwd }, src);
+    return runHaml(cfg().get('commands.haml', 'haml'), 'compile', ['--debug'], cwd, src);
   }
   if (lang === 'erb') return run(cfg().get('commands.erb', 'erb'), ['-x', '-T', '-'], { cwd }, src);
   return { code: 1, stdout: '', stderr: `Unsupported language: ${lang}` };
@@ -240,27 +329,41 @@ async function showCompiledSource() {
 
 // ---------------------------------------------------------------- converters
 
+// `command` is both the rubyTemplates.commands.* setting name and its default executable.
+const CONVERTERS = {
+  'erb>haml': { command: 'html2haml', args: ['--erb'], gem: 'html2haml' },
+  'html>haml': { command: 'html2haml', args: ['--no-erb'], gem: 'html2haml' },
+  'erb>slim': { command: 'erb2slim', args: [], gem: 'html2slim' },
+  'haml>slim': { command: 'haml2slim', args: [], gem: 'haml2slim' },
+  // haml_to_erb's own CLI only converts files in place, so call its library through ruby.
+  'haml>erb': { command: 'ruby', args: ['-rhaml_to_erb', '-e', 'print HamlToErb.convert($stdin.read)'], gem: 'haml_to_erb' }
+};
+
 async function convert(target) {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   const from = ed.document.languageId;
   const cwd = workspaceFolderFor(ed.document);
   const src = ed.document.getText();
-  let bin, args, gem;
-  if (from === 'erb' && target === 'haml') { bin = cfg().get('commands.html2haml', 'html2haml'); args = ['--erb']; gem = 'html2haml'; }
-  else if (from === 'erb' && target === 'slim') { bin = cfg().get('commands.erb2slim', 'erb2slim'); args = []; gem = 'html2slim'; }
-  else if (from === 'haml' && target === 'slim') { bin = cfg().get('commands.haml2slim', 'haml2slim'); args = []; gem = 'haml2slim'; }
-  else { vscode.window.showInformationMessage(`No converter for ${from} → ${target}.`); return; }
+  const converter = CONVERTERS[`${from}>${target}`];
+  if (!converter) { vscode.window.showInformationMessage(`No converter for ${from} → ${target}.`); return; }
+  const { command, args, gem } = converter;
+  const bin = cfg().get(`commands.${command}`, command);
 
   const r = await run(bin, args, { cwd }, src);
-  if (r.err && r.err.code === 'ENOENT') {
-    const pick = await vscode.window.showErrorMessage(`"${bin}" not found. Install with: gem install ${gem}`, 'Copy command');
-    if (pick) vscode.env.clipboard.writeText(`gem install ${gem}`);
+  const missingGem = r.stderr.includes(`cannot load such file -- ${gem}`);
+  if (r.err?.code === 'ENOENT' || missingGem) {
+    const what = missingGem ? `The ${gem} gem was` : `"${bin}" was`;
+    const pick = await vscode.window.showErrorMessage(`${what} not found. Install with: gem install ${gem}`, 'Copy command');
+    if (pick) await vscode.env.clipboard.writeText(`gem install ${gem}`);
     return;
   }
   if (r.code !== 0) { vscode.window.showErrorMessage(`Conversion failed: ${(r.stderr || r.stdout).split('\n')[0]}`); return; }
 
-  const newName = ed.document.fileName.replace(/\.(erb|haml|rhtml)$/, `.${target}`);
+  // index.html → index.html.haml; show.html.erb → show.html.haml
+  const newName = from === 'html'
+    ? `${ed.document.fileName}.${target}`
+    : ed.document.fileName.replace(/\.(erb|haml|rhtml)$/, `.${target}`);
   const choice = await vscode.window.showQuickPick(
     [
       { label: `Save as ${path.basename(newName)} next to the original`, id: 'save' },
@@ -284,6 +387,129 @@ async function convert(target) {
     await ed.edit(eb => eb.replace(full, r.stdout));
     await vscode.languages.setTextDocumentLanguage(ed.document, target);
   }
+}
+
+// ---------------------------------------------------------------- haml-lint
+
+const LINT_DEBOUNCE_MS = 300;
+// haml-lint exits 65 (EX_DATAERR) when it found lints; anything else non-zero is a failure.
+const HAML_LINT_OK_CODES = new Set([0, 65]);
+const LINT_SEVERITY = { error: vscode.DiagnosticSeverity.Error, warning: vscode.DiagnosticSeverity.Warning };
+
+/** `haml-lint <args> --stdin <file>` fed the document's text. */
+function runHamlLint(doc, args, signal) {
+  const bin = cfg().get('commands.hamlLint', 'haml-lint');
+  const useBundler = cfg().get('hamlLint.useBundler', false);
+  return run(bin, [...args, '--stdin', doc.uri.fsPath], { cwd: workspaceFolderFor(doc), useBundler, signal }, doc.getText());
+}
+
+// 127: `bundle exec` couldn't find the executable.
+const hamlLintMissing = r => r.err?.code === 'ENOENT' || r.code === 127;
+const firstLine = r => (r.stderr || r.stdout).split('\n')[0];
+
+function registerHamlFormatting(context, output) {
+  context.subscriptions.push(
+    vscode.languages.registerDocumentFormattingEditProvider('haml', {
+      provideDocumentFormattingEdits: (doc, { tabSize }) =>
+        cfg().get('haml.formatter', 'reindent') === 'haml-lint' ? formatWithHamlLint(doc, output) : reindentEdits(doc, tabSize)
+    }),
+    vscode.languages.registerDocumentRangeFormattingEditProvider('haml', {
+      provideDocumentRangeFormattingEdits: (doc, range, { tabSize }) => reindentEdits(doc, tabSize, range.start.line, range.end.line)
+    })
+  );
+}
+
+async function formatWithHamlLint(doc, output) {
+  const { version } = doc;
+  const r = await runHamlLint(doc, ['--auto-correct-only', '--stderr']);
+  if (hamlLintMissing(r)) {
+    vscode.window.showErrorMessage('haml-lint was not found. Install it with: gem install haml_lint — or set rubyTemplates.commands.hamlLint.');
+    return [];
+  }
+  if (!HAML_LINT_OK_CODES.has(r.code)) {
+    output.appendLine(`[haml-lint] format ${doc.uri.fsPath} failed:\n${r.stderr || r.stdout}`);
+    vscode.window.showErrorMessage(`haml-lint failed: ${firstLine(r)}`);
+    return [];
+  }
+  // haml-lint prints nothing when there was nothing to correct.
+  if (!r.stdout || doc.version !== version) return [];
+  return [vscode.TextEdit.replace(new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), r.stdout)];
+}
+
+function lintDiagnostic(doc, { line, severity, linter, message }) {
+  const { lineNumber, firstNonWhitespaceCharacterIndex, text } = doc.lineAt(Math.min(line, doc.lineCount - 1));
+  const d = new vscode.Diagnostic(new vscode.Range(lineNumber, firstNonWhitespaceCharacterIndex, lineNumber, text.length),
+    message, LINT_SEVERITY[severity] ?? vscode.DiagnosticSeverity.Information);
+  d.source = 'haml-lint';
+  d.code = linter;
+  return d;
+}
+
+/** Run haml-lint on open and save; a newer run for the same file cancels the older one. */
+function startHamlLint(context, output) {
+  const diagnostics = vscode.languages.createDiagnosticCollection('haml-lint');
+  const pending = new Map(); // uri → { timer, controller }
+  let reportedMissing = false;
+
+  const cancel = key => {
+    const p = pending.get(key);
+    if (!p) return;
+    clearTimeout(p.timer);
+    p.controller.abort();
+    pending.delete(key);
+  };
+
+  const lint = async (doc, controller) => {
+    const r = await runHamlLint(doc, ['--reporter', 'json'], controller.signal);
+    if (controller.signal.aborted) return;
+    pending.delete(doc.uri.toString());
+    if (hamlLintMissing(r)) {
+      if (!reportedMissing) output.appendLine('[haml-lint] not found; Haml lint diagnostics are off. Install it with: gem install haml_lint');
+      reportedMissing = true;
+      return;
+    }
+    if (!HAML_LINT_OK_CODES.has(r.code)) {
+      output.appendLine(`[haml-lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
+      return;
+    }
+    try {
+      diagnostics.set(doc.uri, hamlLintOffenses(r.stdout).map(o => lintDiagnostic(doc, o)));
+    } catch (e) {
+      output.appendLine(`[haml-lint] unreadable JSON for ${doc.uri.fsPath}: ${e.message}`);
+    }
+  };
+
+  const schedule = doc => {
+    if (doc.languageId !== 'haml' || doc.uri.scheme !== 'file' || !cfg().get('hamlLint.enabled', true)) return;
+    // Generator templates (`*.haml.tt`) hold ERB tags that haml-lint would misreport.
+    if (doc.uri.path.endsWith('.tt')) return;
+    const key = doc.uri.toString();
+    cancel(key);
+    const controller = new AbortController();
+    const timer = setTimeout(() => lint(doc, controller).catch(e => output.appendLine(`[haml-lint] ${e.message}`)), LINT_DEBOUNCE_MS);
+    pending.set(key, { timer, controller });
+  };
+
+  const relintAll = () => {
+    [...pending.keys()].forEach(cancel);
+    diagnostics.clear();
+    vscode.workspace.textDocuments.forEach(schedule);
+  };
+
+  context.subscriptions.push(
+    diagnostics,
+    { dispose: () => [...pending.keys()].forEach(cancel) },
+    vscode.workspace.onDidOpenTextDocument(schedule),
+    vscode.workspace.onDidSaveTextDocument(schedule),
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      cancel(doc.uri.toString());
+      diagnostics.delete(doc.uri);
+    }),
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('rubyTemplates.hamlLint') || e.affectsConfiguration('rubyTemplates.commands.hamlLint')) relintAll();
+    })
+  );
+  vscode.workspace.textDocuments.forEach(schedule);
 }
 
 function deactivate() { previewPanel?.dispose(); return stopClient(); }

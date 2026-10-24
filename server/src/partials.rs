@@ -21,6 +21,9 @@ static RENDER_COMPONENT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 static RENDER_MODEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
+/// How deep under app/views partial completion and rename look.
+pub const VIEWS_MAX_DEPTH: usize = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderKind { Partial, Template }
 
@@ -249,6 +252,9 @@ fn templates_in<'a>(root: &'a Path, files: &'a [PathBuf], partial: bool) -> impl
         Some((full, p.clone()))
     })
 }
+
+/// `_card.html.haml` → `card`.
+pub fn partial_name(p: &Path) -> Option<String> { template_name(p, true) }
 
 fn template_name(p: &Path, partial: bool) -> Option<String> {
     let fname = p.file_name()?.to_str()?;
@@ -508,5 +514,19 @@ mod tests {
         ] {
             assert_eq!(passed(skip), None, "{skip}");
         }
+    }
+
+    #[test]
+    fn component_haml_sidecar() {
+        let root = std::env::temp_dir().join(format!("rt-component-{}", std::process::id()));
+        let components = root.join("app/components/users");
+        std::fs::create_dir_all(&components).unwrap();
+        std::fs::create_dir_all(root.join("app/views/users")).unwrap();
+        for f in ["card_component.rb", "card_component.html.haml"] {
+            std::fs::write(components.join(f), "").unwrap();
+        }
+        let found = resolve_component(&root.join("app/views/users/show.html.haml"), "Users::CardComponent");
+        assert_eq!(found, [components.join("card_component.rb"), components.join("card_component.html.haml")]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

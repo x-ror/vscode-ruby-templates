@@ -39,8 +39,9 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
 }
 
+/// Template indentation: spaces and tabs only (Haml and Slim don't indent with other Unicode whitespace).
 pub fn leading_ws(line: &str) -> &str {
-    &line[..line.len() - line.trim_start().len()]
+    &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]
 }
 
 /// `text.lines()` paired with each line's byte offset in `text`.

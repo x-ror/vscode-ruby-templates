@@ -25,6 +25,30 @@ pub fn strip(code: &str) -> String {
     out
 }
 
+/// Where a Ruby snippet ends up: in code, inside a `"…"`/`'…'` string, or after a `#` (not `#{`) comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodeEnd { Code, String, Comment }
+
+pub fn code_end(code: &str) -> CodeEnd {
+    let mut quote = None;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(_), '\\') => { chars.next(); }
+            (Some(q), c) if c == q => quote = None,
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '#') if chars.peek() != Some(&'{') => return CodeEnd::Comment,
+            _ => {}
+        }
+    }
+    if quote.is_some() { CodeEnd::String } else { CodeEnd::Code }
+}
+
+/// The rest of the line after `code` is a Ruby comment.
+pub fn comment_before(code: &str) -> bool {
+    code_end(code) == CodeEnd::Comment
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockEffect {
     /// Opens N blocks (net), e.g. `if x` or `items.each do |i|`.
@@ -80,11 +104,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
                 loop_opened = true;
             }
             t if OPENERS.contains(&t) => opens += 1,
-            t if CONTINUERS.contains(&t) => {
-                if i == 0 {
-                    has_continue = true;
-                }
-            }
+            t if CONTINUERS.contains(&t) && i == 0 => has_continue = true,
             _ => {}
         }
     }
