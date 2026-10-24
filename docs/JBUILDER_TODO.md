@@ -11,30 +11,30 @@ Ruby LSP (`shopify.ruby-lsp`) already maps `.jbuilder` and `.builder` to `ruby`.
 ## Tasks
 
 ### Client / manifest
-- [ ] Contribute `{ "id": "ruby", "extensions": [".jbuilder", ".builder"] }` so VS Code without Ruby LSP still opens them as Ruby; VS Code's built-in `ruby` doesn't claim them (`package.json` `contributes.languages`). No grammar entry.
-- [ ] `documentSelector` maps *every* contributed language id (`src/client.js` `startClient`). With `ruby` contributed, every `.rb` file would be sent to our server. Exclude `ruby` from that map and add `{ language: 'ruby', pattern: '**/*.{jbuilder,builder}' }`.
-- [ ] Activation: VS Code only generates `onLanguage:<id>` for a contributed language with a `configuration`, and the `ruby` entry has none; `activationEvents` lists only `erb|haml|slim`. So opening just a `.jbuilder` never starts the extension. Add an explicit event to `package.json` `activationEvents` (see open question).
+- [x] Contribute `{ "id": "ruby", "extensions": [".jbuilder", ".builder"] }` so VS Code without Ruby LSP still opens them as Ruby; VS Code's built-in `ruby` doesn't claim them (`package.json` `contributes.languages`). No grammar entry.
+- [x] `documentSelector` maps *every* contributed language id (`src/client.js` `startClient`). With `ruby` contributed, every `.rb` file would be sent to our server. Exclude `ruby` from that map and add `{ language: 'ruby', pattern: '**/*.{jbuilder,builder}' }`.
+- [x] Activation: VS Code only generates `onLanguage:<id>` for a contributed language with a `configuration`, and the `ruby` entry has none; `activationEvents` lists only `erb|haml|slim`. So opening just a `.jbuilder` never starts the extension. Add an explicit event to `package.json` `activationEvents` (see open question).
 
 ### Server
-- [ ] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/main.rs`). Plain `.rb` must still return `None`.
-- [ ] Matches that need a `Ruby` arm (`server/src/main.rs`):
+- [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/main.rs`). Plain `.rb` must still return `None`.
+- [x] Matches that need a `Ruby` arm (`server/src/main.rs`):
   - `diagnostics`: no template diagnostics (Ruby LSP reports syntax errors). `unresolved_renders`/`strict_locals_mismatches` already run for every language; only the arm is new.
   - `render_in_code`: `(TemplateLang::Ruby, _) => in_ruby().then_some(0)`. It matches every language, so the compiler asks for this arm. `line_roles` falls back to `LineRole::Start` and needs nothing.
   - `in_ruby_context`: `true` unless `ruby_comment_before(&text[line_start..offset])`.
-- [ ] Partial refs: widen `RENDER_STR` and the `OPEN` regex in `render_string_prefix` from `render` to `(?:render|json\.partial!)` (`server/src/partials.rs`). That covers `json.partial! "x"`, `json.partial! partial: "x"` and `json.partial! "x", user: u`.
-- [ ] Jbuilder option keys: `json.partial! "posts/post", collection: @posts, as: :post` makes `passed_locals` return `collection`, `as` (`server/src/partials.rs` `passed_locals`), so a `# locals: (post:)` partial gets a false strict-locals warning. Drop `collection`/`as`/`cached` from the passed names for `json.partial!` refs.
-- [ ] Collection form `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`: the `partial:` key isn't directly after the call. Add one `JSON_PARTIAL_KEY` regex (`json\.\w+!?\b[^#]*?\bpartial\s*(?::|=>)\s*["']…["']`) feeding `render_refs` (`server/src/partials.rs`). It overlaps the widened `RENDER_STR` on `json.partial! partial: 'x'` (same span), and the `regex` crate has no lookahead to exclude it, so `refs.dedup_by_key(|r| r.start)` after the sort in `render_refs`. It feeds only `render_refs`, so `json.array! …, partial: "` gets no completion; accepted.
+- [x] Partial refs (`server/src/partials.rs` `RENDER_STR`, `render_string_prefix`): widen `RENDER_STR` and the `OPEN` regex in `render_string_prefix` from `render` to `(?:render|json\.partial!)` (`server/src/partials.rs`). That covers `json.partial! "x"`, `json.partial! partial: "x"` and `json.partial! "x", user: u`.
+- [x] Jbuilder option keys: `json.partial! "posts/post", collection: @posts, as: :post` makes `passed_locals` return `collection`, `as` (`server/src/partials.rs` `passed_locals`), so a `# locals: (post:)` partial gets a false strict-locals warning. Done as: `passed_locals` returns `None` (unknown) when a Jbuilder call passes `collection`/`as`/`cached`, since `as:` names the local; dropping the names would report the `as:` local as missing.
+- [x] Collection form `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`: the `partial:` key isn't directly after the call. Added `JSON_PARTIAL_KEY` (`json\.\w+!?[\s(][^#]*?; the `\b` in the first draft never matches after `!`, \bpartial\s*(?::|=>)\s*["']…["']`) feeding `render_refs` (`server/src/partials.rs`). It overlaps the widened `RENDER_STR` on `json.partial! partial: 'x'` (same span), and the `regex` crate has no lookahead to exclude it, so `refs.dedup_by_key(|r| r.start)` after the sort in `render_refs`. It feeds only `render_refs`, so `json.array! …, partial: "` gets no completion; accepted.
 - [x] Format: `resolve`/`resolve_model` keep only partials in the view's format (`server/src/partials.rs` `renders_format`, test `resolve_by_view_format`). No-op when the view has no format (`x.builder`); format-less partials (`_post.jbuilder`) always match; JS and turbo_stream views also take HTML. Builder reuses it unchanged. Same gap as `ERB_TODO.md` §14 "Jbuilder/other templates in the same dir don't confuse partial resolution".
-- [ ] Strict locals: `STRICT_LOCALS` already accepts `# locals: (user:)` at end of line (`(?m)…$`), so `file_signature` should work for `_post.json.jbuilder`. Confirm with a test, don't write code.
-- [ ] Hover: `erb::tag_doc` is ERB-gated already. Rails `HELPERS` hover/completion will also show in jbuilder (completion step 4 offers all helpers and locals on every identifier, duplicating Ruby LSP's list); accepted noise, since view helpers are available there.
+- [x] Strict locals: `STRICT_LOCALS` already accepts `# locals: (user:)` at end of line (`(?m)…$`), so `file_signature` should work for `_post.json.jbuilder`. Confirm with a test, don't write code.
+- [x] Hover: `erb::tag_doc` is ERB-gated already; Rails `HELPERS` hover shows in jbuilder. Helper completion is off for `TemplateLang::Ruby` (`server/src/main.rs` `completion`): it would duplicate Ruby LSP's list on every identifier.
 
 ## Tests
 
-- [ ] `partials.rs` `refs`: `json.partial! "users/user", user: u`, `json.array! @u, partial: "users/user", as: :user` → one ref each; `json.partial! partial: 'x'` → exactly one ref (dedup); `render partial: "x"` in ERB still one ref.
-- [ ] `partials.rs`: `json.partial! "posts/post", collection: @p, as: :post` against a `# locals: (post:)` partial → no strict-locals mismatch.
+- [x] `partials.rs` `refs`: `json.partial! "users/user", user: u`, `json.array! @u, partial: "users/user", as: :user` → one ref each; `json.partial! partial: 'x'` → exactly one ref (dedup); `render partial: "x"` in ERB still one ref.
+- [x] `partials.rs`: `json.partial! "posts/post", collection: @p, as: :post` against a `# locals: (post:)` partial → no strict-locals mismatch.
 - [x] `partials.rs` format filter on a temp dir (`resolve_by_view_format`).
-- [ ] `main.rs`: `from_uri_or_id(index.json.jbuilder, Some("ruby"))` → `Ruby`, `foo.rb` → `None`; `render_in_code(Ruby, …)` true for `json.partial! "x"`; `in_ruby_context` false after `# `.
-- [ ] `test/e2e.js` (asserts and exits non-zero on a mismatch): open `users/index.json.jbuilder` with `languageId: 'ruby'`, definition on `json.partial! "users/user"` → only `_user.json.jbuilder`. Checks the client-facing path: language id, selector, format filter.
+- [x] `main.rs`: `from_uri_or_id(index.json.jbuilder, Some("ruby"))` → `Ruby`, `foo.rb` → `None`; `render_in_code(Ruby, …)` true for `json.partial! "x"`; `in_ruby_context` false after `# `.
+- [x] `test/e2e.js` (asserts and exits non-zero on a mismatch): open `users/index.json.jbuilder` with `languageId: 'ruby'`, definition on `json.partial! "users/user"` → only `_user.json.jbuilder`. Checks the client-facing path: language id, selector, format filter.
 - No token sample (no grammar); a `test/sample.json.jbuilder` would also need a `test/tokenize.js` `samples` entry.
 
 ## Open questions

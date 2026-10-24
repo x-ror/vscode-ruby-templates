@@ -30,6 +30,10 @@ fs.writeFileSync(
   "class BadgeComponent; end\n",
 );
 fs.writeFileSync(path.join(views, "users", "_user.html.erb"), "<p></p>\n");
+fs.writeFileSync(
+  path.join(views, "users", "_user.json.jbuilder"),
+  "json.name user.name\n",
+);
 fs.mkdirSync(path.join(root, "app", "javascript", "controllers"), {
   recursive: true,
 });
@@ -603,6 +607,30 @@ const check = (label, actual, expected) => {
       },
     },
     true,
+  );
+  const jbuilderUri =
+    "file://" + path.join(views, "users", "index.json.jbuilder");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: jbuilderUri,
+        languageId: "ruby",
+        version: 1,
+        text: 'json.array! @users, partial: "users/user", as: :user\njson.partial! "users/user", user: @user\n',
+      },
+    },
+    true,
+  );
+  check(
+    "jbuilder array! partial:",
+    targets(await req("textDocument/definition", jbuilderUri, 0, 33)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "jbuilder partial!",
+    targets(await req("textDocument/definition", jbuilderUri, 1, 18)),
+    ["/app/views/users/_user.json.jbuilder"],
   );
   const card = path.join(views, "users", "_card.html.slim");
   const renamed = await send("workspace/willRenameFiles", {

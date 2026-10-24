@@ -35,6 +35,8 @@ enum TemplateLang {
     Haml,
     Slim,
     Skim,
+    /// Jbuilder and Builder views: plain Ruby, attached through the `ruby` language id.
+    Ruby,
 }
 
 impl TemplateLang {
@@ -47,6 +49,9 @@ impl TemplateLang {
             _ => {}
         }
         let path = uri.path().to_ascii_lowercase();
+        if path.ends_with(".jbuilder") || path.ends_with(".builder") {
+            return Some(Self::Ruby);
+        }
         if ERB_EXTENSIONS.iter().any(|ext| path.ends_with(ext)) || path.ends_with(".rhtml") {
             Some(Self::Erb)
         } else if path.ends_with(".haml") {
@@ -133,6 +138,8 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
             .into_iter()
             .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim_indent::code::RUBY.contains(&c.as_str())))
             .collect(),
+        // Syntax errors are Ruby LSP's job; only the render checks below apply.
+        TemplateLang::Ruby => vec![],
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if doc.lang == TemplateLang::Slim && !slim_html_host(uri) {
@@ -326,7 +333,7 @@ fn line_roles(lang: TemplateLang, text: &str) -> Vec<LineRole> {
 /// text, a Ruby comment or a Ruby string (`link_to "render 'x'"`)? `spans` are `erb::code_spans(text)`.
 fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usize, usize)], line_start: usize, start: usize) -> bool {
     let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
-    let Some(call) = line[..start].rfind("render") else { return false };
+    let Some(call) = ["render", "json."].into_iter().filter_map(|c| line[..start].rfind(c)).max() else { return false };
     let in_ruby = || in_ruby_context(lang, text, spans, line_start + start);
     let code_start = match (lang, role) {
         // A tag opened on an earlier line puts the whole line before `render` in Ruby.
@@ -343,6 +350,7 @@ fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usiz
             prefix.filter(|_| in_ruby()).map(marker_end)
         }
         (TemplateLang::Skim, _) => None,
+        (TemplateLang::Ruby, _) => in_ruby().then_some(0),
     };
     code_start.is_some_and(|code| code <= call && ruby::code_end(&line[code..call]) == ruby::CodeEnd::Code)
 }
@@ -615,7 +623,7 @@ impl LanguageServer for Backend {
                 Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines)))
             }
             TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
-            TemplateLang::Erb => Ok(None),
+            TemplateLang::Erb | TemplateLang::Ruby => Ok(None),
         }
     }
 
@@ -626,6 +634,7 @@ impl LanguageServer for Backend {
             TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
             TemplateLang::Haml => outline::haml_document_symbols(&doc.text),
             TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.slim_options().extra_engines),
+            TemplateLang::Ruby => return Ok(None),
         };
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
@@ -746,6 +755,8 @@ impl LanguageServer for Backend {
                 // An unclosed `#{` being typed is Ruby too, for completion only.
                 slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
             }
+            // Ruby LSP completes Ruby files; offering view helpers on every identifier would duplicate it.
+            (TemplateLang::Ruby, _) => false,
             (_, LineRole::Start) => in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col),
             (_, LineRole::Ruby) => !ruby::comment_before(before),
             (_, LineRole::Text) => false,
@@ -856,6 +867,7 @@ fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, usize)], off
         }
         // Skim code is CoffeeScript: no Rails helpers, renders or form builders.
         TemplateLang::Skim => false,
+        TemplateLang::Ruby => !ruby::comment_before(&text[line_start..offset]),
         TemplateLang::Slim => {
             let before = &text[line_start..offset];
             let t = before.trim_start();
@@ -1282,6 +1294,34 @@ mod tests {
                 ("Partial `users/card` does not accept locals: `colour`".to_string(), at(1, 12, 22)),
             ]
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn jbuilder_and_builder_views() {
+        let lang = |path: &str, id| TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), id);
+        assert_eq!(lang("file:///app/views/users/index.json.jbuilder", Some("ruby")), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/views/feed.atom.builder", Some("ruby")), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/views/users/index.json.jbuilder", None), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/models/user.rb", Some("ruby")), None);
+
+        let root = std::env::temp_dir().join(format!("rt-jbuilder-{}", std::process::id()));
+        let posts = root.join("app/views/posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        std::fs::write(posts.join("_post.json.jbuilder"), "# locals: (post:)\njson.title post.title\n").unwrap();
+        let file = posts.join("index.json.jbuilder");
+        let text = concat!(
+            "json.array! @posts, partial: \"posts/post\", as: :post\n",
+            "json.partial! \"posts/post\", collection: @posts, as: :post\n",
+            "json.partial! \"posts/missing\"\n",
+            "# json.partial! \"posts/old\"\n",
+            "json.partial! \"posts/post\", post: @post, extra: 1\n",
+        );
+        let lines = |d: Vec<Diagnostic>| d.iter().map(|d| (d.range.start.line, d.message.clone())).collect::<Vec<_>>();
+        assert_eq!(lines(unresolved(TemplateLang::Ruby, &file, text)), [(2, "Partial `posts/missing` not found".to_string())]);
+        let mismatches = strict_locals_mismatches(&file, text, render_filter(TemplateLang::Ruby, text, &[]));
+        assert_eq!(lines(mismatches), [(4, "Partial `posts/post` does not accept locals: `extra`".to_string())]);
+        assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

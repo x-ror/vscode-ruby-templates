@@ -26,7 +26,8 @@
   "activationEvents": [
     "onLanguage:erb",
     "onLanguage:haml",
-    "onLanguage:slim"
+    "onLanguage:slim",
+    "workspaceContains:**/*.{jbuilder,builder}"
   ],
   "contributes": {
     "languages": [
@@ -179,6 +180,13 @@
           ".skim"
         ],
         "configuration": "./language-configuration/slim.json"
+      },
+      {
+        "id": "ruby",
+        "extensions": [
+          ".jbuilder",
+          ".builder"
+        ]
       }
     ],
     "grammars": [

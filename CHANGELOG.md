@@ -6,6 +6,7 @@
 - Partials: hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` get navigation, completion and diagnostics.
 - Partials resolve only in the view's format: `render "users/user"` from `index.html.erb` no longer offers `_user.json.jbuilder`. Format-less partials still match; JS and turbo_stream views also take HTML partials.
 - Erubi / Erubis: `.erubi` and `.erubis` files open as ERB, with the same diagnostics and navigation; `x.html.erubi` gets the HTML tag checks.
+- Jbuilder / Builder views (`.jbuilder`, `.builder`, kept on the `ruby` language): go to definition, hover, links, completion and unresolved / strict-locals warnings for `json.partial! "x"`, `json.array! @xs, partial: "x"` and `xml << render(...)`; renaming a partial updates them too.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

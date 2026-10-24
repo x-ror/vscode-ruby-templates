@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
-static RENDER_STR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
+static RENDER_STR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
+});
+// Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
+static JSON_PARTIAL_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"json\.\w+!?[\s(][^#]*?\bpartial\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
 // After a bare `render "y", layout: …` it's just a local.
 static RENDER_LAYOUT_KEY: LazyLock<Regex> = LazyLock::new(|| {
@@ -50,8 +54,11 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
         .captures_iter(line)
         .filter(|cap| split_args(&cap[2]).is_some())
         .filter_map(|cap| Some(render_ref(cap.get(1), cap.get(3)?, true)));
-    let mut refs: Vec<RenderRef> = calls.chain(layouts).collect();
+    let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(None, cap.get(1)?, false)));
+    let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(json).collect();
     refs.sort_by_key(|r| r.start);
+    // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
+    refs.dedup_by_key(|r| r.start);
     refs
 }
 
@@ -393,7 +400,7 @@ fn template_name(p: &Path, partial: bool) -> Option<String> {
 pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
     static OPEN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(concat!(
-            r#"(?:render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
+            r#"(?:(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
             r#"|render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
         ))
         .unwrap()
@@ -493,12 +500,33 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
         },
         (true, _) => return None,
     };
-    pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect()
+    let names: Vec<&str> = pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect::<Option<_>>()?;
+    // Jbuilder takes these out of the locals; `as:` names the local the collection items arrive in.
+    let jbuilder = line[..r.start].contains("json.");
+    if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
+        return None;
+    }
+    Some(names)
 }
+
+const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn jbuilder_refs() {
+        let names = |line: &str| render_refs(line).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"json.partial! "users/user", user: u"#), ["users/user"]);
+        assert_eq!(names(r#"json.partial!("users/user")"#), ["users/user"]);
+        assert_eq!(names(r#"json.partial! partial: 'users/user', locals: { user: u }"#), ["users/user"]);
+        assert_eq!(names(r#"json.array! @users, partial: "users/user", as: :user"#), ["users/user"]);
+        assert_eq!(names(r#"json.array!(@users, :partial => "users/user", :as => :user)"#), ["users/user"]);
+        assert_eq!(names(r#"json.comments @post.comments, partial: "comments/comment", as: :comment"#), ["comments/comment"]);
+        assert_eq!(names(r#"xml << render(partial: "items/item", locals: { i: i })"#), ["items/item"]);
+        assert_eq!(names(r#"<%= render partial: "x" %>"#), ["x"]);
+    }
+
     #[test]
     fn refs() {
         let l = r#"<%= render "users/card", user: u %>"#;
@@ -517,6 +545,8 @@ mod tests {
         assert!(render_string_prefix(r#"render partial: "x", locals: { layout: "ad"#, 41).is_none());
         assert!(render_string_prefix(r#"render "x", layout: "ad"#, 23).is_none());
         assert!(render_string_prefix(r#"page_layout "ad"#, 15).is_none());
+        assert_eq!(render_string_prefix(r#"json.partial! "po"#, 17).unwrap(), (RenderKind::Partial, "po".to_string()));
+        assert_eq!(render_string_prefix(r#"json.partial! partial: 'po"#, 26).unwrap(), (RenderKind::Partial, "po".to_string()));
         assert_eq!(snake_case("CardComponent"), "card_component");
         let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.kind, r.name)).collect::<Vec<_>>();
         let p = |n: &str| (RenderKind::Partial, n.to_string());
@@ -715,6 +745,11 @@ mod tests {
         assert_eq!(passed(r#"<%= render "card" %>"#), Some(vec![]));
         assert_eq!(passed(r#"<%= render partial: "card", locals: { a: 1, b: [2] } %>"#), Some(vec!["a", "b"]));
         assert_eq!(passed(r#"= render(partial: "card")"#), Some(vec![]));
+        assert_eq!(passed(r#"json.partial! "posts/post", post: p"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"json.partial! partial: "posts/post", locals: { post: p }"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"json.partial! "posts/post", collection: @posts, as: :post"#), None);
+        assert_eq!(passed(r#"json.array! @posts, partial: "posts/post", as: :post"#), None);
+        assert_eq!(passed(r#"<%= render "card", collection: @cards %>"#), Some(vec!["collection"]));
         for skip in [
             r#"<%= render partial: "card", collection: @cards %>"#,
             r#"<%= render "card", **opts %>"#,
