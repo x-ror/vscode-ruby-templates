@@ -23,6 +23,7 @@ mod slim_hover;
 mod slim_indent;
 mod slim_outline;
 mod slim_parser;
+mod slots;
 mod stimulus;
 mod tags;
 mod util;
@@ -1046,6 +1047,10 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
+        if let Some(found) = path.as_deref().and_then(|p| slot_setter_completions(p, &doc.text[..line_start + col])).filter(|_| code_here())
+        {
+            return items(found);
+        }
         if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
         }
@@ -1099,6 +1104,11 @@ impl LanguageServer for Backend {
         }
         let mut found = local_completions(&doc.text, typed);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        let own_slots = path.as_deref().and_then(slots::class_of_template).and_then(|class| std::fs::read_to_string(class).ok());
+        let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
+        found.extend(
+            readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
+        );
         let routes = path.as_deref().map(|p| self.routes_for(p)).unwrap_or_default();
         found.extend(
             routes::completions(&routes, typed)
@@ -1166,6 +1176,25 @@ fn ivar_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionIte
             }
         })
         .collect()
+}
+
+/// `with_header` … after `card.` inside `render CardComponent.new do |card|`.
+fn slot_setter_completions(path: &Path, before: &str) -> Option<Vec<CompletionItem>> {
+    let (head, typed) = before.rsplit_once('.')?;
+    let var = head.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next()?;
+    if var.is_empty() || !typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    let component = slots::block_component(head, var)?;
+    let detail = format!("{component} slot");
+    let setters = slots::setters(&slots::component_slots(path, component));
+    Some(
+        setters
+            .into_iter()
+            .filter(|s| s.starts_with(typed))
+            .map(|s| util::completion_item(s, CompletionItemKind::METHOD, detail.clone()))
+            .collect(),
+    )
 }
 
 /// The component constant being typed after `render ` / `render(`: `Us`, `Admin::Us`.

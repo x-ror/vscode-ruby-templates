@@ -39,6 +39,7 @@
 - Route helpers: `*_path` / `*_url` completion, hover (verbs, path, `controller#action`) and go to definition, from the app's routes through `bin/rails runner` (`rubyTemplates.routes.enabled`).
 - Instance variable completion after `@` and go to definition, from the view's controller action and its `before_action` callbacks.
 - Go to definition on a partial's local lists the `render` calls that pass it.
+- ViewComponent slots: `with_*` completion in a `render X.new do |c|` block and slot readers in the component's template; *Switch to Related File* also goes between a component and its preview.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

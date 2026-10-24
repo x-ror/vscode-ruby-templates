@@ -6,6 +6,7 @@ import {
   relatedDirs,
   actionSource,
   actionLine,
+  previewPartners,
 } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
@@ -338,3 +339,30 @@ assert.deepStrictEqual(
 );
 assert.strictEqual(routesFromOutput("Puma starting\n"), undefined);
 assert.throws(() => routesFromOutput("__RUBY_TEMPLATES_ROUTES__\n{oops"));
+
+// previewPartners
+const previews = (dir) => [
+  `/r/test/components/previews/${dir}card_component_preview.rb`,
+  `/r/spec/components/previews/${dir}card_component_preview.rb`,
+];
+assert.deepStrictEqual(
+  previewPartners("/r/app/components/admin/card_component.rb"),
+  previews("admin/"),
+);
+assert.deepStrictEqual(
+  previewPartners("/r/app/components/card_component/card_component.html.erb"),
+  previews(""),
+);
+assert.deepStrictEqual(
+  previewPartners(
+    "/r/spec/components/previews/admin/card_component_preview.rb",
+  ),
+  ["/r/app/components/admin/card_component.rb"],
+);
+for (const file of [
+  "/r/app/components/helpers.rb",
+  "/r/app/views/users/show.html.erb",
+  "/r/spec/components/previews/card_preview.rb",
+]) {
+  assert.deepStrictEqual(previewPartners(file), [], file);
+}

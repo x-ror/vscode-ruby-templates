@@ -20,6 +20,7 @@ import {
   relatedDirs,
   actionSource,
   actionLine,
+  previewPartners,
 } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
@@ -243,7 +244,7 @@ const RENDER_CALL = {
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
 /**
  * Open the view's other formats (`.html.erb` ↔ `.text.erb`), its controller action, or a component's class ↔
- * template.
+ * template ↔ preview.
  */
 async function switchRelated() {
   const doc = vscode.window.activeTextEditor?.document;
@@ -269,6 +270,8 @@ async function switchRelated() {
   }
   const action = await controllerAction(doc.uri.fsPath);
   if (action) candidates.push(action);
+  for (const partner of previewPartners(doc.uri.fsPath, path.sep))
+    if (await exists(vscode.Uri.file(partner))) candidates.push(partner);
   if (!candidates.length) {
     vscode.window.showInformationMessage(`No related file for ${name}.`);
     return;
@@ -310,13 +313,9 @@ const actionName = (view) => actionSource(view, path.sep)?.action;
 /** The controller or mailer that renders `view`, when it exists. */
 async function controllerAction(view) {
   const source = actionSource(view, path.sep);
-  if (!source) return undefined;
-  try {
-    await vscode.workspace.fs.stat(vscode.Uri.file(source.file));
-    return source.file;
-  } catch {
-    return undefined;
-  }
+  return source && (await exists(vscode.Uri.file(source.file)))
+    ? source.file
+    : undefined;
 }
 
 async function extractPartial() {

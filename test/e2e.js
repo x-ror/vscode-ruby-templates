@@ -30,7 +30,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(root, "app", "components", "badge_component.rb"),
-  "class BadgeComponent; end\n",
+  "class BadgeComponent\n  renders_one :icon\n  renders_many :links\nend\n",
 );
 fs.writeFileSync(path.join(views, "users", "_user.html.erb"), "<p></p>\n");
 fs.writeFileSync(
@@ -806,6 +806,42 @@ const check = (label, actual, expected) => {
     ],
   );
   await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 3 },
+      contentChanges: [
+        { text: "<%= render BadgeComponent.new do |b| %>\n  <% b.with_l %>\n" },
+      ],
+    },
+    true,
+  );
+  const badgeUri =
+    "file://" +
+    path.join(root, "app", "components", "badge_component.html.haml");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: badgeUri,
+        languageId: "haml",
+        version: 1,
+        text: "- if ic\n",
+      },
+    },
+    true,
+  );
+  check(
+    "ViewComponent slots",
+    [
+      labels(await req("textDocument/completion", helperUri, 1, 13)),
+      labels(await req("textDocument/completion", badgeUri, 0, 7)),
+    ],
+    [
+      ["with_link", "with_links"],
+      ["icon", "icon?"],
+    ],
+  );
+  await send(
     "rubyTemplates/routes",
     {
       root,
@@ -830,7 +866,7 @@ const check = (label, actual, expected) => {
   await send(
     "textDocument/didChange",
     {
-      textDocument: { uri: helperUri, version: 3 },
+      textDocument: { uri: helperUri, version: 4 },
       contentChanges: [
         { text: '<%= link_to "x", users_p %>\n<%= users_path %>\n' },
       ],

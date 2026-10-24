@@ -36,6 +36,11 @@ write(
   "class OrdersController < ApplicationController\n  def index\n  end\n\n  def show\n  end\nend\n",
 );
 write("app/components/badge_component.rb", "class BadgeComponent; end\n");
+write("app/components/card_component.rb", "class CardComponent; end\n");
+write(
+  "spec/components/previews/card_component_preview.rb",
+  "class CardComponentPreview; end\n",
+);
 write(
   "app/components/badge_component.html.erb",
   "<span><%= content %></span>\n",

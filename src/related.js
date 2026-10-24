@@ -51,4 +51,44 @@ function actionLine(source, action) {
   return source.split("\n").findIndex((line) => def.test(line));
 }
 
-export { relatedFiles, relatedDirs, actionSource, actionLine };
+/**
+ * A ViewComponent's previews ↔ the component: `app/components/admin/card_component.rb` (or its template, sidecar
+ * included) → `{test,spec}/components/previews/admin/card_component_preview.rb`, and a preview back to its class.
+ * Candidates only; the caller keeps the ones that exist.
+ */
+function previewPartners(file, sep = "/") {
+  const parts = file.split(sep);
+  const app = parts.lastIndexOf("app");
+  if (app !== -1 && parts[app + 1] === "components") {
+    const dirs = parts.slice(app + 2, -1);
+    const stem = stemOf(parts.at(-1));
+    if (!stem.endsWith("_component")) return [];
+    const rel = [...(dirs.at(-1) === stem ? dirs.slice(0, -1) : dirs), stem];
+    return ["test", "spec"].map((tests) =>
+      [...parts.slice(0, app), tests, "components", "previews", ...rel]
+        .join(sep)
+        .concat("_preview.rb"),
+    );
+  }
+  const previews = parts.lastIndexOf("previews");
+  const tests = parts[previews - 2];
+  if (
+    previews < 2 ||
+    parts[previews - 1] !== "components" ||
+    !["test", "spec"].includes(tests)
+  )
+    return [];
+  const name = parts.at(-1).match(/^(\w+_component)_preview\.rb$/)?.[1];
+  if (!name) return [];
+  return [
+    [
+      ...parts.slice(0, previews - 2),
+      "app",
+      "components",
+      ...parts.slice(previews + 1, -1),
+      `${name}.rb`,
+    ].join(sep),
+  ];
+}
+
+export { relatedFiles, relatedDirs, actionSource, actionLine, previewPartners };

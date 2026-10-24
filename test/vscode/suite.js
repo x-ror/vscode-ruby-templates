@@ -505,6 +505,16 @@ const checks = {
       ),
     );
   },
+
+  async "switch to related: component preview"() {
+    await open("spec/components/previews/card_component_preview.rb");
+    await vscode.commands.executeCommand("rubyTemplates.switchRelated");
+    await until("previewed component", () =>
+      vscode.window.activeTextEditor?.document.fileName.endsWith(
+        path.join("app", "components", "card_component.rb"),
+      ),
+    );
+  },
 };
 
 export async function run() {

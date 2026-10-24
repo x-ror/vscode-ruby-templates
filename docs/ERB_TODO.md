@@ -202,8 +202,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 - [x] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment (`syntaxes/erb.tmLanguage.json` `erb-strict-locals`)
 - [x] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11) (see items above)
-- [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
-- [ ] ViewComponent previews (`spec/components/previews`) navigation
+- [x] ViewComponent slots: `with_*` after `c.` in a `render X.new do |c|` block, `header` / `header?` in the component's own template (`server/src/slots.rs`)
+- [x] ViewComponent previews (`{test,spec}/components/previews`) ↔ component in *Switch to Related File* (`src/related.js` `previewPartners`)
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
 - [x] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command (`rubyTemplates.switchRelated`: any view's other formats)
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
