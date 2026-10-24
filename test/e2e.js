@@ -74,6 +74,27 @@ const rel = p => p.replace(root, '');
   console.log('slim diagnostics       →', slimGot);
   const slimWant = ['3:1 unknown-engine', '5:1 unmatched-branch', '8:3 void-children', '9:3 silent-output-helper', '11:1 unclosed-ruby'];
   if (JSON.stringify(slimGot) !== JSON.stringify(slimWant)) { console.error('expected', slimWant); process.exit(1); }
+
+  const editUri = 'file://' + path.join(views, 'users', 'edit.html.slim');
+  const editText = 'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n';
+  await send('textDocument/didOpen', { textDocument: { uri: editUri, languageId: 'slim', version: 1, text: editText } }, true);
+  const expect = (what, ok, got) => { console.log(`${what.padEnd(25)}→`, got); if (!ok) { console.error('unexpected', what); process.exit(1); } };
+  const complete = async (line, character) =>
+    ((await send('textDocument/completion', { textDocument: { uri: editUri }, position: { line, character } })).result || []).map(i => i.label);
+  const helpers = await complete(1, 11);
+  expect('slim completion p= link_', helpers.includes('link_to'), helpers.slice(0, 3));
+  const attrs = await complete(2, 8);
+  expect('slim completion a hr', attrs.includes('href') && !attrs.includes('link_to'), attrs.filter(l => l.startsWith('hr')));
+  const engines = await complete(3, 7);
+  expect('slim completion jav', engines.includes('javascript:'), engines.filter(l => l.startsWith('jav')));
+  const inText = await complete(5, 14);
+  expect('slim completion in text', inText.length === 0, inText);
+  const markerHover = await send('textDocument/hover', { textDocument: { uri: editUri }, position: { line: 4, character: 5 } });
+  const markerDoc = markerHover.result?.contents.value ?? '';
+  expect('slim hover ==', markerDoc.includes('unescaped output'), markerDoc.split('\n')[0]);
+  const edits = (await send('textDocument/formatting', { textDocument: { uri: editUri }, options: { tabSize: 2, insertSpaces: true } })).result || [];
+  const formatted = 'div\n  p= link_\n  a hr\n  jav\n  == raw x\n  | text lin\n';
+  expect('slim formatting', edits.length === 1 && edits[0].newText === formatted, JSON.stringify(edits[0]?.newText));
   await send('shutdown', {}); await send('exit', {}, true);
   fs.rmSync(root, { recursive: true, force: true });
   process.exit(0);

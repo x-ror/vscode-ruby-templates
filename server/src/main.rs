@@ -1,9 +1,14 @@
 mod erb;
 mod helpers;
+mod html;
 mod indented;
 mod outline;
 mod partials;
 mod ruby;
+mod slim_complete;
+mod slim_format;
+mod slim_hover;
+mod slim_parser;
 mod tags;
 mod util;
 
@@ -81,6 +86,8 @@ struct Backend {
     docs: DashMap<Url, Doc>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     slim: OnceLock<SlimOptions>,
+    /// The client registers formatting per language, so ERB/Haml keep their own formatters.
+    dynamic_formatting: OnceLock<bool>,
 }
 
 fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
@@ -103,7 +110,7 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
         out.extend(tags::diagnostics(&doc.text, partial));
     }
     if let Ok(path) = uri.to_file_path() {
-        out.extend(unresolved_renders(doc.lang, &path, &doc.text));
+        out.extend(unresolved_renders(doc.lang, &path, &doc.text, &slim.extra_engines));
     }
     if matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
         out.retain(|d| {
@@ -139,7 +146,7 @@ fn is_html_format(format: &str) -> bool {
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
+fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
@@ -157,11 +164,11 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
                 TemplateLang::Erb => true,
                 _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
             };
-            if !ruby_line || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
+            let range = util::line_range(text, i, r.start, r.end);
+            if !ruby_line || !in_ruby_context(lang, text, range.start, extra_engines) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
-            let range = util::line_range(text, i, r.start, r.end);
             out.push(util::coded(
                 util::warning(range, message),
                 "unresolved-render",
@@ -203,6 +210,13 @@ impl LanguageServer for Backend {
             self.client.log_message(MessageType::WARNING, message).await;
         }
         let _ = self.slim.set(slim);
+        let dynamic_formatting = params
+            .capabilities
+            .text_document
+            .and_then(|t| t.formatting)
+            .and_then(|f| f.dynamic_registration)
+            .unwrap_or(false);
+        let _ = self.dynamic_formatting.set(dynamic_formatting);
         Ok(InitializeResult {
             server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
@@ -217,12 +231,24 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: (!dynamic_formatting).then_some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        if self.dynamic_formatting.get() == Some(&true) {
+            let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
+            let registration = Registration {
+                id: "slim-formatting".into(),
+                method: "textDocument/formatting".into(),
+                register_options: Some(selector),
+            };
+            if let Err(e) = self.client.register_capability(vec![registration]).await {
+                self.client.log_message(MessageType::WARNING, format!("Slim formatting not registered: {e}")).await;
+            }
+        }
         self.client.log_message(MessageType::INFO, "ruby-templates-ls ready").await;
     }
 
@@ -297,6 +323,14 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        if doc.lang == TemplateLang::Slim {
+            let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
+            let parsed = slim_parser::parse(&doc.text, engines);
+            let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
+            if let Some(value) = marker {
+                return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }));
+            }
+        }
         let line = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
         if let Ok(path) = uri.to_file_path() {
@@ -341,6 +375,20 @@ impl LanguageServer for Backend {
         Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
     }
 
+    async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
+        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
+            return Ok(None);
+        }
+        let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
+        let Some(formatted) = slim_format::format(&doc.text, p.options.tab_size as usize, engines) else { return Ok(None) };
+        if formatted == doc.text {
+            return Ok(Some(vec![]));
+        }
+        let end = util::offset_to_position(&doc.text, doc.text.len());
+        Ok(Some(vec![TextEdit::new(Range::new(Position::new(0, 0), end), formatted)]))
+    }
+
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
@@ -381,8 +429,18 @@ impl LanguageServer for Backend {
             }
         }
 
-        // 3. Rails helpers, only when we're in a Ruby context.
-        if !in_ruby_context(doc.lang, line, col) { return Ok(None); }
+        let engines = &self.slim.get_or_init(SlimOptions::default).extra_engines;
+        // 3. Slim tag, engine and attribute names.
+        if doc.lang == TemplateLang::Slim {
+            let parsed = slim_parser::parse(&doc.text, engines);
+            let items = util::position_to_offset(&doc.text, pos).and_then(|o| slim_complete::items(&doc.text, o, &parsed, engines));
+            if let Some(items) = items {
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+        }
+
+        // 4. Rails helpers, only when we're in a Ruby context.
+        if !in_ruby_context(doc.lang, &doc.text, pos, engines) { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }
         let items: Vec<CompletionItem> = helpers::HELPERS.iter().filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
@@ -408,37 +466,25 @@ fn word_at(line: &str, col: usize) -> &str {
     &line[start..end]
 }
 
-/// A `#` (not `#{`) outside a string means the rest of the tag is a Ruby comment.
-fn ruby_comment_before(code: &str) -> bool {
-    let mut quote = None;
-    let mut chars = code.chars().peekable();
-    while let Some(c) = chars.next() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), '\\') => { chars.next(); }
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '#') if chars.peek() != Some(&'{') => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
-fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
-    let before = &line[..col.min(line.len())];
+fn in_ruby_context(lang: TemplateLang, text: &str, pos: Position, extra_engines: &[String]) -> bool {
+    let line = Backend::line_at(text, pos.line);
+    let before = &line[..Backend::byte_col(line, pos.character)];
     match lang {
         TemplateLang::Erb => {
             let open = before.rfind("<%");
             let close = before.rfind("%>");
             matches!((open, close), (Some(o), None) | (Some(o), Some(_)) if close.map(|c| c < o).unwrap_or(true))
                 && !before[open.unwrap()..].starts_with("<%#")
-                && !ruby_comment_before(&before[open.unwrap() + 2..])
+                && !ruby::comment_before(&before[open.unwrap() + 2..])
         }
-        TemplateLang::Haml | TemplateLang::Slim | TemplateLang::Skim => {
+        TemplateLang::Haml => {
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
         }
+        TemplateLang::Slim => slim_parser::in_ruby(text, pos, extra_engines),
+        // Skim code is CoffeeScript.
+        TemplateLang::Skim => false,
     }
 }
 
@@ -446,6 +492,15 @@ fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
 async fn main() {
     // `ruby-templates-ls --check <file>...` prints diagnostics and exits (handy for CI and debugging).
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `ruby-templates-ls --format <file.slim>` prints the file formatted with 2 spaces, or fails if it can't.
+    if let [flag, file] = args.as_slice() {
+        if flag == "--format" {
+            let formatted = std::fs::read_to_string(file).ok().and_then(|text| slim_format::format(&text, 2, &[]));
+            let Some(formatted) = formatted else { eprintln!("{file}: cannot be formatted"); std::process::exit(1) };
+            print!("{formatted}");
+            return;
+        }
+    }
     if args.first().map(|a| a == "--check").unwrap_or(false) {
         let mut failed = false;
         for f in &args[1..] {
@@ -467,6 +522,7 @@ async fn main() {
         client,
         docs: DashMap::new(),
         slim: OnceLock::new(),
+        dynamic_formatting: OnceLock::new(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -566,7 +622,7 @@ mod tests {
             "<%= render @users %> <%= render \"a/#{b}\" %> <%= render layout: \"box\" do %>\n",
             "<p>we render \"prose\"</p>\n",
         );
-        let diags = unresolved_renders(TemplateLang::Erb, &file, text);
+        let diags = unresolved_renders(TemplateLang::Erb, &file, text, &[]);
         let got: Vec<(String, Range)> = diags.iter().map(|d| (d.message.clone(), d.range)).collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         assert_eq!(got, vec![
@@ -577,11 +633,11 @@ mod tests {
 
         let layouts = root.join("app/views/layouts");
         std::fs::create_dir_all(&layouts).unwrap();
-        assert!(unresolved_renders(TemplateLang::Erb, &layouts.join("application.html.erb"), "<%= render \"header\" %>").is_empty());
-        assert!(unresolved_renders(TemplateLang::Erb, Path::new("/tmp/x.html.erb"), "<%= render \"users/nope\" %>").is_empty());
+        assert!(unresolved_renders(TemplateLang::Erb, &layouts.join("application.html.erb"), "<%= render \"header\" %>", &[]).is_empty());
+        assert!(unresolved_renders(TemplateLang::Erb, Path::new("/tmp/x.html.erb"), "<%= render \"users/nope\" %>", &[]).is_empty());
         let haml = users.join("show.html.haml");
-        assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
-        assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")", &[]).is_empty());
+        assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"", &[]).len(), 1);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

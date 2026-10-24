@@ -115,6 +115,22 @@ pub fn ends_with_block(code: &str) -> bool {
     }
 }
 
+/// A `#` (not `#{`) outside a string means the rest of the code is a comment.
+pub fn comment_before(code: &str) -> bool {
+    let mut quote = None;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), '\\') => { chars.next(); }
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '#') if chars.peek() != Some(&'{') => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

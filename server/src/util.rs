@@ -10,6 +10,23 @@ pub fn offset_to_position(text: &str, offset: usize) -> Position {
     Position::new(line as u32, col as u32)
 }
 
+/// Byte offset of an LSP position; a column past the line end clamps to it, a line past the end is `None`.
+pub fn position_to_offset(text: &str, pos: Position) -> Option<usize> {
+    let mut line_start = 0;
+    for _ in 0..pos.line {
+        line_start += text[line_start..].find('\n')? + 1;
+    }
+    let line = text[line_start..].split('\n').next().unwrap_or("");
+    let mut units = 0;
+    for (idx, ch) in line.char_indices() {
+        if units >= pos.character {
+            return Some(line_start + idx);
+        }
+        units += ch.len_utf16() as u32;
+    }
+    Some(line_start + line.len())
+}
+
 pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
     let line_text = text.lines().nth(line).unwrap_or("");
     let s = line_text.get(..start_col.min(line_text.len())).unwrap_or("").encode_utf16().count() as u32;
