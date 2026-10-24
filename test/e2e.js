@@ -16,7 +16,8 @@ const bin =
     "release",
     "ruby-templates-ls",
   );
-const fileUri = (p) => pathToFileURL(p).href;
+// Node escapes `~` (8.3 names such as RUNNER~1 on CI); the server, like VS Code, leaves it as is.
+const fileUri = (p) => pathToFileURL(p).href.replaceAll("%7E", "~");
 // macOS puts tmpdir under the /var symlink; one spelling of each path keeps built and returned URIs equal.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-")));
 const views = path.join(root, "app", "views");
