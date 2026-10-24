@@ -639,6 +639,12 @@ const check = (label, actual, expected) => {
       ],
     ],
   );
+  const linked = await req("textDocument/linkedEditingRange", uri, 8, 2);
+  check(
+    "linkedEditingRange nav",
+    linked.result?.ranges.map((r) => `${r.start.line}:${r.start.character}`),
+    ["8:1", "10:2"],
+  );
   const refs = await send("textDocument/references", {
     textDocument: { uri },
     position: { line: 1, character: 16 },

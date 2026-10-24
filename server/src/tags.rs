@@ -168,6 +168,18 @@ pub fn elements(text: &str) -> Vec<Element> {
     elements
 }
 
+/// The open and close tag names of the element whose name holds byte `offset`, for linked editing.
+pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
+    elements(text).into_iter().find_map(|e| {
+        let open = (e.start + 1, e.start + 1 + e.name.len());
+        let close = (e.close_start + 2, e.close_start + 2 + e.name.len());
+        // An implied end (`<li>a<li>`) has no `</li>` to edit along.
+        let names = |(s, end): (usize, usize)| text.get(s..end).is_some_and(|n| n.eq_ignore_ascii_case(&e.name));
+        let holds = |(s, end): (usize, usize)| (s..=end).contains(&offset);
+        (names(open) && names(close) && (holds(open) || holds(close))).then_some([open, close])
+    })
+}
+
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
     let Some((html, events)) = split(text) else { return };
     let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
@@ -338,6 +350,18 @@ mod tests {
         let pairs: Vec<(String, usize, usize)> =
             elements("<ul><li>a<li>b</li></ul><script>x</script>").into_iter().map(|e| (e.name, e.start, e.end)).collect();
         assert_eq!(pairs, [("li".to_string(), 9, 19), ("ul".to_string(), 0, 24), ("script".to_string(), 24, 42)]);
+    }
+
+    #[test]
+    fn linked_tag_names() {
+        let text = "<div class=\"a\"><% if x %><SPAN>b</span><% end %></div><ul><li>a<li>b</ul>";
+        let at = |needle: &str| text.find(needle).unwrap() + 1;
+        let names = |offset| linked_names(text, offset).map(|r| r.map(|(s, e)| &text[s..e]));
+        assert_eq!(names(at("div")), Some(["div", "div"]));
+        assert_eq!(names(text.rfind("div").unwrap()), Some(["div", "div"]));
+        assert_eq!(names(at("SPAN")), Some(["SPAN", "span"]));
+        assert_eq!(names(at("li")), None);
+        assert_eq!(names(at("class")), None);
     }
 
     #[test]

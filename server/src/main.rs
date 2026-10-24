@@ -493,6 +493,7 @@ impl LanguageServer for Backend {
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
                     code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
                     ..Default::default()
@@ -745,6 +746,15 @@ impl LanguageServer for Backend {
             locations.extend(files.iter().filter_map(file_location));
         }
         Ok(Some(locations))
+    }
+
+    async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
+        let uri = p.text_document_position_params.text_document.uri;
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri)) else { return Ok(None) };
+        let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
+        let to_range = |(s, e)| Range::new(util::offset_to_position(&doc.text, s), util::offset_to_position(&doc.text, e));
+        Ok(tags::linked_names(&doc.text, offset)
+            .map(|names| LinkedEditingRanges { ranges: names.map(to_range).to_vec(), word_pattern: None }))
     }
 
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {

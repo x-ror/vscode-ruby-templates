@@ -63,7 +63,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
 - [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
-- [ ] Linked editing of HTML tag pairs
+- [x] Linked editing of HTML tag pairs, across ERB tags between them (`server/src/tags.rs` `linked_names`; needs `editor.linkedEditing`)
 - [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)
 - [ ] Line comment toggle for a single line inside a code tag (`# `) vs whole-tag toggle
 
