@@ -8,6 +8,7 @@ mod erb_complete;
 mod erb_format;
 mod format;
 mod haml;
+mod haml_format;
 mod haml_indent;
 mod helper_defs;
 mod helpers;

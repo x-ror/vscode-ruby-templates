@@ -1,8 +1,8 @@
 use crate::lang::{file_name, html_host, slim_html_host, TemplateLang};
 use crate::{
-    assets, controllers, erb, erb_complete, haml, haml_indent, helper_defs, helpers, html_lint, i18n, ivars, outline, partial_rename,
-    partials, routes, ruby, schema, slim_complete, slim_format, slim_hover, slim_indent, slim_outline, slim_parser, slots, stimulus, tags,
-    util,
+    assets, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, html_lint, i18n, ivars, outline,
+    partial_rename, partials, routes, ruby, schema, slim_complete, slim_hover, slim_indent, slim_outline, slim_parser, slots, stimulus,
+    tags, util,
 };
 use dashmap::DashMap;
 use haml_indent::LineRole;
@@ -346,6 +346,22 @@ pub(crate) fn render_filter<'a>(
     }
 }
 
+/// Edits replacing each line in `lines` that differs between `text` and `formatted`; `None` when formatting added or
+/// removed lines, which a line range can't express.
+fn line_edits(text: &str, formatted: &str, lines: std::ops::RangeInclusive<usize>) -> Option<Vec<TextEdit>> {
+    let old: Vec<&str> = text.split('\n').collect();
+    let new: Vec<&str> = formatted.split('\n').collect();
+    if old.len() != new.len() {
+        return None;
+    }
+    let changed = old.iter().zip(&new).enumerate().filter(|(i, (a, b))| lines.contains(i) && a != b);
+    let edit = |(i, (a, b)): (usize, (&&str, &&str))| {
+        let end = util::offset_to_position(a, a.len()).character;
+        TextEdit::new(Range::new(Position::new(i as u32, 0), Position::new(i as u32, end)), b.to_string())
+    };
+    Some(changed.map(edit).collect())
+}
+
 /// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
 /// `source.fixAll`, which many users run on save for other languages' linters.
 const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.erbSpacing");
@@ -394,6 +410,19 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
 }
 
 impl Backend {
+    /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is.
+    async fn formatted(&self, uri: &Url, options: &FormattingOptions) -> Option<(String, String)> {
+        let (lang, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.text.clone()))?;
+        let settings = format::Settings::default().with_editor(options);
+        match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
+            Ok(formatted) => Some((text, formatted.text)),
+            Err(skipped) => {
+                self.client.log_message(MessageType::INFO, format!("{}: left unchanged: {skipped}", file_name(uri))).await;
+                None
+            }
+        }
+    }
+
     fn options(&self) -> &Options {
         self.options.get_or_init(Options::default)
     }
@@ -882,23 +911,19 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
-        // Generator templates' ERB lines aren't Slim the formatter could move safely.
-        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) || p.text_document.uri.path().to_ascii_lowercase().ends_with(".tt")
-        {
-            return Ok(None);
-        }
-        // Indentation is always spaces; a tab-indented file is left as it is.
-        if !p.options.insert_spaces {
-            return Ok(None);
-        }
-        let engines = &self.options().extra_engines;
-        let Some(formatted) = slim_format::format(&doc.text, p.options.tab_size as usize, engines) else { return Ok(None) };
-        if formatted == doc.text {
+        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options).await else { return Ok(None) };
+        if formatted == text {
             return Ok(Some(vec![]));
         }
-        let end = util::offset_to_position(&doc.text, doc.text.len());
+        let end = util::offset_to_position(&text, text.len());
         Ok(Some(vec![TextEdit::new(Range::new(Position::new(0, 0), end), formatted)]))
+    }
+
+    /// Only the lines in the range change, with nesting read from the whole document; not advertised, the client's
+    /// Haml provider asks for it.
+    async fn range_formatting(&self, p: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options).await else { return Ok(None) };
+        Ok(line_edits(&text, &formatted, p.range.start.line as usize..=p.range.end.line as usize))
     }
 
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {

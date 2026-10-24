@@ -625,6 +625,52 @@ const check = (label, actual, expected) => {
     options: { tabSize: 2, insertSpaces: false },
   });
   expect("slim formatting, tabs", tabs.result === null, tabs.result);
+
+  // Haml through the same formatter: the file's own unit, the whole document or the lines of a range.
+  const reindentUri = fileUri(path.join(views, "users", "reindent.html.haml"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: reindentUri,
+        languageId: "haml",
+        version: 1,
+        text: "%div\n    %p\n      %b x\n  %i\n",
+      },
+    },
+    true,
+  );
+  const hamlOptions = { tabSize: 2, insertSpaces: true };
+  const hamlEdits =
+    (
+      await send("textDocument/formatting", {
+        textDocument: { uri: reindentUri },
+        options: hamlOptions,
+      })
+    ).result || [];
+  expect(
+    "haml formatting",
+    hamlEdits[0]?.newText === "%div\n    %p\n        %b x\n    %i\n",
+    JSON.stringify(hamlEdits[0]?.newText),
+  );
+  const rangeEdits =
+    (
+      await send("textDocument/rangeFormatting", {
+        textDocument: { uri: reindentUri },
+        options: hamlOptions,
+        range: {
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 0 },
+        },
+      })
+    ).result || [];
+  expect(
+    "haml range formatting",
+    rangeEdits.length === 1 &&
+      rangeEdits[0].range.start.line === 3 &&
+      rangeEdits[0].newText === "    %i",
+    JSON.stringify(rangeEdits),
+  );
   // Without dynamic registration nothing is advertised, so ERB/Haml never see a formatter that does nothing.
   const staticFormatting = init.result.capabilities.documentFormattingProvider;
   expect(

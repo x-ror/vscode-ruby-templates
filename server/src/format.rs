@@ -3,9 +3,9 @@
 //! with the reason.
 
 use crate::lang::{html_host, slim_html_host, TemplateLang};
-use crate::{erb, erb_format, haml_indent, slim_format, slim_indent, tags, util};
+use crate::{erb, erb_format, haml_format, haml_indent, slim_format, slim_indent, tags, util};
 use std::fmt;
-use tower_lsp::lsp_types::{Diagnostic, Url};
+use tower_lsp::lsp_types::{Diagnostic, FormattingOptions, Url};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndentStyle {
@@ -65,6 +65,21 @@ pub enum SkipKind {
     Doubt,
     /// A formatter bug, caught by an invariant check.
     Internal,
+}
+
+impl Settings {
+    /// These settings under the editor's options: its indentation, and the file options it turns on.
+    pub fn with_editor(self, options: &FormattingOptions) -> Self {
+        let on = |flag: Option<bool>| flag == Some(true);
+        Self {
+            indent_style: if options.insert_spaces { IndentStyle::Space } else { IndentStyle::Tab },
+            indent_size: options.tab_size as usize,
+            trim_trailing_whitespace: self.trim_trailing_whitespace || on(options.trim_trailing_whitespace),
+            final_newline: if on(options.insert_final_newline) { Some(true) } else { self.final_newline },
+            trim_trailing_blank_lines: self.trim_trailing_blank_lines || on(options.trim_final_newlines),
+            ..self
+        }
+    }
 }
 
 /// Why a file came back unchanged.
@@ -142,7 +157,7 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines)?,
         TemplateLang::Erb if !html_host(uri) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
         TemplateLang::Erb => erb_format::indent(text, &indent_unit(settings), settings.trim_trailing_whitespace, is_partial(uri))?,
-        TemplateLang::Haml => return skip(SkipKind::NotHandled, "not supported yet"),
+        TemplateLang::Haml => haml_format::indent(text, settings.indent_size, settings.trim_trailing_whitespace)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
     };
     let mut lines = split_lines(&indented.text, &indented.fixed);
@@ -400,8 +415,7 @@ mod tests {
 
     #[test]
     fn broken_fixtures_come_back_unchanged() {
-        // Haml joins in with its formatter.
-        for (name, text) in SAMPLES[7..].iter().filter(|(name, _)| !name.ends_with(".haml")) {
+        for (name, text) in &SAMPLES[7..] {
             let uri = uri(name);
             let lang = TemplateLang::from_uri_or_id(&uri, None).unwrap();
             let kind = format(&uri, lang, text, &Settings::default(), &[]).map(|f| f.text);
