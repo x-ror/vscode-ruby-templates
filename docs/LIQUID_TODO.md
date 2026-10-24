@@ -26,13 +26,13 @@ Legend as in `ERB_TODO.md`.
 
 ### Server
 
-- [ ] `TemplateLang::Liquid` from id `liquid` or `.liquid` path (`server/src/main.rs` `TemplateLang::from_uri_or_id`). Arms for the exhaustive matches: `diagnostics` → `vec![]` at first, `render_in_code` → `None` (also keeps Liquid renders out of unresolved-render and strict-locals warnings), `in_ruby_context` → `false`.
-- [ ] Gate the Rails-only paths on `lang != Liquid` (`server/src/main.rs`). `goto_definition`, `hover`, `document_link` and `completion` call `partials::render_ref_at`/`render_refs`/`render_string_prefix` without checking `in_ruby_context`, and `RENDER_STR` matches `{% render "x" %}` (checked). Without the gate, Liquid renders would resolve as Rails partials by accident. The Rails `HELPERS` hover via `word_at` is ungated too, and so is the form-builder branch of `completion` (step 3, before any `in_ruby_context` check), so `{{ f.` would offer `FormBuilder` methods. One `lang == Liquid` early return at the top of each handler, not per call.
+- [ ] `TemplateLang::Liquid` from id `liquid` or `.liquid` path (`server/src/lang.rs` `TemplateLang::from_uri_or_id`). Arms for the exhaustive matches: `diagnostics` → `vec![]` at first, `render_in_code` → `None` (also keeps Liquid renders out of unresolved-render and strict-locals warnings), `in_ruby_context` → `false`.
+- [ ] Gate the Rails-only paths on `lang != Liquid` (`server/src/lsp.rs`). `goto_definition`, `hover`, `document_link` and `completion` call `partials::render_ref_at`/`render_refs`/`render_string_prefix` without checking `in_ruby_context`, and `RENDER_STR` matches `{% render "x" %}` (checked). Without the gate, Liquid renders would resolve as Rails partials by accident. The Rails `HELPERS` hover via `word_at` is ungated too, and so is the form-builder branch of `completion` (step 3, before any `in_ruby_context` check), so `{{ f.` would offer `FormBuilder` methods. One `lang == Liquid` early return at the top of each handler, not per call.
 - [ ] Phase 2: new `server/src/liquid.rs`:
   - `refs(line)` for `{%-? (render|include|include_relative) 'name' … %}`. Jekyll also allows unquoted `{% include footer.html %}`. Skip `{{ var }}` dynamic names.
   - `resolve(current, ref)`: Jekyll (walk up to `_config.yml`) → `_includes/<name>`, or relative to the file for `include_relative`; otherwise `partials::resolve` filtered to `.liquid` (the liquid gem's `_<name>.liquid` default is the same lookup).
   - `candidates` for completion: reuse `partials::files_under`.
-- [ ] Phase 2: wire `liquid::refs`/`resolve` into `goto_definition`, `document_link`, `hover` (resolved file list, like `render_hover`) and `completion` (inside `{% render '`) for `TemplateLang::Liquid` (`server/src/main.rs`).
+- [ ] Phase 2: wire `liquid::refs`/`resolve` into `goto_definition`, `document_link`, `hover` (resolved file list, like `render_hover`) and `completion` (inside `{% render '`) for `TemplateLang::Liquid` (`server/src/lsp.rs`).
 - [ ] Diagnostics (phase 3): unclosed or stray block tags (`if`/`for`/`case`/`capture`/`comment`/`raw` without `end…`), unclosed `{{`/`{%`. One stack pass in `liquid.rs`; reuse `util::error`/`util::warning`/`util::offset_to_position`.
 
 ## Tests

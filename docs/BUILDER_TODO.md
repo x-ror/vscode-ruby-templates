@@ -7,7 +7,7 @@ Legend as in `ERB_TODO.md`.
 ## Tasks
 
 - [x] Nothing extra in `package.json` / `src/client.js`: the Jbuilder entries already list `.builder` (`contributes.languages[id=ruby]`, `documentSelector` pattern `**/*.{jbuilder,builder}`).
-- [x] Server detection: `.builder` maps to `TemplateLang::Ruby` in `TemplateLang::from_uri_or_id` (`server/src/main.rs`), done in the Jbuilder change.
+- [x] Server detection: `.builder` maps to `TemplateLang::Ruby` in `TemplateLang::from_uri_or_id` (`server/src/lsp.rs`), done in the Jbuilder change.
 - [x] `xml << render(partial: "items/item", locals: { i: i })` and `xml << render "items/item"` already match `RENDER_STR` (`server/src/partials.rs`; checked). Once `in_ruby_context`/`render_in_code` accept `TemplateLang::Ruby`, definition, hover, links, unresolved-render warnings and completion work with no new code.
 - [x] Legacy `render(:partial => "items/item")`, `:template =>`, `:layout =>` in every language (`server/src/partials.rs` `RENDER_STR`, `RENDER_LAYOUT_KEY`, `render_string_prefix`).
 - [x] Format filter: `partials::renders_format`, unchanged (format segment of the current file name; bare `x.builder` doesn't filter).

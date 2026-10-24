@@ -71,7 +71,7 @@ A small language server written in Rust (`server/`, built on tower-lsp and tree-
 - Find All References (`Shift+F12`) on a `render "…"`, or anywhere in a partial, lists the `render` calls that resolve to it in views, controllers, helpers and components (same search and limits as rename below). On a `t("…")` key it lists the calls with the same full key in any template or Ruby file of `app/` and `lib/` (lazy `.title` keys resolved per view) and the key in each locale file.
 - Renaming or moving a partial in the Explorer updates the `render "…"` calls that point to it in ERB, Haml and Slim views. Renaming a folder under `app/views` re-qualifies the renders of the partials in it, and qualified `render partial: "dir/name"` calls in `app/controllers`, `app/helpers` and `app/components` are updated too. Limits: only the same `app` tree is searched (engines are not); a `render` is changed only when every variant Rails could pick for it (`_card.html.erb`, `_card.html+phone.erb`, …) moves to the same new name; moving a partial directly into `app/views` changes nothing; `render` text inside a Ruby string, comment or template text is left alone.
 - Slim formatting (_Format Document_): re-indents each Slim line to the editor's tab size in spaces, moves text blocks, engine bodies and continuation lines with their line (keeping their relative indentation), and strips trailing whitespace except where it is part of the output (`|`/`'` text, inline text, quoted attribute values, engine bodies). A file Slim would reject (or that uses `slim/smart` `>` lines) is left unchanged, and so is any file when the editor indents with tabs (`editor.insertSpaces: false`): the formatter only writes spaces. A byte order mark and whitespace-only lines at the end of the file are kept, since Slim compiles them; settings beyond the editor's come from `.editorconfig` and `.slim-lint.yml` ([docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md)). Format on save: `"[slim]": { "editor.formatOnSave": true }`. The formatter is registered for Slim and Skim only, through dynamic registration, so ERB and Haml keep their own formatters (clients without dynamic registration get no formatter).
-- The built-in formatter (ERB with `rubyTemplates.erb.formatter: builtin`, Haml, Slim, and the `ruby-templates format` command line) takes its settings from the editor, `.editorconfig`, then the whitespace linters of `.erb_lint.yml` / `.haml-lint.yml` / `.slim-lint.yml`; see [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md).
+- The built-in formatter (ERB with `rubyTemplates.erb.formatter: builtin`, Haml, Slim, and the `ruby-templates format` command line) takes its settings from the editor, `.editorconfig`, then the whitespace linters of `.erb_lint.yml` / `.haml-lint.yml` / `.slim-lint.yml`; see [Built-in formatter](#built-in-formatter).
 - `ruby-templates-ls --check file.slim …` runs the same diagnostics from the command line (exit code 1 on errors), handy for CI. `ruby-templates-ls --format file.slim` prints the file formatted with 2 spaces (exit code 1 if it can't be formatted safely).
 
 The binary for your platform is bundled in `bin/<platform>/`. To build it yourself: `bun run build:server` (needs a Rust toolchain and [Bun](https://bun.sh)). Settings: `rubyTemplates.server.enabled`, `rubyTemplates.server.path`. Command: _Ruby Templates: Restart Language Server_.
@@ -122,6 +122,34 @@ Executable paths are configurable under `rubyTemplates.commands.*`. Set `rubyTem
 
 Note that a standalone render has no Rails helpers (`link_to`, `render`, …). The preview is most useful for layout fragments and plain-Ruby templates. Set `rubyTemplates.preview.useRails` to render through the app instead: when a `bin/rails` is found above the file, the preview runs `bin/rails runner` with `ApplicationController.render(inline: source, type: :slim)` (or `:erb` / `:haml`), so helpers and routes work. It boots the app on each refresh and gives up after 60 seconds; the render runs on a controller whose path is the template's directory under `app/views`, so a bare `render "card"` finds the partial next to the file, as in a request. Set `rubyTemplates.slim.compileForRails` to show the Slim compiled source as Rails compiles it (`slimrb --rails`: ActionView output buffer, no capture).
 
+## Built-in formatter
+
+One formatter for HTML ERB views (`.html.erb`, `.html+variant.erb`, `.turbo_stream.erb`, `.html.erubi`, `.html.erubis`, `.rhtml`, localized views without a format), Haml and Slim, in the language server and in the `ruby-templates` command line. It changes **only whitespace**: the leading indentation of lines, trailing whitespace, blank lines, the final newline and line endings. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
+
+- **ERB**: a line gets one indent unit per open HTML element and ERB block (`<% if %>` … `<% else %>` … `<% end %>`, `do … end`, `case`/`when`); end tags and `<% end %>` at the start of a line dedent it. `<script>`, `<style>`, comments, multi-line tags and multi-line ERB tags move as one unit with their first line, keeping their relative indentation. `<pre>`, `<textarea>` and `<title>` bodies, quoted attribute values across lines, and Ruby holding a heredoc or a string across lines keep every byte. `<li>`, `<p>` and the other optional-end elements indent only when they have an end tag. Where ERB branches leave different tags open (`<% if a %><div><% end %>`), the rest of the file keeps its indentation.
+- **Haml**: every level becomes the file's own indent unit (its first indented line, as Haml reads it); filter and `-#` bodies and continuation lines move with their head. Also _Format Selection_ and _Re-indent Haml_.
+- **Slim**: as described above.
+- A file the formatter is in doubt about (broken ERB, mismatched tags, a `javascript_tag do` block, a Haml or Slim file its engine would reject) comes back unchanged, and the reason is logged. Files that aren't HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …), Jbuilder views and generator templates (`*.tt`) are never formatted.
+- Every change is checked before it is returned: the result must be stable when formatted again, keep every non-whitespace character, and add no diagnostic.
+
+**Settings** come from the editor (in VS Code), `.editorconfig`, then the few erb_lint / haml-lint / slim-lint linters that check the same whitespace (`FinalNewline`, `TrailingWhitespace`, `ExtraNewline`, …), then defaults (2 spaces). The table is in [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md); it reads those files only to agree with them, it is not those tools.
+
+**Command line**: the server build includes a second binary, also published on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux x64/arm64, macOS x64/arm64 and Windows x64:
+
+```sh
+npm install --save-dev @x-ror/ruby-templates
+npx ruby-templates check app/views                 # diagnostics; exit 1 on errors or warnings
+npx ruby-templates format --check app/views        # list files that would change; exit 1 if any
+npx ruby-templates format --write app/views        # rewrite them
+npx ruby-templates format app/views/users/show.html.erb          # print one file formatted
+npx ruby-templates format --stdin-filepath show.html.erb < x     # from stdin, for editors
+npx ruby-templates format --verbose --check app/views            # also the settings, config files read and keys ignored
+```
+
+Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors, files that aren't templates, or a formatter bug caught by its checks. Folders are walked for template files, skipping hidden folders and `node_modules`.
+
+**Not supported**: reflowing long lines or attributes (use `erb-format`), indenting embedded JavaScript or CSS by their own syntax, Ruby code formatting (use RuboCop through erb_lint or haml-lint), converting a Haml file's indent unit, Slim files indented with tabs, and resuming indentation after ERB branches that leave different tags open.
+
 ## Tips
 
 - Emmet works in `.html.erb` out of the box (the extension defaults `"emmet.includeLanguages": { "erb": "html" }`). VS Code's Emmet supports the `slim` id natively and expands to Slim syntax (`ul>li` → `ul` / `  li`); the extension maps `skim` to it too.
@@ -139,14 +167,16 @@ bun install           # also enables .githooks (pre-commit formats staged JS and
 bun run build:server  # cargo build --release, copies the binary into bin/<platform>/
 bun run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
 bun run test:server   # cargo test + diagnostics check on the samples
-bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
+bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, haml-lint JSON)
 bun run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
 bun test/e2e.js       # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
+bun test/cli.js       # the ruby-templates command line on a temp folder
+bun test/npm.js       # the npm packages: assembled from the release build, packed, installed offline, run
 bun run test:slim     # Slim editing helpers and onEnterRules
 bun run test:vscode   # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)
-bun run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
+bun run test:format   # Slim/Haml formatters vs. the gems: test/format/*.{slim,haml} compile the same before and after (needs `ruby -rslim` / `ruby -rhaml`)
 bun run build         # bundle the client into dist/extension.js (what VS Code loads)
 bun run package       # bundle, then build the .vsix
 ```
 
-Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (`erb.rs`, `haml_indent.rs` and `slim_indent.rs` for Haml/Slim structure, `slim_parser.rs` (a port of `Slim::Parser` used by Slim completion, hover and formatting), `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux, macOS and Windows and packages one `.vsix` per platform.
+Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (a library shared by `ruby-templates-ls` and the `ruby-templates` CLI: `lsp.rs`, `cli.rs`, `format.rs` with `erb_format.rs`, `haml_format.rs`, `slim_format.rs` and `config.rs` for the formatter, `erb.rs`, `haml_indent.rs` and `slim_indent.rs` for Haml/Slim structure, `slim_parser.rs` (a port of `Slim::Parser` used by Slim completion, hover and formatting), `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux, macOS and Windows, packages one `.vsix` per platform, and assembles the npm packages (`npm/`, `npm/assemble.js`); tags publish them.

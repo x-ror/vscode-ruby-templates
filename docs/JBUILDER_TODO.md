@@ -18,8 +18,8 @@ Ruby LSP (`shopify.ruby-lsp`) already maps `.jbuilder` and `.builder` to `ruby`.
 
 ### Server
 
-- [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/main.rs`). Plain `.rb` must still return `None`.
-- [x] Matches that need a `Ruby` arm (`server/src/main.rs`):
+- [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/lsp.rs`). Plain `.rb` must still return `None`.
+- [x] Matches that need a `Ruby` arm (`server/src/lsp.rs`):
   - `diagnostics`: no template diagnostics (Ruby LSP reports syntax errors). `unresolved_renders`/`strict_locals_mismatches` already run for every language; only the arm is new.
   - `render_in_code`: `(TemplateLang::Ruby, _) => in_ruby().then_some(0)`. It matches every language, so the compiler asks for this arm. `line_roles` falls back to `LineRole::Start` and needs nothing.
   - `in_ruby_context`: `true` unless `ruby_comment_before(&text[line_start..offset])`.
@@ -28,7 +28,7 @@ Ruby LSP (`shopify.ruby-lsp`) already maps `.jbuilder` and `.builder` to `ruby`.
 - [x] Collection form `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`: the `partial:` key isn't directly after the call. Added `JSON_PARTIAL_KEY` (`json\.\w+!?[\s(][^#]*?\bpartial\s*(?::|=>)\s*["']…["']`; a `\b` after `!?` would never match after `!`) feeding `render_refs` (`server/src/partials.rs`). It overlaps the widened `RENDER_STR` on `json.partial! partial: 'x'` (same span), and the `regex` crate has no lookahead to exclude it, so `refs.dedup_by_key(|r| r.start)` after the sort in `render_refs`. It feeds only `render_refs`, so `json.array! …, partial: "` gets no completion; accepted.
 - [x] Format: `resolve`/`resolve_model` keep only partials in the view's format (`server/src/partials.rs` `renders_format`, test `resolve_by_view_format`). No-op when the view has no format (`x.builder`); format-less partials (`_post.jbuilder`) always match; JS and turbo_stream views also take HTML. Builder reuses it unchanged. Same gap as `ERB_TODO.md` §14 "Jbuilder/other templates in the same dir don't confuse partial resolution".
 - [x] Strict locals: `STRICT_LOCALS` already accepts `# locals: (user:)` at end of line (`(?m)…$`), so `file_signature` should work for `_post.json.jbuilder`. Confirm with a test, don't write code.
-- [x] Hover: `erb::tag_doc` is ERB-gated already; Rails `HELPERS` hover shows in jbuilder. Helper completion is off for `TemplateLang::Ruby` (`server/src/main.rs` `completion`): it would duplicate Ruby LSP's list on every identifier.
+- [x] Hover: `erb::tag_doc` is ERB-gated already; Rails `HELPERS` hover shows in jbuilder. Helper completion is off for `TemplateLang::Ruby` (`server/src/lsp.rs` `completion`): it would duplicate Ruby LSP's list on every identifier.
 
 ## Tests
 
