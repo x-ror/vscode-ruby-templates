@@ -834,7 +834,7 @@ fn kind_name(k: partials::RenderKind) -> &'static str {
 
 fn word_at(line: &str, col: usize) -> &str {
     let is_w = |c: char| c.is_alphanumeric() || c == '_' || c == '?' || c == '!';
-    let start = line[..col.min(line.len())].rfind(|c: char| !is_w(c)).map(|i| i + 1).unwrap_or(0);
+    let start = line[..col.min(line.len())].char_indices().rev().find(|&(_, c)| !is_w(c)).map_or(0, |(i, c)| i + c.len_utf8());
     let end = line[col.min(line.len())..].find(|c: char| !is_w(c)).map(|i| i + col).unwrap_or(line.len());
     &line[start..end]
 }
