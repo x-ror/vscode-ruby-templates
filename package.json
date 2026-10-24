@@ -868,8 +868,8 @@
     "test:slim": "node test/slim.js",
     "test:format": "node test/slim_format.js",
     "test:vscode": "node test/vscode/run.js",
-    "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
-    "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*",
+    "build:server": "cargo build --release --manifest-path server/Cargo.toml && node server/install-bin.js",
+    "test:server": "cargo test --manifest-path server/Cargo.toml && node server/check-samples.js",
     "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\"",
     "format:check": "prettier --check \"src/**/*.js\" \"test/**/*.js\""
   },
