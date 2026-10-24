@@ -137,3 +137,11 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with: { files: "*.vsix" }
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Publish to the VS Code Marketplace
+        run: for vsix in *.vsix; do bunx @vscode/vsce publish --packagePath "$vsix"; done
+        env: { VSCE_PAT: "${{ secrets.VSCE_PAT }}" }
+      - if: startsWith(github.ref, 'refs/tags/v')
+        name: Publish to Open VSX
+        run: for vsix in *.vsix; do bunx ovsx publish "$vsix"; done
+        env: { OVSX_PAT: "${{ secrets.OVSX_PAT }}" }
