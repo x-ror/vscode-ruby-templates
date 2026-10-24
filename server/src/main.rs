@@ -812,9 +812,17 @@ impl LanguageServer for Backend {
         }
 
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
-        let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
-        if let Some(context) = haml::completion_context(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return items(haml::completions(context));
+        let roles = line_roles(doc.lang, &doc.text);
+        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        if doc.lang == TemplateLang::Haml {
+            if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
+                return items(haml::completions(context));
+            }
+            let lines: Vec<&str> = doc.text.lines().collect();
+            let head = haml::continued_head(&lines, &roles, pos.line as usize, col).filter(|_| role == LineRole::Ruby);
+            if let Some(context) = head.as_deref().and_then(|head| haml::completion_context(head, head.len())) {
+                return items(haml::completions(context));
+            }
         }
 
         // Rails helpers, only when we're in a Ruby context.
