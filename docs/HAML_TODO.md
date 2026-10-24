@@ -169,7 +169,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 ## 14. Rails-specific
 
 - [x] Strict locals `-# locals: (…)` highlighted as a signature (`syntaxes/haml.tmLanguage.json` `strict-locals`)
-- [ ] Strict locals: completion and diagnostics. ERB has none to share yet (`docs/ERB_TODO.md` "Strict locals: completion, hover, and diagnostics"); build both together
+- [x] Strict locals: completion and diagnostics (`server/src/main.rs` `local_completions`, `strict_locals_mismatches`, shared with ERB)
 - [x] ViewComponent sidecar `.html.haml` templates (`server/src/partials.rs` `resolve_component`, unit test `component_haml_sidecar`; `test/e2e.js`)
 - [x] `haml-rails` generator templates recognized as Haml: `lib/templates/haml/**/*.haml` by extension, `*.haml.tt` under `lib/templates/haml/` and `lib/generators/**/templates/` by `filenamePatterns` (`package.json` `contributes.languages[haml]`); structure diagnostics are skipped for `.tt`, whose column-0 ERB breaks Haml indentation (`server/src/main.rs` `diagnostics`, unit test `thor_templates_skip_haml_structure`)
 
@@ -183,7 +183,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Rust unit tests for `server/src/haml_indent.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/haml_indent.rs` `tests`)
 - [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/haml_indent.rs` `broken_fixture`)
 - [x] Haml file in `test/e2e.js`: definition, hover, completion (including filter bodies), diagnostics, symbols, folding, rename; every result is asserted and a mismatch exits non-zero (`test/e2e.js` `check`)
-- [ ] Fixture corpus of real-world Haml views (no false-positive diagnostics)
+- [x] Fixture corpus of real-world Haml views (no false-positive diagnostics). Checked by hand with `--check` on the `app/views` of Mastodon, diaspora (Haml), Ruby Toolbox (Slim), Forem and rubygems.org (ERB): the false positives found (`=begin` blocks, multi-line `<% %>` with `if` on its own line, `key: if …`, gem view folders, `.rss`/`.atom`) are fixed with unit tests; the rest are real template bugs or app-registered formats (`:mobile`). The Slim formatter keeps the compiled output of all 86 Ruby Toolbox views, re-indented to 4 spaces first.
 
 ## 16. Docs
 
