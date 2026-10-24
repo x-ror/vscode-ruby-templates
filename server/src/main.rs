@@ -435,18 +435,20 @@ fn render_filter<'a>(
     }
 }
 
-/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it.
-const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.fixAll.erbSpacing");
+/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
+/// `source.fixAll`, which many users run on save for other languages' linters.
+const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.erbSpacing");
 
-/// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file as a source action.
-fn spacing_actions(uri: &Url, text: &str, range: Range) -> Vec<CodeActionOrCommand> {
-    let edits: Vec<(Range, TextEdit)> = erb::spacing_edits(text)
-        .into_iter()
-        .map(|(s, e, tag)| {
-            let r = Range::new(util::offset_to_position(text, s), util::offset_to_position(text, e));
-            (r, TextEdit::new(r, tag))
-        })
-        .collect();
+/// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file when `only` asks
+/// for source actions: VS Code requests code actions on every cursor move, without `only`.
+fn spacing_actions(uri: &Url, text: &str, range: Range, only: Option<&[CodeActionKind]>) -> Vec<CodeActionOrCommand> {
+    let (Some(from), Some(to)) = (util::position_to_offset(text, range.start), util::position_to_offset(text, range.end)) else {
+        return vec![];
+    };
+    let edits = erb::spacing_edits(text);
+    let to_edit = |(s, e, tag): &(usize, usize, String)| {
+        TextEdit::new(Range::new(util::offset_to_position(text, *s), util::offset_to_position(text, *e)), tag.clone())
+    };
     let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
         CodeActionOrCommand::CodeAction(CodeAction {
             title: title.into(),
@@ -455,14 +457,16 @@ fn spacing_actions(uri: &Url, text: &str, range: Range) -> Vec<CodeActionOrComma
             ..Default::default()
         })
     };
-    let touching: Vec<TextEdit> =
-        edits.iter().filter(|(r, _)| r.start <= range.end && range.start <= r.end).map(|(_, e)| e.clone()).collect();
+    let touching: Vec<TextEdit> = edits.iter().filter(|(s, e, _)| *s <= to && from <= *e).map(to_edit).collect();
     let mut out = Vec::new();
     if !touching.is_empty() {
         out.push(action("Add spaces inside this ERB tag", CodeActionKind::REFACTOR_REWRITE, touching));
     }
-    if !edits.is_empty() {
-        out.push(action("Add spaces inside every ERB tag", ERB_SPACING, edits.into_iter().map(|(_, e)| e).collect()));
+    let file_wide = only.is_some_and(|kinds| {
+        kinds.iter().any(|k| ERB_SPACING.as_str() == k.as_str() || ERB_SPACING.as_str().starts_with(&format!("{}.", k.as_str())))
+    });
+    if file_wide && !edits.is_empty() {
+        out.push(action("Add spaces inside every ERB tag", ERB_SPACING, edits.iter().map(to_edit).collect()));
     }
     out
 }
@@ -758,7 +762,7 @@ impl LanguageServer for Backend {
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
-            actions.extend(spacing_actions(&uri, &doc.text, p.range));
+            actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
         }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
         let quick_fixes = unresolved.filter_map(|d| {

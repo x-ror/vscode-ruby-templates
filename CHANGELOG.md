@@ -27,7 +27,7 @@
 - ERB: typing `>` closes the HTML start tag (`rubyTemplates.erb.autoCloseTags`).
 - ERB: `img-missing-alt`, `duplicate-id`, `prefer-image-tag` and `unsafe-output` checks for HTML views.
 - ERB: typing a whole `<%= x %>` no longer leaves the auto-inserted ` %>` behind (`<%= x %> %>`).
-- ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.fixAll.erbSpacing`).
+- ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.erbSpacing`).
 - Completion of ViewComponent classes after `render ` (`Admin::UserCardComponent.new(…)`) from `app/components`.
 - Completion of Stimulus action methods after `hello#` in `data-action` and of `static targets` names in `data-hello-target` / `hello_target:`, read from the controller file.
 - Find All References on a `t("…")` key: the calls with the same full key in views, controllers, helpers and components, and its locale entries.

@@ -796,26 +796,32 @@ const check = (label, actual, expected) => {
     },
     true,
   );
-  const spacing = await send("textDocument/codeAction", {
-    textDocument: { uri: streamUri },
-    range: { start: { line: 0, character: 5 }, end: { line: 0, character: 5 } },
-    context: { diagnostics: [] },
-  });
-  check(
-    "codeAction ERB tag spacing",
-    spacing.result?.map((a) => [
+  const spacing = (only) =>
+    send("textDocument/codeAction", {
+      textDocument: { uri: streamUri },
+      range: {
+        start: { line: 0, character: 5 },
+        end: { line: 0, character: 5 },
+      },
+      context: { diagnostics: [], only },
+    });
+  const spacingActions = (r) =>
+    r.result?.map((a) => [
       a.title,
       a.kind,
       a.edit.changes[streamUri].map((e) => e.newText),
-    ]),
-    [
-      ["Add spaces inside this ERB tag", "refactor.rewrite", ["<%= foo %>"]],
-      [
-        "Add spaces inside every ERB tag",
-        "source.fixAll.erbSpacing",
-        ["<%= foo %>"],
-      ],
-    ],
+    ]);
+  check(
+    "codeAction ERB tag spacing",
+    spacingActions(await spacing(undefined)),
+    [["Add spaces inside this ERB tag", "refactor.rewrite", ["<%= foo %>"]]],
+  );
+  check(
+    "source action ERB spacing",
+    spacingActions(await spacing(["source"]))?.filter(([, kind]) =>
+      kind.startsWith("source"),
+    ),
+    [["Add spaces inside every ERB tag", "source.erbSpacing", ["<%= foo %>"]]],
   );
   await send(
     "textDocument/didChange",
