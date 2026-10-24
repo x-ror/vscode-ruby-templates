@@ -14,8 +14,11 @@ fs.mkdirSync(path.join(root, 'app', 'javascript', 'controllers'), { recursive: t
 fs.writeFileSync(path.join(root, 'app', 'javascript', 'controllers', 'hello_controller.js'), '');
 fs.mkdirSync(path.join(root, 'app', 'assets', 'images'), { recursive: true });
 fs.writeFileSync(path.join(root, 'app', 'assets', 'images', 'logo.png'), '');
+fs.mkdirSync(path.join(root, 'config', 'locales'), { recursive: true });
+fs.writeFileSync(path.join(root, 'config', 'locales', 'en.yml'), 'en:\n  users:\n    index:\n      title: Users\n');
+fs.writeFileSync(path.join(root, 'config', 'locales', 'uk.yml'), 'uk:\n  users:\n    index:\n      title: Користувачі\n');
 const file = path.join(views, 'users', 'index.html.erb');
-const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n<%= render template: "us\n<%= link_to "x",\n  link_ %>\n<%= render @users %>\n<div data-controller="hello"></div>\n<%= image_tag "logo.png" %>\n';
+const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n<%= render template: "us\n<%= link_to "x",\n  link_ %>\n<%= render @users %>\n<div data-controller="hello"></div>\n<%= image_tag "logo.png" %>\n<%= t(".title") %>\n';
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
 
@@ -53,6 +56,12 @@ const rel = p => p.replace(root, '');
     const def = await send('textDocument/definition', { textDocument: { uri }, position: { line, character } });
     console.log(`definition ${label}`.padEnd(23), '→', (def.result || []).map(l => rel(l.uri)));
   }
+  const def4 = await send('textDocument/definition', { textDocument: { uri }, position: { line: 18, character: 9 } });
+  console.log('definition t(".title") →', (def4.result || []).map(l => `${rel(l.uri)}:${l.range.start.line + 1}`));
+  const hov4 = await send('textDocument/hover', { textDocument: { uri }, position: { line: 18, character: 9 } });
+  console.log('hover t(".title")      →', hov4.result && hov4.result.contents.value.split('\n').slice(2).join(' '));
+  const c6 = await send('textDocument/completion', { textDocument: { uri }, position: { line: 18, character: 8 } });
+  console.log('completion t(".        →', (c6.result || []).map(i => i.label));
   const hov = await send('textDocument/hover', { textDocument: { uri }, position: { line: 0, character: 14 } });
   console.log('hover                  →', hov.result && hov.result.contents.value.split('\n')[0]);
   const c1 = await send('textDocument/completion', { textDocument: { uri }, position: { line: 3, character: 14 } });

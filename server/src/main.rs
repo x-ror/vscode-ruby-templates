@@ -1,6 +1,7 @@
 mod assets;
 mod erb;
 mod helpers;
+mod i18n;
 mod indented;
 mod outline;
 mod partials;
@@ -164,6 +165,13 @@ fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize
     models.chain(controllers).chain(assets).filter(|(_, _, found)| !found.is_empty()).collect()
 }
 
+/// Full key of the `t("…")` literal under `col`, when the call is Ruby.
+fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize) -> Option<String> {
+    let (start, end) = i18n::key_at(line, col)?;
+    if !in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) { return None; }
+    i18n::full_key(path, &line[start..end])
+}
+
 fn helper_hover(h: &helpers::Helper) -> String {
     let signature = format!("```ruby\n{}\n```", h.detail);
     match h.doc_url() {
@@ -260,9 +268,16 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let (_, line) = Self::line_at(&doc.text, pos.line);
+        let (line_start, line) = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
 
+        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col) {
+            let files = i18n::locale_files(&path);
+            let locs: Vec<Location> = i18n::lookup(&files, &key)
+                .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(Position::new(t.line as u32, 0), Position::new(t.line as u32, 0)))))
+                .collect();
+            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        }
         let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
             partials::resolve(&path, &r)
         } else if let Some(c) = partials::component_ref_at(line, col) {
@@ -303,7 +318,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let (_, line) = Self::line_at(&doc.text, pos.line);
+        let (line_start, line) = Self::line_at(&doc.text, pos.line);
         let col = Self::byte_col(line, pos.character);
         let markdown = |value: String| Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }));
         if doc.lang == TemplateLang::Erb {
@@ -314,6 +329,9 @@ impl LanguageServer for Backend {
         if let Ok(path) = uri.to_file_path() {
             if let Some(r) = partials::render_ref_at(line, col) {
                 return markdown(render_hover(&path, &r));
+            }
+            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&i18n::locale_files(&path), &key)) {
+                return markdown(md);
             }
         }
         let word = word_at(line, col);
@@ -367,7 +385,23 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        // 2. Form builder methods after `f.` / `form.` / `ff.`
+        // 2. i18n keys inside t("...")
+        if let Some((start, end, prefix)) = i18n::completion_prefix(line, col) {
+            if in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
+                let Ok(path) = uri.to_file_path() else { return Ok(None) };
+                let range = util::span_range(pos.line as usize, line, start, end);
+                let items = i18n::completions(&i18n::locale_files(&path), &path, prefix).into_iter().map(|(key, value)| CompletionItem {
+                    label: key.clone(),
+                    kind: Some(CompletionItemKind::CONSTANT),
+                    detail: Some(value),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key))),
+                    ..Default::default()
+                }).collect();
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+        }
+
+        // 3. Form builder methods after `f.` / `form.` / `ff.`
         if let Some(idx) = before.rfind('.') {
             let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
             let typed = &before[idx + 1..];
@@ -382,7 +416,7 @@ impl LanguageServer for Backend {
             }
         }
 
-        // 3. Rails helpers, only when we're in a Ruby context.
+        // 4. Rails helpers, only when we're in a Ruby context.
         if !in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col) { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }

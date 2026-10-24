@@ -144,7 +144,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Helper method → definition in `app/helpers/**` (and gem helpers through Ruby LSP)
 - [ ] Locals: go to where a local is passed (`render … locals:`) from its use in the partial
 - [ ] Instance variables → assignment in the controller action
-- [ ] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path)
+- [x] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path) (`server/src/i18n.rs`)
 - [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
 - [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
@@ -161,7 +161,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Instance variables used in the matching controller action
 - [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
-- [ ] i18n keys from `config/locales`
+- [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
 - [ ] Model attributes after `f.text_field :` (from `db/schema.rb`)
 - [ ] ViewComponent class names after `render `
@@ -175,7 +175,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Hover on render call lists resolved file(s) or "No matching template found" (`server/src/main.rs` `hover`)
 - [x] Hover on a known Rails helper shows its signature (`server/src/main.rs`, `server/src/helpers.rs`)
 - [x] Partial hover shows its strict locals signature (`server/src/main.rs` `render_hover`)
-- [ ] i18n key hover shows the translations
+- [x] i18n key hover shows the translations (`server/src/i18n.rs`; missing locales listed)
 - [ ] Route helper hover shows verb + path
 - [x] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim) (`server/src/erb.rs` `tag_doc`)
 - [x] Helper docs link to api.rubyonrails.org (`server/src/helpers.rs` `doc_url`)

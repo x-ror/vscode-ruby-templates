@@ -98,7 +98,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     out
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
 }
 
