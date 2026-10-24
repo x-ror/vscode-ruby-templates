@@ -671,6 +671,7 @@
               "unclosed-block",
               "output-control-flow",
               "silent-output-helper",
+              "unterminated-string",
               "unexpected-close-tag",
               "mismatched-close-tag",
               "unclosed-element",

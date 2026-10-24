@@ -15,7 +15,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `# comment` inside a code tag ends at `%>`, not at end of line (`syntaxes/erb.tmLanguage.json` `ruby-inner`)
 - [x] `=%>` closing tag scoped as punctuation; `<%_`/`_%>` deliberately not supported (Erubi only allows `-`/`=` before `%>`) (`syntaxes/erb.tmLanguage.json`)
 - [ ] `trim_mode: '%'` lines (lines starting with `%` are Ruby; `%%` escapes it) for plain-Ruby ERB files
-- [ ] Diagnostic: `%>` inside a Ruby string or `<%#` comment closes the tag early (ERB ends a tag at the first `%>`)
+- [x] Diagnostic: `%>` inside a Ruby string closes the tag early (`server/src/erb.rs` `UNTERMINATED_STRING`; skipped for tags with a heredoc). A `%>` inside `<%#` leaves no trace to detect.
 - [ ] Multi-line `<% ... %>` tags containing heredocs
 
 ## 2. File types and host languages

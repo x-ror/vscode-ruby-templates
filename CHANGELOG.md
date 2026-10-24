@@ -12,6 +12,7 @@
 - Find All References on a partial lists the `render` calls that resolve to it.
 - Completion of Turbo Stream actions after `turbo_stream.` (`append`, `replace`, `remove`, `refresh`, `*_all`, `action`).
 - Completion of Stimulus controller names in `data-controller="…"`, `data-action="…->…"` and `data: { controller: "…" }`.
+- ERB: warn when `%>` inside a Ruby string ends the tag early (`<%= "50%>" %>`).
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

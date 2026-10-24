@@ -1,6 +1,6 @@
 //! ERB diagnostics via tree-sitter-embedded-template + Ruby block balancing.
 
-use crate::ruby::{analyze, ends_with_block, BlockEffect};
+use crate::ruby::{analyze, code_end, ends_with_block, BlockEffect, CodeEnd};
 use crate::util::{coded, error, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -22,6 +22,7 @@ pub mod code {
     pub const UNCLOSED_BLOCK: &str = "unclosed-block";
     pub const OUTPUT_CONTROL_FLOW: &str = "output-control-flow";
     pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
+    pub const UNTERMINATED_STRING: &str = "unterminated-string";
 }
 
 fn node_range(text: &str, node: Node) -> Range {
@@ -95,6 +96,11 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
                 }
             }
             BlockEffect::Neutral => {}
+        }
+        // ERB ends a tag at the first `%>`, even inside a string. A heredoc body may hold lone quotes.
+        if code_end(snippet) == CodeEnd::String && !snippet.contains("<<") {
+            let message = "String is not closed before `%>`: ERB ends the tag at the first `%>`, even inside a string";
+            out.push(coded(warning(range, message), code::UNTERMINATED_STRING));
         }
         let is_output = text[node.start_byte()..].starts_with("<%=");
         let t = snippet.trim();
@@ -182,7 +188,7 @@ pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::DiagnosticSeverity;
+    use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
 
     fn only(text: &str) -> Diagnostic {
         let diags = diagnostics(text);
@@ -192,6 +198,17 @@ mod tests {
 
     fn span(line: u32, start: u32, end: u32) -> Range {
         Range::new(Position::new(line, start), Position::new(line, end))
+    }
+
+    #[test]
+    fn percent_gt_inside_a_string_ends_the_tag() {
+        let codes = |t: &str| diagnostics(t).into_iter().filter_map(|d| d.code).collect::<Vec<_>>();
+        let unterminated = NumberOrString::String(code::UNTERMINATED_STRING.into());
+        assert_eq!(codes(r#"<%= "50%>" %>"#), [unterminated.clone()]);
+        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated]);
+        for clean in [r#"<%= "50%" %>"#, "<%= x # don't %>", "<% x = <<~T\n  don't\nT\n%>", r#"<%= "a\"b" %>"#] {
+            assert!(codes(clean).is_empty(), "{clean}");
+        }
     }
 
     #[test]
