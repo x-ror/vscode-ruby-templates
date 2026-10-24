@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import path from "path";
 import fs from "fs";
-import { LanguageClient, TransportKind } from "vscode-languageclient/node";
+import {
+  LanguageClient,
+  State,
+  TransportKind,
+} from "vscode-languageclient/node";
 
 /** @type {LanguageClient | undefined} */
 let client;
@@ -97,9 +101,13 @@ async function doStart(context, output) {
     },
   );
   client = started;
+  // Also after the client restarts a crashed server by itself, which doesn't go through doStart.
+  started.onDidChangeState(({ newState }) => {
+    if (newState === State.Running)
+      for (const listener of startListeners) listener();
+  });
   try {
     await started.start();
-    for (const listener of startListeners) listener();
   } catch (e) {
     client = undefined;
     await disposeQuietly(started, output);

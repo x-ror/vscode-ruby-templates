@@ -887,6 +887,8 @@ function registerErbLint(context, output) {
  */
 function registerRoutes(context, output) {
   const cache = new Map(); // Rails root → routes
+  // Roots whose boot failed: retried on a routes file change or a settings change, not on every view opened.
+  const failed = new Set();
   const busy = new Set();
   const again = new Set();
   const enabled = () => cfg().get("routes.enabled", true);
@@ -917,8 +919,10 @@ function registerRoutes(context, output) {
       output.appendLine(
         `[routes] bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
       );
+      failed.add(root);
       return;
     }
+    failed.delete(root);
     cache.set(root, routes);
     await send(root, routes);
   };
@@ -940,17 +944,27 @@ function registerRoutes(context, output) {
     }
   };
 
-  const railsRoot = (file) =>
-    findUp(path.dirname(file), path.join("bin", "rails"));
+  // Booting runs the app's own code: only for an app inside a trusted workspace folder, never for a file
+  // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
+  const railsRoot = (file) => {
+    if (!enabled() || !vscode.workspace.isTrusted) return undefined;
+    const root = findUp(path.dirname(file), path.join("bin", "rails"));
+    const folder =
+      root && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+    return folder && !path.relative(folder.uri.fsPath, root).startsWith("..")
+      ? root
+      : undefined;
+  };
   const opened = (doc) => {
-    if (!enabled() || doc.uri.scheme !== "file") return;
+    if (doc.uri.scheme !== "file") return;
     if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
     const root = railsRoot(doc.uri.fsPath);
-    if (root && !cache.has(root) && !busy.has(root)) void refresh(root);
+    if (root && !cache.has(root) && !failed.has(root) && !busy.has(root))
+      void refresh(root);
   };
   const routesChanged = (uri) => {
     const root = railsRoot(uri.fsPath);
-    if (enabled() && root && cache.has(root)) void refresh(root);
+    if (root && (cache.has(root) || failed.has(root))) void refresh(root);
   };
 
   const watcher = vscode.workspace.createFileSystemWatcher(
@@ -962,11 +976,19 @@ function registerRoutes(context, output) {
     watcher.onDidCreate(routesChanged),
     watcher.onDidDelete(routesChanged),
     vscode.workspace.onDidOpenTextDocument(opened),
+    vscode.workspace.onDidGrantWorkspaceTrust(() =>
+      vscode.workspace.textDocuments.forEach(opened),
+    ),
     onServerStarted(() => {
       for (const [root, routes] of cache) void send(root, routes);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration("rubyTemplates.routes")) return;
+      if (
+        !e.affectsConfiguration("rubyTemplates.routes") &&
+        !e.affectsConfiguration("rubyTemplates.commands.ruby")
+      )
+        return;
+      failed.clear();
       if (enabled()) vscode.workspace.textDocuments.forEach(opened);
       else {
         for (const root of cache.keys()) void send(root, []);
