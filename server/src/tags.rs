@@ -14,7 +14,7 @@ pub mod code {
     pub const UNCLOSED_ELEMENT: &str = "unclosed-element";
 }
 
-const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
+pub const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
 const OPTIONAL_END: &[&str] = &[
     "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "optgroup", "html", "head",
