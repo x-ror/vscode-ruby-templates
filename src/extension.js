@@ -428,10 +428,10 @@ function run(
         ? ["bundle", ["exec", cmd, ...args]]
         : [cmd, args];
     const windows = process.platform === "win32";
-    const [file, fileArgs, spawnOptions] = windows
-      ? windowsShellCommand(bin, binArgs)
-      : [bin, binArgs, {}];
     try {
+      const [file, fileArgs, spawnOptions] = windows
+        ? windowsShellCommand(bin, binArgs)
+        : [bin, binArgs, {}];
       const child = cp.execFile(
         file,
         fileArgs,
