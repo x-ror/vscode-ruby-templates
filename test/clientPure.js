@@ -4,7 +4,7 @@ import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
-import { tagToClose } from "../src/autoClose.js";
+import { tagToClose, isHtmlView } from "../src/autoClose.js";
 
 // convertedFileName
 const cases = [
@@ -153,7 +153,7 @@ assert.deepStrictEqual(erbLintOffenses(erbLintReport), [
 ]);
 
 // tagToClose
-for (const [line, name] of [
+for (const [text, name] of [
   ["<div>", "div"],
   ['  <a href="<%= url %>" class="x">', "a"],
   ["<my-el>", "my-el"],
@@ -166,6 +166,30 @@ for (const [line, name] of [
   ['<input value="a>b">', null],
   ['<span title="a>b">', "span"],
   ["a > b", null],
+  ["<!-- <div>", null],
+  ["<!-- x -->\n<div>", "div"],
+  ["<script>\nif (a <b>", null],
+  ["<script></script>\n<p>", "p"],
+  ["<script>", "script"],
+  ["<p>100% <span>", "span"],
 ]) {
-  assert.strictEqual(tagToClose(line), name, line);
+  assert.strictEqual(tagToClose(text), name, text);
+}
+// Many ERB tags on one line that never form a start tag must not backtrack exponentially.
+const started = Date.now();
+tagToClose(
+  "<nav <%= attrs %>>" + "<%= link_to a, b %> | ".repeat(40) + "</nav>",
+);
+assert.ok(Date.now() - started < 100, "tagToClose is linear");
+
+for (const [file, html] of [
+  ["show.html.erb", true],
+  ["show.html+phone.erb", true],
+  ["create.turbo_stream.erb", true],
+  ["old.rhtml", true],
+  ["Foo.java.erb", false],
+  ["nginx.conf.erb", false],
+  ["index.js.erb", false],
+]) {
+  assert.strictEqual(isHtmlView(file), html, file);
 }

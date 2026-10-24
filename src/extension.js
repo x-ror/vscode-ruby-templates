@@ -11,7 +11,7 @@ import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
-import { tagToClose } from "./autoClose.js";
+import { tagToClose, isHtmlView } from "./autoClose.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -1062,6 +1062,7 @@ function registerErbAutoClose(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(async (e) => {
       if (e.document.languageId !== "erb" || e.reason !== undefined) return;
+      if (!isHtmlView(e.document.fileName)) return;
       if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">")
         return;
       if (!cfg().get("erb.autoCloseTags", true)) return;
@@ -1070,7 +1071,10 @@ function registerErbAutoClose(context) {
         return;
       const at = e.contentChanges[0].range.start.translate(0, 1);
       const { text } = e.document.lineAt(at.line);
-      const name = tagToClose(text.slice(0, at.character));
+      const before = e.document.getText(
+        new vscode.Range(0, 0, at.line, at.character),
+      );
+      const name = tagToClose(before);
       if (!name || text.slice(at.character).startsWith(`</${name}`)) return;
       const inserted = await editor.edit((b) => b.insert(at, `</${name}>`), {
         undoStopBefore: false,

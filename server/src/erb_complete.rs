@@ -1,9 +1,9 @@
 //! HTML completion in ERB template text: element names after `<`, the open element after `</`, attribute names
 //! inside a start tag.
 
-use crate::erb;
 use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
 use crate::html::BOOLEAN_ATTRIBUTES;
+use crate::html_lint::{inside, non_markup};
 use crate::tags::VOID;
 use crate::util::completion_item;
 use regex::Regex;
@@ -22,9 +22,13 @@ pub enum Context<'a> {
     Attribute(&'a str),
 }
 
-/// What the cursor at byte `offset` of `text` is completing, outside ERB tags.
+/// What the cursor at byte `offset` of `text` is completing, in markup (not ERB, comments, `<script>` or `<style>`).
 pub fn context(text: &str, offset: usize) -> Option<Context<'_>> {
     let before = text.get(..offset)?;
+    let regions = non_markup(before);
+    if inside(&regions, offset.saturating_sub(1)) {
+        return None;
+    }
     let head = before.trim_end_matches(|c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | ':'));
     let typed = &before[head.len()..];
     if head.ends_with("</") {
@@ -33,22 +37,19 @@ pub fn context(text: &str, offset: usize) -> Option<Context<'_>> {
     if head.ends_with('<') {
         return typed.chars().next().is_none_or(|c| c.is_ascii_alphabetic()).then_some(Context::Element(typed));
     }
-    let after_space = head.ends_with([' ', '\t', '\n']);
-    (after_space && in_start_tag(head)).then_some(Context::Attribute(typed))
+    let after_space = head.ends_with(char::is_whitespace);
+    (after_space && in_start_tag(head, &regions)).then_some(Context::Attribute(typed))
 }
 
 /// Is the end of `head` between a start tag's name and its `>`, outside quotes and ERB tags?
-fn in_start_tag(head: &str) -> bool {
-    // `code_spans` gives the code between `<%` and the `>` of `%>`; widen it to the delimiters.
-    let code = erb::code_spans(head);
-    let in_erb = |at: usize| code.iter().any(|&(s, e)| (s.saturating_sub(2)..=e).contains(&at));
-    let Some(open) = head.rmatch_indices('<').map(|(at, _)| at).find(|&at| !in_erb(at)) else { return false };
+fn in_start_tag(head: &str, regions: &[(usize, usize)]) -> bool {
+    let Some(open) = head.rmatch_indices('<').map(|(at, _)| at).find(|&at| !inside(regions, at)) else { return false };
     if !head[open + 1..].starts_with(|c: char| c.is_ascii_alphabetic()) {
         return false;
     }
     let mut quote = None;
     for (at, c) in head[open..].char_indices().map(|(i, c)| (open + i, c)) {
-        if in_erb(at) {
+        if inside(regions, at) {
             continue;
         }
         match (quote, c) {
@@ -61,13 +62,13 @@ fn in_start_tag(head: &str) -> bool {
     quote.is_none()
 }
 
-/// The innermost element still open at the end of `before`, by a plain scan that skips ERB tags.
+/// The innermost element still open at the end of `before`, by a plain scan of its markup.
 fn open_element(before: &str) -> Option<String> {
-    let code = erb::code_spans(before);
+    let regions = non_markup(before);
     let mut stack: Vec<String> = Vec::new();
     for cap in TAG.captures_iter(before) {
         let (Some(whole), Some(name)) = (cap.get(0), cap.get(2)) else { continue };
-        if code.iter().any(|&(s, e)| (s..e).contains(&whole.start())) {
+        if inside(&regions, whole.start()) {
             continue;
         }
         let name = name.as_str().to_ascii_lowercase();
@@ -144,6 +145,10 @@ mod tests {
         assert_eq!(at_end("<div>text and"), None);
         assert_eq!(at_end("<ul><li></"), Some(Context::Close("")));
         assert_eq!(at_end("a < b"), None);
+        for raw in ["<%# <di", "<!-- <di", "<script>\nfor (let i = 0; i<n; i++) {\n  ", "<script>if (a <b", "<style>.a{} </"] {
+            assert_eq!(at_end(raw), None, "{raw}");
+        }
+        assert_eq!(at_end("<script>x</script>\n<di"), Some(Context::Element("di")));
     }
 
     #[test]
@@ -154,6 +159,7 @@ mod tests {
         assert_eq!(close("<section><% if a %><b>x</b><% end %>"), ["section>"]);
         assert_eq!(close("<div><%= \"<p>\" %>"), ["div>"]);
         assert!(close("<div></div>").is_empty());
+        assert_eq!(close("<%# <section> %><div><p></p>"), ["div>"]);
         assert_eq!(close("<section>\n  <butt\n  <a hre\n  "), ["section>"]);
     }
 
