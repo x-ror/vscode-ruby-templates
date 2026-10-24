@@ -509,4 +509,18 @@ mod tests {
             assert_eq!(passed(skip), None, "{skip}");
         }
     }
+
+    #[test]
+    fn component_haml_sidecar() {
+        let root = std::env::temp_dir().join(format!("rt-component-{}", std::process::id()));
+        let components = root.join("app/components/users");
+        std::fs::create_dir_all(&components).unwrap();
+        std::fs::create_dir_all(root.join("app/views/users")).unwrap();
+        for f in ["card_component.rb", "card_component.html.haml"] {
+            std::fs::write(components.join(f), "").unwrap();
+        }
+        let found = resolve_component(&root.join("app/views/users/show.html.haml"), "Users::CardComponent");
+        assert_eq!(found, [components.join("card_component.rb"), components.join("card_component.html.haml")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

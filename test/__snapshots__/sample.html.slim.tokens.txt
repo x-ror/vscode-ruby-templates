@@ -26,14 +26,14 @@
    "||"                        meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
    "\"App\""                   meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
 "    javascript:"
-   "javascript"                meta.embedded.block > entity.name.function.embedded
-   ":"                         meta.embedded.block > punctuation.definition.embedded
+   "javascript"                meta.embedded.block.interpolated > entity.name.function.embedded
+   ":"                         meta.embedded.block.interpolated > punctuation.definition.embedded
 "      console.log(\"hi\");"
-   "console.log"               meta.embedded.block > source.js > stub.source.js
-   "("                         meta.embedded.block > source.js
-   "\"hi\""                    meta.embedded.block > source.js > stub.source.js
-   ")"                         meta.embedded.block > source.js
-   ";"                         meta.embedded.block > source.js > stub.source.js
+   "console.log"               meta.embedded.block.interpolated > source.js > stub.source.js
+   "("                         meta.embedded.block.interpolated > source.js
+   "\"hi\""                    meta.embedded.block.interpolated > source.js > stub.source.js
+   ")"                         meta.embedded.block.interpolated > source.js
+   ";"                         meta.embedded.block.interpolated > source.js > stub.source.js
 "  body.main#page"
    "body"                      meta.tag > entity.name.tag
    "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
@@ -169,11 +169,308 @@
    "model:"                    meta.line.output > source.ruby > stub.source.ruby
    "@user,"                    meta.line.output > source.ruby > stub.source.ruby
 "        class: \"form\" do |f|"
-   "class"                     meta.tag > entity.name.tag
-   ":"                         meta.tag
-   "\"form\" do |f|"           meta.tag > string.unquoted.text
+   "class:"                    meta.line.output > source.ruby > stub.source.ruby
+   "\"form\""                  meta.line.output > source.ruby > stub.source.ruby
+   "do"                        meta.line.output > source.ruby > stub.source.ruby
+   "|f|"                       meta.line.output > source.ruby > stub.source.ruby
 "      = f.text_field :name"
    "="                         meta.line.output > punctuation.section.embedded.ruby
    "f.text_field"              meta.line.output > source.ruby > stub.source.ruby
    ":name"                     meta.line.output > source.ruby > stub.source.ruby
+"    span{title=\"x\" data-id=1} Braces"
+   "span"                      meta.tag > entity.name.tag
+   "{"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.begin
+   "title"                     meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "x"                         meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "data-id"                   meta.tag > meta.attributes.wrapped > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > keyword.operator.assignment
+   "1"                         meta.tag > meta.attributes.wrapped > meta.attribute.ruby > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.end
+   "Braces"                    meta.tag > string.unquoted.text
+"    a(href=\"/\""
+   "a"                         meta.tag > entity.name.tag
+   "("                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.begin
+   "href"                      meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "/"                         meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+"      class=\"wrapped\") Multi-line"
+   "class"                     meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "wrapped"                   meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   ")"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.end
+   "Multi-line"                meta.tag > string.unquoted.text
+"    =< link_to \"Left\", \"/\""
+   "=<"                        meta.line.output > punctuation.section.embedded.ruby
+   "link_to"                   meta.line.output > source.ruby > stub.source.ruby
+   "\"Left\""                  meta.line.output > source.ruby > stub.source.ruby
+   ","                         meta.line.output > source.ruby > stub.source.ruby
+   "\"/\""                     meta.line.output > source.ruby > stub.source.ruby
+"    ==<> raw_html"
+   "==<>"                      meta.line.output > punctuation.section.embedded.ruby
+   "raw_html"                  meta.line.output > source.ruby > stub.source.ruby
+"    p =' @user.name"
+   "p"                         meta.tag > entity.name.tag
+   "='"                        meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "@user.name"                meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    a> Trailing"
+   "a"                         meta.tag > entity.name.tag
+   ">"                         meta.tag > keyword.operator.whitespace
+   "Trailing"                  meta.tag > string.unquoted.text
+"    a<> Both"
+   "a"                         meta.tag > entity.name.tag
+   "<>"                        meta.tag > keyword.operator.whitespace
+   "Both"                      meta.tag > string.unquoted.text
+"    img/"
+   "img"                       meta.tag > entity.name.tag
+   "/"                         meta.tag > punctuation.definition.tag.self-closing
+"    p Inline text"
+   "p"                         meta.tag > entity.name.tag
+   "Inline text"               meta.tag > string.unquoted.text
+"      continues here, not a tag"
+   "continues here, not a tag" string.unquoted.text
+"    li: a href=\"/\" Home"
+   "li"                        meta.tag > entity.name.tag
+   ":"                         meta.tag > punctuation.separator.inline-tag
+   "a"                         meta.tag > entity.name.tag
+   "href"                      meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "/"                         meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "Home"                      meta.tag > string.unquoted.text
+"      more text"
+   "more text"                 string.unquoted.text
+"    /[if IE]"
+   "/["                        meta.tag.conditional-comment > punctuation.definition.comment
+   "if IE"                     meta.tag.conditional-comment > keyword.control.conditional
+   "]"                         meta.tag.conditional-comment > punctuation.definition.comment
+"      p IE only"
+   "p"                         meta.tag > entity.name.tag
+   "IE only"                   meta.tag > string.unquoted.text
+"    | Raw #{{ html_safe_value }} and #{escaped}"
+   "|"                         meta.text.block > punctuation.definition.text
+   "Raw "                      meta.text.block > string.unquoted.text
+   "#{{"                       meta.text.block > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.begin
+   "html_safe_value"           meta.text.block > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "}}"                        meta.text.block > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.end
+   " and "                     meta.text.block > string.unquoted.text
+   "#{"                        meta.text.block > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "escaped"                   meta.text.block > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.text.block > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
+"    <div class=\"inline\" id='#{dom_id}'>"
+   "<"                         meta.tag.inline.html > punctuation.definition.tag.begin.html
+   "div"                       meta.tag.inline.html > entity.name.tag.html
+   "class"                     meta.tag.inline.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.html
+   "\""                        meta.tag.inline.html > string.quoted.double.html
+   "inline"                    meta.tag.inline.html > string.quoted.double.html
+   "\""                        meta.tag.inline.html > string.quoted.double.html
+   "id"                        meta.tag.inline.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.html
+   "'"                         meta.tag.inline.html > string.quoted.single.html
+   "#{"                        meta.tag.inline.html > string.quoted.single.html > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "dom_id"                    meta.tag.inline.html > string.quoted.single.html > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag.inline.html > string.quoted.single.html > meta.embedded.interpolation > punctuation.section.embedded.end
+   "'"                         meta.tag.inline.html > string.quoted.single.html
+   ">"                         meta.tag.inline.html > punctuation.definition.tag.end.html
+"    </div>"
+   "</"                        meta.tag.inline.html > punctuation.definition.tag.begin.html
+   "div"                       meta.tag.inline.html > entity.name.tag.html
+   ">"                         meta.tag.inline.html > punctuation.definition.tag.end.html
+"    a title='Hi #{name}' Single"
+   "a"                         meta.tag > entity.name.tag
+   "title"                     meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "'"                         meta.tag > string.quoted.single
+   "Hi "                       meta.tag > string.quoted.single
+   "#{"                        meta.tag > string.quoted.single > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "name"                      meta.tag > string.quoted.single > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.quoted.single > meta.embedded.interpolation > punctuation.section.embedded.end
+   "'"                         meta.tag > string.quoted.single
+   "Single"                    meta.tag > string.unquoted.text
+"    button @click=\"open = true\" :class=\"cls\" x-on:click.prevent=\"go\" Open"
+   "button"                    meta.tag > entity.name.tag
+   "@click"                    meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "open = true"               meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   ":class"                    meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "cls"                       meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "x-on:click.prevent"        meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "go"                        meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "Open"                      meta.tag > string.unquoted.text
+"    - items = [1,"
+   "-"                         meta.line.control > punctuation.section.embedded.ruby
+   "items"                     meta.line.control > source.ruby > stub.source.ruby
+   "="                         meta.line.control > source.ruby > stub.source.ruby
+   " ["                        meta.line.control > source.ruby
+   "1,"                        meta.line.control > source.ruby > stub.source.ruby
+"        2]"
+   "2"                         meta.line.control > source.ruby > stub.source.ruby
+   "]"                         meta.line.control > source.ruby
+"    include partials/header"
+   "include"                   meta.include > keyword.control.import.include
+   "partials/header"           meta.include > string.unquoted.include
+"    > Smart text line"
+   ">"                         meta.text.block > punctuation.definition.text
+   "Smart text line"           meta.text.block > string.unquoted.text
+"    scss class=\"theme\":"
+   "scss"                      meta.embedded.block > entity.name.function.embedded
+   "class"                     meta.embedded.block > entity.other.attribute-name
+   "="                         meta.embedded.block > keyword.operator.assignment
+   "\""                        meta.embedded.block > string.quoted.double
+   "theme"                     meta.embedded.block > string.quoted.double
+   "\""                        meta.embedded.block > string.quoted.double
+   ":"                         meta.embedded.block > punctuation.definition.embedded
+"      .a { color: red; }"
+   ".a"                        meta.embedded.block > source.css.scss > stub.source.css.scss
+   " { "                       meta.embedded.block > source.css.scss
+   "color:"                    meta.embedded.block > source.css.scss > stub.source.css.scss
+   "red;"                      meta.embedded.block > source.css.scss > stub.source.css.scss
+   " }"                        meta.embedded.block > source.css.scss
+"    javascript nonce=content_security_policy_nonce:"
+   "javascript"                meta.embedded.block.interpolated > entity.name.function.embedded
+   "nonce"                     meta.embedded.block.interpolated > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.embedded.block.interpolated > meta.attribute.ruby > keyword.operator.assignment
+   "content_security_policy_nonce"meta.embedded.block.interpolated > meta.attribute.ruby > source.ruby > stub.source.ruby
+   ":"                         meta.embedded.block.interpolated > punctuation.definition.embedded
+"      var data = #{raw data.to_json};"
+   "var"                       meta.embedded.block.interpolated > source.js > stub.source.js
+   "data"                      meta.embedded.block.interpolated > source.js > stub.source.js
+   "="                         meta.embedded.block.interpolated > source.js > stub.source.js
+   "#{"                        meta.embedded.block.interpolated > source.js > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "raw"                       meta.embedded.block.interpolated > source.js > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "data.to_json"              meta.embedded.block.interpolated > source.js > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.embedded.block.interpolated > source.js > meta.embedded.interpolation > punctuation.section.embedded.end
+   ";"                         meta.embedded.block.interpolated > source.js > stub.source.js
+"    css:"
+   "css"                       meta.embedded.block.interpolated > entity.name.function.embedded
+   ":"                         meta.embedded.block.interpolated > punctuation.definition.embedded
+"      .b { content: \"#{label}\"; }"
+   ".b"                        meta.embedded.block.interpolated > source.css > stub.source.css
+   " { "                       meta.embedded.block.interpolated > source.css
+   "content:"                  meta.embedded.block.interpolated > source.css > stub.source.css
+   "\"#{label}\""              meta.embedded.block.interpolated > source.css > stub.source.css
+   ";"                         meta.embedded.block.interpolated > source.css > stub.source.css
+   " }"                        meta.embedded.block.interpolated > source.css
+"    <p>Don't panic</p>"
+   "<"                         meta.tag.inline.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.inline.html > entity.name.tag.html
+   ">"                         meta.tag.inline.html > punctuation.definition.tag.end.html
+   "Don't panic"               meta.tag.inline.html
+   "</"                        meta.tag.inline.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.inline.html > entity.name.tag.html
+   ">"                         meta.tag.inline.html > punctuation.definition.tag.end.html
+"    p after inline html"
+   "p"                         meta.tag > entity.name.tag
+   "after inline html"         meta.tag > string.unquoted.text
+"    p Config #{{a: 1}.to_json} stays escaped"
+   "p"                         meta.tag > entity.name.tag
+   "Config "                   meta.tag > string.unquoted.text
+   "#{"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "{"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby
+   "a:"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "1"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby
+   ".to_json"                  meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
+   " stays escaped"            meta.tag > string.unquoted.text
+"    span after interpolation"
+   "span"                      meta.tag > entity.name.tag
+   "after interpolation"       meta.tag > string.unquoted.text
+"    p= attached"
+   "p"                         meta.tag > entity.name.tag
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "attached"                  meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    p==unescaped"
+   "p"                         meta.tag > entity.name.tag
+   "=="                        meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "unescaped"                 meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    a>= trailing"
+   "a"                         meta.tag > entity.name.tag
+   ">"                         meta.tag > keyword.operator.whitespace
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "trailing"                  meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    a(href=\"/\")= after_wrapped"
+   "a"                         meta.tag > entity.name.tag
+   "("                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.begin
+   "href"                      meta.tag > meta.attributes.wrapped > entity.other.attribute-name
+   "="                         meta.tag > meta.attributes.wrapped > keyword.operator.assignment
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   "/"                         meta.tag > meta.attributes.wrapped > string.quoted.double
+   "\""                        meta.tag > meta.attributes.wrapped > string.quoted.double
+   ")"                         meta.tag > meta.attributes.wrapped > punctuation.section.attributes.end
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "after_wrapped"             meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
+"    a' legacy"
+   "a"                         meta.tag > entity.name.tag
+   "'"                         meta.tag > keyword.operator.whitespace
+   "legacy"                    meta.tag > string.unquoted.text
+"    |< leading space"
+   "|"                         meta.text.block > punctuation.definition.text
+   "<"                         meta.text.block > keyword.operator.whitespace
+   "leading space"             meta.text.block > string.unquoted.text
+"    |no space"
+   "|"                         meta.text.block > punctuation.definition.text
+   "no space"                  meta.text.block > string.unquoted.text
+"    '> trailing space"
+   "'"                         meta.text.block > punctuation.definition.text
+   ">"                         meta.text.block > keyword.operator.whitespace
+   "trailing space"            meta.text.block > string.unquoted.text
+"    p #{{ {a: 1}.to_json }} raw"
+   "p"                         meta.tag > entity.name.tag
+   "#{{"                       meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.begin
+   "{"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby
+   "a:"                        meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "1"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby
+   ".to_json"                  meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "}}"                        meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.end
+   " raw"                      meta.tag > string.unquoted.text
+"    div *{data: {x: 1}}= splat code then text"
+   "div"                       meta.tag > entity.name.tag
+   "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
+   "{"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.begin
+   "data:"                     meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "{"                         meta.tag > meta.attributes.splat > source.ruby
+   "x:"                        meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "1"                         meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.end
+   "="                         meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "splat code then text"      meta.tag > string.unquoted.text
+"    p title='it''= text after a quote"
+   "p"                         meta.tag > entity.name.tag
+   "title"                     meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "'"                         meta.tag > string.quoted.single
+   "it"                        meta.tag > string.quoted.single
+   "'"                         meta.tag > string.quoted.single
+   "'= text after a quote"     meta.tag > string.unquoted.text
+"    a>text"
+   "a"                         meta.tag > entity.name.tag
+   ">"                         meta.tag > keyword.operator.whitespace
+   "text"                      meta.tag > string.unquoted.text
+"    p a=\"b\"text"
+   "p"                         meta.tag > entity.name.tag
+   "a"                         meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "b"                         meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "text"                      meta.tag > string.unquoted.text
 ""

@@ -1,0 +1,30 @@
+"ul.items"
+   "ul"                        meta.tag > entity.name.tag
+   "."                         meta.tag > entity.other.attribute-name.class > punctuation.definition.entity
+   "items"                     meta.tag > entity.other.attribute-name.class
+"  - for item in @items"
+   "-"                         meta.line.control > punctuation.section.embedded.ruby
+   "for"                       meta.line.control > source.coffee > stub.source.coffee
+   "item"                      meta.line.control > source.coffee > stub.source.coffee
+   "in"                        meta.line.control > source.coffee > stub.source.coffee
+   "@items"                    meta.line.control > source.coffee > stub.source.coffee
+"    li class=item.kind = item.name"
+   "li"                        meta.tag > entity.name.tag
+   "class"                     meta.tag > meta.attribute.ruby > entity.other.attribute-name
+   "="                         meta.tag > meta.attribute.ruby > keyword.operator.assignment
+   "item.kind"                 meta.tag > meta.attribute.ruby > source.coffee > stub.source.coffee
+   "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
+   "item.name"                 meta.tag > meta.embedded.line.ruby > source.coffee > stub.source.coffee
+"p Hello #{@user.name}"
+   "p"                         meta.tag > entity.name.tag
+   "Hello "                    meta.tag > string.unquoted.text
+   "#{"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
+   "@user.name"                meta.tag > string.unquoted.text > meta.embedded.interpolation > source.coffee > stub.source.coffee
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
+"coffee:"
+   "coffee"                    meta.embedded.block > entity.name.function.embedded
+   ":"                         meta.embedded.block > punctuation.definition.embedded
+"  alert \"hi\""
+   "alert"                     meta.embedded.block > source.coffee > stub.source.coffee
+   "\"hi\""                    meta.embedded.block > source.coffee > stub.source.coffee
+""

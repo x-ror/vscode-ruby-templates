@@ -1,0 +1,54 @@
+doctype html  
+html lang="en"
+    head
+        title = content_for(:title) || "App"   
+        javascript:
+            if (a) {
+              b();   
+            }
+        css:
+                .a { color: red; }
+            .b { content: "#{label}"; }
+    body.main#page  
+        - @users.each do |user|   
+            .user class=user.role data-id=user.id *{role: "row"}
+                a href=user_path(user) class="name" = user.name
+                span.badge Admin #{user.role}   
+                li: a href="/" Home
+        p
+              | Plain text  
+                  block
+                block 2  
+
+                 
+              ' trailing  
+        p Inline text  
+          continues here,
+            deeper  
+        = form_with model: @user,
+                class: "form" do |f|
+            = f.text_field :name
+        a(href="/"
+                class="wrapped") Multi-line
+        a title="Hi #{name}  
+          there" Quoted
+        a href=x,  
+            Not continued
+        / code comment  
+            nested
+        /! html comment  
+          more
+        /[if IE]  
+            p IE only
+        <div class="inline">  
+        </div>
+        =< link_to "Left", "/"  
+        ==<> raw_html
+        a> Trailing
+        img/  
+        - items = [1,
+                2]
+        ruby:
+            x = 1
+              y = 2
+        = x + y
