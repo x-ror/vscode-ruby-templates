@@ -624,7 +624,7 @@ async function renderPreview(doc) {
   pre{margin:0;padding:.8rem;font:12px/1.4 var(--vscode-editor-font-family,monospace);white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background);max-height:40vh;overflow:auto}
 </style></head><body>
 <div class="bar"><b>Rendered</b> <span>${esc(path.basename(doc.fileName))} · ${esc(doc.languageId)}</span></div>
-<iframe sandbox="" srcdoc="${r.stdout.replace(/"/g, "&quot;")}"></iframe>
+<iframe sandbox="" srcdoc="${esc(r.stdout).replace(/"/g, "&quot;")}"></iframe>
 <div class="bar"><b>HTML source</b></div>
 <pre>${esc(r.stdout)}</pre>
 </body></html>`;
