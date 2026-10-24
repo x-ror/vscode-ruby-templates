@@ -34,20 +34,20 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ### 4. Config
 
-- [ ] Editor options → `.editorconfig` → `.erb_lint.yml` / `.haml-lint.yml` / `.slim-lint.yml` → defaults
-- [ ] Tests per source and for precedence
-- [ ] Table of supported keys in `docs/`, one line in the README; `--verbose` lists ignored keys
+- [x] Editor options → `.editorconfig` → `.erb_lint.yml` / `.haml-lint.yml` / `.slim-lint.yml` → defaults
+- [x] Tests per source and for precedence
+- [x] Table of supported keys in `docs/`, one line in the README; `--verbose` lists ignored keys
 
 ### 5. Editor integration
 
-- [ ] Language server formats ERB (`rubyTemplates.erb.formatter = builtin`), Haml and Slim with the editor's options
-- [ ] `package.json` setting value, a check in `test/vscode/suite.js`, README, CHANGELOG
+- [x] Language server formats ERB (`rubyTemplates.erb.formatter = builtin`), Haml and Slim with the editor's options
+- [x] `package.json` setting value, a check in `test/vscode/suite.js`, README, CHANGELOG
 
 ### 6. npm package
 
-- [ ] `npm/`: main package, ES-module `bin` wrapper, platform package manifests generated from the CI binaries
-- [ ] Assemble script and `bun test/npm.js`
-- [ ] CI job that assembles the packages; publish job on `v*` tags with trusted publishing (not run)
+- [x] `npm/`: main package, ES-module `bin` wrapper, platform package manifests generated from the CI binaries
+- [x] Assemble script and `bun test/npm.js`
+- [x] CI job that assembles the packages; publish job on `v*` tags with trusted publishing (not run)
 
 ### 7. Finish
 
@@ -57,7 +57,7 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ## Blockers
 
-None yet.
+None. Every tool the stages needed was available: network for the corpora and gems, Ruby 3.3 with htmlbeautifier, slim and haml, Chromium-free VS Code under `xvfb-run`, npm for packing.
 
 ## Notes
 
@@ -81,4 +81,8 @@ None yet.
 - Haml (stage 3): ported to `haml_format.rs` (not `haml_indent.rs`, which only checks structure). The unit stays the file's own (first indented line), as Haml reads it and as the client's re-indenter did; indent settings don't convert Haml. Trailing whitespace is trimmed on structural lines only (Haml strips it there; filter bodies keep it). Haml's indentation errors are what it fixes, so only other errors leave a file alone. The extension's Format Document, Format Selection and _Re-indent Haml_ ask the server; the JS re-indenter and its tests are gone.
 - Slim (stage 3): unchanged `slim_format.rs` behind the same entry point; tabs and files Slim rejects are left alone, and blank lines are content (Slim compiles every line).
 - Stage 2 review: fixed the literal detection (`%()`, backticks, regexps, comments), the ERB-in-end-tag panic, unit pinning, a quadratic fixpoint and the Slim check hiding errors after an unclosed `[`; `.gitignore`'s `bin/` had kept `server/src/bin/ruby-templates.rs` out of the branch until `e6b6ec4` (the commits before it don't build from a clean clone).
+- Config (stage 4): `config.rs`, documented in `docs/FORMATTER_CONFIG.md`. The YAML reader is ~60 lines for nested mappings of scalars, no crate. erb_lint's defaults count only with `EnableDefaultLinters: true`; haml-lint's and slim-lint's mapped linters count unless disabled. A disabled linter has no say. `SpaceAroundErbTag` is listed as ignored (clarification 3), so are haml-lint `Indentation` (Haml keeps its unit) and slim-lint `EmptyLines`/`TrailingBlankLines` (Slim compiles blank lines).
+- Editor (stage 5): ERB with `erb.formatter: builtin`, Haml (`reindent`) and the _Re-indent Haml_ command go through client providers that forward to the server's `textDocument/formatting` / `rangeFormatting`; Slim stays dynamically registered by the server. All three use `format::format`. Range formatting leaves out the steps that add or remove lines.
+- Kept on purpose (stage 3 review): in the editor, our defaults (trim trailing whitespace, add a final newline) apply when neither the editor nor a project file says otherwise, which is decision 4's order; VS Code only sends those options when they are on. Haml and Slim _Format Document_ therefore now also add a missing final newline.
+- npm (stage 6): `npm/ruby-templates` (main package, name set only there), `npm/assemble.js` (platform packages from `cli-<platform>` artifacts), `test/npm.js` (pack, offline install, run). CI: `npm` job uploads the packages; `publish-npm` on `v*` tags uses trusted publishing. Not run. **The first publish probably needs a manual token**: npm lets you configure a trusted publisher only for a package that exists, so the first version of each of the six packages has to be published once with an `NPM_TOKEN` (or by hand) before the OIDC job can take over. `@x-ror` is a placeholder scope.
 - Corpora (outside the repo, shallow sparse clones of `app/views` and `app/components`): Forem, Mastodon, rubygems.org, Whitehall, freeats. The network allowed it.
