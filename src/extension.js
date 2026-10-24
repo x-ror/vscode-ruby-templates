@@ -760,7 +760,9 @@ function registerErbLint(context, output) {
       { cwd: workspaceFolderFor(doc) },
       doc.getText(),
     );
+    // A run that was in flight when the linter was turned off must not bring its offenses back.
     if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (!cfg().get("erbLint.enabled", false)) return;
     if (toolMissing(r)) {
       if (!reportedMissing)
         vscode.window.showWarningMessage(
@@ -777,7 +779,12 @@ function registerErbLint(context, output) {
       const diagnostics = erbLintOffenses(r.stdout).map(
         ({ line, column, endLine, endColumn, linter, message }) => {
           const d = new vscode.Diagnostic(
-            new vscode.Range(line, column, endLine, endColumn),
+            new vscode.Range(
+              line,
+              utf16Column(doc, line, column),
+              endLine,
+              utf16Column(doc, endLine, endColumn),
+            ),
             message,
             vscode.DiagnosticSeverity.Warning,
           );
@@ -803,13 +810,24 @@ function registerErbLint(context, output) {
       latestRun.delete(doc.uri.toString());
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration("rubyTemplates.erbLint")) return;
+      if (
+        !e.affectsConfiguration("rubyTemplates.erbLint") &&
+        !e.affectsConfiguration("rubyTemplates.commands.erbLint")
+      )
+        return;
+      reportedMissing = false;
       if (cfg().get("erbLint.enabled", false))
         vscode.workspace.textDocuments.forEach(lint);
       else lints.clear();
     }),
   );
   vscode.workspace.textDocuments.forEach(lint);
+}
+
+/** erb_lint counts columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
+function utf16Column(doc, line, column) {
+  if (line >= doc.lineCount) return column;
+  return [...doc.lineAt(line).text].slice(0, column).join("").length;
 }
 
 // ---------------------------------------------------------------- slim-lint

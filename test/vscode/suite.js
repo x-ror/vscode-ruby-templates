@@ -149,6 +149,7 @@ const checks = {
     );
     await vscode.commands.executeCommand("workbench.action.files.revert");
     await settings().update("erb.formatter", undefined, global);
+    await settings().update("commands.htmlbeautifier", undefined, global);
   },
 
   async "erb_lint diagnostics"() {
@@ -168,6 +169,7 @@ const checks = {
     );
     assert.strictEqual(lints, 2);
     await settings().update("erbLint.enabled", undefined, global);
+    await settings().update("commands.erbLint", undefined, global);
   },
 
   async "wrap in ERB output: selection and empty cursor"() {
