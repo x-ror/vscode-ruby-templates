@@ -262,7 +262,7 @@ mod tests {
                         .strip_prefix(&self.0)
                         .unwrap()
                         .to_string_lossy()
-                        .into_owned();
+                        .replace('\\', "/");
                     edits.iter().map(move |e| {
                         (
                             file.clone(),

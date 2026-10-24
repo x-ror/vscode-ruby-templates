@@ -163,7 +163,11 @@ fn file_name(uri: &Url) -> String {
     uri.to_file_path()
         .ok()
         .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
-        .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
+        // No local path (another scheme, or a drive-less `file:///v/…` on Windows): decode the segment ourselves.
+        .unwrap_or_else(|| {
+            let segment = uri.path().rsplit('/').next().unwrap_or_default();
+            percent_encoding::percent_decode_str(segment).decode_utf8_lossy().into_owned()
+        })
 }
 
 /// The `format` of `name.format.ext`; `None` when `file` doesn't end in `ext` or has no format part.
@@ -881,6 +885,8 @@ mod tests {
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
+        // Without a local path the name is decoded from the URI itself.
+        assert!(html_host(&Url::parse("vscode-remote://ssh-remote/v/users/show.html%2Bphone.erb").unwrap()));
     }
 
     #[test]
