@@ -665,6 +665,19 @@ const check = (label, actual, expected) => {
     labels(await req("textDocument/completion", streamUri, 0, 20)),
     ["replace", "replace_all"],
   );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 2 },
+      contentChanges: [{ text: '<div data-action="click->he">\n' }],
+    },
+    true,
+  );
+  check(
+    "stimulus completion",
+    labels(await req("textDocument/completion", streamUri, 0, 27)),
+    ["hello"],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

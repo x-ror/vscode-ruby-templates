@@ -4,6 +4,7 @@ use crate::partials::app_root;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use walkdir::WalkDir;
 
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
@@ -11,6 +12,47 @@ static TARGET_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"data-([\w-]+
 // `data: { controller: "x", action: "…", x_target: "…" }` in helpers and Haml.
 static DATA_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdata:\s*\{([^}]*)\}").unwrap());
 static HASH_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\b(?:(controller|action):\s*["']([^"']*)["']|(\w+)_target:)"#).unwrap());
+
+// An unfinished `data-controller="…`, `data-action="…`, or `controller:`/`action:` value in a `data:` hash.
+static OPEN_VALUE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:data-(controller|action)["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(controller|action):)\s*["']([^"']*)$"#).unwrap()
+});
+
+/// The identifier being typed at byte `col`: its start and the typed part. In an action value only the part
+/// after `->` and before `#` names a controller.
+pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, &str)> {
+    let before = line.get(..col)?;
+    let cap = OPEN_VALUE.captures(before)?;
+    let value = cap.get(3)?;
+    let token_start = value.as_str().rfind(char::is_whitespace).map_or(0, |i| i + 1);
+    let token = &value.as_str()[token_start..];
+    let is_action = cap.get(1).or(cap.get(2))?.as_str() == "action";
+    let skip = if is_action { token.rfind("->").map_or(0, |i| i + 2) } else { 0 };
+    let typed = &token[skip..];
+    if is_action && typed.contains(['#', ':']) || !typed.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return None;
+    }
+    Some((value.start() + token_start + skip, typed))
+}
+
+/// The identifiers stimulus-loading registers for the files under app/javascript/controllers.
+pub fn controllers(current: &Path) -> Vec<String> {
+    let Some(app) = app_root(current) else { return vec![] };
+    let dir = app.join("javascript/controllers");
+    let mut out: Vec<String> = WalkDir::new(&dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let stem = ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].iter().find_map(|s| rel.strip_suffix(s))?;
+            Some(stem.replace('/', "--").replace('_', "-"))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
 
 /// Every controller identifier on `line`: its byte range and the identifier Stimulus would register.
 pub fn identifiers(line: &str) -> Vec<(usize, usize, String)> {
@@ -108,6 +150,21 @@ mod tests {
     }
 
     #[test]
+    fn completion_prefixes() {
+        let at_end = |line: &str| completion_prefix(line, line.len()).map(|(s, typed)| (s, typed.to_string()));
+        assert_eq!(at_end(r#"<div data-controller="he"#), Some((22, "he".into())));
+        assert_eq!(at_end(r#"<div data-controller="hello da"#), Some((28, "da".into())));
+        assert_eq!(at_end(r#"<div data-controller=""#), Some((22, "".into())));
+        assert_eq!(at_end(r#"<div data-action="click->he"#), Some((25, "he".into())));
+        assert_eq!(at_end(r#"<div data-action="he"#), Some((18, "he".into())));
+        assert_eq!(at_end(r#"%div{data: {controller: "x", action: "click->y"#), Some((45, "y".into())));
+        assert_eq!(at_end(r#"div data-controller='a--"#), Some((21, "a--".into())));
+        for line in [r#"<div data-action="click->hello#gr"#, r#"<div data-controller="x">"#, r#"<%= link_to "x", controller: "us"#] {
+            assert_eq!(at_end(line), None, "{line}");
+        }
+    }
+
+    #[test]
     fn resolves_controller_files() {
         let root = std::env::temp_dir().join(format!("rt-stimulus-{}", std::process::id()));
         let controllers = root.join("app/javascript/controllers");
@@ -128,6 +185,7 @@ mod tests {
         assert_eq!(resolve(&current, "date-picker"), [controllers.join("date_picker_controller.js")]);
         assert_eq!(resolve(&current, "color-picker"), [controllers.join("color-picker_controller.js")]);
         assert_eq!(resolve(&current, "tab-list"), [controllers.join("tab-list-controller.ts")]);
+        assert_eq!(super::controllers(&current), ["admin--users", "color-picker", "date-picker", "hello", "tab-list"]);
         std::fs::create_dir_all(controllers.join("a")).unwrap();
         std::fs::write(controllers.join("a/b_controller.js"), "").unwrap();
         std::fs::write(root.join("app/x_controller.js"), "").unwrap();

@@ -811,6 +811,24 @@ impl LanguageServer for Backend {
             }
         }
 
+        // 2b. Stimulus controller identifiers in `data-controller` / `data-action` values.
+        if let Some((start, typed)) = stimulus::completion_prefix(line, col) {
+            let Ok(path) = uri.to_file_path() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, start, col);
+            let items = stimulus::controllers(&path)
+                .into_iter()
+                .filter(|id| id.starts_with(typed))
+                .map(|id| CompletionItem {
+                    label: id.clone(),
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some("Stimulus controller".into()),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id))),
+                    ..Default::default()
+                })
+                .collect();
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
         // 3. Form builder methods after `f.` / `form.` / `ff.`, Turbo Stream actions after `turbo_stream.`
         if let Some(idx) = before.rfind('.') {
             let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
