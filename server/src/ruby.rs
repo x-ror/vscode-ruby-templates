@@ -80,11 +80,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
                 loop_opened = true;
             }
             t if OPENERS.contains(&t) => opens += 1,
-            t if CONTINUERS.contains(&t) => {
-                if i == 0 {
-                    has_continue = true;
-                }
-            }
+            t if CONTINUERS.contains(&t) && i == 0 => has_continue = true,
             _ => {}
         }
     }

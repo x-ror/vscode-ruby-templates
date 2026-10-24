@@ -139,6 +139,16 @@ function run(cmd, args, options, input) {
   });
 }
 
+/** `haml <subcommand> -` (Haml 6+), falling back to the Haml < 6 CLI, which has no subcommands and reads stdin. */
+async function runHaml(bin, subcommand, legacyArgs, cwd, src) {
+  const r = await run(bin, [subcommand, '-'], { cwd }, src);
+  // Haml < 6 opens the subcommand name as the input file.
+  if (r.code !== 0 && r.stderr.includes('ENOENT') && r.stderr.includes(` - ${subcommand}`)) return run(bin, legacyArgs, { cwd }, src);
+  // Thor reports usage errors on stderr but exits 0.
+  if (r.code === 0 && !r.stdout && r.stderr) return { ...r, code: 1 };
+  return r;
+}
+
 /** Render a template document to HTML with the matching CLI. */
 async function renderToHtml(doc) {
   const lang = engineOf(doc.languageId);
@@ -149,12 +159,7 @@ async function renderToHtml(doc) {
     return run(bin, ['--pretty'], { cwd }, src);
   }
   if (lang === 'haml') {
-    const bin = cfg().get('commands.haml', 'haml');
-    return run(bin, ['render', '--'], { cwd }, src).then(async r => {
-      if (r.code === 0) return r;
-      // Haml < 6 CLI: `haml` reads stdin, no `render` subcommand.
-      return run(bin, [], { cwd }, src);
-    });
+    return runHaml(cfg().get('commands.haml', 'haml'), 'render', [], cwd, src);
   }
   if (lang === 'erb') {
     const bin = cfg().get('commands.erb', 'erb');
@@ -170,9 +175,7 @@ async function compileToRuby(doc) {
   const src = doc.getText();
   if (lang === 'slim') return run(cfg().get('commands.slimrb', 'slimrb'), ['--compile'], { cwd }, src);
   if (lang === 'haml') {
-    const bin = cfg().get('commands.haml', 'haml');
-    const r = await run(bin, ['compile', '--'], { cwd }, src);
-    return r.code === 0 ? r : run(bin, ['--debug'], { cwd }, src);
+    return runHaml(cfg().get('commands.haml', 'haml'), 'compile', ['--debug'], cwd, src);
   }
   if (lang === 'erb') return run(cfg().get('commands.erb', 'erb'), ['-x', '-T', '-'], { cwd }, src);
   return { code: 1, stdout: '', stderr: `Unsupported language: ${lang}` };

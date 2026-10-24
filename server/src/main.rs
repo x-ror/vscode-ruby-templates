@@ -82,11 +82,16 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
                 Some((dir, _)) if views.join(dir).is_dir() => {}
                 _ => continue,
             }
-            let ruby_line = match lang {
-                TemplateLang::Erb => true,
-                _ => { let t = line.trim_start(); ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) }
+            let in_code = match lang {
+                TemplateLang::Erb => in_ruby_context(lang, line, r.start),
+                TemplateLang::Haml => indented::haml_code_start(line)
+                    .is_some_and(|start| start <= r.start && !ruby_comment_before(&line[start..r.start])),
+                TemplateLang::Slim => {
+                    let t = line.trim_start();
+                    ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) && in_ruby_context(lang, line, r.start)
+                }
             };
-            if !ruby_line || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
+            if !in_code || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
@@ -443,6 +448,19 @@ mod tests {
         let haml = users.join("show.html.haml");
         assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
         assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        let haml_text = concat!(
+            "%div= render \"users/a\"\n",
+            ".box{data: {x: 1}}= render \"users/b\"\n",
+            "#main!= render \"users/c\"\n",
+            "%p&= render \"users/d\"\n",
+            "~ render \"users/e\"\n",
+            "%p<~ render \"users/f\"\n",
+            "%p render \"users/g\"\n",
+            "- # render \"users/h\"\n",
+            "-# render \"users/i\"\n",
+        );
+        let lines: Vec<u32> = unresolved_renders(TemplateLang::Haml, &haml, haml_text).iter().map(|d| d.range.start.line).collect();
+        assert_eq!(lines, vec![0, 1, 2, 3, 4, 5]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

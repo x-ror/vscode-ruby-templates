@@ -9,10 +9,17 @@
     { "open": "'", "close": "'", "notIn": ["string", "comment"] }
   ],
   "surroundingPairs": [["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]],
-  "folding": { "offSide": true },
+  "folding": {
+    "offSide": true,
+    "markers": { "start": "^\\s*-#\\s*region\\b", "end": "^\\s*-#\\s*endregion\\b" }
+  },
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(%[\\w:-]+|[.#][\\w-]+)(?![^{(\\[]*[=~/<>&!]\\s*\\S).*$|^\\s*-\\s*(if|unless|while|until|for|case|begin|def|class|module|else|elsif|when|rescue|ensure)\\b|^\\s*[-=~].*\\bdo\\b(\\s*\\|[^|]*\\|)?\\s*$|^\\s*:(\\w+)\\s*$|^\\s*(/|-#)\\s*$",
+    "increaseIndentPattern": "^\\s*(%[\\w:-]+|[.#][\\w-]+)([.#][\\w-]+)*([{(\\[].*[})\\]])?[<>]*\\s*$|^\\s*-\\s*(if|unless|while|until|for|case|begin|def|class|module|else|elsif|when|rescue|ensure)\\b|^\\s*([-=~]|[!&][=~]).*\\bdo\\b(\\s*\\|[^|]*\\|)?\\s*$|^\\s*:(\\w+)\\s*$|^\\s*(/|-#|/!?\\[[^\\]]*\\])\\s*$",
     "decreaseIndentPattern": "^\\s*-\\s*(end|else|elsif|when|rescue|ensure)\\b"
   },
+  "onEnterRules": [
+    { "beforeText": "^(?!.*\\bdo\\s*\\|[^|]*\\s\\|\\s*$).*\\s\\|\\s*$", "action": { "indent": "none" } },
+    { "beforeText": "^\\s*([-=~]|[!&][=~]|(%[\\w:-]+|[.#][\\w-]+)([.#][\\w-]+)*([{(\\[].*[})\\]])?[<>]*[&!]?[=~]).*,\\s*$", "action": { "indent": "none" } }
+  ],
   "wordPattern": "(-?\\d*\\.\\d\\w*)|([A-Za-z_@$][\\w-]*[?!]?)"
 }

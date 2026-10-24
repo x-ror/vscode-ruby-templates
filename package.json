@@ -255,7 +255,9 @@
           "source.css.scss": "scss",
           "source.sass": "sass",
           "source.coffee": "coffeescript",
-          "text.html.markdown": "markdown"
+          "source.css.less": "less",
+          "text.html.markdown": "markdown",
+          "text.html.erb": "erb"
         }
       },
       {
