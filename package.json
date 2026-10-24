@@ -785,6 +785,16 @@
           "uniqueItems": true,
           "description": "Built-in Slim diagnostics to turn off, by code."
         },
+        "rubyTemplates.erbLint.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run erb_lint (`--format json --stdin`) on open and save and show its offenses, using the project's .erb_lint.yml. Uses `bundle exec` when rubyTemplates.preview.useBundler is on."
+        },
+        "rubyTemplates.commands.erbLint": {
+          "type": "string",
+          "default": "erb_lint",
+          "description": "Executable for erb_lint diagnostics (gem install erb_lint)."
+        },
         "rubyTemplates.slimLint.enabled": {
           "type": "boolean",
           "default": false,

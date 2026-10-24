@@ -10,6 +10,7 @@ import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
+import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -82,6 +83,7 @@ function activate(context) {
   );
   void startClient(context, output);
   registerSlimLint(context, output);
+  registerErbLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -733,6 +735,81 @@ async function showCompiledSource() {
     viewColumn: vscode.ViewColumn.Beside,
     preview: true,
   });
+}
+
+// ---------------------------------------------------------------- erb_lint
+
+/** Lint ERB views on open and save with `erb_lint --stdin`, so the editor's text is what gets linted. */
+function registerErbLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection("erb_lint");
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+  let reportedMissing = false;
+
+  const lint = async (doc) => {
+    if (!/^erb/.test(doc.languageId) || doc.uri.scheme !== "file") return;
+    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
+    if (!cfg().get("erbLint.enabled", false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
+    const bin = cfg().get("commands.erbLint", "erb_lint");
+    const r = await run(
+      bin,
+      ["--format", "json", "--stdin", doc.uri.fsPath],
+      { cwd: workspaceFolderFor(doc) },
+      doc.getText(),
+    );
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (toolMissing(r)) {
+      if (!reportedMissing)
+        vscode.window.showWarningMessage(
+          `"${bin}" was not found. Install it with: gem install erb_lint — or set rubyTemplates.commands.erbLint.`,
+        );
+      reportedMissing = true;
+      return;
+    }
+    if (!ERB_LINT_OK_CODES.has(r.code)) {
+      output.appendLine(`[erb_lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
+      return;
+    }
+    try {
+      const diagnostics = erbLintOffenses(r.stdout).map(
+        ({ line, column, endLine, endColumn, linter, message }) => {
+          const d = new vscode.Diagnostic(
+            new vscode.Range(line, column, endLine, endColumn),
+            message,
+            vscode.DiagnosticSeverity.Warning,
+          );
+          d.source = "erb_lint";
+          d.code = linter;
+          return d;
+        },
+      );
+      lints.set(doc.uri, diagnostics);
+    } catch (e) {
+      output.appendLine(
+        `[erb_lint] unreadable JSON for ${doc.uri.fsPath}: ${e.message}`,
+      );
+    }
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidOpenTextDocument(lint),
+    vscode.workspace.onDidSaveTextDocument(lint),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration("rubyTemplates.erbLint")) return;
+      if (cfg().get("erbLint.enabled", false))
+        vscode.workspace.textDocuments.forEach(lint);
+      else lints.clear();
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(lint);
 }
 
 // ---------------------------------------------------------------- slim-lint

@@ -3,6 +3,7 @@ import { convertedFileName } from "../src/convert.js";
 import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
+import { erbLintOffenses } from "../src/erbLint.js";
 
 // convertedFileName
 const cases = [
@@ -98,3 +99,54 @@ assert.deepStrictEqual(
   ["--stdin"],
 );
 assert.ok(Object.keys(ERB_FORMATTERS).every((k) => k !== "none"));
+
+// erbLintOffenses, on erb_lint 0.9's report shape
+const erbLintReport = JSON.stringify({
+  files: [
+    {
+      path: "a.html.erb",
+      offenses: [
+        {
+          linter: "SpaceAroundErbTag",
+          message: "Use 1 space after `<%=` instead of 0 space.",
+          location: {
+            start_line: 2,
+            start_column: 3,
+            last_line: 2,
+            last_column: 3,
+            length: 0,
+          },
+        },
+        {
+          linter: "RequireInputAutocomplete",
+          message: "Input tag is missing an autocomplete attribute.",
+          location: {
+            start_line: 4,
+            start_column: 2,
+            last_line: 5,
+            last_column: 1,
+            length: 9,
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.deepStrictEqual(erbLintOffenses(erbLintReport), [
+  {
+    line: 1,
+    column: 3,
+    endLine: 1,
+    endColumn: 4,
+    linter: "SpaceAroundErbTag",
+    message: "Use 1 space after `<%=` instead of 0 space.",
+  },
+  {
+    line: 3,
+    column: 2,
+    endLine: 4,
+    endColumn: 1,
+    linter: "RequireInputAutocomplete",
+    message: "Input tag is missing an autocomplete attribute.",
+  },
+]);
