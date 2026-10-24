@@ -4,7 +4,7 @@ import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
-import { tagToClose, isHtmlView } from "../src/autoClose.js";
+import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 
 // convertedFileName
 const cases = [
@@ -192,4 +192,22 @@ for (const [file, html] of [
   ["index.js.erb", false],
 ]) {
   assert.strictEqual(isHtmlView(file), html, file);
+}
+
+// doubledErbClose: what auto-closing left after a tag typed in full
+for (const [before, after, length] of [
+  ["<%= x %>", " %>", 3],
+  ["<%=x%>", " %>", 3],
+  ["<p><% if a %>", " %></p>", 3],
+  ["<%= x %>", "%>", 2],
+  ["<%= x %>", "</p>", 0],
+  ["50%>", " %>", 0],
+  ["<%%>", " %>", 0],
+  ["<%= a %%>", " %>", 0],
+]) {
+  assert.strictEqual(
+    doubledErbClose(before, after),
+    length,
+    `${before}|${after}`,
+  );
 }

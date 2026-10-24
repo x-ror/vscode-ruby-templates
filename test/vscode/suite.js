@@ -80,6 +80,30 @@ const runOnSelection = async (rel, range, command) => {
 };
 
 const checks = {
+  async "typing a whole ERB tag leaves one %>"() {
+    const editor = await open("app/views/users/toggle.html.erb");
+    const lines = [];
+    for (const typed of ["<%= x %>", "<%# c %>", "<% if a %>", "<%"]) {
+      await editor.edit((b) => b.insert(new vscode.Position(1, 0), "\n"));
+      editor.selection = new vscode.Selection(1, 0, 1, 0);
+      for (const ch of typed)
+        await vscode.commands.executeCommand("type", { text: ch });
+      // The fix runs after the change event, so give it a moment before reading the line.
+      const line = () => editor.document.lineAt(1).text;
+      await until("one %>", () => line().split("%>").length <= 2, 2000).catch(
+        () => {},
+      );
+      lines.push(line());
+      await vscode.commands.executeCommand("workbench.action.files.revert");
+    }
+    assert.deepStrictEqual(lines, [
+      "<%= x %>",
+      "<%# c %>",
+      "<% if a %>",
+      "<% %>",
+    ]);
+  },
+
   async "auto-close an HTML tag in ERB"() {
     const editor = await open("app/views/users/toggle.html.erb");
     await editor.edit((b) =>

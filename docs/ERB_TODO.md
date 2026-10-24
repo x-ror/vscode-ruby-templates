@@ -61,7 +61,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Default `tabSize: 2`, spaces (`package.json` `configurationDefaults["[erb]"]`)
 - [x] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered) (`language-configuration/erb.json`, `test/langconfig.js`)
 - [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
-- [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
+- [x] Typing a whole tag (`<%= x %>`) after auto-closing inserted ` %>` no longer ends in `%> %>` (`src/autoClose.js` `doubledErbClose`; checked in `test/vscode/suite.js`)
 - [x] Auto-close HTML tags (`</div>`) in `erb` files on typing `>` (`rubyTemplates.erb.autoCloseTags`, `src/autoClose.js`)
 - [x] Linked editing of HTML tag pairs, across ERB tags between them (`server/src/tags.rs` `linked_names`; needs `editor.linkedEditing`)
 - [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)

@@ -11,7 +11,7 @@ import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
-import { tagToClose, isHtmlView } from "./autoClose.js";
+import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -1057,20 +1057,37 @@ function runHamlLint(doc, args, signal) {
 const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
 
-/** Typing the `>` of a start tag in ERB adds its end tag, as VS Code does for plain HTML. */
+/**
+ * Typing `>` in ERB: drops the ` %>` auto-closing added when the user types the tag's own `%>`, and in HTML views
+ * adds a start tag's end tag, as VS Code does for plain HTML.
+ */
 function registerErbAutoClose(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(async (e) => {
-      if (e.document.languageId !== "erb" || e.reason !== undefined) return;
-      if (!isHtmlView(e.document.fileName)) return;
+      if (!/^erb/.test(e.document.languageId) || e.reason !== undefined) return;
       if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">")
         return;
-      if (!cfg().get("erb.autoCloseTags", true)) return;
       const editor = vscode.window.activeTextEditor;
       if (editor?.document !== e.document || editor.selections.length !== 1)
         return;
       const at = e.contentChanges[0].range.start.translate(0, 1);
       const { text } = e.document.lineAt(at.line);
+      const doubled = doubledErbClose(
+        text.slice(0, at.character),
+        text.slice(at.character),
+      );
+      if (doubled) {
+        await editor.edit(
+          (b) => b.delete(new vscode.Range(at, at.translate(0, doubled))),
+          {
+            undoStopBefore: false,
+            undoStopAfter: false,
+          },
+        );
+        return;
+      }
+      if (!isHtmlView(e.document.fileName)) return;
+      if (!cfg().get("erb.autoCloseTags", true)) return;
       const before = e.document.getText(
         new vscode.Range(0, 0, at.line, at.character),
       );
