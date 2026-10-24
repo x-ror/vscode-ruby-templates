@@ -80,10 +80,12 @@ jobs:
       # Commands and the language server inside a downloaded VS Code; tools that aren't installed are skipped.
       - run: xvfb-run -a npm run test:vscode
       - name: Package one .vsix per platform
+        # vsce packs all of bin/, so it holds only the target's binary while that target is packaged.
         run: |
+          mv bin .pkg
           for plat in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
-            [ -d bin/$plat ] || continue
-            mkdir -p .pkg && rm -rf .pkg/bin && mkdir -p .pkg/bin && cp -r bin/$plat .pkg/bin/
+            [ -d .pkg/$plat ] || continue
+            rm -rf bin && mkdir -p bin && cp -r .pkg/$plat bin/
             npx @vscode/vsce package --target $plat --out ruby-templates-$plat.vsix
           done
       - uses: actions/upload-artifact@v4
