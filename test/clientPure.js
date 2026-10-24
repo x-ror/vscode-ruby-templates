@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { convertedFileName } from "../src/convert.js";
 import { windowsShellCommand } from "../src/shell.js";
+import { relatedFiles, relatedDirs } from "../src/related.js";
 
 // convertedFileName
 const cases = [
@@ -46,3 +47,38 @@ assert.throws(
   () => windowsShellCommand("x", ['a" & calc & "']),
   /double quote/,
 );
+
+// relatedFiles / relatedDirs
+assert.deepStrictEqual(
+  relatedFiles("welcome.html.erb", [
+    "welcome.html.erb",
+    "welcome.text.erb",
+    "welcome_back.html.erb",
+    "welcome",
+  ]),
+  ["welcome.text.erb"],
+);
+assert.deepStrictEqual(
+  relatedFiles("show.html+phone.erb", [
+    "show.json.jbuilder",
+    "show.html.erb",
+    "shows.html.erb",
+  ]),
+  ["show.html.erb", "show.json.jbuilder"],
+);
+assert.deepStrictEqual(
+  relatedFiles("card_component.rb", [
+    "card_component.html.slim",
+    "card_component.rb",
+    "card_component",
+  ]),
+  ["card_component.html.slim"],
+);
+assert.deepStrictEqual(relatedDirs("/a/components", "card_component.rb"), [
+  "/a/components/card_component",
+]);
+assert.deepStrictEqual(
+  relatedDirs("/a/components/card_component", "card_component.html.erb"),
+  ["/a/components"],
+);
+assert.deepStrictEqual(relatedDirs("/a/views/users", "show.html.erb"), []);

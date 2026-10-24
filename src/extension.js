@@ -8,6 +8,7 @@ import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
+import { relatedFiles, relatedDirs } from "./related.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -56,6 +57,7 @@ function activate(context) {
   sub("rubyTemplates.convertToSlim", () => convert("slim"));
   sub("rubyTemplates.convertToErb", () => convert("erb"));
   sub("rubyTemplates.extractPartial", extractPartial);
+  sub("rubyTemplates.switchRelated", switchRelated);
   sub("rubyTemplates.toggleHamlPrefix", toggleActiveHamlLines);
   sub("rubyTemplates.reindentHaml", reindentActiveHaml);
   sub("rubyTemplates.toggleSlimTag", toggleSlimTag);
@@ -217,6 +219,49 @@ const RENDER_CALL = {
 };
 
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
+/** Open the view's other formats (`.html.erb` ↔ `.text.erb`) or a component's class ↔ template. */
+async function switchRelated() {
+  const doc = vscode.window.activeTextEditor?.document;
+  if (doc?.uri.scheme !== "file") return;
+  const dir = path.dirname(doc.uri.fsPath);
+  const name = path.basename(doc.uri.fsPath);
+  const candidates = [];
+  for (const folder of [dir, ...relatedDirs(dir, name, path.sep)]) {
+    let entries;
+    try {
+      entries = await vscode.workspace.fs.readDirectory(
+        vscode.Uri.file(folder),
+      );
+    } catch {
+      continue; // most components have no sidecar folder
+    }
+    const files = entries
+      .filter(([, type]) => type === vscode.FileType.File)
+      .map(([n]) => n);
+    candidates.push(
+      ...relatedFiles(name, files).map((n) => path.join(folder, n)),
+    );
+  }
+  if (!candidates.length) {
+    vscode.window.showInformationMessage(`No related file for ${name}.`);
+    return;
+  }
+  const picked =
+    candidates.length === 1
+      ? candidates[0]
+      : (
+          await vscode.window.showQuickPick(
+            candidates.map((file) => ({
+              label: path.basename(file),
+              description: vscode.workspace.asRelativePath(path.dirname(file)),
+              file,
+            })),
+            { placeHolder: "Related file" },
+          )
+        )?.file;
+  if (picked) await vscode.window.showTextDocument(vscode.Uri.file(picked));
+}
+
 async function extractPartial() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.selection.isEmpty) return;

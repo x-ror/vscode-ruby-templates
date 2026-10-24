@@ -149,7 +149,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
 - [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
-- [ ] ViewComponent: component `.rb` ↔ template file switch command
+- [x] ViewComponent: component `.rb` ↔ template file switch command, sidecar folder included (`rubyTemplates.switchRelated`, `src/related.js`)
 - [x] Find references: who renders this partial (workspace scan) (`server/src/main.rs` `references`, `partial_rename::references`)
 - [x] Workspace symbol search for partials/templates by render name (`server/src/main.rs` `symbol`, `partials::named_templates`)
 
@@ -205,7 +205,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
 - [ ] ViewComponent previews (`spec/components/previews`) navigation
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
-- [ ] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command
+- [x] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command (`rubyTemplates.switchRelated`: any view's other formats)
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
 - [x] Jbuilder/Builder views get partial navigation (`docs/JBUILDER_TODO.md`, `TemplateLang::Ruby`)
 - [x] Jbuilder/other templates in the same dir don't confuse partial resolution (`server/src/partials.rs` `renders_format`)

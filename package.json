@@ -374,6 +374,10 @@
     ],
     "commands": [
       {
+        "command": "rubyTemplates.switchRelated",
+        "title": "Ruby Templates: Switch to Related File (other format, component class/template)"
+      },
+      {
         "command": "rubyTemplates.toggleErbTag",
         "title": "Ruby Templates: Toggle ERB Tag (<% / <%= / <%#)"
       },
@@ -527,6 +531,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "rubyTemplates.switchRelated",
+          "when": "resourceScheme == file && (editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim|ruby)$/)"
+        },
         {
           "command": "rubyTemplates.toggleErbTag",
           "when": "editorLangId =~ /^erb/"
