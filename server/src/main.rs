@@ -404,6 +404,10 @@ fn render_filter<'a>(
     }
 }
 
+fn file_location(file: impl AsRef<Path>) -> Option<Location> {
+    Some(Location::new(Url::from_file_path(file).ok()?, Range::default()))
+}
+
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
     FileOperationFilter {
         scheme: Some("file".into()),
@@ -585,9 +589,8 @@ impl LanguageServer for Backend {
         } else {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
-        let locs: Vec<Location> =
-            targets.into_iter().filter_map(|t| Url::from_file_path(t).ok()).map(|u| Location::new(u, Range::default())).collect();
-        Ok(if locs.is_empty() { None } else { Some(GotoDefinitionResponse::Array(locs)) })
+        let locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
@@ -734,7 +737,7 @@ impl LanguageServer for Backend {
         let sources = partial_rename::sources(&views, &self.open_texts());
         let mut locations = partial_rename::references(&files, &sources, &self.options().extra_engines);
         if p.context.include_declaration {
-            locations.extend(files.iter().filter_map(|f| Some(Location::new(Url::from_file_path(f).ok()?, Range::default()))));
+            locations.extend(files.iter().filter_map(file_location));
         }
         Ok(Some(locations))
     }
