@@ -86,9 +86,7 @@ async function doStart(context, output) {
     const msg =
       `Ruby Templates language server failed to start (${command}). ` +
       "Build it with `cargo build --release` in the extension's server/ folder, or set rubyTemplates.server.path.";
-    output.appendLine(
-      `[ruby-templates] ${msg}\n${e && e.message ? e.message : e}`,
-    );
+    output.appendLine(`[ruby-templates] ${msg}\n${e?.message || e}`);
     void offerHelp(msg, output);
   }
 }
@@ -108,9 +106,9 @@ async function offerHelp(msg, output) {
   if (pick === "Show log") output.show();
 }
 
-async function disposeQuietly(c, output) {
+async function disposeQuietly(languageClient, output) {
   try {
-    await c.dispose();
+    await languageClient.dispose();
   } catch (e) {
     output.appendLine(`[ruby-templates] stopping language server: ${e}`);
   }

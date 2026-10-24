@@ -7,6 +7,8 @@ import { startClient, stopClient, restartClient } from "./client.js";
 import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
+import { convertedFileName } from "./convert.js";
+import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
   inVerbatimBlock,
@@ -414,19 +416,6 @@ function findUp(dir, rel) {
   return undefined;
 }
 
-const WINDOWS_COMMAND_NOT_FOUND = 9009; // cmd.exe's exit code for an unknown command
-
-// RubyGems installs .bat shims on Windows, which execFile can't run directly (Node refuses .bat without a shell).
-// ponytail: `%VAR%` inside an argument still expands in cmd.exe; none of our callers pass one.
-function windowsShellCommand(bin, args) {
-  const quote = (a) => `"${a.replace(/"/g, '\\"')}"`;
-  return [
-    "cmd.exe",
-    ["/d", "/s", "/c", `"${[bin, ...args].map(quote).join(" ")}"`],
-    { windowsVerbatimArguments: true },
-  ];
-}
-
 function run(
   cmd,
   args,
@@ -619,15 +608,19 @@ async function openPreview(context) {
   await renderPreview(ed.document);
 }
 
+const escapeHtml = (s) =>
+  String(s).replace(
+    /[&<>]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
+  );
+
 async function renderPreview(doc) {
   const panel = previewPanel;
   if (!panel) return;
   const r = await renderToHtml(doc);
   // The panel may have closed, or moved to another document, during a slow render.
   if (previewPanel !== panel || previewUri !== doc.uri.toString()) return;
-  const esc = (s) =>
-    s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
-  if (r.err && r.err.code === "ENOENT") {
+  if (r.err?.code === "ENOENT") {
     panel.webview.html = errorPage(
       "Renderer not found",
       missingToolMessage(r.err.path, doc.languageId),
@@ -652,30 +645,25 @@ async function renderPreview(doc) {
   iframe{border:0;width:100%;height:calc(55vh);background:#fff}
   pre{margin:0;padding:.8rem;font:12px/1.4 var(--vscode-editor-font-family,monospace);white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background);max-height:40vh;overflow:auto}
 </style></head><body>
-<div class="bar"><b>Rendered</b> <span>${esc(path.basename(doc.fileName))} · ${esc(doc.languageId)}</span></div>
-<iframe sandbox="" srcdoc="${esc(r.stdout).replace(/"/g, "&quot;")}"></iframe>
+<div class="bar"><b>Rendered</b> <span>${escapeHtml(path.basename(doc.fileName))} · ${escapeHtml(doc.languageId)}</span></div>
+<iframe sandbox="" srcdoc="${escapeHtml(r.stdout).replace(/"/g, "&quot;")}"></iframe>
 <div class="bar"><b>HTML source</b></div>
-<pre>${esc(r.stdout)}</pre>
+<pre>${escapeHtml(r.stdout)}</pre>
 </body></html>`;
 }
 
 function errorPage(title, detail, hint) {
-  const esc = (s) =>
-    String(s).replace(
-      /[&<>]/g,
-      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
-    );
   return `<!DOCTYPE html><html><body style="font-family:system-ui;padding:1rem">
-<h3 style="color:var(--vscode-errorForeground)">${esc(title)}</h3>
-<pre style="white-space:pre-wrap">${esc(detail)}</pre>
-${hint ? `<p style="opacity:.8">${esc(hint)}</p>` : ""}</body></html>`;
+<h3 style="color:var(--vscode-errorForeground)">${escapeHtml(title)}</h3>
+<pre style="white-space:pre-wrap">${escapeHtml(detail)}</pre>
+${hint ? `<p style="opacity:.8">${escapeHtml(hint)}</p>` : ""}</body></html>`;
 }
 
 async function showCompiledSource() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) return;
   const r = await compileToRuby(ed.document);
-  if (r.err && r.err.code === "ENOENT") {
+  if (r.err?.code === "ENOENT") {
     vscode.window.showErrorMessage(
       missingToolMessage(r.err.path, ed.document.languageId),
     );
@@ -839,14 +827,7 @@ async function convert(target) {
     return;
   }
 
-  // index.html → index.html.haml; show.html.erb → show.html.haml; show.html.haml.tt → show.html.slim.tt
-  const fileName = ed.document.fileName;
-  const renamed = fileName.replace(
-    /\.(erb|haml|rhtml|slim)(\.tt)?$/i,
-    `.${target}$2`,
-  );
-  const newName =
-    from !== "html" && renamed !== fileName ? renamed : `${fileName}.${target}`;
+  const newName = convertedFileName(ed.document.fileName, from, target);
   const canSave = ed.document.uri.scheme === "file";
   const choice = await vscode.window.showQuickPick(
     [
