@@ -77,6 +77,8 @@ gem install erb_lint           # ERB lint diagnostics
 
 **erb_lint**: set `rubyTemplates.erbLint.enabled` to show `erb_lint`'s offenses (your `.erb_lint.yml`) on open and save; the editor's unsaved text is what gets linted. `rubyTemplates.commands.erbLint` sets the executable.
 
+**herb-lint**: set `rubyTemplates.herbLint.enabled` to show [Herb](https://herb-tools.dev/linter/rules/)'s offenses (your `.herb.yml`, with its severities) on open and save. herb-lint has no stdin mode, so it lints the saved file. It is an npm package (`npm install --save-dev @herb-tools/linter`); the project's `node_modules/.bin/herb-lint` is used before one on `PATH`, and `rubyTemplates.commands.herbLint` overrides both. erb_lint and herb-lint can run side by side; turn off the built-in checks they duplicate with `rubyTemplates.erb.disabledDiagnostics`.
+
 **ERB formatting**: set `rubyTemplates.erb.formatter` to `htmlbeautifier` (`gem install htmlbeautifier`; re-indents to the editor's tab size) or `erb-format` (`gem install erb-formatter`; re-flows to a line width) and *Format Document* / format on save run it (`"[erb]": { "editor.formatOnSave": true }`). The default `none` leaves ERB formatting to other extensions.
 
 **haml-lint**: when `haml-lint` is installed, Haml files are linted on open and save and its offenses show up as diagnostics (`rubyTemplates.hamlLint.enabled`, `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`). Set `rubyTemplates.haml.formatter` to `haml-lint` to make *Format Document* run `haml-lint --auto-correct-only`; note that it applies your RuboCop config's safe corrections too, which can rewrite or drop Ruby code (for example a useless assignment).

@@ -212,6 +212,29 @@ const checks = {
     await settings().update("commands.erbLint", undefined, global);
   },
 
+  async "herb-lint diagnostics"() {
+    const bin = process.env.RT_HERB_LINT;
+    if (!bin || !fs.existsSync(bin)) return "skipped: RT_HERB_LINT not set";
+    const global = vscode.ConfigurationTarget.Global;
+    await settings().update("commands.herbLint", bin, global);
+    await settings().update("herbLint.enabled", true, global);
+    const editor = await open("app/views/users/lint.html.erb");
+    const codes = await until(
+      "herb-lint offenses",
+      () => {
+        const found = vscode.languages
+          .getDiagnostics(editor.document.uri)
+          .filter((d) => d.source === "herb-lint")
+          .map((d) => d.code);
+        return found.length && found;
+      },
+      60000,
+    );
+    assert.ok(codes.includes("erb-require-whitespace-inside-tags"), codes);
+    await settings().update("herbLint.enabled", undefined, global);
+    await settings().update("commands.herbLint", undefined, global);
+  },
+
   async "wrap in ERB output: selection and empty cursor"() {
     const editor = await open("app/views/users/wrap.html.erb");
     try {

@@ -8,7 +8,7 @@ A catalogue of what the template linters check, per language, to decide which ru
 | Haml | [HAML.md](HAML.md) | built-in (13 codes), [haml-lint](https://github.com/sds/haml-lint) 0.78.0 (35 linters) |
 | Slim | [SLIM.md](SLIM.md) | built-in (12 codes), [slim-lint](https://github.com/sds/slim-lint) 0.37.0 (20 linters) |
 
-Herb parses HTML+ERB only; it has no Haml or Slim support. The extension already runs erb_lint, haml-lint and slim-lint when they are installed (`rubyTemplates.{erbLint,hamlLint,slimLint}.enabled`); the built-in checks run without any gem.
+Herb parses HTML+ERB only; it has no Haml or Slim support. The extension runs erb_lint, herb-lint, haml-lint and slim-lint when they are installed and enabled (`rubyTemplates.{erbLint,herbLint,hamlLint,slimLint}.enabled`); the built-in checks run without any gem.
 
 ## The same check across languages
 

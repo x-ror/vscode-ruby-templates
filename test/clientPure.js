@@ -6,6 +6,7 @@ import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
+import { herbLintReport } from "../src/herbLint.js";
 import { spawnSync } from "node:child_process";
 
 // convertedFileName
@@ -226,3 +227,67 @@ if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
   assert.match(erb("compile", "<%= x %>").stdout, /__erubi\.h\(\( x \)\)/);
   assert.notStrictEqual(erb("render", "<% if %>").status, 0);
 }
+
+// herbLintReport
+const herbOffense = (start, end, extra = {}) => ({
+  filename: "app/views/a.html.erb",
+  message: "m",
+  code: "html-img-require-alt",
+  severity: "warning",
+  location: { start, end },
+  ...extra,
+});
+assert.deepStrictEqual(
+  herbLintReport(
+    JSON.stringify({
+      offenses: [
+        herbOffense({ line: 1, column: 1 }, { line: 1, column: 4 }),
+        herbOffense({ line: 3, column: 5 }, { line: 3, column: 5 }),
+        herbOffense({ line: 2, column: 7 }, { line: 4, column: 0 }),
+      ],
+      completed: true,
+    }),
+  ),
+  {
+    offenses: [
+      {
+        line: 0,
+        column: 1,
+        endLine: 0,
+        endColumn: 4,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+      {
+        line: 2,
+        column: 5,
+        endLine: 2,
+        endColumn: 6,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+      {
+        line: 1,
+        column: 7,
+        endLine: 3,
+        endColumn: 0,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+    ],
+    error: null,
+  },
+);
+assert.deepStrictEqual(
+  herbLintReport(
+    JSON.stringify({
+      offenses: [],
+      completed: false,
+      message: "✗ No files found matching pattern: x.erb",
+    }),
+  ),
+  { offenses: [], error: "✗ No files found matching pattern: x.erb" },
+);

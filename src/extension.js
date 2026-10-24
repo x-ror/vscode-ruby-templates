@@ -13,6 +13,7 @@ import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { erbRubyArgs } from "./erbEngine.js";
+import { herbLintReport } from "./herbLint.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -87,6 +88,7 @@ function activate(context) {
   void startClient(context, output);
   registerSlimLint(context, output);
   registerErbLint(context, output);
+  registerHerbLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -830,7 +832,114 @@ function registerErbLint(context, output) {
   vscode.workspace.textDocuments.forEach(lint);
 }
 
-/** erb_lint counts columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
+// ---------------------------------------------------------------- herb-lint
+
+const HERB_SEVERITY = {
+  error: vscode.DiagnosticSeverity.Error,
+  warning: vscode.DiagnosticSeverity.Warning,
+  info: vscode.DiagnosticSeverity.Information,
+  hint: vscode.DiagnosticSeverity.Hint,
+};
+
+/** The project's own `node_modules/.bin/herb-lint` while the setting is left at its default. */
+function herbLintBin(doc) {
+  const bin = cfg().get("commands.herbLint", "herb-lint");
+  if (bin !== "herb-lint") return bin;
+  const rel = path.join("node_modules", ".bin", "herb-lint");
+  const project = findUp(path.dirname(doc.uri.fsPath), rel);
+  return project ? path.join(project, rel) : bin;
+}
+
+/** Lint saved ERB files with `herb-lint --json`; it has no stdin mode, so unsaved text isn't linted. */
+function registerHerbLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection("herb-lint");
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+  let reportedMissing = false;
+
+  const lint = async (doc) => {
+    if (!/^erb/.test(doc.languageId) || doc.uri.scheme !== "file") return;
+    if (doc.uri.path.toLowerCase().endsWith(".tt") || doc.isDirty) return;
+    if (!cfg().get("herbLint.enabled", false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
+    const bin = herbLintBin(doc);
+    const cwd =
+      findUp(path.dirname(doc.uri.fsPath), ".herb.yml") ??
+      workspaceFolderFor(doc);
+    const r = await run(
+      bin,
+      ["--json", "--no-timing", "--no-color", doc.uri.fsPath],
+      { cwd, useBundler: false },
+    );
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (!cfg().get("herbLint.enabled", false)) return;
+    if (toolMissing(r)) {
+      if (!reportedMissing)
+        vscode.window.showWarningMessage(
+          `"${bin}" was not found. Install it with: npm install --save-dev @herb-tools/linter — or set rubyTemplates.commands.herbLint.`,
+        );
+      reportedMissing = true;
+      return;
+    }
+    let report;
+    try {
+      report = herbLintReport(r.stdout);
+    } catch {
+      output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
+      return;
+    }
+    if (report.error) {
+      output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${report.error}`);
+      return;
+    }
+    lints.set(
+      doc.uri,
+      report.offenses.map(
+        ({ line, column, endLine, endColumn, code, message, severity }) => {
+          const d = new vscode.Diagnostic(
+            new vscode.Range(
+              line,
+              utf16Column(doc, line, column),
+              endLine,
+              utf16Column(doc, endLine, endColumn),
+            ),
+            message,
+            HERB_SEVERITY[severity] ?? vscode.DiagnosticSeverity.Warning,
+          );
+          d.source = "herb-lint";
+          d.code = code;
+          return d;
+        },
+      ),
+    );
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidOpenTextDocument(lint),
+    vscode.workspace.onDidSaveTextDocument(lint),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration("rubyTemplates.herbLint") &&
+        !e.affectsConfiguration("rubyTemplates.commands.herbLint")
+      )
+        return;
+      reportedMissing = false;
+      if (cfg().get("herbLint.enabled", false))
+        vscode.workspace.textDocuments.forEach(lint);
+      else lints.clear();
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(lint);
+}
+
+/** erb_lint and herb-lint count columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
 function utf16Column(doc, line, column) {
   if (line >= doc.lineCount) return column;
   return [...doc.lineAt(line).text].slice(0, column).join("").length;

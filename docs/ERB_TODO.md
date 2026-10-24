@@ -124,7 +124,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
 - [x] `raw` / `html_safe` / `<%==` security hints (`unsafe-output`, info, `server/src/html_lint.rs`)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
-- [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
+- [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)
 - [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
 - [ ] Settings to pick external linters
 - [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
