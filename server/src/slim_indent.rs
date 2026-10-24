@@ -61,7 +61,9 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
-    let roles = slim_parser::parse(text, extra_engines).lines;
+    let parsed = slim_parser::parse(text, extra_engines);
+    // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
+    let roles = if parsed.valid { parsed.lines } else { vec![] };
     let unit: Option<usize> = detect_unit(&lines, &roles);
     let mut i = 0usize;
 
@@ -190,14 +192,13 @@ fn nested_branch_openers(keyword: &str) -> &'static [&'static str] {
     }
 }
 
-/// Most common positive indentation step between a line and its parent: the file's indent unit.
 /// The most common indentation step between Slim lines; text, engine bodies and continuations don't count, as
 /// their indentation is free.
 fn detect_unit(lines: &[&str], roles: &[slim_parser::LineInfo]) -> Option<usize> {
     let mut levels: Vec<usize> = vec![0];
     let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
-    for (raw, info) in lines.iter().zip(roles) {
-        if raw.trim().is_empty() || !matches!(info.role, slim_parser::Role::Structural { .. }) {
+    for (i, raw) in lines.iter().enumerate() {
+        if raw.trim().is_empty() || roles.get(i).is_some_and(|l| !matches!(l.role, slim_parser::Role::Structural { .. })) {
             continue;
         }
         let indent = indent_width(leading_ws(raw));
@@ -636,6 +637,9 @@ mod tests {
         // Engine bodies and continuations don't set the unit: this file is indented by 4.
         assert!(slim("ruby:\n  a =\n    b ||\n      c\n= f x,\n  y\ndiv\n    p\n    span\n        b\n").is_empty());
         assert!(slim("head\n    link [rel=\"a\"\n      href=\"b\"]\n    meta\n").is_empty(), "a bracket continuation is no child");
+        // An unclosed construct doesn't hide what follows it.
+        assert!(slim("div\n  a [href=\"x\"\n  p\n    - else\n  div\n   span\n").len() >= 2);
+        assert!(slim("div\n  a href=\"x\n  p\n    - else\n").len() >= 2);
     }
 
     #[test]

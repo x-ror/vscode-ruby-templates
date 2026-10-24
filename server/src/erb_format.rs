@@ -4,7 +4,7 @@
 //! body, a quoted attribute value and Ruby holding a heredoc or a multi-line string keep every byte.
 
 use crate::format::{skip, Indented, SkipKind, Skipped};
-use crate::ruby::{code_end, BlockEffect, CodeEnd};
+use crate::ruby::BlockEffect;
 use crate::tags::{self, Block, Tag, Token, OPTIONAL_END, VOID};
 use regex::Regex;
 use std::collections::HashSet;
@@ -22,6 +22,14 @@ enum Role {
     Fixed,
     /// Inside the unit with this index, which moves with its first line.
     Unit(usize),
+}
+
+/// Lines starting in `first..=last` move with the line holding `owner`.
+struct UnitSpan {
+    first: usize,
+    last: usize,
+    owner: usize,
+    rigid: bool,
 }
 
 struct Unit {
@@ -58,18 +66,18 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
 
     let mut fixed: Ranges = Vec::new();
     let mut keep_end: Ranges = Vec::new();
-    // (first, last line start, owner offset, rigid), outer before inner.
-    let mut unit_spans: Vec<(usize, usize, usize, bool)> = Vec::new();
+    let mut unit_spans: Vec<UnitSpan> = Vec::new();
+    let span = |first, last, owner, rigid| UnitSpan { first, last, owner, rigid };
     let paired = paired_optional(&tokens);
     for (i, token) in tokens.iter().enumerate() {
         match token {
             Token::Erb(e) => {
                 let code = &text[e.at..e.end];
-                unit_spans.push((e.at + 1, e.end - 1, e.at, rigid_ruby(code)));
+                unit_spans.push(span(e.at + 1, e.end - 1, e.at, rigid_ruby(code)));
                 keep_end.push((e.at + 1, e.end - 1));
             }
             Token::Open { tag, quoted, .. } | Token::Close { tag, quoted } => {
-                unit_spans.push((tag.start + 1, tag.end - 1, tag.start, false));
+                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start, false));
                 for &(q, q_end) in quoted {
                     fixed.push((q + 1, q_end - 1));
                     keep_end.push((q + 1, q_end - 1));
@@ -90,13 +98,15 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
                 };
                 keep_end.push((tag.end, close_start.saturating_sub(1)));
                 if tag.name == "script" || tag.name == "style" {
-                    unit_spans.push((tag.start + 1, close_end - 1, tag.start, false));
+                    // A JS template literal across lines is content, like a Ruby string.
+                    let rigid = text[tag.end..close_start].contains('`');
+                    unit_spans.push(span(tag.start + 1, close_end - 1, tag.start, rigid));
                 } else {
-                    unit_spans.push((tag.start + 1, tag.end - 1, tag.start, false));
+                    unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start, false));
                     fixed.push((tag.end, close_start));
                 }
             }
-            Token::Comment { start, end } => unit_spans.push((start + 1, end - 1, *start, false)),
+            Token::Comment { start, end } => unit_spans.push(span(start + 1, end - 1, *start, false)),
             Token::Unterminated => return skip(SkipKind::Doubt, "a tag is never closed with `>`"),
         }
     }
@@ -104,8 +114,8 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
     let mut roles = vec![Role::Markup; lines.len()];
     let mut units = Vec::new();
     // Inner units start later; sorting by start lets them win over the unit around them.
-    unit_spans.sort_by_key(|&(_, _, owner, _)| owner);
-    for (first, last, owner, rigid) in unit_spans {
+    unit_spans.sort_by_key(|u| u.owner);
+    for UnitSpan { first, last, owner, rigid } in unit_spans {
         let lines_inside = lines_starting_in(&starts, first, last);
         if lines_inside.is_empty() {
             continue;
@@ -121,10 +131,10 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
             roles[line] = Role::Fixed;
         }
     }
+    let ends: Vec<usize> = lines.iter().map(|l| l.start + l.ws.len() + l.rest.len()).collect();
     let mut keeps_end = vec![false; lines.len()];
-    for (i, line) in lines.iter().enumerate() {
-        let end = line.start + line.ws.len() + line.rest.len();
-        keeps_end[i] = keep_end.iter().any(|&(a, b)| a <= end && end <= b);
+    for &(first, last) in &keep_end {
+        lines_starting_in(&ends, first, last).for_each(|line| keeps_end[line] = true);
     }
 
     let (levels, uncertain) = levels(text, &tokens, &paired, &lines, &roles, partial);
@@ -173,12 +183,63 @@ fn lines_starting_in(starts: &[usize], first: usize, last: usize) -> std::ops::R
     starts.partition_point(|&s| s < first)..starts.partition_point(|&s| s <= last)
 }
 
-/// Ruby code that a move could change: a line break inside a string, or a heredoc.
+/// Ruby code that a move could change: a heredoc, or a line break inside a string, `%` literal, backtick command
+/// or regexp. Unsure readings (`a %(b)`, `x /y/`) count as literals, which only keeps more code where it is.
 fn rigid_ruby(code: &str) -> bool {
-    if !code.contains('\n') {
-        return false;
+    code.contains('\n') && (HEREDOC.is_match(code) || literal_spans_lines(code))
+}
+
+fn literal_spans_lines(code: &str) -> bool {
+    let chars: Vec<char> = code.chars().collect();
+    let mut i = 0;
+    // The last character of code before `i`, outside literals and comments: tells a regexp from a division.
+    let mut prev = ' ';
+    while i < chars.len() {
+        let c = chars[i];
+        let close = match c {
+            '#' => {
+                while chars.get(i).is_some_and(|&c| c != '\n') {
+                    i += 1;
+                }
+                continue;
+            }
+            '"' | '\'' | '`' => Some(c),
+            '/' if !(prev.is_alphanumeric() || matches!(prev, '_' | ')' | ']' | '}')) => Some('/'),
+            '%' if chars.get(i + 1).is_some_and(|n| !n.is_whitespace() && *n != '=') => {
+                if chars.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
+                    i += 1;
+                }
+                chars.get(i + 1).map(|&open| match open {
+                    '(' => ')',
+                    '[' => ']',
+                    '{' => '}',
+                    '<' => '>',
+                    other => other,
+                })
+            }
+            _ => None,
+        };
+        let Some(close) = close else {
+            if !c.is_whitespace() {
+                prev = c;
+            }
+            i += 1;
+            continue;
+        };
+        i += if c == '%' { 2 } else { 1 };
+        while let Some(&c) = chars.get(i) {
+            match c {
+                '\\' => i += 1,
+                '\n' => return true,
+                _ if c == close => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        prev = close;
+        i += 1;
     }
-    HEREDOC.is_match(code) || code.match_indices('\n').any(|(at, _)| code_end(&code[..at]) == CodeEnd::String)
+    false
 }
 
 fn closing<'t>(tokens: &'t [Token], name: &str) -> Option<&'t Tag> {
@@ -214,7 +275,7 @@ fn span(token: &Token) -> (usize, usize) {
         Token::Open { tag, .. } | Token::Close { tag, .. } => (tag.start, tag.end),
         Token::Raw { tag, close } => (tag.start, close.map_or(tag.end, |(_, end)| end)),
         Token::Comment { start, end } => (*start, *end),
-        Token::Unterminated => (usize::MAX, usize::MAX),
+        Token::Unterminated => unreachable!("`indent` refuses unterminated tags"),
     }
 }
 
@@ -305,7 +366,15 @@ fn levels(
         let mut at = line.start + line.ws.len();
         while next < tokens.len() {
             let (start, end) = span(&tokens[next]);
-            if start >= line_end || !text[at..start].trim_matches([' ', '\t']).is_empty() {
+            // ERB inside a tag that leads the line (`</div <%= x %>>`) belongs to it.
+            let Some(gap) = text.get(at..start) else {
+                if !nesting.step(next) {
+                    return (out, Some(l));
+                }
+                next += 1;
+                continue;
+            };
+            if start >= line_end || !gap.trim_matches([' ', '\t']).is_empty() {
                 break;
             }
             let kind = nesting.kind(next);
@@ -335,8 +404,15 @@ fn levels(
 }
 
 /// The new leading whitespace of each line, `None` to keep it. A unit moves only as a whole: if one of its lines
-/// can't follow the first (it is indented less, or holds Ruby that can't move), the first line stays too.
+/// can't follow the first (it is indented less, or holds Ruby that can't move), the first line stays too, and so
+/// does every unit that line belongs to.
 fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize>], unit: &str) -> Vec<Option<String>> {
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
+    for (i, role) in roles.iter().enumerate() {
+        if let Role::Unit(u) = role {
+            members[*u].push(i);
+        }
+    }
     let mut pinned = vec![false; lines.len()];
     let mut moves = vec![true; units.len()];
     loop {
@@ -352,17 +428,28 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
             };
             decided.push(ws);
         }
-        let stuck = units.iter().enumerate().find(|&(u, unit)| {
-            let owner = &lines[unit.owner_line];
-            let moved = decided[unit.owner_line].as_deref().is_some_and(|new| new != owner.ws);
-            let inside = || roles.iter().zip(lines).filter(|(role, line)| **role == Role::Unit(u) && !line.rest.is_empty());
-            moves[u] && moved && (unit.rigid || inside().any(|(_, line)| !line.ws.starts_with(owner.ws)))
-        });
-        let Some((u, unit)) = stuck else { return decided };
-        moves[u] = false;
-        match roles[unit.owner_line] {
-            Role::Unit(outer) => moves[outer] = false,
-            _ => pinned[unit.owner_line] = true,
+        let stuck: Vec<usize> = (0..units.len())
+            .filter(|&u| {
+                let owner = &lines[units[u].owner_line];
+                let moved = decided[units[u].owner_line].as_deref().is_some_and(|new| new != owner.ws);
+                let behind = || members[u].iter().any(|&i| !lines[i].rest.is_empty() && !lines[i].ws.starts_with(owner.ws));
+                moves[u] && moved && (units[u].rigid || behind())
+            })
+            .collect();
+        if stuck.is_empty() {
+            return decided;
+        }
+        for mut u in stuck {
+            loop {
+                moves[u] = false;
+                match roles[units[u].owner_line] {
+                    Role::Unit(outer) => u = outer,
+                    _ => {
+                        pinned[units[u].owner_line] = true;
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -410,6 +497,7 @@ mod tests {
         assert_eq!(fmt("<li><% if a %>\nx\n<% end %></li>"), "<li><% if a %>\n    x\n<% end %></li>");
         assert_eq!(fmt("<div>\n</div><div>\nx\n</div>"), "<div>\n</div><div>\n  x\n</div>");
         assert_eq!(fmt("<div>\nx</div>"), "<div>\n  x</div>");
+        assert_eq!(fmt("<div>\n<p>x</p>\n</div <%= x %>>\n"), "<div>\n  <p>x</p>\n</div <%= x %>>\n");
     }
 
     #[test]
@@ -442,6 +530,11 @@ mod tests {
         ] {
             assert_eq!(fmt(&rigid), rigid);
         }
+        for literal in ["t %(a\n  b)", "x = `a\n  b`", "x = /a\n  b/", "x 1 # note\n  \"a\n  b\""] {
+            let text = format!("<div>\n<%= {literal} %>\n</div>");
+            assert_eq!(fmt(&text), text, "{literal}");
+        }
+        assert_eq!(fmt("<div>\n<%= a / b +\n  c %>\n</div>"), "<div>\n  <%= a / b +\n    c %>\n</div>", "a division moves");
         let block = lines(&["<%= link_to x,", "      class: \"a\" do %>", "<span>y</span>", "<% end %>"]);
         assert_eq!(fmt(&block), lines(&["<%= link_to x,", "      class: \"a\" do %>", "  <span>y</span>", "<% end %>"]));
     }
@@ -450,6 +543,10 @@ mod tests {
     fn raw_text_and_pre() {
         let script = lines(&["<div>", "    <script>", "      if (a) {", "        b();", "      }", "    </script>", "</div>"]);
         assert_eq!(fmt(&script), lines(&["<div>", "  <script>", "    if (a) {", "      b();", "    }", "  </script>", "</div>"]));
+        let template = lines(&["<div>", "<script>", "  var a = `x", "  y`;", "</script>", "</div>"]);
+        assert_eq!(fmt(&template), template, "a template literal is content");
+        let nested = lines(&["<div>", "<script>", "  var a = <%= raw \"x", "  y\" %>;", "</script>", "</div>"]);
+        assert_eq!(fmt(&nested), nested, "a stuck ERB tag holds its script too");
         let shallow = lines(&["<div>", "    <style>", "a {}", "    </style>", "</div>"]);
         assert_eq!(fmt(&shallow), shallow, "a body left of its tag can't keep its offsets");
         let pre = lines(&["<div>", "    <pre>", "  a  ", "    b", "    </pre>", "  <textarea>", " x ", "</textarea>", "</div>"]);
