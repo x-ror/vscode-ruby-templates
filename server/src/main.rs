@@ -137,6 +137,8 @@ struct Backend {
     locales: DashMap<PathBuf, LocaleFiles>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     options: Arc<OnceLock<Options>>,
+    /// Workspace folders from `initialize`, for workspace symbols before any view is open.
+    roots: OnceLock<Vec<PathBuf>>,
     /// Formatting is registered for Slim/Skim only, and only when the client supports dynamic registration:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
@@ -448,7 +450,12 @@ impl Backend {
         let Some(views) = partials::views_root(current) else {
             return Arc::new(current.parent().map(|dir| partials::files_under(dir, 1)).unwrap_or_default());
         };
-        self.templates.entry(views.clone()).or_insert_with(|| Arc::new(partials::files_under(&views, usize::MAX))).clone()
+        self.views_files(&views)
+    }
+
+    /// Every file under an app/views root, cached until a watched-file event says otherwise.
+    fn views_files(&self, views: &Path) -> Arc<Vec<PathBuf>> {
+        self.templates.entry(views.to_path_buf()).or_insert_with(|| Arc::new(partials::files_under(views, usize::MAX))).clone()
     }
 
     fn locale_files(&self, current: &Path) -> LocaleFiles {
@@ -472,6 +479,10 @@ impl LanguageServer for Backend {
             self.client.log_message(MessageType::WARNING, message).await;
         }
         let _ = self.options.set(options);
+        #[allow(deprecated)]
+        let root_uri = params.root_uri.iter().cloned();
+        let folders = params.workspace_folders.unwrap_or_default().into_iter().map(|f| f.uri);
+        let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| u.to_file_path().ok()).collect());
         let dynamic_formatting =
             params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
         let _ = self.dynamic_formatting.set(dynamic_formatting);
@@ -493,6 +504,7 @@ impl LanguageServer for Backend {
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
                     code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
@@ -757,6 +769,37 @@ impl LanguageServer for Backend {
             .map(|names| LinkedEditingRanges { ranges: names.map(to_range).to_vec(), word_pattern: None }))
     }
 
+    /// Partials and templates by their render name (`users/card`), matched like VS Code's fuzzy filter.
+    async fn symbol(&self, p: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = p.query.to_lowercase();
+        let open = self.docs.iter().filter_map(|d| partials::views_root(&d.key().to_file_path().ok()?)).collect::<Vec<_>>();
+        let mut roots: Vec<PathBuf> =
+            self.roots.get().into_iter().flatten().map(|r| r.join("app/views")).filter(|v| v.is_dir()).chain(open).collect();
+        roots.sort();
+        roots.dedup();
+        let mut out = Vec::new();
+        for views in roots {
+            let is_template = |f: &&PathBuf| Url::from_file_path(f).is_ok_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
+            let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
+            for (name, kind, file) in partials::named_templates(&views, &templates) {
+                if !util::fuzzy_match(&name.to_lowercase(), &query) {
+                    continue;
+                }
+                let Some(location) = file_location(&file) else { continue };
+                #[allow(deprecated)]
+                out.push(SymbolInformation {
+                    name,
+                    kind: SymbolKind::FILE,
+                    tags: None,
+                    deprecated: None,
+                    location,
+                    container_name: Some(kind.name().to_lowercase()),
+                });
+            }
+        }
+        Ok(Some(out))
+    }
+
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
         let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
@@ -1018,6 +1061,7 @@ async fn main() {
         templates: DashMap::new(),
         locales: DashMap::new(),
         options: Arc::default(),
+        roots: OnceLock::new(),
         dynamic_formatting: OnceLock::new(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;

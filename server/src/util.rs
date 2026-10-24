@@ -36,6 +36,12 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
 }
 
 /// Attach a stable `code` so users can filter or disable the diagnostic.
+/// Do `query`'s characters appear in `name` in order (`uscard` in `users/card`)?
+pub fn fuzzy_match(name: &str, query: &str) -> bool {
+    let mut chars = name.chars();
+    query.chars().all(|q| chars.any(|c| c == q))
+}
+
 pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
     d.code = Some(NumberOrString::String(code.into()));
     d
@@ -154,6 +160,13 @@ mod tests {
     fn edit(range: Option<((u32, u32), (u32, u32))>, text: &str) -> TextDocumentContentChangeEvent {
         let range = range.map(|((sl, sc), (el, ec))| Range::new(Position::new(sl, sc), Position::new(el, ec)));
         TextDocumentContentChangeEvent { range, range_length: None, text: text.into() }
+    }
+
+    #[test]
+    fn fuzzy_matches_in_order() {
+        assert!(fuzzy_match("users/card", "uscard"));
+        assert!(fuzzy_match("users/card", ""));
+        assert!(!fuzzy_match("users/card", "cardus"));
     }
 
     #[test]

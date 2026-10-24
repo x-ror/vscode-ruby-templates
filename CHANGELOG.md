@@ -16,6 +16,7 @@
 - Fewer false warnings, found on real apps: `=begin`/`=end` comments in ERB tags, `.rss`/`.atom` (and font) formats, and `render "devise/…"` views shipped by a gem in `Gemfile.lock`.
 - ERB and Slim generator templates (`*.erb.tt`, `*.slim.tt` under `lib/templates` or `lib/generators`) open as ERB / Slim, without diagnostics or formatting.
 - ERB: linked editing of HTML open/close tag names (`editor.linkedEditing`).
+- Go to Symbol in Workspace lists partials and templates by their render name.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

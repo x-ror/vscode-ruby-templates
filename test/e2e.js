@@ -639,6 +639,12 @@ const check = (label, actual, expected) => {
       ],
     ],
   );
+  const symbols = await send("workspace/symbol", { query: "shfoot" });
+  check(
+    "workspace/symbol shfoot",
+    symbols.result?.map((s) => `${s.name} ${s.containerName}`),
+    ["shared/footer partial"],
+  );
   const linked = await req("textDocument/linkedEditingRange", uri, 8, 2);
   check(
     "linkedEditingRange nav",

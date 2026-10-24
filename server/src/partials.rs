@@ -440,6 +440,13 @@ pub fn render_candidates(current: &Path, kind: RenderKind, files: &[PathBuf]) ->
     out
 }
 
+/// Every partial and template among `files` under `views`, by the name `render` uses for it.
+pub fn named_templates(views: &Path, files: &[PathBuf]) -> Vec<(String, RenderKind, PathBuf)> {
+    let partials = templates_in(views, files, true).map(|(name, p)| (name, RenderKind::Partial, p));
+    let templates = templates_in(views, files, false).map(|(name, p)| (name, RenderKind::Template, p));
+    partials.chain(templates).collect()
+}
+
 /// Partials (`_x.*`) or non-partial templates among `files` under `root`, named `dir/x` relative to `root`.
 fn templates_in<'a>(root: &'a Path, files: &'a [PathBuf], partial: bool) -> impl Iterator<Item = (String, PathBuf)> + 'a {
     files.iter().filter_map(move |p| {
