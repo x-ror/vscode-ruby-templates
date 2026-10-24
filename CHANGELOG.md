@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Symlinked folders under `app/views` (and the other template folders) are followed by partial completion, find references and rename.
 - **Breaking:** requires VS Code 1.100 or newer: the extension is now an ES module (`vscode-languageclient` 11 alone needs 1.91).
 - Partials: hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` get navigation, completion and diagnostics.
 - Partials resolve only in the view's format: `render "users/user"` from `index.html.erb` no longer offers `_user.json.jbuilder`. Format-less partials still match; JS and turbo_stream views also take HTML partials.

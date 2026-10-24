@@ -450,12 +450,12 @@ pub fn snake_case(s: &str) -> String {
 /// Every file under `root`; the listing `render_candidates` names come from.
 pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
     WalkDir::new(root)
+        .follow_links(true)
         .min_depth(1)
         .max_depth(max_depth)
         .into_iter()
         .flatten()
-        // `path().is_file()` follows symlinks; walkdir's file_type() doesn't.
-        .filter(|e| e.path().is_file())
+        .filter(|e| e.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
         .collect()
 }
@@ -735,6 +735,21 @@ mod tests {
         for singular in ["bus", "virus", "axis"] {
             assert_eq!(singularize(singular), singular);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn files_under_follows_symlinked_dirs() {
+        let root = std::env::temp_dir().join(format!("rt-symlink-{}", std::process::id()));
+        let shared = root.join("shared/cards");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("_card.html.erb"), "").unwrap();
+        let views = root.join("app/views");
+        std::fs::create_dir_all(&views).unwrap();
+        std::os::unix::fs::symlink(root.join("shared"), views.join("shared")).unwrap();
+        std::os::unix::fs::symlink(&views, views.join("loop")).unwrap();
+        assert_eq!(files_under(&views, usize::MAX), [views.join("shared/cards/_card.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

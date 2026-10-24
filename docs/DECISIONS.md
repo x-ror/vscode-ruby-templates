@@ -6,43 +6,6 @@ To decide an item, change its `Status:` to `accepted` or `rejected` and add a sh
 
 ## Pending
 
-### D1. HTML diagnostics for locale-only ERB views
-
-`show.de.erb` currently behaves like a bare `show.erb`: no HTML tag diagnostics, folding or outline, because its output format is unknown. In `app/views`, such files are almost always localized HTML.
-
-- **A:** keep as is.
-- **B:** treat `<name>.<locale>.erb` under `app/views` as HTML.
-
-**Recommendation:** B. A one-line change in `html_host`, plus a test.
-Status: pending
-
-### D2. turbo_stream views falling back to HTML partials
-
-`render "x"` inside `create.turbo_stream.erb` currently finds `_x.html.erb`, so no "not found" warning appears. ActionView itself only adds this fallback for JS views. It is unverified whether turbo-rails adds it for turbo_stream views.
-
-- **A:** keep the fallback.
-- **B:** drop it.
-- **C:** check the turbo-rails source first, then pick A or B.
-
-**Recommendation:** C. Keep A until it is checked, since the worst case is a missed warning rather than a false one.
-Status: pending
-
-### D5. Next template languages
-
-The plans are in `docs/*_TODO.md`:
-
-| Language | Plan | Size |
-|---|---|---|
-| Erubi / Erubis | `ERUBI_TODO.md` | XS |
-| Jbuilder | `JBUILDER_TODO.md` | S, the format filter is already done |
-| Builder | `BUILDER_TODO.md` | XS, on top of Jbuilder |
-| Liquid | `LIQUID_TODO.md` | L, phased |
-
-Accept or reject each one separately.
-
-**Recommendation:** accept Erubi, Jbuilder and Builder. Defer Liquid until someone asks for it, since Shopify already ships its own extension.
-Status: pending
-
 ### D6. Migrate from tower-lsp to tower-lsp-server
 
 tower-lsp 0.20 is unmaintained. Its maintained fork, tower-lsp-server, has a slightly different API.
@@ -51,26 +14,6 @@ tower-lsp 0.20 is unmaintained. Its maintained fork, tower-lsp-server, has a sli
 - **B:** migrate when a bug or a missing LSP 3.18 feature forces it.
 
 **Recommendation:** B. Nothing is broken today, and `cargo audit` in CI will flag any advisory.
-Status: pending
-
-### D7. Symlinked folders under `app/views`
-
-`resolve` follows symlinks. Completion and partial rename don't, because walkdir doesn't follow links by default.
-
-- **A:** turn on `follow_links(true)`. Walkdir detects loops.
-- **B:** leave it as is.
-
-**Recommendation:** A, with a temp-dir test.
-Status: pending
-
-### D8. Form-builder completion and helper hover in plain text
-
-Typing `form.` in `<p>Please fill in the form.` pops up 42 FormBuilder methods. Hovering "cache" in `<p>Clear the cache</p>` shows the Rails `cache` helper.
-
-- **A:** gate both on the same "cursor is in Ruby code" check that the rest of completion uses.
-- **B:** leave it.
-
-**Recommendation:** A.
 Status: pending
 
 ### D9. Windows check
@@ -108,6 +51,11 @@ Status: pending
 
 ## Decided
 
+- **Locale-only ERB views are HTML** (D1): `<name>.<locale>.erb` under `app/views` gets the HTML checks (`html_host`).
+- **turbo_stream views keep the HTML partial fallback** (D2): turbo-rails registers no lookup fallback itself, but Turbo sends `Accept: text/vnd.turbo-stream.html, text/html`, so ActionView looks up both formats. A missed warning is the worse case of being wrong.
+- **Erubi, Jbuilder and Builder are supported; Liquid is deferred** (D5) until someone asks, since Shopify ships its own extension. Plans stay in `docs/*_TODO.md`.
+- **Symlinked folders under `app/views` are followed** (D7), by completion, partial rename and the template index; walkdir detects loops.
+- **Form-builder completion and helper hover only inside Ruby code** (D8), not in template text.
 - **Coding rules live in `CLAUDE.md`, and the agents point to it.** Bugs go through the cycle feature-dev → refactorer → test-writer. feature-dev and test-writer run on Sonnet.
 - **Conventional Commits, one logical change per commit, formatting in separate `style:` commits.** Tests are written only where they catch a plausible regression, and each is seen failing first.
 - **rustfmt** with `max_width = 140` and `use_small_heuristics = "Max"`; **`bun fmt`** with default rules. A plain git **pre-commit hook** formats staged files, with no husky.
@@ -123,4 +71,4 @@ Status: pending
 ## Open bugs
 
 - herb-lint on Windows lints nothing below the folder it runs in ("excluded by configuration patterns", `filesChecked: 0`): its exclude check gets backslash relative paths. Upstream (herb-tools); `--force` would bypass the user's excludes.
-- See also D7 (symlinks), D8 (completion in plain text) and D11 (app-registered formats). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.
+- See also D11 (app-registered formats). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.

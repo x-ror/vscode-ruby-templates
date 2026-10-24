@@ -215,7 +215,7 @@ pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> 
 
 fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>) -> Vec<Source> {
     roots
-        .flat_map(|root| WalkDir::new(root).into_iter().flatten())
+        .flat_map(|root| WalkDir::new(root).follow_links(true).into_iter().flatten())
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
             let path = e.into_path();
