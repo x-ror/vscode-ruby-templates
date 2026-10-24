@@ -39,6 +39,14 @@ pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
     d
 }
 
+/// The string `code` of `d`, as set by `coded`.
+pub fn code(d: &Diagnostic) -> Option<&str> {
+    match &d.code {
+        Some(NumberOrString::String(code)) => Some(code),
+        _ => None,
+    }
+}
+
 /// Template indentation: spaces and tabs only (Haml and Slim don't indent with other Unicode whitespace).
 pub fn leading_ws(line: &str) -> &str {
     &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]

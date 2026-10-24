@@ -154,14 +154,14 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
         TemplateLang::Skim => slim_indent::diagnostics(&doc.text, &options.extra_engines)
             .into_iter()
-            .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim_indent::code::RUBY.contains(&c.as_str())))
+            .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
             .collect(),
         // Syntax errors are Ruby LSP's job; only the render checks below apply.
         TemplateLang::Ruby => vec![],
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if doc.lang == TemplateLang::Slim && !slim_html_host(uri) {
-        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if c == slim_indent::code::VOID_CHILDREN));
+        out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
@@ -173,7 +173,7 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
         out.extend(strict_locals_mismatches(&path, &doc.text, &in_code));
     }
     let disabled = options.disabled(doc.lang);
-    out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if disabled.contains(c)));
+    out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
     out
 }
 
@@ -684,7 +684,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let unresolved = p.context.diagnostics.into_iter().filter(|d| d.code == Some(NumberOrString::String(UNRESOLVED_RENDER.into())));
+        let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
         let actions = unresolved
             .filter_map(|d| {
                 let (_, line, start) = util::line_at(&doc.text, d.range.start);
