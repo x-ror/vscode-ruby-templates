@@ -478,7 +478,11 @@ async function extractSlimPartial() {
   // One edit, so a single undo restores the selection and a failed create leaves the template alone.
   const edit = new vscode.WorkspaceEdit();
   edit.createFile(targetUri, { overwrite: false, ignoreIfExists: false });
-  edit.insert(targetUri, new vscode.Position(0, 0), lines.join(eol) + eol);
+  // A new document takes files.eol (CRLF on Windows) and would convert the inserted text to it.
+  edit.set(targetUri, [
+    vscode.TextEdit.setEndOfLine(doc.eol),
+    vscode.TextEdit.insert(new vscode.Position(0, 0), lines.join(eol) + eol),
+  ]);
   edit.replace(doc.uri, range, `${indent}= render "${name}"`);
   if (!(await vscode.workspace.applyEdit(edit))) {
     vscode.window.showErrorMessage(`Couldn't create ${path.basename(target)}.`);
