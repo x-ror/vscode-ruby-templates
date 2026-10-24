@@ -19,6 +19,7 @@ static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s
 static KEYWORD_ARG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
 static RENDER_COMPONENT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
+static RENDER_MODEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderKind { Partial, Template }
@@ -65,6 +66,69 @@ pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
         }
     }
     None
+}
+
+/// `render @user` / `@users` / `@post.comments`: byte range of the expression and the name its partial follows.
+/// Longer chains and calls (`@posts.page(1)`, `@post.comments.order(:id)`) name a query, not a model.
+pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
+    RENDER_MODEL.captures_iter(line).filter_map(|cap| {
+        let m = cap.get(1)?;
+        if line[m.end()..].starts_with(['.', '(']) { return None; }
+        Some((m.start(), m.end(), m.as_str().rsplit(['.', '@']).next()?))
+    }).collect()
+}
+
+/// `user`/`users` → app/views/users/_user.* (`to_partial_path`); nothing when the inflection finds no file.
+// ponytail: namespaced models (`Admin::User` → admin/users/_user) aren't knowable from the variable.
+pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
+    let Some(views) = views_root(current) else { return vec![] };
+    let singular = singularize(name);
+    matching_templates(&views.join(pluralize(&singular)), &format!("_{singular}"))
+}
+
+// Suffix-matched like ActiveSupport's irregulars, so `sales_person` → `sales_people`.
+const IRREGULAR: [(&str, &str); 10] = [
+    ("person", "people"), ("child", "children"), ("movie", "movies"), ("status", "statuses"), ("alias", "aliases"),
+    ("cookie", "cookies"), ("hero", "heroes"), ("quiz", "quizzes"), ("cache", "caches"), ("analysis", "analyses"),
+];
+const UNCOUNTABLE: [&str; 9] = ["equipment", "information", "rice", "money", "species", "series", "fish", "sheep", "news"];
+
+/// Matched on the last `_` segment so `prices` isn't read as `rice`.
+fn uncountable(word: &str) -> bool {
+    UNCOUNTABLE.contains(&word.rsplit('_').next().unwrap_or(word))
+}
+
+fn ends_with_consonant_y(word: &str) -> bool {
+    word.strip_suffix('y').and_then(|w| w.chars().last()).is_some_and(|c| !"aeiou".contains(c))
+}
+
+fn pluralize(word: &str) -> String {
+    if uncountable(word) { return word.to_string(); }
+    if let Some((stem, plural)) = IRREGULAR.iter().find_map(|(s, p)| Some((word.strip_suffix(s)?, p))) {
+        return format!("{stem}{plural}");
+    }
+    if ends_with_consonant_y(word) { return format!("{}ies", &word[..word.len() - 1]); }
+    if ["s", "x", "z", "ch", "sh"].iter().any(|e| word.ends_with(e)) { return format!("{word}es"); }
+    format!("{word}s")
+}
+
+fn singularize(word: &str) -> String {
+    if uncountable(word) { return word.to_string(); }
+    for (singular, plural) in IRREGULAR {
+        if let Some(stem) = word.strip_suffix(plural) { return format!("{stem}{singular}"); }
+        if word.ends_with(singular) { return word.to_string(); }
+    }
+    if let Some(stem) = word.strip_suffix("ies").filter(|s| ends_with_consonant_y(&format!("{s}y"))) {
+        return format!("{stem}y");
+    }
+    if let Some(stem) = word.strip_suffix("es").filter(|s| ["x", "ch", "ss", "sh", "zz"].iter().any(|e| s.ends_with(e))) {
+        return stem.to_string();
+    }
+    // `ss|us|is` end singulars (`address`, `bus`, `axis`); their plurals took `es` above or just miss.
+    match word.strip_suffix('s') {
+        Some(stem) if !["ss", "us", "is"].iter().any(|e| word.ends_with(e)) => stem.to_string(),
+        _ => word.to_string(),
+    }
 }
 
 /// Walk up from `file` to find the Rails `app/views` directory.
@@ -336,6 +400,49 @@ mod tests {
         assert_eq!(refs(r#"<%= render partial: "row", locals: { a: 1, layout: "gone" } %>"#), [p("row")]);
         assert_eq!(refs(r#"<%= render partial: "row", locals: [{ a: 1 }], layout: "box" %>"#), [p("row"), p("box")]);
         assert!(render_refs(r#"render partial: "row", layout: "box""#)[1].from_layout);
+    }
+
+    #[test]
+    fn inflection_round_trips() {
+        for (singular, plural) in [("user", "users"), ("category", "categories"), ("day", "days"), ("address", "addresses"),
+                                   ("box", "boxes"), ("match", "matches"), ("person", "people"), ("sales_person", "sales_people"),
+                                   ("child", "children"), ("movie", "movies"), ("status", "statuses"), ("news", "news"), ("line_item", "line_items"),
+                                   ("price", "prices"), ("cookie", "cookies"), ("hero", "heroes"), ("quiz", "quizzes"),
+                                   ("cache", "caches"), ("analysis", "analyses"), ("daily_news", "daily_news")] {
+            assert_eq!(pluralize(singular), plural);
+            assert_eq!(singularize(plural), singular);
+            assert_eq!(singularize(singular), singular);
+        }
+        for singular in ["bus", "virus", "axis"] {
+            assert_eq!(singularize(singular), singular);
+        }
+    }
+
+    #[test]
+    fn model_render_partials() {
+        let root = std::env::temp_dir().join(format!("rt-models-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in ["users/_user.html.erb", "comments/_comment.html.erb", "people/_person.html.haml", "categories/_category.html.erb"] {
+            let p = views.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let current = views.join("posts/show.html.erb");
+        let line = "<%= render @user %> <%= render(@users) %> <%= render @post.comments, cached: true %> <%= render @people %> <%= render @categories %> <%= render @post.author %> <%= render @user.name %>";
+        let refs = model_renders(line);
+        assert_eq!(refs.iter().map(|r| r.2).collect::<Vec<_>>(), ["user", "users", "comments", "people", "categories", "author", "name"]);
+        assert_eq!(&line[refs[2].0..refs[2].1], "@post.comments");
+        let found: Vec<Vec<PathBuf>> = refs.iter().map(|r| resolve_model(&current, r.2)).collect();
+        assert_eq!(found[0], [views.join("users/_user.html.erb")]);
+        assert_eq!(found[1], found[0]);
+        assert_eq!(found[2], [views.join("comments/_comment.html.erb")]);
+        assert_eq!(found[3], [views.join("people/_person.html.haml")]);
+        assert_eq!(found[4], [views.join("categories/_category.html.erb")]);
+        assert!(found[5..].iter().all(Vec::is_empty));
+        for query in ["render @products.page(params[:page])", "render @post.comments.order(:id)", "render @users.map(&:x)", "render @users.first.posts"] {
+            assert!(model_renders(query).is_empty(), "{query}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

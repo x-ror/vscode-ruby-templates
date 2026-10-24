@@ -1,9 +1,11 @@
+mod assets;
 mod erb;
 mod helpers;
 mod indented;
 mod outline;
 mod partials;
 mod ruby;
+mod stimulus;
 mod tags;
 mod util;
 
@@ -149,6 +151,19 @@ fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
     md
 }
 
+/// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
+/// With `col`, only the ones under it are resolved.
+fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
+    let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
+    let models = partials::model_renders(line).into_iter().filter(|&(s, e, _)| at(s, e))
+        .map(|(s, e, name)| (s, e, partials::resolve_model(path, name)));
+    let controllers = stimulus::identifiers(line).into_iter().filter(|&(s, e, _)| at(s, e))
+        .map(|(s, e, id)| (s, e, stimulus::resolve(path, &id)));
+    let assets = assets::asset_refs(line).into_iter().filter(|r| at(r.start, r.end))
+        .map(|r| (r.start, r.end, assets::resolve(path, &r)));
+    models.chain(controllers).chain(assets).filter(|(_, _, found)| !found.is_empty()).collect()
+}
+
 fn helper_hover(h: &helpers::Helper) -> String {
     let signature = format!("```ruby\n{}\n```", h.detail);
     match h.doc_url() {
@@ -253,7 +268,7 @@ impl LanguageServer for Backend {
         } else if let Some(c) = partials::component_ref_at(line, col) {
             partials::resolve_component(&path, &c)
         } else {
-            vec![]
+            convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
         let locs: Vec<Location> = targets
             .into_iter()
@@ -269,17 +284,16 @@ impl LanguageServer for Backend {
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         let mut links = Vec::new();
         for (i, line) in doc.text.lines().enumerate() {
-            for r in partials::render_refs(line) {
-                if let Some(target) = partials::resolve(&path, &r).into_iter().next() {
-                    if let Ok(t) = Url::from_file_path(&target) {
-                        links.push(DocumentLink {
-                            range: util::line_range(&doc.text, i, r.start, r.end),
-                            target: Some(t),
-                            tooltip: Some(target.to_string_lossy().into_owned()),
-                            data: None,
-                        });
-                    }
-                }
+            let renders = partials::render_refs(line).into_iter().map(|r| (r.start, r.end, partials::resolve(&path, &r)));
+            for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
+                let Some(target) = found.into_iter().next() else { continue };
+                let Ok(t) = Url::from_file_path(&target) else { continue };
+                links.push(DocumentLink {
+                    range: util::span_range(i, line, start, end),
+                    target: Some(t),
+                    tooltip: Some(target.to_string_lossy().into_owned()),
+                    data: None,
+                });
             }
         }
         Ok(Some(links))

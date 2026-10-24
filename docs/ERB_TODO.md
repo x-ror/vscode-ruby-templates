@@ -135,7 +135,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial lookup in the same dir, `app/views/<dir>`, `app/views/application`, and `app/views/layouts` for `layout:` (`server/src/partials.rs` `resolve`)
 - [x] Go to `FooComponent` `.rb` and sidecar template from `render FooComponent.new` (`server/src/partials.rs` `resolve_component`)
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
-- [ ] `render @user` / `render @users` → `users/_user` by model naming convention
+- [x] `render @user` / `render @users` → `users/_user` by model naming convention (`server/src/partials.rs` `resolve_model`; namespaced models skipped)
 - [ ] `render partial: name_var` (non-literal partial name): show nothing, don't guess
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
@@ -146,8 +146,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Instance variables → assignment in the controller action
 - [ ] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path)
 - [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
-- [ ] Asset paths in `image_tag` / `stylesheet_link_tag` → file
-- [ ] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js`
+- [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
+- [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
 - [ ] ViewComponent: component `.rb` ↔ template file switch command
 - [ ] Find references: who renders this partial (workspace scan)
 - [ ] Workspace symbol search for partials/templates

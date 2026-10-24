@@ -11,7 +11,11 @@ pub fn offset_to_position(text: &str, offset: usize) -> Position {
 }
 
 pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
-    let line_text = text.lines().nth(line).unwrap_or("");
+    span_range(line, text.lines().nth(line).unwrap_or(""), start_col, end_col)
+}
+
+/// Byte columns of `line_text` (line number `line`) as an LSP range.
+pub fn span_range(line: usize, line_text: &str, start_col: usize, end_col: usize) -> Range {
     let s = line_text.get(..start_col.min(line_text.len())).unwrap_or("").encode_utf16().count() as u32;
     let e = line_text.get(..end_col.min(line_text.len())).unwrap_or("").encode_utf16().count() as u32;
     Range::new(Position::new(line as u32, s), Position::new(line as u32, e))
