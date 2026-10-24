@@ -22,7 +22,7 @@
     "slim",
     "template"
   ],
-  "main": "./src/extension.js",
+  "main": "./dist/extension.js",
   "activationEvents": [
     "workspaceContains:**/*.{jbuilder,builder}"
   ],
@@ -861,13 +861,15 @@
   },
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
-    "package": "npx @vscode/vsce package",
+    "build": "bun build src/extension.js --target=node --format=esm --external vscode --minify-syntax --minify-whitespace --outfile dist/extension.js",
+    "vscode:prepublish": "npm run build",
+    "package": "npx @vscode/vsce package --no-dependencies",
     "test:tokens": "node test/tokenize.js",
     "test:snippets": "node test/snippets.js",
     "test:unit": "node test/erbTags.js && node test/langconfig.js && node test/haml.js && node test/clientPure.js",
     "test:slim": "node test/slim.js",
     "test:format": "node test/slim_format.js",
-    "test:vscode": "node test/vscode/run.js",
+    "test:vscode": "npm run build && node test/vscode/run.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && node server/install-bin.js",
     "test:server": "cargo test --manifest-path server/Cargo.toml && node server/check-samples.js",
     "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\"",

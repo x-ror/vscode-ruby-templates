@@ -86,6 +86,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with: { node-version: 26, cache: npm }
+      - uses: oven-sh/setup-bun@v2
       # One .pkg/server-<platform>/ per build; artifacts lose the executable bit.
       - uses: actions/download-artifact@v8
         with: { pattern: server-*, path: .pkg }
@@ -103,7 +104,7 @@ jobs:
           for d in .pkg/server-*; do
             plat=${d#.pkg/server-}
             rm -rf bin && mkdir -p bin && cp -r $d bin/$plat
-            npx @vscode/vsce package --target $plat --out ruby-templates-$plat.vsix
+            npx @vscode/vsce package --no-dependencies --target $plat --out ruby-templates-$plat.vsix
           done
       - uses: actions/upload-artifact@v7
         with: { name: vsix, path: '*.vsix' }

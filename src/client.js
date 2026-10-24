@@ -113,7 +113,7 @@ async function doStart(context, output) {
     await disposeQuietly(started, output);
     const msg =
       `Ruby Templates language server failed to start (${command}). ` +
-      "Build it with `cargo build --release` in the extension's server/ folder, or set rubyTemplates.server.path.";
+      "Install the package built for your platform, build the server from the repository with `npm run build:server`, or set rubyTemplates.server.path.";
     output.appendLine(`[ruby-templates] ${msg}\n${e?.message || e}`);
     void offerHelp(msg, output);
   }

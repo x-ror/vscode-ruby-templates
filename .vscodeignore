@@ -6,11 +6,10 @@
 .pkg/**
 artifacts/**
 docs/**
-test/**
+node_modules/**
 server/**
-!server/src/**
-!server/Cargo.toml
-!server/Cargo.lock
+src/**
+test/**
 *.vsix
 .editorconfig
 .gitattributes
