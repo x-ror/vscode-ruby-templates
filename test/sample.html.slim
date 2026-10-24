@@ -30,7 +30,7 @@ html lang="en"
       class="wrapped") Multi-line
     =< link_to "Left", "/"
     ==<> raw_html
-    p ='x'
+    p =' @user.name
     a> Trailing
     a<> Both
     img/
@@ -55,3 +55,15 @@ html lang="en"
       var data = #{raw data.to_json};
     css:
       .b { content: "#{label}"; }
+    <p>Don't panic</p>
+    p after inline html
+    p Config #{{a: 1}.to_json} stays escaped
+    span after interpolation
+    p= attached
+    p==unescaped
+    a>= trailing
+    a(href="/")= after_wrapped
+    a' legacy
+    |< leading space
+    |no space
+    '> trailing space

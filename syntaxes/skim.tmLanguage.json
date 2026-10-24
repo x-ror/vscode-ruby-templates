@@ -25,6 +25,9 @@
       "include": "#text-block"
     },
     {
+      "include": "#smart-text"
+    },
+    {
       "include": "#inline-html"
     },
     {
@@ -373,12 +376,15 @@
     "text-block": {
       "name": "meta.text.block.slim",
       "contentName": "string.unquoted.text.slim",
-      "begin": "^(\\s*)([|'>])(?:\\s(.*))?$",
+      "begin": "^(\\s*)([|'])([<>]{1,2}(?=\\s|$))? ?(.*)$",
       "beginCaptures": {
         "2": {
           "name": "punctuation.definition.text.slim"
         },
         "3": {
+          "name": "keyword.operator.whitespace.slim"
+        },
+        "4": {
           "name": "string.unquoted.text.slim",
           "patterns": [
             {
@@ -440,7 +446,7 @@
       "patterns": [
         {
           "name": "entity.name.tag.slim",
-          "match": "(?<![\\w.#-])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=<>/]|$)"
+          "match": "(?<![\\w.#-])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=<>/']|$)"
         },
         {
           "name": "entity.other.attribute-name.class.slim",
@@ -468,7 +474,7 @@
         },
         {
           "name": "keyword.operator.whitespace.slim",
-          "match": "(?<=\\S)[<>]+(?=[\\s(\\[{]|$)"
+          "match": "(?<=\\S)[<>']+(?=[\\s(\\[{=]|$)"
         },
         {
           "name": "punctuation.definition.tag.self-closing.slim",
@@ -687,7 +693,7 @@
     "inline-output": {
       "name": "meta.embedded.line.ruby.slim",
       "contentName": "source.coffee",
-      "begin": "\\s+(==?['<>]*)\\s*",
+      "begin": "(?:(?<=[\\w<>'\")\\]}])\\s*|\\s+)(==?['<>]*)\\s*",
       "end": "(?<![,\\\\\\n])$",
       "beginCaptures": {
         "1": {
@@ -782,29 +788,50 @@
           "include": "#interpolation"
         },
         {
-          "match": "(</?)([a-zA-Z][\\w:-]*)",
-          "captures": {
+          "begin": "(</?)([a-zA-Z][\\w:-]*)",
+          "beginCaptures": {
             "1": {
               "name": "punctuation.definition.tag.begin.html"
             },
             "2": {
               "name": "entity.name.tag.html"
             }
-          }
-        },
-        {
-          "match": "(?<=\\s)([\\w:@.-]+)(?=\\s*=)",
-          "name": "entity.other.attribute-name.html"
-        },
-        {
-          "include": "#string-double"
-        },
-        {
-          "include": "#string-single"
-        },
-        {
-          "match": "/?>",
-          "name": "punctuation.definition.tag.end.html"
+          },
+          "end": "(/?>)|(?=$)",
+          "endCaptures": {
+            "1": {
+              "name": "punctuation.definition.tag.end.html"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#interpolation"
+            },
+            {
+              "match": "(?<=\\s)([\\w:@.-]+)(?=\\s*=)",
+              "name": "entity.other.attribute-name.html"
+            },
+            {
+              "name": "string.quoted.double.html",
+              "begin": "\"",
+              "end": "\"|(?=$)",
+              "patterns": [
+                {
+                  "include": "#interpolation"
+                }
+              ]
+            },
+            {
+              "name": "string.quoted.single.html",
+              "begin": "'",
+              "end": "'|(?=$)",
+              "patterns": [
+                {
+                  "include": "#interpolation"
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -821,7 +848,7 @@
       }
     },
     "tag-line-with-text": {
-      "begin": "^(\\s*)(?=(?:(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>]*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))\\s*:\\s+)*(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>]*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))[ \\t]+(?![:=/]|[\\w:@.-]+\\s*==?|\\*\\S)\\S)",
+      "begin": "^(\\s*)(?=(?:(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>']*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))\\s*:\\s+)*(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>']*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))[ \\t]+(?![:=/]|[\\w:@.-]+\\s*==?|\\*\\S)\\S)",
       "end": "^(?!\\G)(?!\\1\\s)(?=\\s*\\S)",
       "patterns": [
         {
@@ -849,7 +876,7 @@
     "interpolation-unescaped": {
       "name": "meta.embedded.interpolation.unescaped.slim",
       "contentName": "source.coffee",
-      "begin": "(?<!\\\\)#\\{\\{",
+      "begin": "(?<!\\\\)#\\{\\{(?=[^{}]*\\}\\})",
       "end": "\\}\\}",
       "beginCaptures": {
         "0": {
@@ -885,6 +912,30 @@
       "patterns": [
         {
           "include": "source.coffee"
+        }
+      ]
+    },
+    "smart-text": {
+      "name": "meta.text.block.slim",
+      "contentName": "string.unquoted.text.slim",
+      "begin": "^(\\s*)(>) ?(.*)$",
+      "beginCaptures": {
+        "2": {
+          "name": "punctuation.definition.text.slim"
+        },
+        "3": {
+          "name": "string.unquoted.text.slim",
+          "patterns": [
+            {
+              "include": "#interpolation"
+            }
+          ]
+        }
+      },
+      "end": "^(?!\\1\\s)(?=\\s*\\S)",
+      "patterns": [
+        {
+          "include": "#interpolation"
         }
       ]
     }

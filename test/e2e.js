@@ -15,9 +15,18 @@ const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= 
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
 const slimFile = path.join(views, 'users', 'show.html.slim');
-const slimText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+const slimText = 'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
 fs.writeFileSync(slimFile, slimText);
 const slimUri = 'file://' + slimFile;
+const outlineFile = path.join(views, 'users', 'outline.html.slim');
+const outlineText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+fs.writeFileSync(outlineFile, outlineText);
+const outlineUri = 'file://' + outlineFile;
+// Unsaved text differs from disk; VS Code sends `+` percent-encoded.
+const phoneFile = path.join(views, 'users', 'edit.html+phone.slim');
+fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
+const phoneText = '= render "card"\n';
+const phoneUri = 'file://' + phoneFile.replace('+', '%2B');
 
 const proc = cp.spawn(bin);
 let id = 0, buf = Buffer.alloc(0); const pending = new Map(); const notes = [];
@@ -40,7 +49,8 @@ const send = (method, params, isNote) => new Promise(res => {
 });
 const rel = p => p.replace(root, '');
 (async () => {
-  await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {} });
+  await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {},
+    initializationOptions: { slim: { extraEngines: ['mjml'], disabledDiagnostics: ['explicit-end'] } } });
   await send('initialized', {}, true);
   await send('textDocument/didOpen', { textDocument: { uri, languageId: 'erb', version: 1, text } }, true);
   const def1 = await send('textDocument/definition', { textDocument: { uri }, position: { line: 0, character: 14 } });
@@ -64,21 +74,29 @@ const rel = p => p.replace(root, '');
   const syms = await send('textDocument/documentSymbol', { textDocument: { uri } });
   const tree = s => s.children ? `${s.name} [${s.children.map(tree).join(', ')}]` : s.name;
   console.log('documentSymbols        →', (syms.result || []).map(tree));
-  await send('textDocument/didOpen', { textDocument: { uri: slimUri, languageId: 'slim', version: 1, text: slimText } }, true);
-  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: slimUri } });
+  await send('textDocument/didOpen', { textDocument: { uri: outlineUri, languageId: 'slim', version: 1, text: outlineText } }, true);
+  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: outlineUri } });
   console.log('slim documentSymbols   →', slimSyms.result.map(tree));
   assert.deepStrictEqual(slimSyms.result.map(tree), ['main#page [content_for :aside [nav [render "card"]]]', 'javascript:']);
-  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: slimUri } });
+  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: outlineUri } });
   const slimRanges = slimFolds.result.map(f => `${f.startLine}-${f.endLine}`);
   console.log('slim foldingRanges     →', slimRanges);
   assert.deepStrictEqual(slimRanges, ['0-5', '1-2', '3-5', '7-8']);
+  await send('textDocument/didOpen', { textDocument: { uri: phoneUri, languageId: 'slim', version: 1, text: phoneText } }, true);
   const renamed = await send('workspace/willRenameFiles', { files: [{ oldUri: 'file://' + path.join(views, 'users', '_card.html.slim'), newUri: 'file://' + path.join(views, 'users', '_tile.html.slim') }] });
   const renameEdits = Object.entries(renamed.result.changes).map(([u, es]) => `${rel(decodeURIComponent(new URL(u).pathname))}: ${es.map(e => `${e.range.start.line}:${e.range.start.character} ${e.newText}`).join(', ')}`).sort();
   console.log('willRenameFiles _card  →', renameEdits);
-  assert.deepStrictEqual(renameEdits, ['/app/views/users/index.html.erb: 0:12 tile, 9:12 tile', '/app/views/users/show.html.slim: 2:18 tile']);
+  assert.deepStrictEqual(renameEdits, ['/app/views/users/edit.html+phone.slim: 0:10 tile', '/app/views/users/index.html.erb: 0:12 tile, 9:12 tile', '/app/views/users/outline.html.slim: 2:18 tile']);
   await new Promise(r => setTimeout(r, 200));
-  const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics');
+  const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics' && n.params.uri === uri);
   console.log('diagnostics            →', diag ? diag.params.diagnostics.map(d => `${d.range.start.line + 1}: ${d.message}`) : 'none');
+  await send('textDocument/didOpen', { textDocument: { uri: slimUri, languageId: 'slim', version: 1, text: slimText } }, true);
+  await new Promise(r => setTimeout(r, 200));
+  const slimDiag = notes.find(n => n.method === 'textDocument/publishDiagnostics' && n.params.uri === slimUri);
+  const slimGot = slimDiag ? slimDiag.params.diagnostics.map(d => `${d.range.start.line + 1}:${d.range.start.character + 1} ${d.code}`) : [];
+  console.log('slim diagnostics       →', slimGot);
+  const slimWant = ['3:1 unknown-engine', '5:1 unmatched-branch', '8:3 void-children', '9:3 silent-output-helper', '11:1 unclosed-ruby'];
+  if (JSON.stringify(slimGot) !== JSON.stringify(slimWant)) { console.error('expected', slimWant); process.exit(1); }
   await send('shutdown', {}); await send('exit', {}, true);
   fs.rmSync(root, { recursive: true, force: true });
   process.exit(0);

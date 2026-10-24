@@ -26,11 +26,33 @@ struct Entry {
     start: usize,
     /// Set for headers whose deeper lines are text, comment or engine content rather than Slim.
     verbatim: Option<Verbatim>,
-    /// Byte range of `tag.class#id`.
-    head: Option<(usize, usize)>,
+    /// Byte ranges of `tag.class#id`, more than one for inline tags (`li: a.x`).
+    heads: Vec<(usize, usize)>,
     /// Byte offset where Ruby code (`- x`, `= x`, `tag = x`) starts.
     code: Option<usize>,
     control: bool,
+}
+
+impl Entry {
+    fn plain(line: usize, indent: i64, start: usize) -> Self {
+        Entry {
+            first: line,
+            last: line,
+            indent,
+            start,
+            verbatim: None,
+            heads: Vec::new(),
+            code: None,
+            control: false,
+        }
+    }
+}
+
+/// What follows a tag's head and attributes.
+enum Tail {
+    Nothing,
+    Code(usize),
+    Text,
 }
 
 /// (byte offset, content without `\r`) per line.
@@ -90,10 +112,6 @@ fn value_len(s: &str) -> usize {
         .map_or(s.len(), |(i, ..)| i)
 }
 
-fn unbalanced(s: &str) -> bool {
-    depths(s).last().is_some_and(|(_, _, d)| d > 0)
-}
-
 /// `tag`, `.class`, `#id`, `svg:use` and combinations; 0 when `c` doesn't start with a tag.
 fn tag_head_len(c: &str) -> usize {
     let word = |s: &str| {
@@ -129,20 +147,31 @@ fn attr_name_len(s: &str) -> usize {
     }
 }
 
-fn verbatim_kind(c: &str) -> Option<Verbatim> {
+/// The engine of an embedded engine header; Slim's `@embedded_re` is the engine, optional attributes,
+/// `:`, then anything.
+fn engine_name<'a>(c: &'a str, extra_engines: &[String]) -> Option<&'a str> {
+    let len = c
+        .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '-'))
+        .unwrap_or(c.len());
+    let (word, rest) = c.split_at(len);
+    let known = SLIM_ENGINES.contains(&word) || extra_engines.iter().any(|e| e == word);
+    let header =
+        rest.starts_with(':') || (rest.starts_with(char::is_whitespace) && rest.contains(':'));
+    (known && header).then_some(word)
+}
+
+fn verbatim_kind(c: &str, extra_engines: &[String]) -> Option<Verbatim> {
+    // `/[if IE]` conditional comments wrap markup.
+    if c.starts_with("/[") {
+        return None;
+    }
     if c.starts_with('/') {
         return Some(Verbatim::Comment);
     }
     if c.starts_with(['|', '\'', '>']) {
         return Some(Verbatim::Text);
     }
-    let word = c
-        .split(|ch: char| !ch.is_alphanumeric())
-        .next()
-        .unwrap_or("");
-    let engine =
-        SLIM_ENGINES.contains(&word) && c.ends_with(':') && c[word.len()..].starts_with([':', ' ']);
-    engine.then_some(Verbatim::Engine)
+    engine_name(c, extra_engines).map(|_| Verbatim::Engine)
 }
 
 /// Offset after `=`/`==` and their whitespace modifiers, when `c` (at `offset`) is an output line.
@@ -155,30 +184,34 @@ fn output_code(c: &str, offset: usize) -> Option<usize> {
     Some(offset + c.len() - rest.len())
 }
 
-/// A following line continues the logical line unless it is blank or dedented past its start.
-fn continues(lines: &[(usize, &str)], next: usize, indent: i64) -> bool {
-    lines
-        .get(next)
-        .and_then(|l| indent_level(l.1))
-        .is_some_and(|d| d >= indent)
+fn indent_at(lines: &[(usize, &str)], i: usize) -> Option<i64> {
+    lines.get(i).and_then(|l| indent_level(l.1))
 }
 
-/// Skip a tag's head, attribute wrappers (across lines) and `name=value` attributes; return where its inline
-/// Ruby starts, following `tag: tag` nesting.
-fn tag_code(text: &str, lines: &[(usize, &str)], e: &mut Entry, mut pos: usize) -> Option<usize> {
+/// Skip a tag's head, attribute wrappers (across lines) and `name=value` attributes, following `tag: tag`
+/// nesting, and classify what is left.
+fn tag_tail(text: &str, lines: &[(usize, &str)], e: &mut Entry, mut pos: usize) -> Tail {
     loop {
         let rest = &text[pos..line_end(lines, e.last)];
-        match rest.chars().next()? {
-            '(' | '[' | '{' => loop {
-                if let Some(n) = group_len(&text[pos..line_end(lines, e.last)]) {
-                    pos += n;
-                    break;
-                }
-                if !continues(lines, e.last + 1, e.indent) {
-                    return None;
-                }
-                e.last += 1;
-            },
+        let Some(first) = rest.chars().next() else {
+            return Tail::Nothing;
+        };
+        match first {
+            '(' | '[' | '{' => {
+                // An unclosed wrapper would swallow the rest of the file; leave it on its own line instead.
+                let mut last = e.last;
+                let len = loop {
+                    if let Some(n) = group_len(&text[pos..line_end(lines, last)]) {
+                        break n;
+                    }
+                    if !indent_at(lines, last + 1).is_some_and(|d| d >= e.indent) {
+                        return Tail::Nothing;
+                    }
+                    last += 1;
+                };
+                e.last = last;
+                pos += len;
+            }
             '<' | '>' => pos += 1,
             '*' => pos += 1 + value_len(&rest[1..]),
             ':' => {
@@ -186,39 +219,43 @@ fn tag_code(text: &str, lines: &[(usize, &str)], e: &mut Entry, mut pos: usize) 
                 let at = pos + rest.len() - inner.len();
                 let head = tag_head_len(inner);
                 if head == 0 {
-                    return output_code(inner, at);
+                    return output_code(inner, at).map_or(Tail::Nothing, Tail::Code);
                 }
+                e.heads.push((at, at + head));
                 pos = at + head;
             }
             c if c.is_whitespace() => {
                 let t = rest.trim_start();
                 let at = pos + rest.len() - t.len();
                 let name = attr_name_len(t);
-                if name == 0 {
-                    return output_code(t, at);
+                if name > 0 {
+                    let value = t[name..].trim_start_matches('=');
+                    pos = at + t.len() - value.len() + value_len(value);
+                    continue;
                 }
-                let value = t[name..].trim_start_matches('=');
-                pos = at + t.len() - value.len() + value_len(value);
+                return match output_code(t, at) {
+                    Some(code) => Tail::Code(code),
+                    None if t.is_empty() => Tail::Nothing,
+                    None => Tail::Text,
+                };
             }
-            '=' => return output_code(rest, pos),
-            _ => return None,
+            '=' => return output_code(rest, pos).map_or(Tail::Nothing, Tail::Code),
+            _ => return Tail::Nothing,
         }
     }
 }
 
-fn parse(text: &str, lines: &[(usize, &str)], i: usize, indent: i64, start: usize) -> Entry {
-    let mut e = Entry {
-        first: i,
-        last: i,
-        indent,
-        start,
-        verbatim: None,
-        head: None,
-        code: None,
-        control: false,
-    };
+fn parse(
+    text: &str,
+    lines: &[(usize, &str)],
+    i: usize,
+    indent: i64,
+    start: usize,
+    extra_engines: &[String],
+) -> Entry {
+    let mut e = Entry::plain(i, indent, start);
     let c = &text[start..line_end(lines, i)];
-    e.verbatim = verbatim_kind(c);
+    e.verbatim = verbatim_kind(c, extra_engines);
     if e.verbatim.is_some() || c.starts_with('<') || c.starts_with("doctype") {
         return e;
     }
@@ -232,14 +269,20 @@ fn parse(text: &str, lines: &[(usize, &str)], i: usize, indent: i64, start: usiz
         if head == 0 {
             return e;
         }
-        e.head = Some((start, start + head));
-        e.code = tag_code(text, lines, &mut e, start + head);
+        e.heads.push((start, start + head));
+        match tag_tail(text, lines, &mut e, start + head) {
+            Tail::Code(code) => e.code = Some(code),
+            // Lines nested under a tag with inline text continue that text.
+            Tail::Text => e.verbatim = Some(Verbatim::Text),
+            Tail::Nothing => {}
+        }
     }
+    // Slim's broken lines: a trailing `,` or `\` continues the code on the next, deeper line.
     if let Some(code) = e.code {
         loop {
             let so_far = text[code..line_end(lines, e.last)].trim_end();
-            let open = so_far.ends_with(',') || so_far.ends_with('\\') || unbalanced(so_far);
-            if !open || !continues(lines, e.last + 1, indent) {
+            let open = so_far.ends_with(',') || so_far.ends_with('\\');
+            if !open || !indent_at(lines, e.last + 1).is_some_and(|d| d > indent) {
                 break;
             }
             e.last += 1;
@@ -248,7 +291,7 @@ fn parse(text: &str, lines: &[(usize, &str)], i: usize, indent: i64, start: usiz
     e
 }
 
-fn entries(text: &str, lines: &[(usize, &str)]) -> Vec<Entry> {
+fn entries(text: &str, lines: &[(usize, &str)], extra_engines: &[String]) -> Vec<Entry> {
     let mut out = Vec::new();
     let mut verbatim_indent: Option<i64> = None;
     let mut i = 0;
@@ -260,25 +303,26 @@ fn entries(text: &str, lines: &[(usize, &str)]) -> Vec<Entry> {
         };
         let start = offset + line.len() - line.trim_start().len();
         if verbatim_indent.is_some_and(|v| indent > v) {
-            out.push(Entry {
-                first: i,
-                last: i,
-                indent,
-                start,
-                verbatim: None,
-                head: None,
-                code: None,
-                control: false,
-            });
+            out.push(Entry::plain(i, indent, start));
             i += 1;
             continue;
         }
-        let entry = parse(text, lines, i, indent, start);
+        let entry = parse(text, lines, i, indent, start, extra_engines);
         verbatim_indent = entry.verbatim.map(|_| indent);
         i = entry.last + 1;
         out.push(entry);
     }
     out
+}
+
+/// Byte ranges of Ruby code (`- x`, `= x`, `tag = x`, broken lines included); text, comments and engine
+/// content are left out.
+pub fn code_spans(text: &str, extra_engines: &[String]) -> Vec<(usize, usize)> {
+    let lines = line_spans(text);
+    entries(text, &lines, extra_engines)
+        .iter()
+        .filter_map(|e| Some((e.code?, line_end(&lines, e.last))))
+        .collect()
 }
 
 /// Last line of each entry's block: itself plus every following deeper entry.
@@ -301,9 +345,9 @@ fn block_ends(entries: &[Entry]) -> Vec<usize> {
 }
 
 /// Offside indentation folds (trailing blank lines stay outside), with each logical line folded as one unit.
-pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
+pub fn folding_ranges(text: &str, extra_engines: &[String]) -> Vec<FoldingRange> {
     let lines = line_spans(text);
-    let entries = entries(text, &lines);
+    let entries = entries(text, &lines, extra_engines);
     let ends = block_ends(&entries);
     entries
         .iter()
@@ -320,9 +364,9 @@ pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
 
 /// Outline: tags with `#id`/`.class` or landmark names, `content_for`, forms, Turbo Frames, `render`,
 /// `- if`/`case` branches and embedded engines, nested by indentation.
-pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
+pub fn document_symbols(text: &str, extra_engines: &[String]) -> Vec<DocumentSymbol> {
     let lines = line_spans(text);
-    let entries = entries(text, &lines);
+    let entries = entries(text, &lines, extra_engines);
     let ends = block_ends(&entries);
     let mut items = Vec::new();
     let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
@@ -332,17 +376,20 @@ pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
         let block = (e.start, line_end(&lines, end));
         let first_line = (e.start, line_end(&lines, e.first));
         if e.verbatim == Some(Verbatim::Engine) {
-            let engine = text[e.start..]
-                .split(|c: char| !c.is_alphanumeric())
-                .next()
-                .unwrap_or("");
+            let engine = engine_name(&text[e.start..], extra_engines).unwrap_or_default();
             add(format!("{engine}:"), SymbolKind::PACKAGE, block, first_line);
         }
-        if let Some((head_start, head_end)) = e.head {
+        let tail_end = e.code.unwrap_or_else(|| line_end(&lines, e.last));
+        let attr_ends = e
+            .heads
+            .iter()
+            .skip(1)
+            .map(|h| h.0)
+            .chain(std::iter::once(tail_end));
+        for (&(head_start, head_end), attrs_end) in e.heads.iter().zip(attr_ends) {
             let head = &text[head_start..head_end];
-            let attrs = &text[head_end..e.code.unwrap_or_else(|| line_end(&lines, e.last))];
             let id = ID_ATTR
-                .captures(attrs)
+                .captures(&text[head_end..attrs_end.max(head_end)])
                 .and_then(|c| c.iter().skip(1).flatten().next())
                 .map(|m| m.as_str());
             let name = match id {
@@ -386,7 +433,7 @@ mod tests {
     use tower_lsp::lsp_types::{Position, Range};
 
     fn folds(text: &str) -> Vec<(u32, u32)> {
-        folding_ranges(text)
+        folding_ranges(text, &[])
             .into_iter()
             .map(|r| (r.start_line, r.end_line))
             .collect()
@@ -399,6 +446,10 @@ mod tests {
                 None => s.name.clone(),
             })
             .collect()
+    }
+
+    fn symbols(text: &str) -> Vec<String> {
+        outline(&document_symbols(text, &[]))
     }
 
     #[test]
@@ -415,10 +466,36 @@ mod tests {
             "  name=\"y\"]\n",             // 8
             "- items = [1,\n",             // 9
             "    2]\n",                    // 10
-            "p Hello,\n",                  // 11
-            "  | world\n",                 // 12
+            "= link_to \"x\", \\\n",       // 11
+            "  y\n",                       // 12
         );
         assert_eq!(folds(text), [(0, 2), (3, 5), (7, 8), (9, 10), (11, 12)]);
+    }
+
+    #[test]
+    fn only_trailing_comma_or_backslash_continues_code() {
+        let text = concat!(
+            "- # deprecated (see below\n", // 0
+            "header\n",                    // 1
+            "  p\n",                       // 2
+            "= f(a,\n",                    // 3
+            "b)\n",                        // 4
+            "  p\n",                       // 5
+        );
+        assert_eq!(folds(text), [(1, 2), (4, 5)]);
+        assert_eq!(symbols(text), ["header"]);
+    }
+
+    #[test]
+    fn unclosed_wrapper_stays_on_its_line() {
+        assert_eq!(
+            folds("a(href=\"/\"\n  span#x\nnav#n\n  p"),
+            [(0, 1), (2, 3)]
+        );
+        assert_eq!(
+            symbols("a(href=\"/\"\n  span#x\nnav#n\n  p"),
+            ["span#x", "nav#n"]
+        );
     }
 
     #[test]
@@ -433,7 +510,7 @@ mod tests {
             "p\n",           // 6
             "  | x\n",       // 7
         );
-        let ranges = folding_ranges(text);
+        let ranges = folding_ranges(text, &[]);
         let got: Vec<_> = ranges
             .iter()
             .map(|r| (r.start_line, r.end_line, r.kind.clone()))
@@ -450,10 +527,56 @@ mod tests {
     }
 
     #[test]
+    fn engine_headers_follow_slim_embedded_re() {
+        assert_eq!(
+            symbols("css: \n  .btn { color: red }\nnav\n  a"),
+            ["css:", "nav"]
+        );
+        assert_eq!(symbols("javascript: init()\n  .x\n"), ["javascript:"]);
+        assert_eq!(symbols("javascript nonce=n:\n  .x\n"), ["javascript:"]);
+        assert_eq!(symbols("mjml:\n  .x\n"), [".x"]);
+        let extra = ["mjml".to_string()];
+        assert_eq!(
+            outline(&document_symbols("mjml:\n  .x\n", &extra)),
+            ["mjml:"]
+        );
+        assert_eq!(symbols("css.theme\n  .x\n"), ["css.theme[.x]"]);
+    }
+
+    #[test]
+    fn lines_under_inline_text_are_text() {
+        assert_eq!(
+            symbols("p Ranked list\n  #1 pick\n  .gitignore matters\n"),
+            Vec::<String>::new()
+        );
+        assert_eq!(symbols("li: a.y Text\n  .z\n"), ["a.y"]);
+        assert_eq!(symbols("nav = x\n  .z\n"), ["nav[.z]"]);
+    }
+
+    #[test]
+    fn conditional_comment_children_are_markup() {
+        assert_eq!(symbols("/[if IE]\n  nav#old\n"), ["nav#old"]);
+        assert_eq!(symbols("/! html\n  nav#old\n"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn inline_tags_each_get_a_symbol() {
+        let syms = document_symbols(
+            "ul\n  li: a#x href=\"/\" = render \"a\"\n  li: nav: a id=\"y\"\n",
+            &[],
+        );
+        assert_eq!(outline(&syms), ["a#x[render \"a\"]", "nav[a#y]"]);
+        assert_eq!(
+            syms[0].selection_range,
+            Range::new(Position::new(1, 6), Position::new(1, 9))
+        );
+    }
+
+    #[test]
     fn every_indentation_block_of_the_sample_folds() {
         let text = include_str!("../../test/sample.html.slim");
         let lines = line_spans(text);
-        let continuation: Vec<usize> = entries(text, &lines)
+        let continuation: Vec<usize> = entries(text, &lines, &[])
             .iter()
             .flat_map(|e| e.first + 1..=e.last)
             .collect();
@@ -493,15 +616,25 @@ mod tests {
             "    render \"js\"\n",
             "  | text render \"t\"\n",
         );
-        assert_eq!(outline(&document_symbols(text)), [
-            "main#page.wide[content_for :sidebar[nav[render \"shared/menu\"]],if current_user[turbo_frame_tag \"cart\"[form_with(model: @cart, url: x)[section#f]]],else[render \"users/login\"]]",
+        assert_eq!(symbols(text), [
+            "main#page.wide[content_for :sidebar[nav[a.link[render \"shared/menu\"]]],if current_user[turbo_frame_tag \"cart\"[form_with(model: @cart, url: x)[section#f]]],else[render \"users/login\"]]",
             "javascript:",
         ]);
     }
 
     #[test]
+    fn code_spans_skip_text_comments_and_engines() {
+        let text = "= a\n/ = b\np c = d\njavascript:\n  = e\np = f,\n    g\n";
+        let spans: Vec<&str> = code_spans(text, &[])
+            .into_iter()
+            .map(|(s, e)| &text[s..e])
+            .collect();
+        assert_eq!(spans, [" a", " f,\n    g"]);
+    }
+
+    #[test]
     fn symbol_ranges_are_utf16() {
-        let syms = document_symbols("😀\n.é#a\n  p x\n\n");
+        let syms = document_symbols("😀\n.é#a\n  p x\n\n", &[]);
         assert_eq!(
             syms[0].range,
             Range::new(Position::new(1, 0), Position::new(2, 5))
