@@ -61,7 +61,7 @@ fn code_refs(source: &Source, extra_engines: &[String]) -> Vec<(usize, usize, Re
     let mut out = Vec::new();
     for (i, (offset, line)) in lines_with_offsets(&source.text).enumerate() {
         let in_code = |r: &RenderRef| match &template_code {
-            Some(in_code) => in_code(i, offset, r.start),
+            Some(in_code) => in_code(i, offset, r),
             None => !line.trim_start().starts_with('#'),
         };
         out.extend(render_refs(line).into_iter().filter(in_code).map(shift(offset)));

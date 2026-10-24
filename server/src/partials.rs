@@ -9,6 +9,7 @@ static RENDER_STR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
 });
 // Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
+// ponytail: stops at any `#`, so a `partial:` after `"#x"` or an interpolation is missed (no ref, no warning).
 static JSON_PARTIAL_KEY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"json\.\w+!?[\s(][^#]*?\bpartial\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
@@ -36,6 +37,8 @@ pub struct RenderRef {
     /// Byte range of the string literal (without quotes) inside the line.
     pub start: usize,
     pub end: usize,
+    /// Byte start of the call (`render`, `json.partial!`, `json.array!`) the string belongs to.
+    pub call: usize,
     /// The `layout:` of a `render partial:|template:` call; it receives that call's locals.
     pub from_layout: bool,
 }
@@ -44,17 +47,17 @@ pub struct RenderRef {
 /// ActionView 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
-    let render_ref = |kind: Option<regex::Match>, m: regex::Match, from_layout| {
+    let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
         let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
-        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), from_layout }
+        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), call: call.start(), from_layout }
     };
-    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(1), cap.get(2)?, false)));
+    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(2)?, false)));
     // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
     let layouts = RENDER_LAYOUT_KEY
         .captures_iter(line)
         .filter(|cap| split_args(&cap[2]).is_some())
-        .filter_map(|cap| Some(render_ref(cap.get(1), cap.get(3)?, true)));
-    let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(None, cap.get(1)?, false)));
+        .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(3)?, true)));
+    let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, None, cap.get(1)?, false)));
     let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(json).collect();
     refs.sort_by_key(|r| r.start);
     // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
@@ -491,7 +494,12 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
         _ => return None,
     };
     let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
+    let jbuilder = line[r.call..].starts_with("json.");
     let pairs = match (options_form, args) {
+        // Jbuilder reads a lone `locals:` as the locals hash, like the options form.
+        (false, [locals]) if jbuilder && keyword_arg(locals).is_some_and(|(name, _)| name == "locals") => {
+            split_args(keyword_arg(locals)?.1.strip_prefix('{')?.strip_suffix('}')?)?
+        }
         (false, args) => args.to_vec(),
         (true, []) => vec![],
         (true, [locals]) => match keyword_arg(locals)? {
@@ -502,7 +510,6 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
     };
     let names: Vec<&str> = pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect::<Option<_>>()?;
     // Jbuilder takes these out of the locals; `as:` names the local the collection items arrive in.
-    let jbuilder = line[..r.start].contains("json.");
     if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
         return None;
     }
@@ -750,6 +757,8 @@ mod tests {
         assert_eq!(passed(r#"json.partial! "posts/post", collection: @posts, as: :post"#), None);
         assert_eq!(passed(r#"json.array! @posts, partial: "posts/post", as: :post"#), None);
         assert_eq!(passed(r#"<%= render "card", collection: @cards %>"#), Some(vec!["collection"]));
+        assert_eq!(passed(r#"json.partial! "posts/post", locals: { post: @post }"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"<%= @x.to_json.html_safe %><%= render "card", as: 1 %>"#), Some(vec!["as"]));
         for skip in [
             r#"<%= render partial: "card", collection: @cards %>"#,
             r#"<%= render "card", **opts %>"#,

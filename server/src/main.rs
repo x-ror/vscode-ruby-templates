@@ -195,13 +195,13 @@ fn is_html_format(format: &str) -> bool {
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, usize) -> bool) -> Vec<Diagnostic> {
+fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             let range = util::line_range(text, i, r.start, r.end);
-            if !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, r.start) || !partials::resolve(path, &r).is_empty() {
+            if !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
@@ -212,13 +212,13 @@ fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, us
 }
 
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, usize) -> bool) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             // A partial's layout gets the partial's locals, which this check can't see.
-            if r.from_layout || !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, r.start) {
+            if r.from_layout || !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) {
                 continue;
             }
             let Some(passed) = partials::passed_locals(line, &r) else { continue };
@@ -331,14 +331,20 @@ fn line_roles(lang: TemplateLang, text: &str) -> Vec<LineRole> {
 
 /// Is the `render` whose string starts at byte `start` of the line at `line_start` a call in Ruby code, not template
 /// text, a Ruby comment or a Ruby string (`link_to "render 'x'"`)? `spans` are `erb::code_spans(text)`.
-fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usize, usize)], line_start: usize, start: usize) -> bool {
+fn render_in_code(
+    lang: TemplateLang,
+    role: LineRole,
+    text: &str,
+    spans: &[(usize, usize)],
+    line_start: usize,
+    r: &partials::RenderRef,
+) -> bool {
     let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
-    let Some(call) = ["render", "json."].into_iter().filter_map(|c| line[..start].rfind(c)).max() else { return false };
-    let in_ruby = || in_ruby_context(lang, text, spans, line_start + start);
+    let in_ruby = || in_ruby_context(lang, text, spans, line_start + r.start);
     let code_start = match (lang, role) {
         // A tag opened on an earlier line puts the whole line before `render` in Ruby.
-        (TemplateLang::Erb, _) => in_ruby().then(|| line[..call].rfind("<%").map_or(0, |open| open + 2)),
-        (TemplateLang::Haml, LineRole::Start) => haml_indent::haml_code_start(line).filter(|&code| code <= call),
+        (TemplateLang::Erb, _) => in_ruby().then(|| line[..r.call].rfind("<%").map_or(0, |open| open + 2)),
+        (TemplateLang::Haml, LineRole::Start) => haml_indent::haml_code_start(line).filter(|&code| code <= r.call),
         (TemplateLang::Haml, LineRole::Ruby) => Some(0),
         (TemplateLang::Haml, LineRole::Text) => None,
         (TemplateLang::Slim, _) => {
@@ -352,18 +358,22 @@ fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usiz
         (TemplateLang::Skim, _) => None,
         (TemplateLang::Ruby, _) => in_ruby().then_some(0),
     };
-    code_start.is_some_and(|code| code <= call && ruby::code_end(&line[code..call]) == ruby::CodeEnd::Code)
+    code_start.is_some_and(|code| code <= r.call && ruby::code_end(&line[code..r.call]) == ruby::CodeEnd::Code)
 }
 
-/// `render_in_code` for each `render` in `text`, as `(line index, line start, byte start in line)`; Slim lines
+/// `render_in_code` for each render ref in `text`, given its line index and line start; Slim lines
 /// also have to be Ruby to Slim's parser.
-fn render_filter<'a>(lang: TemplateLang, text: &'a str, extra_engines: &[String]) -> impl Fn(usize, usize, usize) -> bool + 'a {
+fn render_filter<'a>(
+    lang: TemplateLang,
+    text: &'a str,
+    extra_engines: &[String],
+) -> impl Fn(usize, usize, &partials::RenderRef) -> bool + 'a {
     let roles = line_roles(lang, text);
     let spans = erb::code_spans(text);
     let slim = (lang == TemplateLang::Slim).then(|| slim_parser::parse(text, extra_engines));
-    move |i, line_start, start| {
-        render_in_code(lang, roles[i], text, &spans, line_start, start)
-            && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + start))
+    move |i, line_start, r| {
+        render_in_code(lang, roles[i], text, &spans, line_start, r)
+            && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + r.start))
     }
 }
 
@@ -1316,9 +1326,13 @@ mod tests {
             "json.partial! \"posts/missing\"\n",
             "# json.partial! \"posts/old\"\n",
             "json.partial! \"posts/post\", post: @post, extra: 1\n",
+            "json.array! @x, title: \"render\", partial: \"posts/missing3\"\n",
         );
         let lines = |d: Vec<Diagnostic>| d.iter().map(|d| (d.range.start.line, d.message.clone())).collect::<Vec<_>>();
-        assert_eq!(lines(unresolved(TemplateLang::Ruby, &file, text)), [(2, "Partial `posts/missing` not found".to_string())]);
+        assert_eq!(
+            lines(unresolved(TemplateLang::Ruby, &file, text)),
+            [(2, "Partial `posts/missing` not found".to_string()), (5, "Partial `posts/missing3` not found".to_string())]
+        );
         let mismatches = strict_locals_mismatches(&file, text, render_filter(TemplateLang::Ruby, text, &[]));
         assert_eq!(lines(mismatches), [(4, "Partial `posts/post` does not accept locals: `extra`".to_string())]);
         assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
