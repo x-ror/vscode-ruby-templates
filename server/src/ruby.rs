@@ -7,10 +7,13 @@ use std::sync::LazyLock;
 static STRINGS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[A-Za-z_]\w*[?!]?|\d+|[^\w\s]").unwrap());
+// `=begin` … `=end` at line starts; kaminari's generated partials open with one.
+static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?ms)^=begin\b.*?(?:^=end\b[^\n]*|\z)").unwrap());
 
 /// Strip strings and comments so keywords inside them don't count.
 pub fn strip(code: &str) -> String {
-    let no_strings = STRINGS.replace_all(code, "\"\"");
+    let code = BLOCK_COMMENT.replace_all(code, "");
+    let no_strings = STRINGS.replace_all(&code, "\"\"");
     // Drop `# comment` to end of line, but keep `#{interpolation}`.
     let mut out = String::with_capacity(no_strings.len());
     for line in no_strings.split_inclusive('\n') {
@@ -154,6 +157,13 @@ pub fn ends_with_block(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn block_comments_hide_keywords() {
+        assert_eq!(analyze("\n=begin\nfor each page\n- if any\n=end\n").0, BlockEffect::Neutral);
+        assert_eq!(analyze("=begin\nunclosed for").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = 1 # =begin\ny.each do").0, BlockEffect::Open(1));
+    }
+
     #[test]
     fn basics() {
         assert_eq!(analyze("@users.each do |u|").0, BlockEffect::Open(1));
