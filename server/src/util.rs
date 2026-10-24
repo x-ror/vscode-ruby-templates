@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent};
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
@@ -39,9 +39,46 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
 }
 
+/// Attach a stable `code` so users can filter or disable the diagnostic.
+pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
+    d.code = Some(NumberOrString::String(code.into()));
+    d
+}
+
 /// Template indentation: spaces and tabs only (Haml and Slim don't indent with other Unicode whitespace).
 pub fn leading_ws(line: &str) -> &str {
     &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]
+}
+
+/// Length of a balanced `open ... close` group starting at s[0], honoring strings.
+pub fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut in_str: Option<char> = None;
+    let mut esc = false;
+    for (idx, ch) in s.char_indices() {
+        if let Some(q) = in_str {
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == q {
+                in_str = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_str = Some(ch),
+            c if c == open => depth += 1,
+            c if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(idx + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `text.lines()` paired with each line's byte offset in `text`.
@@ -64,10 +101,14 @@ pub fn byte_col(line: &str, character: u32) -> usize {
     line.len()
 }
 
-/// Byte offset of an LSP position in `text`; past-the-end lines map to the end.
-pub fn position_to_offset(text: &str, pos: Position) -> usize {
-    let (start, line) = lines_with_offsets(text).nth(pos.line as usize).unwrap_or((text.len(), ""));
-    start + byte_col(line, pos.character)
+/// Byte offset of an LSP position; a column past the line end clamps to it, a line past the end is `None`.
+pub fn position_to_offset(text: &str, pos: Position) -> Option<usize> {
+    let mut line_start = 0;
+    for _ in 0..pos.line {
+        line_start += text[line_start..].find('\n')? + 1;
+    }
+    let line = lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
+    Some(line_start + byte_col(line, pos.character))
 }
 
 /// Apply one `didChange` content change: a ranged edit, or the whole text when `range` is absent.
@@ -76,8 +117,8 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
         *text = change.text;
         return;
     };
-    let start = position_to_offset(text, range.start);
-    let end = position_to_offset(text, range.end).max(start);
+    let start = position_to_offset(text, range.start).unwrap_or(text.len());
+    let end = position_to_offset(text, range.end).unwrap_or(text.len()).max(start);
     text.replace_range(start..end, &change.text);
 }
 

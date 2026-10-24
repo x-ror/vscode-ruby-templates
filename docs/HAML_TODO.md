@@ -22,17 +22,17 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] `-#` silent comment, including its nested block (`syntaxes/haml.tmLanguage.json` `silent-comment`)
 - [x] `/` HTML comment with nested content, `/[if IE]` conditional comment (`syntaxes/haml.tmLanguage.json` `html-comment`)
 - [x] Bare `- else` / `- ensure` / `- end` scoped as `keyword.control`; keywords followed by an expression (`- elsif x`, `- when x`, `- rescue Foo`) get their scope from `source.ruby` (`syntaxes/haml.tmLanguage.json` `ruby-line`)
-- [x] Multi-line Ruby after a trailing `,`, including the last continuation line (`  class: "y"`) (`syntaxes/haml.tmLanguage.json` `inline-ruby-multiline`); the server joins it after a tag too (`server/src/indented.rs` `join_continuation`)
+- [x] Multi-line Ruby after a trailing `,`, including the last continuation line (`  class: "y"`) (`syntaxes/haml.tmLanguage.json` `inline-ruby-multiline`); the server joins it after a tag too (`server/src/haml_indent.rs` `join_continuation`)
 - [x] Plain text ending in `,` or `|` (`Dear Sir,`) stays plain text (`syntaxes/haml.tmLanguage.json` `text`, `inline-text-multiline`; `test/sample.html.haml`)
-- [x] `==` / `&==` / `!==` interpolated text (`%p== hi #{x}`, `== top #{x}`) is plain text with interpolation (`syntaxes/haml.tmLanguage.json`; server: `server/src/indented.rs` `strip_output_prefix`)
-- [x] Multiline `|`: trailing `|` is punctuation, except block arguments `do | x |` (`syntaxes/haml.tmLanguage.json` `multiline-pipe`, `punctuation.separator.continuation.multiline.haml`); the server groups `|` lines for plain text, tags and Ruby (`server/src/indented.rs` `multiline_len`, `is_haml_multiline`)
+- [x] `==` / `&==` / `!==` interpolated text (`%p== hi #{x}`, `== top #{x}`) is plain text with interpolation (`syntaxes/haml.tmLanguage.json`; server: `server/src/haml_indent.rs` `strip_output_prefix`)
+- [x] Multiline `|`: trailing `|` is punctuation, except block arguments `do | x |` (`syntaxes/haml.tmLanguage.json` `multiline-pipe`, `punctuation.separator.continuation.multiline.haml`); the server groups `|` lines for plain text, tags and Ruby (`server/src/haml_indent.rs` `multiline_len`, `is_haml_multiline`)
 
 ## 2. Attributes
 
 - [x] Ruby hash `{}` with Ruby 1.9 `key: v`, `"data-x": v`, and hashrocket `:a => v` (embedded `source.ruby`) (`syntaxes/haml.tmLanguage.json` `hash-attributes`)
 - [x] Nested `data: {…}` hash (`test/sample.html.haml`)
 - [ ] (?) Nested `aria: {…}` hash: same rule as `data:`, not in the sample
-- [x] Multiline `{}` attribute hash spanning lines (`syntaxes/haml.tmLanguage.json` begin/end region; server joins lines in `server/src/indented.rs` `skip_tag_head`)
+- [x] Multiline `{}` attribute hash spanning lines (`syntaxes/haml.tmLanguage.json` begin/end region; server joins lines in `server/src/haml_indent.rs` `skip_tag_head`)
 - [x] HTML-style `(name="v" other=ruby_expr)` attributes (`syntaxes/haml.tmLanguage.json` `html-attributes`, `test/sample.html.haml`)
 - [x] `#{}` inside double-quoted `()` attribute values (`syntaxes/haml.tmLanguage.json` `string-double`)
 - [x] Boolean attributes in `()` without a value (`%input(checked type="x")`) (`syntaxes/haml.tmLanguage.json` `html-attributes`; `test/sample.html.haml`)
@@ -45,10 +45,10 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Embedded highlighting for `:javascript`, `:css`, `:ruby`, `:scss`, `:sass`, `:coffee`, `:markdown`, `:erb` (`syntaxes/haml.tmLanguage.json` `filters`)
 - [x] `:plain`, `:escaped`, `:preserve`, `:cdata`, `:less` as plain text with `#{}` (`syntaxes/haml.tmLanguage.json` `filters`)
 - [x] Embedded language mapping for ruby/js/css/scss/sass/coffee/markdown (`package.json` `grammars[haml].embeddedLanguages`)
-- [x] Filters Haml 6+ doesn't register (`:textile`, `:maruku`, `:styl`, `:stylus`, `:builder`, `:nokogiri`, `:wiki`, `:creole`, `:mediawiki`) removed; `HAML_FILTERS` now matches `Haml::Filters` in 6.4.0 and 7.5.1, so they warn as unknown (`server/src/indented.rs` `HAML_FILTERS`; `syntaxes/haml.tmLanguage.json` `filters`)
+- [x] Filters Haml 6+ doesn't register (`:textile`, `:maruku`, `:styl`, `:stylus`, `:builder`, `:nokogiri`, `:wiki`, `:creole`, `:mediawiki`) removed; `HAML_FILTERS` now matches `Haml::Filters` in 6.4.0 and 7.5.1, so they warn as unknown (`server/src/haml_indent.rs` `HAML_FILTERS`; `syntaxes/haml.tmLanguage.json` `filters`)
 - [x] `#{}` interpolation highlighted inside `:javascript`, `:css`, `:markdown`, `:scss`, `:sass`, `:coffee`, `:less` (`syntaxes/haml.tmLanguage.json` `filters`)
 - [x] `:less` embeds `source.css.less` (`syntaxes/haml.tmLanguage.json` `filters`; `package.json` `embeddedLanguages`)
-- [x] `:coffeescript` alias for `:coffee` (`server/src/indented.rs` `HAML_FILTERS`; `syntaxes/haml.tmLanguage.json` `filters`)
+- [x] `:coffeescript` alias for `:coffee` (`server/src/haml_indent.rs` `HAML_FILTERS`; `syntaxes/haml.tmLanguage.json` `filters`)
 - [x] `text.html.erb` → `erb` in `embeddedLanguages` (`package.json` `grammars[haml].embeddedLanguages`)
 
 ## 4. File types
@@ -99,31 +99,31 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 ## 9. Diagnostics and linting
 
-- [x] Mixed tabs and spaces within one line's indentation; filter and comment bodies aren't checked (`server/src/indented.rs` `visit_lines`)
-- [x] Inconsistent indentation step against the file's detected unit (`server/src/indented.rs` `detect_unit`; `test/broken/bad.html.haml`)
-- [x] Dedent to a level that never existed (`server/src/indented.rs`; `test/broken/bad.html.haml`)
-- [x] Unexpected indentation at top level (`server/src/indented.rs`)
-- [x] Explicit `- end` rejected (`server/src/indented.rs` `check_explicit_end`; `test/broken/bad.html.haml`)
-- [x] Unclosed `{` `(` `[` in tag attributes, across lines (`server/src/indented.rs` `skip_tag_head`; `test/broken/bad.html.haml`)
-- [x] Unknown filter warning (`server/src/indented.rs` `HAML_FILTERS`; `test/broken/bad.html.haml`)
-- [x] Nothing nested under a doctype (`server/src/indented.rs`)
-- [x] Illegal nesting: content on a tag's line plus children, including `%p= form_with do |f|` (Haml 5–7 reject it); allowed only when the line's value ends in `,` (Haml's `is_ruby_multiline?`). Message names the tag as Haml does (`... as %p and nested within it.`) (`server/src/indented.rs` `classify`, `is_ruby_multiline`; `test/broken/bad.html.haml`)
-- [x] Illegal nesting under plain text (`server/src/indented.rs` `LineKind::Text`)
-- [x] Multiline `|` and trailing-`,` Ruby on line-start `-`/`=` lines joined before analysis (`server/src/indented.rs` `join_continuation`)
-- [x] `,`/`|` continuation after a tag (`%p= link_to "x",` + `  class: "y"`), and `|` multiline plain text, are not reported as nesting (`server/src/indented.rs` `classify`, `multiline_len`; unit test `no_false_positives`)
+- [x] Mixed tabs and spaces within one line's indentation; filter and comment bodies aren't checked (`server/src/haml_indent.rs` `visit_lines`)
+- [x] Inconsistent indentation step against the file's detected unit (`server/src/haml_indent.rs` `detect_unit`; `test/broken/bad.html.haml`)
+- [x] Dedent to a level that never existed (`server/src/haml_indent.rs`; `test/broken/bad.html.haml`)
+- [x] Unexpected indentation at top level (`server/src/haml_indent.rs`)
+- [x] Explicit `- end` rejected (`server/src/haml_indent.rs` `check_explicit_end`; `test/broken/bad.html.haml`)
+- [x] Unclosed `{` `(` `[` in tag attributes, across lines (`server/src/haml_indent.rs` `skip_tag_head`; `test/broken/bad.html.haml`)
+- [x] Unknown filter warning (`server/src/haml_indent.rs` `HAML_FILTERS`; `test/broken/bad.html.haml`)
+- [x] Nothing nested under a doctype (`server/src/haml_indent.rs`)
+- [x] Illegal nesting: content on a tag's line plus children, including `%p= form_with do |f|` (Haml 5–7 reject it); allowed only when the line's value ends in `,` (Haml's `is_ruby_multiline?`). Message names the tag as Haml does (`... as %p and nested within it.`) (`server/src/haml_indent.rs` `classify`, `is_ruby_multiline`; `test/broken/bad.html.haml`)
+- [x] Illegal nesting under plain text (`server/src/haml_indent.rs` `LineKind::Text`)
+- [x] Multiline `|` and trailing-`,` Ruby on line-start `-`/`=` lines joined before analysis (`server/src/haml_indent.rs` `join_continuation`)
+- [x] `,`/`|` continuation after a tag (`%p= link_to "x",` + `  class: "y"`), and `|` multiline plain text, are not reported as nesting (`server/src/haml_indent.rs` `classify`, `multiline_len`; unit test `no_false_positives`)
 - [x] Unresolved `render "dir/partial"` warning on `=`/`-`/`!=`/`&=` lines (`server/src/main.rs` `unresolved_renders`, unit test `unresolved_render_warnings`)
-- [x] Line-start `~ code` is Ruby (`server/src/indented.rs` `strip_output_prefix`)
-- [x] `#{x}` at line start is plain text: nesting under it is reported as within plain text (`server/src/indented.rs` `classify`)
-- [x] Tabs: consistent tabs are accepted; a line indented with the other character than the first indented line gets Haml's `Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 2 spaces.` The reference is the first indented line the structure pass visits, so continuation lines (multi-line `{}`, `,`, `|`) don't count; indentation is spaces and tabs only, not other Unicode whitespace (`server/src/indented.rs` `check_structure`, `human_indentation`; `server/src/util.rs` `leading_ws`)
-- [x] `- else` / `- elsif` / `- when` with no open `if`/`case`/`unless` (`Got "else" with no preceding "if"`) or at the wrong level (`"else" is indented at wrong level: expected 0, but was at 1.`), following Haml's `@script_level_stack` (`server/src/indented.rs` `track_block_keyword`)
+- [x] Line-start `~ code` is Ruby (`server/src/haml_indent.rs` `strip_output_prefix`)
+- [x] `#{x}` at line start is plain text: nesting under it is reported as within plain text (`server/src/haml_indent.rs` `classify`)
+- [x] Tabs: consistent tabs are accepted; a line indented with the other character than the first indented line gets Haml's `Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 2 spaces.` The reference is the first indented line the structure pass visits, so continuation lines (multi-line `{}`, `,`, `|`) don't count; indentation is spaces and tabs only, not other Unicode whitespace (`server/src/haml_indent.rs` `check_structure`, `human_indentation`; `server/src/util.rs` `leading_ws`)
+- [x] `- else` / `- elsif` / `- when` with no open `if`/`case`/`unless` (`Got "else" with no preceding "if"`) or at the wrong level (`"else" is indented at wrong level: expected 0, but was at 1.`), following Haml's `@script_level_stack` (`server/src/haml_indent.rs` `track_block_keyword`)
 - [ ] `- rescue` / `- ensure` / `- in` / a second `- else` out of place: Haml itself accepts them and only the generated Ruby fails to parse; belongs with the Ruby syntax check below
-- [x] `- code` / `= code` / `~ code` with nested children but no block opener (`do`, `if`, …); Haml appends `end`, so Ruby fails with `unexpected 'end'` (`server/src/indented.rs` `opens_block`)
-- [x] Self-closing tag with content (`Self-closing tags can't have content.`) or children (`Illegal nesting: nesting within a self-closing tag is illegal.`) (`server/src/indented.rs` `LineKind::SelfClosing`)
-- [x] `/ comment text` and `/[if IE] text` with nested content (`Illegal nesting: nesting within a tag that already has content is illegal.`); `/[if IE]` and `/![if !IE]` alone may have children (`server/src/indented.rs` `LineKind::TextComment`)
-- [x] `#`/`.` with no name (`# heading`, `...more`): `Illegal element: classes and ids must have values.` (`server/src/indented.rs` `classify`)
+- [x] `- code` / `= code` / `~ code` with nested children but no block opener (`do`, `if`, …); Haml appends `end`, so Ruby fails with `unexpected 'end'` (`server/src/haml_indent.rs` `opens_block`)
+- [x] Self-closing tag with content (`Self-closing tags can't have content.`) or children (`Illegal nesting: nesting within a self-closing tag is illegal.`) (`server/src/haml_indent.rs` `LineKind::SelfClosing`)
+- [x] `/ comment text` and `/[if IE] text` with nested content (`Illegal nesting: nesting within a tag that already has content is illegal.`); `/[if IE]` and `/![if !IE]` alone may have children (`server/src/haml_indent.rs` `LineKind::TextComment`)
+- [x] `#`/`.` with no name (`# heading`, `...more`): `Illegal element: classes and ids must have values.` (`server/src/haml_indent.rs` `classify`)
 - [ ] Indentation of `,` continuation lines (Haml checks them: `"\t    " used for indentation` in a tab file); continuation lines are skipped today
 - [ ] Indentation inside filter bodies relative to the filter (Haml requires the body to start with the filter's indent plus one unit); bodies are skipped today
-- [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/indented.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
+- [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
 - [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output)
 - [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
 - [ ] Settings to enable/disable each built-in check: blocked on plumbing. The server ignores `initializationOptions` and has no `workspace/didChangeConfiguration` handler (`server/src/main.rs` `initialize`), and the client passes no options (`src/client.js`); that plumbing comes first
@@ -134,9 +134,9 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Form builder methods after `f.` (`server/src/main.rs` `completion`)
 - [x] Rails helpers on Ruby lines (`server/src/main.rs` `in_ruby_context`)
 - [x] Ruby context only in the code part: after `-`/`=`/`~`/`!=`/`&=` (line start or after a tag head), inside a tag's `{}` hash or `[]` object ref, or an open `#{`; not in `()` attributes, plain text, or after a Ruby `#` comment (`server/src/haml.rs` `in_ruby`, unit test `ruby_only_in_code`)
-- [x] Completion and hover use each line's role: Haml completion and hover only on structural lines (never in filter or `-#` bodies or `|` text), Rails helpers also on continuation lines of `-`/`=` code and multi-line `{}` hashes and in `:ruby` bodies (`server/src/indented.rs` `haml_line_roles`, unit test `line_roles`; `server/src/main.rs` `completion`, `hover`; `test/e2e.js`)
+- [x] Completion and hover use each line's role: Haml completion and hover only on structural lines (never in filter or `-#` bodies or `|` text), Rails helpers also on continuation lines of `-`/`=` code and multi-line `{}` hashes and in `:ruby` bodies (`server/src/haml_indent.rs` `haml_line_roles`, unit test `line_roles`; `server/src/main.rs` `completion`, `hover`; `test/e2e.js`)
 - [ ] Attribute-name completion on continuation lines of a multi-line `{}` hash (those lines get Ruby helpers instead)
-- [x] Filter names after `:` at line start (`server/src/haml.rs` `completion_context`, `server/src/indented.rs` `HAML_FILTERS`)
+- [x] Filter names after `:` at line start (`server/src/haml.rs` `completion_context`, `server/src/haml_indent.rs` `HAML_FILTERS`)
 - [x] `succeed` / `precede` / `surround` / `preserve` / `find_and_preserve` completion and hover, Haml files only (`server/src/helpers.rs` `HAML_HELPERS`, `server/src/main.rs` `helpers_for`)
 - [x] Attribute-name completion inside `{}` (`name: `, quoted `"http-equiv": `, `data: {}` / `aria: {}`, and old-style `:name => `), inside nested `data: {…}` (Rails/Turbo/Stimulus keys) and `aria: {…}`, and inside `()` (`name=""`, `aria-*`, `data-*`) (`server/src/haml.rs` `completion_context`, `server/src/helpers.rs` `HTML_ATTRIBUTES`/`DATA_KEYS`/`ARIA_KEYS`; unit test `completion_contexts`)
 - [x] Tag-name completion after `%` (`server/src/haml.rs` `completion_context`, `server/src/helpers.rs` `HTML_TAGS`); `%`, `:`, `{`, `(` added as trigger characters (`server/src/main.rs` `initialize`)
@@ -156,9 +156,10 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Folding by indentation: the server returns VS Code's off-side indentation ranges itself, since any provider answer replaces them (`server/src/outline.rs` `haml_folding_ranges`, `indentation_folds`)
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, `render`, `#id` and landmark tags, with ERB's symbol kinds, nested by indentation; filter and comment bodies skipped (`server/src/outline.rs` `haml_document_symbols`, unit test `haml_symbols_nest_by_indentation`)
 - [ ] Outline: ids given as attributes (`%div{id: "x"}`, `%div(id="x")`); only the `#id` shorthand is used
-- [x] Folding for multiline `{}` attribute hashes, `|` blocks and `,` continuations whose lines aren't indented deeper, plus `-# region` markers (`server/src/outline.rs` `haml_folding_ranges`, `server/src/indented.rs` `haml_structure`; unit test `haml_folds_indentation_regions_and_continuations`)
-- [x] Rename a partial and update every `render` in ERB, Haml and Slim files under `app/views` (`workspace/willRenameFiles`). A render changes only when every file Rails could pick for it (the first resolved directory, all variants/formats) moves, all to one name; one edit per render however many files move; `render` inside Ruby strings, comments, template text and filter bodies is left alone (`server/src/main.rs` `partial_rename_edits`, `moved_reference`, `render_in_code`; unit tests `partial_rename_updates_renders`, `partial_rename_needs_every_candidate_to_move`; `test/e2e.js`; limits in `README.md`)
-- [ ] Rename a directory of partials, moves directly into `app/views`, and `render partial:` strings in controllers/helpers (`.rb`)
+- [x] Folding for multiline `{}` attribute hashes, `|` blocks and `,` continuations whose lines aren't indented deeper, plus `-# region` markers (`server/src/outline.rs` `haml_folding_ranges`, `server/src/haml_indent.rs` `haml_structure`; unit test `haml_folds_indentation_regions_and_continuations`)
+- [x] Rename a partial and update every `render` in ERB, Haml and Slim files under `app/views` (`workspace/willRenameFiles`). A render changes only when every file Rails could pick for it (the first resolved directory, all variants/formats) moves, all to one name; one edit per render however many files move; `render` inside Ruby strings, comments, template text and filter bodies is left alone (`server/src/partial_rename.rs`, with `render_in_code` from `server/src/main.rs` for Haml/ERB; unit tests `partial_rename_updates_renders`, `partial_rename_needs_every_candidate_to_move`; `test/e2e.js`; limits in `README.md`)
+- [x] Rename a directory of partials, and `render partial:` strings in controllers/helpers (`.rb`) (`server/src/partial_rename.rs`, from the Slim work)
+- [ ] Moves directly into `app/views`
 
 ## 13. Embedded languages
 
@@ -179,8 +180,8 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Broken-file fixture (`test/broken/bad.html.haml`)
 - [x] Snippet lint (duplicate prefixes, stray `$`) covers `snippets/haml.json` (`test/snippets.js`, CI `test:snippets`)
 - [x] Sample covers `<`/`>`, self-closing `/`, `[]`, `/[if IE]`, `&`/`!` lines, `|` multiline, multiline `{}`, `()` boolean attributes, every filter (`test/sample.html.haml`)
-- [x] Rust unit tests for `server/src/indented.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/indented.rs` `tests`)
-- [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/indented.rs` `broken_fixture`)
+- [x] Rust unit tests for `server/src/haml_indent.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/haml_indent.rs` `tests`)
+- [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/haml_indent.rs` `broken_fixture`)
 - [x] Haml file in `test/e2e.js`: definition, hover, completion (including filter bodies), diagnostics, symbols, folding, rename; every result is asserted and a mismatch exits non-zero (`test/e2e.js` `check`)
 - [ ] Fixture corpus of real-world Haml views (no false-positive diagnostics)
 

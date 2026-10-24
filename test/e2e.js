@@ -47,6 +47,19 @@ const hamlText = [
 ].join('\n');
 fs.writeFileSync(hamlFile, hamlText);
 const hamlUri = 'file://' + hamlFile;
+const slimFile = path.join(views, 'users', 'show.html.slim');
+const slimText = 'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
+fs.writeFileSync(slimFile, slimText);
+const slimUri = 'file://' + slimFile;
+const outlineFile = path.join(views, 'users', 'outline.html.slim');
+const outlineText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+fs.writeFileSync(outlineFile, outlineText);
+const outlineUri = 'file://' + outlineFile;
+// Unsaved text differs from disk; VS Code sends `+` percent-encoded.
+const phoneFile = path.join(views, 'users', 'edit.html+phone.slim');
+fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
+const phoneText = '= render "card"\n';
+const phoneUri = 'file://' + phoneFile.replace('+', '%2B');
 
 const proc = cp.spawn(bin);
 let id = 0, buf = Buffer.alloc(0); const pending = new Map(); const notes = [];
@@ -76,7 +89,8 @@ const check = (label, actual, expected) => {
   if (!ok) console.log('     expected', expected);
 };
 (async () => {
-  await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {} });
+  const init = await send('initialize', { processId: null, rootUri: 'file://' + root, capabilities: {},
+    initializationOptions: { slim: { extraEngines: ['mjml'], disabledDiagnostics: ['explicit-end'] } } });
   await send('initialized', {}, true);
   await send('textDocument/didOpen', { textDocument: { uri, languageId: 'erb', version: 1, text } }, true);
   const req = (method, u, line, character) => send(method, { textDocument: { uri: u }, position: { line, character } });
@@ -99,7 +113,7 @@ const check = (label, actual, expected) => {
   check('definition t(".title")', (await req('textDocument/definition', uri, 18, 9)).result?.map(l => `${rel(l.uri)}:${l.range.start.line + 1}`), ['/config/locales/en.yml:4', '/config/locales/uk.yml:4']);
   check('hover t(".title")', (await req('textDocument/hover', uri, 18, 9)).result?.contents.value.split('\n').slice(2).join(' '), '- **en**: `Users` - **uk**: `Користувачі`');
   check('completion t(".', labels(await req('textDocument/completion', uri, 18, 8)), ['.title']);
-  check('completion template: "us', labels(await req('textDocument/completion', uri, 12, 24)), ['users/index', 'users/show']);
+  check('completion template: "us', labels(await req('textDocument/completion', uri, 12, 24)), ['users/edit', 'users/index', 'users/outline', 'users/show']);
   check('completion 2nd tag line', labels(await req('textDocument/completion', uri, 14, 7)), ['link_to']);
   check('hover <%=', (await req('textDocument/hover', uri, 0, 2)).result?.contents.value, '**`<%=`** outputs the value, HTML-escaped unless it is `html_safe`.');
   check('hover link_to', (await req('textDocument/hover', uri, 5, 6)).result?.contents.value.split('\n').pop(), '[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)');
@@ -145,12 +159,62 @@ const check = (label, actual, expected) => {
     '12: Partial `shared/missing` not found'
   ]);
 
+  await send('textDocument/didOpen', { textDocument: { uri: outlineUri, languageId: 'slim', version: 1, text: outlineText } }, true);
+  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: outlineUri } });
+  check('slim documentSymbols', (slimSyms.result || []).map(tree), ['main#page [content_for :aside [nav [render "card"]]]', 'javascript:']);
+  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: outlineUri } });
+  check('slim foldingRanges', (slimFolds.result || []).map(f => `${f.startLine}-${f.endLine}`), ['0-5', '1-2', '3-5', '7-8']);
+  await send('textDocument/didOpen', { textDocument: { uri: slimUri, languageId: 'slim', version: 1, text: slimText } }, true);
+  await new Promise(r => setTimeout(r, 200));
+  const slimDiag = notes.find(n => n.method === 'textDocument/publishDiagnostics' && n.params.uri === slimUri);
+  check('slim diagnostics', slimDiag ? slimDiag.params.diagnostics.map(d => `${d.range.start.line + 1}:${d.range.start.character + 1} ${d.code}`) : [],
+    ['3:1 unknown-engine', '5:1 unmatched-branch', '8:3 void-children', '9:3 silent-output-helper', '11:1 unclosed-ruby']);
+
+  const editUri = 'file://' + path.join(views, 'users', 'edit.html.slim');
+  const editText = 'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n    p Hi #{link_\n    = render "card"\n';
+  await send('textDocument/didOpen', { textDocument: { uri: editUri, languageId: 'slim', version: 1, text: editText } }, true);
+  const expect = (label, ok, got) => {
+    if (!ok) failures++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${label.padEnd(24)} →`, got);
+  };
+  const complete = async (line, character) =>
+    ((await send('textDocument/completion', { textDocument: { uri: editUri }, position: { line, character } })).result || []).map(i => i.label);
+  const helpers = await complete(1, 11);
+  expect('slim completion p= link_', helpers.includes('link_to'), helpers.slice(0, 3));
+  const attrs = await complete(2, 8);
+  expect('slim completion a hr', attrs.includes('href') && !attrs.includes('link_to'), attrs.filter(l => l.startsWith('hr')));
+  const engines = await complete(3, 7);
+  expect('slim completion jav', engines.includes('javascript:'), engines.filter(l => l.startsWith('jav')));
+  const inText = await complete(5, 14);
+  expect('slim completion in text', inText.length === 0, inText);
+  const openInterpolation = await complete(6, 16);
+  expect('slim completion #{link_', openInterpolation.includes('link_to'), openInterpolation.slice(0, 3));
+  const slimDef = ((await send('textDocument/definition', { textDocument: { uri: editUri }, position: { line: 7, character: 15 } })).result || []).map(l => rel(l.uri));
+  expect('slim definition "card"', slimDef.length === 1 && slimDef[0].endsWith('_card.html.slim'), slimDef);
+  const markerHover = await send('textDocument/hover', { textDocument: { uri: editUri }, position: { line: 4, character: 5 } });
+  const markerDoc = markerHover.result?.contents.value ?? '';
+  expect('slim hover ==', markerDoc.includes('unescaped output'), markerDoc.split('\n')[0]);
+  const edits = (await send('textDocument/formatting', { textDocument: { uri: editUri }, options: { tabSize: 2, insertSpaces: true } })).result || [];
+  const formatted = 'div\n  p= link_\n  a hr\n  jav\n  == raw x\n  | text lin\n  p Hi #{link_\n  = render "card"\n';
+  expect('slim formatting', edits.length === 1 && edits[0].newText === formatted, JSON.stringify(edits[0]?.newText));
+  const tabs = await send('textDocument/formatting', { textDocument: { uri: editUri }, options: { tabSize: 2, insertSpaces: false } });
+  expect('slim formatting, tabs', tabs.result === null, tabs.result);
+  // Without dynamic registration nothing is advertised, so ERB/Haml never see a formatter that does nothing.
+  const staticFormatting = init.result.capabilities.documentFormattingProvider;
+  expect('no static formatter', staticFormatting === undefined, staticFormatting);
+
+  await send('textDocument/didOpen', { textDocument: { uri: phoneUri, languageId: 'slim', version: 1, text: phoneText } }, true);
   const card = path.join(views, 'users', '_card.html.slim');
   const renamed = await send('workspace/willRenameFiles', { files: [{ oldUri: 'file://' + card, newUri: 'file://' + card.replace('_card', '_tile') }] });
-  const edits = Object.entries(renamed.result?.changes ?? {})
-    .flatMap(([u, es]) => es.map(e => `${rel(u)} ${e.range.start.line}:${e.newText}`)).sort();
-  check('willRenameFiles _card', edits,
-    ['/app/views/users/index.html.erb 0:tile', '/app/views/users/index.html.erb 9:tile', '/app/views/users/show.html.haml 1:tile']);
+  const renameEdits = Object.entries(renamed.result?.changes ?? {})
+    .flatMap(([u, es]) => es.map(e => `${rel(decodeURIComponent(u))} ${e.range.start.line}:${e.range.start.character} ${e.newText}`)).sort();
+  check('willRenameFiles _card', renameEdits, [
+    '/app/views/users/edit.html+phone.slim 0:10 tile',
+    '/app/views/users/index.html.erb 0:12 tile',
+    '/app/views/users/index.html.erb 9:12 tile',
+    '/app/views/users/outline.html.slim 2:18 tile',
+    '/app/views/users/show.html.haml 1:16 tile'
+  ]);
   await send('shutdown', {}); await send('exit', {}, true);
   fs.rmSync(root, { recursive: true, force: true });
   console.log(failures ? `${failures} check(s) failed` : 'all checks passed');

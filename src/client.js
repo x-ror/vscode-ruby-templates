@@ -28,8 +28,8 @@ function findServer(context) {
 }
 
 async function startClient(context, output) {
-  const enabled = vscode.workspace.getConfiguration('rubyTemplates').get('server.enabled', true);
-  if (!enabled) return;
+  const config = vscode.workspace.getConfiguration('rubyTemplates');
+  if (!config.get('server.enabled', true)) return;
   const command = findServer(context);
   output.appendLine(`[ruby-templates] starting language server: ${command}`);
 
@@ -48,6 +48,12 @@ async function startClient(context, output) {
     {
       documentSelector: context.extension.packageJSON.contributes.languages.map(({ id }) => ({ language: id })),
       outputChannel: output,
+      initializationOptions: {
+        slim: {
+          extraEngines: config.get('slim.extraEngines', []),
+          disabledDiagnostics: config.get('slim.disabledDiagnostics', [])
+        }
+      },
       synchronize: { fileEvents: watchers }
     }
   );

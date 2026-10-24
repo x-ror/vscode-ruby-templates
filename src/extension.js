@@ -8,10 +8,19 @@ const { startClient, stopClient, restartClient } = require('./client');
 const { toggleErbTagAt } = require('./erbTags');
 const { toggleHamlLines, reindentHaml, hamlLintOffenses } = require('./haml');
 const { extractBlock, partialFileName } = require('./partial');
+const { toggleSlimMarker, inVerbatimBlock, wrapSlim, dedent, partialPath } = require('./slim');
 
 const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
 const engineOf = languageId => languageId.startsWith('erb-') ? 'erb' : languageId;
+
+// Rails boots slowly on big apps, but a hung runner shouldn't leave the preview waiting forever.
+const RAILS_RENDER_TIMEOUT_MS = 60_000;
+// How far up from a template to look for a Gemfile or bin/rails.
+const MAX_PARENT_DIRS = 6;
+
+// The server reads these at startup, so a change restarts it.
+const SERVER_SETTINGS = ['rubyTemplates.server', 'rubyTemplates.slim.extraEngines', 'rubyTemplates.slim.disabledDiagnostics'];
 
 /** @type {vscode.WebviewPanel | undefined} */
 let previewPanel;
@@ -31,6 +40,9 @@ function activate(context) {
   sub('rubyTemplates.extractPartial', extractPartial);
   sub('rubyTemplates.toggleHamlPrefix', toggleActiveHamlLines);
   sub('rubyTemplates.reindentHaml', reindentActiveHaml);
+  sub('rubyTemplates.toggleSlimTag', toggleSlimTag);
+  sub('rubyTemplates.wrapInSlim', wrapInSlim);
+  sub('rubyTemplates.extractSlimPartial', extractSlimPartial);
 
   // Language server (Rust): diagnostics, go-to-partial, completions, hover.
   const output = vscode.window.createOutputChannel('Ruby Templates');
@@ -39,9 +51,10 @@ function activate(context) {
   startHamlLint(context, output);
   sub('rubyTemplates.restartServer', () => restartClient(context, output));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-    if (e.affectsConfiguration('rubyTemplates.server')) restartClient(context, output);
+    if (SERVER_SETTINGS.some(s => e.affectsConfiguration(s))) restartClient(context, output);
   }));
   startClient(context, output);
+  registerSlimLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(doc => {
@@ -144,8 +157,7 @@ async function reindentActiveHaml() {
 const PARTIAL_NAME_RE = /^\w+$/;
 const RENDER_CALL = {
   erb: p => `<%= render "${p}" %>`,
-  haml: p => `= render "${p}"`,
-  slim: p => `= render "${p}"`
+  haml: p => `= render "${p}"`
 };
 
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
@@ -154,10 +166,11 @@ async function extractPartial() {
   if (!ed || ed.selection.isEmpty) return;
   const doc = ed.document;
   const lang = engineOf(doc.languageId);
+  // Slim has its own extract command.
   if (!RENDER_CALL[lang]) return;
   if (doc.isUntitled) { vscode.window.showInformationMessage('Save the template before extracting a partial.'); return; }
-  // Haml and Slim nest by indentation, so only whole lines can move.
-  const block = extractBlock(documentLines(doc), ed.selection, lang !== 'erb');
+  // Haml nests by indentation, so only whole lines can move.
+  const block = extractBlock(documentLines(doc), ed.selection, lang === 'haml');
   if (!block) return;
   const name = await vscode.window.showInputBox({
     prompt: 'Partial name (without the leading _ and the extension)',
@@ -171,8 +184,7 @@ async function extractPartial() {
   const viewDir = /\/app\/views\/(.+)\/[^/]+$/.exec(doc.uri.path)?.[1];
   const renderPath = viewDir ? `${viewDir}/${name}` : name;
 
-  const exists = await vscode.workspace.fs.stat(partial).then(() => true, () => false);
-  if (exists) {
+  if (await exists(partial)) {
     const ok = await vscode.window.showWarningMessage(`${path.basename(partial.path)} exists. Overwrite?`, { modal: true }, 'Overwrite');
     if (ok !== 'Overwrite') return;
   }
@@ -181,26 +193,120 @@ async function extractPartial() {
   await vscode.window.showTextDocument(partial, { viewColumn: vscode.ViewColumn.Beside, preview: true });
 }
 
+// ---------------------------------------------------------------- Slim editing
+
+/** Last line a selection covers; one ending at column 0 of a later line doesn't take that line along. */
+const lastSelectedLine = ({ start, end }) => (end.character === 0 && end.line > start.line ? end.line - 1 : end.line);
+
+async function toggleSlimTag() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed) return;
+  const text = ed.document.getText().split(/\r?\n/);
+  const lines = new Set(ed.selections.flatMap(sel =>
+    Array.from({ length: lastSelectedLine(sel) - sel.start.line + 1 }, (_, i) => sel.start.line + i)));
+  await ed.edit(eb => {
+    for (const n of lines) {
+      if (inVerbatimBlock(text, n)) continue;
+      const line = ed.document.lineAt(n);
+      const next = toggleSlimMarker(line.text);
+      if (next !== null) eb.replace(line.range, next);
+    }
+  });
+}
+
+async function wrapInSlim() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed) return;
+  const doc = ed.document;
+  if (ed.selections.some(s => !s.isSingleLine)) {
+    vscode.window.showInformationMessage('Wrap in Slim Output skips selections that span several lines.');
+  }
+  await ed.edit(eb => {
+    for (const sel of ed.selections.filter(s => s.isSingleLine)) {
+      const line = doc.lineAt(sel.start.line);
+      const content = line.text.trim();
+      if (content && doc.getText(sel).trim() === content) {
+        const start = line.firstNonWhitespaceCharacterIndex;
+        eb.replace(new vscode.Range(line.lineNumber, start, line.lineNumber, start + content.length), wrapSlim(content, true));
+      } else {
+        eb.replace(sel, wrapSlim(doc.getText(sel), false));
+      }
+    }
+  });
+  if (ed.selections.length === 1 && ed.selection.isEmpty) {
+    const p = ed.selection.active.translate(0, -1);
+    ed.selection = new vscode.Selection(p, p);
+  }
+}
+
+async function extractSlimPartial() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed || ed.selection.isEmpty || ed.document.uri.scheme !== 'file') return;
+  const doc = ed.document;
+  const last = lastSelectedLine(ed.selection);
+  const range = new vscode.Range(ed.selection.start.line, 0, last, doc.lineAt(last).text.length);
+
+  const name = await vscode.window.showInputBox({
+    prompt: 'Partial name, rendered as `= render "name"` (`card`, `shared/card`)',
+    validateInput: v => /^([\w-]+\/)*[a-z_]\w*$/.test(v) ? null : 'Use a lowercase Ruby identifier, optionally prefixed by directories.'
+  });
+  if (!name) return;
+  const target = partialPath(doc.uri.fsPath, name);
+  if (!target) {
+    vscode.window.showErrorMessage(`"${name}" renders from app/views, but this file isn't under app/views.`);
+    return;
+  }
+  const targetUri = vscode.Uri.file(target);
+  if (await exists(targetUri)) {
+    vscode.window.showErrorMessage(`${path.basename(target)} already exists.`);
+    return;
+  }
+  const eol = doc.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+  const { indent, lines } = dedent(doc.getText(range).split(/\r?\n/));
+  // One edit, so a single undo restores the selection and a failed create leaves the template alone.
+  const edit = new vscode.WorkspaceEdit();
+  edit.createFile(targetUri, { overwrite: false, ignoreIfExists: false });
+  edit.insert(targetUri, new vscode.Position(0, 0), lines.join(eol) + eol);
+  edit.replace(doc.uri, range, `${indent}= render "${name}"`);
+  if (!(await vscode.workspace.applyEdit(edit))) {
+    vscode.window.showErrorMessage(`Couldn't create ${path.basename(target)}.`);
+    return;
+  }
+  // Text edits leave the new partial open and unsaved.
+  await (await vscode.workspace.openTextDocument(targetUri)).save();
+}
+
+async function exists(uri) {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch (e) {
+    if (e instanceof vscode.FileSystemError && e.code === 'FileNotFound') return false;
+    throw e;
+  }
+}
+
 // ---------------------------------------------------------------- rendering
 
 function workspaceFolderFor(doc) {
   return vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath || path.dirname(doc.uri.fsPath);
 }
 
-function hasGemfile(dir) {
+/** The nearest of `dir` and its parents that contains `rel`, or undefined. */
+function findUp(dir, rel) {
   let d = dir;
-  for (let i = 0; i < 6; i++) {
-    if (fs.existsSync(path.join(d, 'Gemfile'))) return true;
+  for (let i = 0; i < MAX_PARENT_DIRS; i++) {
+    if (fs.existsSync(path.join(d, rel))) return d;
     const parent = path.dirname(d);
     if (parent === d) break;
     d = parent;
   }
-  return false;
+  return undefined;
 }
 
 function run(cmd, args, { useBundler = cfg().get('preview.useBundler', false), ...options }, input) {
   return new Promise(resolve => {
-    const full = useBundler && hasGemfile(options.cwd) ? ['bundle', ['exec', cmd, ...args]] : [cmd, args];
+    const full = useBundler && findUp(options.cwd, 'Gemfile') !== undefined ? ['bundle', ['exec', cmd, ...args]] : [cmd, args];
     const child = cp.execFile(full[0], full[1], { ...options, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout || ''), stderr: String(stderr || ''), err });
     });
@@ -226,6 +332,10 @@ async function renderToHtml(doc) {
   const lang = engineOf(doc.languageId);
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
+  const railsRoot = cfg().get('preview.useRails', false) && doc.uri.scheme === 'file'
+    ? findUp(path.dirname(doc.uri.fsPath), path.join('bin', 'rails'))
+    : undefined;
+  if (railsRoot) return renderInRails(railsRoot, viewDir(railsRoot, doc.uri.fsPath), lang, src);
   if (lang === 'slim') {
     const bin = cfg().get('commands.slimrb', 'slimrb');
     return run(bin, ['--pretty'], { cwd }, src);
@@ -240,12 +350,37 @@ async function renderToHtml(doc) {
   return { code: 1, stdout: '', stderr: `Unsupported language: ${lang}` };
 }
 
+/** `users` for `<root>/app/views/users/show.html.slim`; undefined outside app/views. */
+function viewDir(root, file) {
+  const rel = path.relative(path.join(root, 'app', 'views'), path.dirname(file));
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : undefined;
+}
+
+const rubyString = s => `'${s.replace(/[\\']/g, '\\$&')}'`;
+
+/**
+ * Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. A controller
+ * whose path is the template's directory makes a bare `render "card"` find `<dir>/_card`, as in a request.
+ */
+async function renderInRails(root, dir, lang, src) {
+  const controller = dir
+    ? `Class.new(ApplicationController) { define_singleton_method(:controller_path) { ${rubyString(dir)} } }`
+    : 'ApplicationController';
+  const script = `print ${controller}.render(inline: $stdin.read, type: :${lang})`;
+  const r = await run('ruby', [path.join('bin', 'rails'), 'runner', script], { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS }, src);
+  if (r.err?.killed) return { ...r, code: 1, stderr: `bin/rails runner timed out after ${RAILS_RENDER_TIMEOUT_MS / 1000}s.\n${r.stderr}` };
+  return r;
+}
+
 /** Compile a template to the Ruby source the engine generates. */
 async function compileToRuby(doc) {
   const lang = engineOf(doc.languageId);
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
-  if (lang === 'slim') return run(cfg().get('commands.slimrb', 'slimrb'), ['--compile'], { cwd }, src);
+  if (lang === 'slim') {
+    const args = cfg().get('slim.compileForRails', false) ? ['--rails'] : ['--compile'];
+    return run(cfg().get('commands.slimrb', 'slimrb'), args, { cwd }, src);
+  }
   if (lang === 'haml') {
     return runHaml(cfg().get('commands.haml', 'haml'), 'compile', ['--debug'], cwd, src);
   }
@@ -285,7 +420,7 @@ async function renderPreview(doc) {
     previewPanel.webview.html = errorPage('Render failed', r.stderr || r.stdout,
       engineOf(doc.languageId) === 'erb'
         ? 'Plain `erb` has no Rails helpers (link_to, render, …). The preview works best for templates that only use Ruby core.'
-        : 'Rails helpers (link_to, render, …) are not available in a standalone render.');
+        : 'Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.');
     return;
   }
   previewPanel.webview.html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -327,6 +462,73 @@ async function showCompiledSource() {
   await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
 }
 
+// ---------------------------------------------------------------- slim-lint
+
+function registerSlimLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection('slim-lint');
+  let warnedMissing = false;
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+
+  const warnMissing = message => {
+    if (!warnedMissing) vscode.window.showWarningMessage(message);
+    warnedMissing = true;
+  };
+
+  const lint = async doc => {
+    if (doc.languageId !== 'slim' || doc.uri.scheme !== 'file') return;
+    if (!cfg().get('slimLint.enabled', false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
+    const bin = cfg().get('commands.slimLint', 'slim-lint');
+    const r = await run(bin, ['--reporter', 'json', doc.uri.fsPath], { cwd: workspaceFolderFor(doc) });
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (r.err?.code === 'ENOENT') {
+      const missing = r.err.path ?? bin;
+      warnMissing(missing === bin
+        ? `"${bin}" was not found. Install it with: gem install slim_lint — or set rubyTemplates.commands.slimLint.`
+        : `"${missing}" was not found, so slim-lint can't run through Bundler. Install Bundler or turn off rubyTemplates.preview.useBundler.`);
+      return;
+    }
+    // `bundle exec` exits 127 when the bundle doesn't include the command.
+    if (r.code === 127 || /command not found/.test(r.stderr)) {
+      warnMissing(`"${bin}" is not in the bundle. Add slim_lint to the Gemfile, or turn off rubyTemplates.preview.useBundler.`);
+      return;
+    }
+    try {
+      lints.set(doc.uri, slimLintDiagnostics(JSON.parse(r.stdout), doc));
+    } catch {
+      output.appendLine(`[slim-lint] ${bin} exited ${r.code}: ${r.stderr || r.stdout}`);
+    }
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidSaveTextDocument(doc => lint(doc)),
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('rubyTemplates.slimLint') && !cfg().get('slimLint.enabled', false)) lints.clear();
+    })
+  );
+}
+
+/** Map a `slim-lint --reporter json` report to diagnostics on the offending lines of `doc`. */
+function slimLintDiagnostics(report, doc) {
+  return (report.files ?? []).flatMap(f => f.offenses ?? []).map(({ severity, message, linter, location }) => {
+    const line = doc.lineAt(Math.min(Math.max((location?.line ?? 1) - 1, 0), doc.lineCount - 1));
+    const range = new vscode.Range(line.lineNumber, line.firstNonWhitespaceCharacterIndex, line.lineNumber, line.text.length);
+    const level = severity === 'error' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
+    const d = new vscode.Diagnostic(range, message, level);
+    d.source = 'slim-lint';
+    d.code = linter;
+    return d;
+  });
+}
+
 // ---------------------------------------------------------------- converters
 
 // `command` is both the rubyTemplates.commands.* setting name and its default executable.
@@ -336,7 +538,8 @@ const CONVERTERS = {
   'erb>slim': { command: 'erb2slim', args: [], gem: 'html2slim' },
   'haml>slim': { command: 'haml2slim', args: [], gem: 'haml2slim' },
   // haml_to_erb's own CLI only converts files in place, so call its library through ruby.
-  'haml>erb': { command: 'ruby', args: ['-rhaml_to_erb', '-e', 'print HamlToErb.convert($stdin.read)'], gem: 'haml_to_erb' }
+  'haml>erb': { command: 'ruby', args: ['-rhaml_to_erb', '-e', 'print HamlToErb.convert($stdin.read)'], gem: 'haml_to_erb' },
+  'slim>erb': { command: 'slimrb', args: ['--erb'], gem: 'slim' }
 };
 
 async function convert(target) {
@@ -360,10 +563,10 @@ async function convert(target) {
   }
   if (r.code !== 0) { vscode.window.showErrorMessage(`Conversion failed: ${(r.stderr || r.stdout).split('\n')[0]}`); return; }
 
-  // index.html → index.html.haml; show.html.erb → show.html.haml
+  // index.html → index.html.haml; show.html.erb → show.html.haml; show.html.slim → show.html.erb
   const newName = from === 'html'
     ? `${ed.document.fileName}.${target}`
-    : ed.document.fileName.replace(/\.(erb|haml|rhtml)$/, `.${target}`);
+    : ed.document.fileName.replace(/\.(erb|haml|rhtml|slim)$/, `.${target}`);
   const choice = await vscode.window.showQuickPick(
     [
       { label: `Save as ${path.basename(newName)} next to the original`, id: 'save' },

@@ -1,16 +1,11 @@
-//! Line-based analysis shared by Slim and Haml: indentation structure, bracket
-//! balance, embedded engines, and misuse of explicit `end`.
+//! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
-use crate::util::{error, leading_ws, line_range, warning};
+use crate::util::{error, find_balanced, leading_ws, line_range, warning};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
+use tower_lsp::lsp_types::Diagnostic;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Lang { Slim, Haml }
-
-const SLIM_ENGINES: &[&str] = &["ruby", "javascript", "css", "sass", "scss", "less", "coffee", "markdown", "textile", "rdoc", "erb", "builder", "nokogiri", "wiki", "creole", "mediawiki", "asciidoc", "org", "styl", "stylus", "livescript", "babel", "typescript", "haml"];
 /// The filters Haml 6 and 7 register (`Haml::Filters`).
 pub const HAML_FILTERS: &[&str] = &["plain", "escaped", "preserve", "cdata", "javascript", "css", "ruby", "erb", "markdown", "sass", "scss", "less", "coffee", "coffeescript"];
 /// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
@@ -47,17 +42,17 @@ struct Frame { indent: usize, kind: LineKind, line: usize, has_children: bool }
 /// An open Haml `if`/`case`/`unless`, for matching `else`/`elsif`/`when`.
 struct Opener { indent: usize, level: usize, seen_when: bool }
 
-pub fn diagnostics(text: &str, lang: Lang) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
-    let visits = visit_lines(lang, &lines, text, &mut out);
-    check_structure(lang, &lines, &visits, text, &mut out);
+    let visits = visit_lines(&lines, text, &mut out);
+    check_structure(&lines, &visits, text, &mut out);
     out.sort_by_key(|d| (d.range.start.line, d.range.start.character));
     out
 }
 
 /// Classifies each structural line, skipping verbatim bodies and the lines a continuation consumed.
-fn visit_lines(lang: Lang, lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) -> Vec<Visit> {
+fn visit_lines(lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) -> Vec<Visit> {
     let mut visits: Vec<Visit> = Vec::new();
     let mut i = 0usize;
     while i < lines.len() {
@@ -71,7 +66,7 @@ fn visit_lines(lang: Lang, lines: &[&str], text: &str, out: &mut Vec<Diagnostic>
             i += 1;
             continue;
         }
-        let (kind, consumed) = classify(lang, lines, i, text, out);
+        let (kind, consumed) = classify(lines, i, text, out);
         let span = consumed.max(1);
         visits.push(Visit { line: i, indent, kind, span });
         i += span;
@@ -82,7 +77,7 @@ fn visit_lines(lang: Lang, lines: &[&str], text: &str, out: &mut Vec<Diagnostic>
 /// Haml lines outside filter and comment bodies, each with the physical lines it spans (`|`, `,`, multi-line `{}`).
 pub fn haml_structure(text: &str) -> Vec<(usize, usize)> {
     let lines: Vec<&str> = text.lines().collect();
-    visit_lines(Lang::Haml, &lines, text, &mut Vec::new()).into_iter().map(|v| (v.line, v.span)).collect()
+    visit_lines(&lines, text, &mut Vec::new()).into_iter().map(|v| (v.line, v.span)).collect()
 }
 
 /// What a Haml line is, for features that only make sense at a line's start or in Ruby.
@@ -100,7 +95,7 @@ pub enum LineRole {
 pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
     let lines: Vec<&str> = text.lines().collect();
     let mut roles = vec![LineRole::Start; lines.len()];
-    let visits = visit_lines(Lang::Haml, &lines, text, &mut Vec::new());
+    let visits = visit_lines(&lines, text, &mut Vec::new());
     for (n, v) in visits.iter().enumerate() {
         let content = lines[v.line].trim_start_matches([' ', '\t']);
         let continuation = match v.kind {
@@ -126,12 +121,12 @@ fn indent_width(ws: &str) -> usize {
 }
 
 /// Indentation consistency, dedents, illegal nesting and Haml's `else`/`when` placement.
-fn check_structure(lang: Lang, lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<Diagnostic>) {
+fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<Diagnostic>) {
     let mut stack: Vec<Frame> = Vec::new();
     let mut openers: Vec<Opener> = Vec::new();
     // Haml measures every line against the first indented one.
     let doc_indentation = visits.iter().map(|v| leading_ws(lines[v.line])).find(|ws| !ws.is_empty())
-        .filter(|ws| lang == Lang::Haml && !(ws.contains('\t') && ws.contains(' ')));
+        .filter(|ws| !(ws.contains('\t') && ws.contains(' ')));
     let unit = detect_unit(lines, visits, doc_indentation);
 
     for &Visit { line: line_no, indent, kind, .. } in visits {
@@ -166,8 +161,7 @@ fn check_structure(lang: Lang, lines: &[&str], visits: &[Visit], text: &str, out
             match unit {
                 None => {}
                 Some(u) if step != u => {
-                    let sev = if lang == Lang::Haml { DiagnosticSeverity::ERROR } else { DiagnosticSeverity::WARNING };
-                    out.push(crate::util::diag(line_range(text, line_no, 0, ws.len()), sev,
+                    out.push(error(line_range(text, line_no, 0, ws.len()),
                         format!("Inconsistent indentation: expected {} spaces, found {}", u, step)));
                 }
                 _ => {}
@@ -181,11 +175,11 @@ fn check_structure(lang: Lang, lines: &[&str], visits: &[Visit], text: &str, out
             let parent_raw = lines[parent.line];
             let nesting_error = match parent.kind {
                 _ if parent.has_children => None,
-                LineKind::Tag { inline_content: true } if lang == Lang::Haml => Some(format!(
+                LineKind::Tag { inline_content: true } => Some(format!(
                     "Illegal nesting: content can't be both given on the same line as %{} and nested within it.",
                     haml_tag_name(&parent_raw[leading_ws(parent_raw).len()..]))),
-                LineKind::Text if lang == Lang::Haml => Some("Illegal nesting: nesting within plain text is illegal.".into()),
-                LineKind::Ruby { opens_block: false } if lang == Lang::Haml =>
+                LineKind::Text => Some("Illegal nesting: nesting within plain text is illegal.".into()),
+                LineKind::Ruby { opens_block: false } =>
                     Some("Nested content under Ruby code that doesn't open a block (`do`, `if`, ...).".into()),
                 LineKind::SelfClosing => Some("Illegal nesting: nesting within a self-closing tag is illegal.".into()),
                 LineKind::TextComment => Some("Illegal nesting: nesting within a tag that already has content is illegal.".into()),
@@ -200,10 +194,8 @@ fn check_structure(lang: Lang, lines: &[&str], visits: &[Visit], text: &str, out
             parent.has_children = true;
         }
 
-        if lang == Lang::Haml {
-            if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, stack.len()) {
-                out.push(error(line_range(text, line_no, ws.len(), raw.len()), message));
-            }
+        if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, stack.len()) {
+            out.push(error(line_range(text, line_no, ws.len(), raw.len()), message));
         }
 
         stack.push(Frame { indent, kind, line: line_no, has_children: false });
@@ -227,7 +219,7 @@ fn human_indentation(ws: &str) -> String {
 /// and returns Haml's error for an `else`/`elsif`/`when` with no opener at its level.
 fn track_block_keyword(openers: &mut Vec<Opener>, content: &str, indent: usize, level: usize) -> Option<String> {
     let silent_code = content.strip_prefix('-').filter(|code| !code.starts_with('#'));
-    let keyword = silent_code.or_else(|| strip_output_prefix(Lang::Haml, content)).and_then(block_keyword);
+    let keyword = silent_code.or_else(|| strip_output_prefix(content)).and_then(block_keyword);
     let continues = silent_code.is_some() && keyword.is_some_and(|k| MID_BLOCK_KEYWORDS.contains(&k));
     while openers.last().is_some_and(|o| o.indent > indent || (o.indent == indent && !continues)) {
         openers.pop();
@@ -279,97 +271,71 @@ fn detect_unit(lines: &[&str], visits: &[Visit], doc_indentation: Option<&str>) 
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
     let c = &raw[ws_len..];
 
     // Doctype
-    if (lang == Lang::Haml && c.starts_with("!!!")) || (lang == Lang::Slim && c.starts_with("doctype")) {
+    if c.starts_with("!!!") {
         return (LineKind::Doctype, 1);
     }
     // Comments
-    if lang == Lang::Haml && c.starts_with("-#") {
+    if c.starts_with("-#") {
         return (LineKind::Verbatim, 1);
     }
-    if lang == Lang::Slim && c.starts_with('/') {
-        return (LineKind::Verbatim, 1);
+    if let Some(comment) = c.strip_prefix('/') {
+        // Conditional comments `/[if IE]` and `/![if !IE]` may have text after the `]`.
+        let conditional = comment.strip_prefix('!').unwrap_or(comment).strip_prefix('[');
+        let text_after = conditional.map_or(comment, |cond| cond.split_once(']').map_or("", |(_, rest)| rest));
+        return (if text_after.trim().is_empty() { LineKind::Other } else { LineKind::TextComment }, 1);
     }
-    if lang == Lang::Haml {
-        if let Some(comment) = c.strip_prefix('/') {
-            // Conditional comments `/[if IE]` and `/![if !IE]` may have text after the `]`.
-            let conditional = comment.strip_prefix('!').unwrap_or(comment).strip_prefix('[');
-            let text_after = conditional.map_or(comment, |cond| cond.split_once(']').map_or("", |(_, rest)| rest));
-            return (if text_after.trim().is_empty() { LineKind::Other } else { LineKind::TextComment }, 1);
-        }
-        if (c.starts_with('.') || (c.starts_with('#') && !c.starts_with("#{")))
-            && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
-        {
-            out.push(error(line_range(text, i, ws_len, raw.len()), "Illegal element: classes and ids must have values."));
-            return (LineKind::Other, 1);
-        }
+    if (c.starts_with('.') || (c.starts_with('#') && !c.starts_with("#{")))
+        && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        out.push(error(line_range(text, i, ws_len, raw.len()), "Illegal element: classes and ids must have values."));
+        return (LineKind::Other, 1);
     }
-    // Filters / embedded engines
-    if lang == Lang::Haml {
-        if let Some(name) = c.strip_prefix(':') {
-            if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-                if !HAML_FILTERS.contains(&name) {
-                    out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name)));
-                }
-                return (LineKind::Verbatim, 1);
+    // Filters
+    if let Some(name) = c.strip_prefix(':') {
+        if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
+            if !HAML_FILTERS.contains(&name) {
+                out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name)));
             }
-        }
-    }
-    if lang == Lang::Slim {
-        if let Some(name) = c.strip_suffix(':') {
-            if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-                if !SLIM_ENGINES.contains(&name) {
-                    out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown embedded engine `{}:`", name)));
-                }
-                return (LineKind::Verbatim, 1);
-            }
-        }
-        if c.starts_with('|') || c.starts_with('\'') {
             return (LineKind::Verbatim, 1);
         }
     }
     // Ruby lines
-    if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(lang, c)) {
-        let (joined, consumed) = join_continuation(lang, lines, i, code);
-        check_explicit_end(lang, &joined, text, i, raw, out);
+    if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
+        let (joined, consumed) = join_continuation(lines, i, code);
+        check_explicit_end(&joined, text, i, raw, out);
         return (LineKind::Ruby { opens_block: opens_block(&joined) }, consumed);
     }
     // Tags
-    let is_tag = match lang {
-        Lang::Haml => is_haml_tag(c),
-        Lang::Slim => c.starts_with('.') || c.starts_with('#') || c.chars().next().map(|ch| ch.is_ascii_alphabetic()).unwrap_or(false),
-    };
-    if is_tag {
-        let (rest, head_lines) = skip_tag_head(lang, lines, i, text, out);
-        if lang == Lang::Haml {
-            if let Some(content) = rest.trim_start_matches(['<', '>']).strip_prefix('/') {
-                if !content.trim().is_empty() {
-                    out.push(error(line_range(text, i, ws_len, raw.len()), "Self-closing tags can't have content."));
-                }
-                return (LineKind::SelfClosing, head_lines);
+    if is_haml_tag(c) {
+        let (rest, head_lines) = skip_tag_head(lines, i, text, out);
+        if let Some(content) = rest.trim_start_matches(['<', '>']).strip_prefix('/') {
+            if !content.trim().is_empty() {
+                out.push(error(line_range(text, i, ws_len, raw.len()), "Self-closing tags can't have content."));
             }
+            return (LineKind::SelfClosing, head_lines);
         }
         let rest_t = rest.trim();
         let last_head_line = i + head_lines - 1;
         // Haml allows children after content only when the line's value ends in `,` (`is_ruby_multiline?`).
         let value = rest.trim_start_matches(['<', '>']).trim();
-        let inline_content = lang == Lang::Haml && !value.is_empty() && !is_ruby_multiline(value);
-        let tail_lines = match strip_output_prefix(lang, rest_t) {
+        let inline_content = !value.is_empty() && !is_ruby_multiline(value);
+        let tail_lines = match strip_output_prefix(rest_t) {
             Some(code) => {
-                let (joined, code_lines) = join_continuation(lang, lines, last_head_line, code);
-                check_explicit_end(lang, &joined, text, i, raw, out);
+                let (joined, code_lines) = join_continuation(lines, last_head_line, code);
+                check_explicit_end(&joined, text, i, raw, out);
                 code_lines
             }
-            None => multiline_len(lang, lines, last_head_line),
+            None => multiline_len(lines, last_head_line),
         };
         return (LineKind::Tag { inline_content }, head_lines - 1 + tail_lines);
     }
-    (LineKind::Text, multiline_len(lang, lines, i))
+    (LineKind::Text, multiline_len(lines, i))
 }
 
 /// Haml's `is_ruby_multiline?`: ends in `,`, except the character literals `?,` and `?\,`.
@@ -388,16 +354,12 @@ fn opens_block(code: &str) -> bool {
     ends_with_block(code) || matches!(analyze(code).0, BlockEffect::Open(_) | BlockEffect::Continue)
 }
 
-fn strip_output_prefix(lang: Lang, s: &str) -> Option<&str> {
-    match lang {
-        // `==`, `&==`, `!==` are interpolated plain text, not Ruby.
-        Lang::Haml if ["==", "&==", "!=="].iter().any(|p| s.starts_with(p)) => None,
-        Lang::Haml => ["!=", "&=", "!~", "&~", "=", "~"].iter().find_map(|p| s.strip_prefix(p)),
-        Lang::Slim => {
-            let t = s.strip_prefix("==").or_else(|| s.strip_prefix('='))?;
-            Some(t.trim_start_matches(['<', '>']))
-        }
+fn strip_output_prefix(s: &str) -> Option<&str> {
+    // `==`, `&==`, `!==` are interpolated plain text, not Ruby.
+    if ["==", "&==", "!=="].iter().any(|p| s.starts_with(p)) {
+        return None;
     }
+    ["!=", "&=", "!~", "&~", "=", "~"].iter().find_map(|p| s.strip_prefix(p))
 }
 
 /// Byte offset where Ruby code starts on a Haml line, after a line-start `-`/`=`/`~`/`!=`/`&=`
@@ -411,7 +373,7 @@ pub fn haml_code_start(line: &str) -> Option<usize> {
         return Some(line.len() - code.len());
     }
     let code_line = if is_haml_tag(content) { content[tag_head_len(content)?..].trim_start_matches(['<', '>']) } else { content };
-    strip_output_prefix(Lang::Haml, code_line).map(|code| line.len() - code.len())
+    strip_output_prefix(code_line).map(|code| line.len() - code.len())
 }
 
 /// `%tag`, `.class` or `#id` (not `#{interpolation}`) at the start of a line's content.
@@ -458,8 +420,8 @@ fn is_haml_multiline(line: &str) -> bool {
 }
 
 /// Physical lines in the Haml `|` multiline group starting at line `i`, blank lines inside included; 1 if none.
-fn multiline_len(lang: Lang, lines: &[&str], i: usize) -> usize {
-    if lang != Lang::Haml || !is_haml_multiline(lines[i]) {
+fn multiline_len(lines: &[&str], i: usize) -> usize {
+    if !is_haml_multiline(lines[i]) {
         return 1;
     }
     let mut len = 1;
@@ -472,8 +434,8 @@ fn multiline_len(lang: Lang, lines: &[&str], i: usize) -> usize {
 }
 
 /// Join Ruby continuation lines (`,` or `\` at end, Haml `|` multiline).
-fn join_continuation(lang: Lang, lines: &[&str], i: usize, first: &str) -> (String, usize) {
-    let group = multiline_len(lang, lines, i);
+fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
+    let group = multiline_len(lines, i);
     if group > 1 {
         let strip_pipe = |s: &str| s.trim().trim_end_matches('|').trim_end().to_string();
         let rest = lines[i + 1..i + group].iter().map(|l| strip_pipe(l));
@@ -490,59 +452,23 @@ fn join_continuation(lang: Lang, lines: &[&str], i: usize, first: &str) -> (Stri
     (code, consumed)
 }
 
-fn check_explicit_end(lang: Lang, code: &str, text: &str, line: usize, raw: &str, out: &mut Vec<Diagnostic>) {
+fn check_explicit_end(code: &str, text: &str, line: usize, raw: &str, out: &mut Vec<Diagnostic>) {
     let (_, _, closes) = analyze(code);
     if closes > 0 {
-        let name = if lang == Lang::Haml { "Haml" } else { "Slim" };
         out.push(error(line_range(text, line, leading_ws(raw).len(), raw.len()),
-            format!("`end` is not allowed: {} closes blocks by indentation", name)));
+            "`end` is not allowed: Haml closes blocks by indentation"));
     }
 }
 
-/// Skip over `%tag.class#id{...}(...)[...]` (Haml) or `tag.class#id attr=val (...)` (Slim),
-/// validating bracket balance (possibly across lines). Returns the remainder and lines consumed.
-fn skip_tag_head(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
+/// Skip over `%tag.class#id{...}(...)[...]`, validating bracket balance (possibly across lines).
+/// Returns the remainder and lines consumed.
+fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
     let raw = lines[i];
     let mut consumed = 1;
     let mut s: String = raw[leading_ws(raw).len()..].to_string();
-    let mut pos = 0usize;
-    let bytes = |s: &String| s.as_bytes().to_vec();
-    // tag name / classes / ids
-    let b = bytes(&s);
-    while pos < b.len() {
-        let ch = b[pos] as char;
-        if is_tag_name_char(ch) { pos += 1; } else { break; }
-    }
-    // Slim: `li: a ...` — the colon ends the head; treat the rest as content
-    loop {
-        let b = s.as_bytes();
-        if pos >= b.len() { break; }
-        let ch = b[pos] as char;
-        let opener = match lang {
-            Lang::Haml => matches!(ch, '{' | '(' | '['),
-            Lang::Slim => matches!(ch, '(' | '[' | '{') || ch == '*',
-        };
-        if ch == ' ' && lang == Lang::Slim {
-            // inline attributes `a=b` may follow; stop at the first token that is not `name=`
-            let rest = &s[pos..];
-            let trimmed = rest.trim_start();
-            if looks_like_attr(trimmed) {
-                pos += rest.len() - trimmed.len();
-                match consume_attr(&s[pos..]) {
-                    Ok(n) => pos += n,
-                    Err(open_ch) => {
-                        out.push(error(line_range(text, i, leading_ws(raw).len(), raw.len()),
-                            format!("Unclosed `{}` in attribute value", open_ch)));
-                        return (String::new(), consumed);
-                    }
-                }
-                continue;
-            }
-            break;
-        }
-        if !opener { break; }
-        if ch == '*' { pos += 1; continue; }
-        let close = match ch { '{' => '}', '(' => ')', '[' => ']', _ => unreachable!() };
+    let mut pos = tag_name_len(&s);
+    while let Some(ch @ ('{' | '(' | '[')) = s[pos..].chars().next() {
+        let close = match ch { '{' => '}', '(' => ')', _ => ']' };
         match find_balanced(&s[pos..], ch, close) {
             Some(len) => pos += len,
             None => {
@@ -568,83 +494,13 @@ fn skip_tag_head(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec
     (s[pos..].to_string(), consumed)
 }
 
-fn looks_like_attr(s: &str) -> bool {
-    let name_len = s.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.')).count();
-    name_len > 0 && s[name_len..].starts_with('=') && !s[name_len..].starts_with("==") || (name_len > 0 && s[name_len..].starts_with("=="))
-}
-
-/// Length of `name=value` where value is a quoted string, a balanced bracket group, or a bare word.
-/// Err(open) when a bracket in the value is never closed.
-fn consume_attr(s: &str) -> std::result::Result<usize, char> {
-    let name_len = s.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.')).count();
-    let mut pos = name_len;
-    while s[pos..].starts_with('=') { pos += 1; }
-    while s[pos..].starts_with(' ') { pos += 1; }
-    let rest = &s[pos..];
-    let first = rest.chars().next().unwrap_or(' ');
-    let len = match first {
-        '"' | '\'' => find_quoted(rest, first).ok_or(first)?,
-        _ => {
-            // bare ruby expression: stop at whitespace unless inside brackets
-            let mut depth = 0i32;
-            let mut n = 0;
-            let mut last_open = '(';
-            for (idx, ch) in rest.char_indices() {
-                match ch {
-                    '(' | '[' | '{' => { depth += 1; last_open = ch; }
-                    ')' | ']' | '}' => depth -= 1,
-                    ' ' if depth <= 0 => { n = idx; break; }
-                    _ => {}
-                }
-                n = idx + ch.len_utf8();
-            }
-            if depth > 0 { return Err(last_open); }
-            n
-        }
-    };
-    Ok(pos + len)
-}
-
-fn find_quoted(s: &str, q: char) -> Option<usize> {
-    let mut esc = false;
-    for (idx, ch) in s.char_indices().skip(1) {
-        if esc { esc = false; continue; }
-        if ch == '\\' { esc = true; continue; }
-        if ch == q { return Some(idx + 1); }
-    }
-    None
-}
-
-/// Length of a balanced `open ... close` group starting at s[0], honoring strings.
-fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
-    let mut depth = 0i32;
-    let mut in_str: Option<char> = None;
-    let mut esc = false;
-    for (idx, ch) in s.char_indices() {
-        if let Some(q) = in_str {
-            if esc { esc = false; } else if ch == '\\' { esc = true; } else if ch == q { in_str = None; }
-            continue;
-        }
-        match ch {
-            '"' | '\'' => in_str = Some(ch),
-            c if c == open => depth += 1,
-            c if c == close => {
-                depth -= 1;
-                if depth == 0 { return Some(idx + ch.len_utf8()); }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// (line, start char, end char, message) for each Haml diagnostic.
     fn haml(text: &str) -> Vec<(u32, u32, u32, String)> {
-        diagnostics(text, Lang::Haml).into_iter()
+        diagnostics(text).into_iter()
             .map(|d| (d.range.start.line, d.range.start.character, d.range.end.character, d.message))
             .collect()
     }
