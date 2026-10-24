@@ -24,9 +24,6 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onLanguage:erb",
-    "onLanguage:haml",
-    "onLanguage:slim",
     "workspaceContains:**/*.{jbuilder,builder}"
   ],
   "contributes": {
