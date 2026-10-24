@@ -833,7 +833,7 @@ impl LanguageServer for Backend {
 fn render_completions(path: &Path, kind: partials::RenderKind, prefix: &str, templates: &[PathBuf]) -> Vec<CompletionItem> {
     partials::render_candidates(path, kind, templates)
         .into_iter()
-        .filter(|(name, _)| name.starts_with(prefix) || prefix.is_empty())
+        .filter(|(name, _)| name.starts_with(prefix))
         .map(|(name, file)| {
             let detail = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
             CompletionItem { insert_text: Some(name.clone()), ..util::completion_item(name, CompletionItemKind::FILE, detail) }
