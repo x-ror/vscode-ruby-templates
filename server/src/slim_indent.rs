@@ -467,6 +467,10 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
                 }
                 continue;
             }
+            if trimmed.starts_with('*') && trimmed[1..].starts_with(|c: char| !c.is_whitespace()) {
+                pos += rest.len() - trimmed.len();
+                continue;
+            }
             break;
         }
         if matches!(ch, '<' | '>') {
@@ -478,6 +482,9 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
         }
         if ch == '*' {
             pos += 1;
+            if !s[pos..].starts_with(['{', '(', '[']) {
+                pos += s[pos..].find(' ').unwrap_or(s.len() - pos);
+            }
             continue;
         }
         let close = match ch {
@@ -667,7 +674,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: `div *attrs` / `p *{a: 1}` (space-separated splat, no text) is classified as a text block, so its children lose structure checks"]
     fn splat_attributes_tag_keeps_structure_checks() {
         for head in ["div *attrs", "p.a *{a: 1}"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
