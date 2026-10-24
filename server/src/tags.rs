@@ -16,7 +16,7 @@ pub mod code {
 
 pub const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
-const OPTIONAL_END: &[&str] = &[
+pub(crate) const OPTIONAL_END: &[&str] = &[
     "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "optgroup", "html", "head",
     "body",
 ];
@@ -27,25 +27,53 @@ static RAW_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
 
 #[derive(Clone)]
-struct Tag {
-    name: String,
-    start: usize,
-    end: usize,
+pub(crate) struct Tag {
+    pub name: String,
+    pub start: usize,
+    pub end: usize,
 }
 
 /// An open ERB block: the tag stack on entry and the tag names each finished branch left open.
 /// `in_branch` is false between `case x` and its first `when`, which is not a branch.
-struct Block {
-    entry: Vec<Tag>,
+pub(crate) struct Block {
+    pub entry: Vec<Tag>,
     branch_ends: Vec<Vec<String>>,
     has_else: bool,
     in_branch: bool,
 }
 
-struct ErbEvent<'a> {
-    at: usize,
-    effect: BlockEffect,
-    keyword: &'a str,
+pub(crate) struct ErbEvent<'a> {
+    pub at: usize,
+    pub end: usize,
+    pub effect: BlockEffect,
+    pub keyword: &'a str,
+}
+
+/// An ERB template's ERB tags and HTML markup, in source order.
+pub(crate) enum Token<'a> {
+    Erb(ErbEvent<'a>),
+    /// A start tag; `pairs` is false for void, self-closing and optional-end elements, which the stack skips.
+    Open {
+        tag: Tag,
+        pairs: bool,
+        quoted: Vec<(usize, usize)>,
+    },
+    Close {
+        tag: Tag,
+        quoted: Vec<(usize, usize)>,
+    },
+    /// `<script>`, `<style>`, `<textarea>`, `<title>` and their unparsed body, up to `</name` (`None`: never closed).
+    Raw {
+        tag: Tag,
+        close: Option<(usize, usize)>,
+    },
+    /// `<!-- … -->`, `<!DOCTYPE …>`, `<?xml …?>`.
+    Comment {
+        start: usize,
+        end: usize,
+    },
+    /// A `<name` whose `>` never comes: nothing after it can be read as HTML.
+    Unterminated,
 }
 
 fn names(stack: &[Tag]) -> Vec<String> {
@@ -56,16 +84,28 @@ fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
-/// Byte offset just past the `>` closing a tag (skipping quoted attribute values), and whether it is
-/// self-closing. A `/` ending an unquoted value (`<a href=/>`) belongs to the value, not to `/>`.
-fn tag_end(html: &[u8], from: usize) -> Option<(usize, bool)> {
+struct TagEnd {
+    end: usize,
+    self_closing: bool,
+    quoted: Vec<(usize, usize)>,
+}
+
+/// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
+/// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
+/// value, not to `/>`.
+fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
     let mut i = from;
     let mut prev = 0u8;
     let mut unquoted = false;
+    let mut quoted = Vec::new();
     while let Some(&b) = html.get(i) {
         match b {
-            b'>' => return Some((i + 1, prev == b'/' && !unquoted)),
-            b'"' | b'\'' if prev == b'=' => i = find(html, i + 1, &[b])?,
+            b'>' => return Some(TagEnd { end: i + 1, self_closing: prev == b'/' && !unquoted, quoted }),
+            b'"' | b'\'' if prev == b'=' => {
+                let close = find(html, i + 1, &[b])?;
+                quoted.push((i, close + 1));
+                i = close;
+            }
             _ if b.is_ascii_whitespace() => unquoted = false,
             _ if prev == b'=' => unquoted = true,
             _ => {}
@@ -78,7 +118,7 @@ fn tag_end(html: &[u8], from: usize) -> Option<(usize, bool)> {
     None
 }
 
-/// HTML with ERB tags blanked out (offsets and newlines kept, lowercased), plus ERB block events in order.
+/// HTML with ERB tags blanked out, plus every ERB tag as an event, in order.
 fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
     let tree = erb::parse(text)?;
     let root = tree.root_node();
@@ -96,24 +136,80 @@ fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
         html[node.byte_range()].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
         let mut c2 = node.walk();
         let code = node.children(&mut c2).find(|n| n.kind() == "code");
-        if let Some(code) = code {
-            let snippet = &text[code.byte_range()];
-            // ponytail: a JS/CSS block body anywhere skips the whole file; per-block raw spans would keep checking.
-            if RAW_BLOCK.is_match(snippet) {
-                return None;
+        let (effect, keyword) = match code {
+            Some(code) => {
+                let snippet = &text[code.byte_range()];
+                // ponytail: a JS/CSS block body anywhere skips the whole file; per-block raw spans would keep checking.
+                if RAW_BLOCK.is_match(snippet) {
+                    return None;
+                }
+                (analyze(snippet).0, snippet.split_whitespace().next().unwrap_or(""))
             }
-            let keyword = snippet.split_whitespace().next().unwrap_or("");
-            events.push(ErbEvent { at: node.start_byte(), effect: analyze(snippet).0, keyword });
-        }
+            None => (BlockEffect::Neutral, ""),
+        };
+        events.push(ErbEvent { at: node.start_byte(), end: node.end_byte(), effect, keyword });
     }
     Some((html, events))
+}
+
+/// The template's tokens; `None` for broken ERB or a JS/CSS block helper, where tag positions are guesswork.
+pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
+    let (html, events) = split(text)?;
+    let mut events = events.into_iter().peekable();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while let Some(start) = find(&html, i, b"<") {
+        tokens.extend(std::iter::from_fn(|| events.next_if(|e| e.at < start)).map(Token::Erb));
+        i = start + 1;
+        if html[start..].starts_with(b"<!--") {
+            i = find(&html, start + 4, b"-->").map_or(html.len(), |p| p + 3);
+            tokens.push(Token::Comment { start, end: i });
+            continue;
+        }
+        if html[start..].starts_with(b"<!") || html[start..].starts_with(b"<?") {
+            i = find(&html, start, b">").map_or(html.len(), |p| p + 1);
+            tokens.push(Token::Comment { start, end: i });
+            continue;
+        }
+        let closing = html.get(i) == Some(&b'/');
+        let name_start = i + closing as usize;
+        if !html.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
+            continue;
+        }
+        let name_len =
+            html[name_start..].iter().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
+        let name = String::from_utf8_lossy(&html[name_start..name_start + name_len]).into_owned();
+        let Some(TagEnd { end, self_closing, quoted }) = tag_end(&html, name_start + name_len) else {
+            tokens.push(Token::Unterminated);
+            return Some(tokens);
+        };
+        i = end;
+        let tag = Tag { name, start, end };
+        if closing {
+            tokens.push(Token::Close { tag, quoted });
+        } else if RAW_TEXT.contains(&tag.name.as_str()) && !self_closing {
+            let close = format!("</{}", tag.name);
+            let close = find(&html, end, close.as_bytes()).map(|close_start| {
+                let after = close_start + close.len();
+                (close_start, after + (html.get(after) == Some(&b'>')) as usize)
+            });
+            i = close.map_or(html.len(), |(_, close_end)| close_end);
+            tokens.push(Token::Raw { tag, close });
+        } else {
+            let name = tag.name.as_str();
+            let pairs = !self_closing && !VOID.contains(&name) && !OPTIONAL_END.contains(&name);
+            tokens.push(Token::Open { tag, pairs, quoted });
+        }
+    }
+    tokens.extend(events.map(Token::Erb));
+    Some(tokens)
 }
 
 /// Track the tag stack through ERB branches. Returns false when the stack is no longer certain.
 // ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
 // open makes the stack path-dependent, so checking stops there. Conditional wrappers
 // (`<% if a %><div><% end %>…<% if a %></div><% end %>`) are therefore unchecked; per-path stacks would cover them.
-fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Block>) -> bool {
+pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Block>) -> bool {
     match event.effect {
         BlockEffect::Open(n) => {
             for _ in 0..n {
@@ -181,53 +277,39 @@ pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
 }
 
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
-    let Some((html, events)) = split(text) else { return };
+    let Some(tokens) = tokens(text) else { return };
     let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
-    let mut events = events.iter().peekable();
     let mut stack: Vec<Tag> = Vec::new();
     // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
     let mut optional: Vec<Tag> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
-    let mut i = 0;
-    while let Some(start) = find(&html, i, b"<") {
-        while let Some(event) = events.next_if(|e| e.at < start) {
-            if !apply(event, &mut stack, &mut blocks) {
-                return;
+    for token in tokens {
+        match token {
+            Token::Erb(event) => {
+                if !apply(&event, &mut stack, &mut blocks) {
+                    return;
+                }
             }
-        }
-        i = start + 1;
-        if html[start..].starts_with(b"<!--") {
-            i = find(&html, start + 4, b"-->").map_or(html.len(), |p| p + 3);
-            continue;
-        }
-        if html[start..].starts_with(b"<!") || html[start..].starts_with(b"<?") {
-            i = find(&html, start, b">").map_or(html.len(), |p| p + 1);
-            continue;
-        }
-        let closing = html.get(i) == Some(&b'/');
-        let name_start = i + closing as usize;
-        if !html.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
-            continue;
-        }
-        let name_len =
-            html[name_start..].iter().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
-        let name = String::from_utf8_lossy(&html[name_start..name_start + name_len]).into_owned();
-        let Some((end, self_closing)) = tag_end(&html, name_start + name_len) else { return };
-        i = end;
-        if VOID.contains(&name.as_str()) {
-            continue;
-        }
-        if OPTIONAL_END.contains(&name.as_str()) {
-            if !closing {
-                optional.push(Tag { name, start, end });
-            } else if let Some(at) = optional.iter().rposition(|t| t.name == name) {
-                elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
-                optional.truncate(at);
+            Token::Comment { .. } | Token::Raw { close: None, .. } => {}
+            Token::Unterminated => return,
+            Token::Raw { tag, close: Some((close_start, end)) } => {
+                elements.push(Element { name: tag.name, start: tag.start, open_end: tag.end, close_start, end })
             }
-            continue;
-        }
-        if closing {
-            match stack.last() {
+            Token::Open { tag, pairs, .. } => {
+                if pairs {
+                    stack.push(tag);
+                } else if OPTIONAL_END.contains(&tag.name.as_str()) {
+                    optional.push(tag);
+                }
+            }
+            Token::Close { tag, .. } if VOID.contains(&tag.name.as_str()) => {}
+            Token::Close { tag: Tag { name, start, end }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
+                if let Some(at) = optional.iter().rposition(|t| t.name == name) {
+                    elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
+                    optional.truncate(at);
+                }
+            }
+            Token::Close { tag: Tag { name, start, end }, .. } => match stack.last() {
                 None if partial => {}
                 None => {
                     out.push(coded(warning(range(start, end), format!("Unexpected closing tag `</{name}>`")), code::UNEXPECTED_CLOSE_TAG))
@@ -243,25 +325,7 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
                     // ponytail: first mismatch only; recovery guesses would cascade into noise.
                     return;
                 }
-            }
-        } else if self_closing {
-            // Self-closing (`<svg … />`, custom elements in XHTML style).
-        } else if RAW_TEXT.contains(&name.as_str()) {
-            let close = format!("</{name}");
-            let Some(close_start) = find(&html, end, close.as_bytes()) else {
-                i = html.len();
-                continue;
-            };
-            i = close_start + close.len();
-            let close_end = i + (html.get(i) == Some(&b'>')) as usize;
-            elements.push(Element { name, start, open_end: end, close_start, end: close_end });
-        } else {
-            stack.push(Tag { name, start, end });
-        }
-    }
-    for event in events {
-        if !apply(event, &mut stack, &mut blocks) {
-            return;
+            },
         }
     }
     if blocks.is_empty() && !partial {
