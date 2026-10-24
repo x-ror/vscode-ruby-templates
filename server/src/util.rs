@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
@@ -33,6 +33,12 @@ pub fn error(range: Range, message: impl Into<String>) -> Diagnostic {
 
 pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
+}
+
+/// Attach a stable `code` so users can filter or disable the diagnostic.
+pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
+    d.code = Some(NumberOrString::String(code.into()));
+    d
 }
 
 pub fn leading_ws(line: &str) -> &str {

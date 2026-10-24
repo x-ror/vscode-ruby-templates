@@ -8,7 +8,9 @@ mod tags;
 mod util;
 
 use dashmap::DashMap;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -34,16 +36,32 @@ impl TemplateLang {
 
 struct Doc { lang: TemplateLang, text: String }
 
+/// `initializationOptions.slim`, from the `rubyTemplates.slim.*` settings.
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct SlimOptions {
+    extra_engines: Vec<String>,
+    disabled_diagnostics: Vec<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct InitOptions {
+    slim: SlimOptions,
+}
+
 struct Backend {
     client: Client,
     docs: DashMap<Url, Doc>,
+    // Set once in `initialize`; the client restarts the server when these settings change.
+    slim: OnceLock<SlimOptions>,
 }
 
-fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
+fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
-        TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
-        TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
+        TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml, &[]),
+        TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim, &slim.extra_engines),
     };
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
@@ -51,6 +69,9 @@ fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
     }
     if let Ok(path) = uri.to_file_path() {
         out.extend(unresolved_renders(doc.lang, &path, &doc.text));
+    }
+    if doc.lang == TemplateLang::Slim {
+        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c)));
     }
     out
 }
@@ -89,7 +110,8 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
             if !ruby_line || !in_ruby_context(lang, line, r.start) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
-            out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
+            let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
+            out.push(util::coded(util::warning(util::line_range(text, i, r.start, r.end), message), "unresolved-render"));
         }
     }
     out
@@ -98,7 +120,7 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
 impl Backend {
     async fn publish(&self, uri: Url) {
         let diags = match self.docs.get(&uri) {
-            Some(doc) => diagnostics(&uri, &doc),
+            Some(doc) => diagnostics(&uri, &doc, self.slim.get_or_init(SlimOptions::default)),
             None => vec![],
         };
         self.client.publish_diagnostics(uri, diags, None).await;
@@ -120,7 +142,16 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let options = match params.initialization_options.map(serde_json::from_value::<InitOptions>) {
+            Some(Ok(options)) => options,
+            Some(Err(e)) => {
+                self.client.log_message(MessageType::WARNING, format!("ignoring invalid initializationOptions: {e}")).await;
+                InitOptions::default()
+            }
+            None => InitOptions::default(),
+        };
+        let _ = self.slim.set(options.slim);
         Ok(InitializeResult {
             server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
@@ -370,7 +401,7 @@ async fn main() {
             let Ok(text) = std::fs::read_to_string(f) else { eprintln!("cannot read {}", f); failed = true; continue };
             let Ok(uri) = Url::from_file_path(std::fs::canonicalize(f).unwrap_or_else(|_| PathBuf::from(f))) else { continue };
             let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { eprintln!("{}: unknown template type", f); failed = true; continue };
-            let diags = diagnostics(&uri, &Doc { lang, text });
+            let diags = diagnostics(&uri, &Doc { lang, text }, &SlimOptions::default());
             for d in &diags {
                 let sev = match d.severity { Some(DiagnosticSeverity::ERROR) => "error", Some(DiagnosticSeverity::WARNING) => "warning", _ => "info" };
                 println!("{}:{}:{}: {}: {}", f, d.range.start.line + 1, d.range.start.character + 1, sev, d.message);
@@ -381,7 +412,7 @@ async fn main() {
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend { client, docs: DashMap::new() });
+    let (service, socket) = LspService::new(|client| Backend { client, docs: DashMap::new(), slim: OnceLock::new() });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 

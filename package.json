@@ -487,6 +487,29 @@
           "default": false,
           "description": "Prefix render commands with `bundle exec` when a Gemfile exists in the workspace."
         },
+        "rubyTemplates.slim.extraEngines": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Embedded engine names registered by your app (e.g. `mjml`) that the unknown-engine check should accept."
+        },
+        "rubyTemplates.slim.disabledDiagnostics": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["inconsistent-indent", "bad-dedent", "top-level-indent", "doctype-children", "void-children", "unknown-engine", "unclosed-attribute", "unclosed-ruby", "explicit-end", "unmatched-branch", "silent-output-helper", "unresolved-render"] },
+          "default": [],
+          "uniqueItems": true,
+          "description": "Built-in Slim diagnostics to turn off, by code."
+        },
+        "rubyTemplates.slimLint.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run slim-lint (`--reporter json`) on save and show its offenses. Uses `bundle exec` when rubyTemplates.preview.useBundler is on."
+        },
+        "rubyTemplates.commands.slimLint": {
+          "type": "string",
+          "default": "slim-lint",
+          "description": "Executable used to lint Slim (gem install slim_lint)."
+        },
         "rubyTemplates.server.enabled": {
           "type": "boolean",
           "default": true,

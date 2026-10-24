@@ -10,6 +10,9 @@ const TEMPLATE_LANGS = new Set(['erb', 'haml', 'slim']);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
 const engineOf = languageId => languageId.startsWith('erb-') ? 'erb' : languageId;
 
+// The server reads these at startup, so a change restarts it.
+const SERVER_SETTINGS = ['rubyTemplates.server', 'rubyTemplates.slim.extraEngines', 'rubyTemplates.slim.disabledDiagnostics'];
+
 /** @type {vscode.WebviewPanel | undefined} */
 let previewPanel;
 /** @type {string | undefined} */
@@ -30,9 +33,10 @@ function activate(context) {
   context.subscriptions.push(output);
   sub('rubyTemplates.restartServer', () => restartClient(context, output));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-    if (e.affectsConfiguration('rubyTemplates.server')) restartClient(context, output);
+    if (SERVER_SETTINGS.some(s => e.affectsConfiguration(s))) restartClient(context, output);
   }));
   startClient(context, output);
+  registerSlimLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument(doc => {
@@ -250,6 +254,52 @@ async function showCompiledSource() {
   }
   const doc = await vscode.workspace.openTextDocument({ language: 'ruby', content: r.stdout });
   await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preview: true });
+}
+
+// ---------------------------------------------------------------- slim-lint
+
+function registerSlimLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection('slim-lint');
+  let warnedMissing = false;
+
+  const lint = async doc => {
+    if (doc.languageId !== 'slim' || doc.uri.scheme !== 'file') return;
+    if (!cfg().get('slimLint.enabled', false)) return;
+    const bin = cfg().get('commands.slimLint', 'slim-lint');
+    const r = await run(bin, ['--reporter', 'json', doc.uri.fsPath], { cwd: workspaceFolderFor(doc) });
+    if (r.err?.code === 'ENOENT') {
+      if (!warnedMissing) vscode.window.showWarningMessage(`"${bin}" was not found. Install it with: gem install slim_lint — or set rubyTemplates.commands.slimLint.`);
+      warnedMissing = true;
+      return;
+    }
+    try {
+      lints.set(doc.uri, slimLintDiagnostics(JSON.parse(r.stdout), doc));
+    } catch {
+      output.appendLine(`[slim-lint] ${bin} exited ${r.code}: ${r.stderr || r.stdout}`);
+    }
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidSaveTextDocument(doc => lint(doc)),
+    vscode.workspace.onDidCloseTextDocument(doc => lints.delete(doc.uri)),
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration('rubyTemplates.slimLint') && !cfg().get('slimLint.enabled', false)) lints.clear();
+    })
+  );
+}
+
+/** Map a `slim-lint --reporter json` report to diagnostics on the offending lines of `doc`. */
+function slimLintDiagnostics(report, doc) {
+  return (report.files ?? []).flatMap(f => f.offenses ?? []).map(({ severity, message, linter, location }) => {
+    const line = doc.lineAt(Math.min(Math.max((location?.line ?? 1) - 1, 0), doc.lineCount - 1));
+    const range = new vscode.Range(line.lineNumber, line.firstNonWhitespaceCharacterIndex, line.lineNumber, line.text.length);
+    const level = severity === 'error' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
+    const d = new vscode.Diagnostic(range, message, level);
+    d.source = 'slim-lint';
+    d.code = linter;
+    return d;
+  });
 }
 
 // ---------------------------------------------------------------- converters

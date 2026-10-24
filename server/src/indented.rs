@@ -2,36 +2,126 @@
 //! balance, embedded engines, and misuse of explicit `end`.
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
-use crate::util::{error, leading_ws, line_range, warning};
+use crate::util::{coded, error, leading_ws, line_range, warning};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Lang { Slim, Haml }
+pub enum Lang {
+    Slim,
+    Haml,
+}
 
-const SLIM_ENGINES: &[&str] = &["ruby", "javascript", "css", "sass", "scss", "less", "coffee", "markdown", "textile", "rdoc", "erb", "builder", "nokogiri", "wiki", "creole", "mediawiki", "asciidoc", "org", "styl", "stylus", "livescript", "babel", "typescript", "haml"];
-const HAML_FILTERS: &[&str] = &["plain", "escaped", "preserve", "cdata", "javascript", "css", "ruby", "erb", "markdown", "sass", "scss", "less", "coffee", "textile", "maruku", "styl", "stylus", "builder", "nokogiri", "wiki", "creole", "mediawiki"];
+/// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
+pub mod code {
+    pub const MIXED_INDENT: &str = "mixed-indent";
+    pub const TAB_INDENT: &str = "tab-indent";
+    pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
+    pub const BAD_DEDENT: &str = "bad-dedent";
+    pub const TOP_LEVEL_INDENT: &str = "top-level-indent";
+    pub const ILLEGAL_NESTING: &str = "illegal-nesting";
+    pub const DOCTYPE_CHILDREN: &str = "doctype-children";
+    pub const VOID_CHILDREN: &str = "void-children";
+    pub const UNKNOWN_ENGINE: &str = "unknown-engine";
+    pub const UNKNOWN_FILTER: &str = "unknown-filter";
+    pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
+    pub const UNCLOSED_RUBY: &str = "unclosed-ruby";
+    pub const EXPLICIT_END: &str = "explicit-end";
+    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
+    pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
+}
+
+// Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
+const SLIM_ENGINES: &[&str] = &[
+    "ruby",
+    "javascript",
+    "css",
+    "sass",
+    "scss",
+    "coffee",
+    "markdown",
+    "textile",
+    "rdoc",
+    "asciidoc",
+];
+const HAML_FILTERS: &[&str] = &[
+    "plain",
+    "escaped",
+    "preserve",
+    "cdata",
+    "javascript",
+    "css",
+    "ruby",
+    "erb",
+    "markdown",
+    "sass",
+    "scss",
+    "less",
+    "coffee",
+    "textile",
+    "maruku",
+    "styl",
+    "stylus",
+    "builder",
+    "nokogiri",
+    "wiki",
+    "creole",
+    "mediawiki",
+];
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
+/// Helpers whose block form returns the HTML, so `-` discards it.
+const OUTPUT_BLOCK_HELPERS: &[&str] = &[
+    "form_with",
+    "form_for",
+    "form_tag",
+    "fields_for",
+    "fields",
+    "link_to",
+    "button_to",
+    "content_tag",
+    "turbo_frame_tag",
+    "render",
+];
+/// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
+const SLIM_TABSIZE: usize = 4;
+const HAML_TAB_WIDTH: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
     /// Children are free-form text (filters, comments, text blocks).
     Verbatim,
-    /// Ruby control line `- ...`.
-    Control,
+    /// Ruby control line `- ...`; `keyword` is its leading branch keyword, or `do` for a trailing block.
+    Control {
+        keyword: Option<&'static str>,
+    },
     /// Ruby output `= ...`.
     Output,
-    Tag { inline_content: bool, inline_code_opens_block: bool },
+    Tag {
+        inline_content: bool,
+        inline_code_opens_block: bool,
+        void: bool,
+    },
     Text,
     Doctype,
     Other,
 }
 
-struct Frame { indent: usize, kind: LineKind, line: usize }
+struct Frame {
+    indent: usize,
+    kind: LineKind,
+    line: usize,
+    /// Keyword that opened the `if`/`case`/`begin`… chain this control line belongs to.
+    chain: Option<&'static str>,
+    has_child: bool,
+}
 
-pub fn diagnostics(text: &str, lang: Lang) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, lang: Lang, extra_engines: &[String]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
-    let unit: Option<usize> = detect_unit(&lines);
+    let unit: Option<usize> = detect_unit(&lines, lang);
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -42,15 +132,25 @@ pub fn diagnostics(text: &str, lang: Lang) -> Vec<Diagnostic> {
             continue;
         }
         let ws = leading_ws(raw);
-        if ws.contains('\t') {
+        let ws_range = line_range(text, line_no, 0, ws.len());
+        // Slim expands tabs (see SLIM_TABSIZE); Haml rejects mixing them with spaces.
+        if lang == Lang::Haml && ws.contains('\t') {
             if ws.contains(' ') {
-                out.push(error(line_range(text, line_no, 0, ws.len()), "Mixed tabs and spaces in indentation"));
-            } else if lang == Lang::Haml {
-                out.push(warning(line_range(text, line_no, 0, ws.len()), "Tabs used for indentation; Haml expects consistent spaces"));
+                out.push(coded(
+                    error(ws_range, "Mixed tabs and spaces in indentation"),
+                    code::MIXED_INDENT,
+                ));
+            } else {
+                out.push(coded(
+                    warning(
+                        ws_range,
+                        "Tabs used for indentation; Haml expects consistent spaces",
+                    ),
+                    code::TAB_INDENT,
+                ));
             }
         }
-        let indent = ws.chars().map(|c| if c == '\t' { 2 } else { 1 }).sum::<usize>();
-        let _content = raw.trim_start();
+        let indent = indent_width(ws, lang);
 
         // Inside a verbatim block? Everything deeper is skipped.
         if let Some(top) = stack.last() {
@@ -61,70 +161,174 @@ pub fn diagnostics(text: &str, lang: Lang) -> Vec<Diagnostic> {
         }
 
         // Dedent to a level that never existed (checked before popping).
-        let known_levels: Vec<usize> = std::iter::once(0).chain(stack.iter().map(|f| f.indent)).collect();
-        let bad_dedent = indent < *known_levels.last().unwrap_or(&0) && !known_levels.contains(&indent);
+        let deepest = stack.last().map_or(0, |f| f.indent);
+        let bad_dedent =
+            indent < deepest && indent != 0 && !stack.iter().any(|f| f.indent == indent);
         if bad_dedent {
-            out.push(error(line_range(text, line_no, 0, ws.len()), "Indentation does not match any outer level"));
+            out.push(coded(
+                error(ws_range, "Indentation does not match any outer level"),
+                code::BAD_DEDENT,
+            ));
         }
 
-        // Pop to the parent level.
+        // Pop to the parent level; the last frame popped at this indent is the previous sibling.
+        let mut prev_sibling = None;
         while let Some(top) = stack.last() {
-            if top.indent >= indent { stack.pop(); } else { break; }
+            if top.indent < indent {
+                break;
+            }
+            let top = stack.pop();
+            if top.as_ref().is_some_and(|f| f.indent == indent) {
+                prev_sibling = top;
+            }
         }
-        let parent_indent = stack.last().map(|f| f.indent).unwrap_or(0);
-        let is_child = stack.last().is_some() && indent > parent_indent;
+        let parent_indent = stack.last().map_or(0, |f| f.indent);
+        let is_child = !stack.is_empty() && indent > parent_indent;
 
         if is_child && !bad_dedent {
             let step = indent - parent_indent;
-            match unit {
-                None => {}
-                Some(u) if step != u => {
-                    let sev = if lang == Lang::Haml { DiagnosticSeverity::ERROR } else { DiagnosticSeverity::WARNING };
-                    out.push(crate::util::diag(line_range(text, line_no, 0, ws.len()), sev,
-                        format!("Inconsistent indentation: expected {} spaces, found {}", u, step)));
-                }
-                _ => {}
+            if let Some(u) = unit.filter(|&u| u != step) {
+                let sev = if lang == Lang::Haml {
+                    DiagnosticSeverity::ERROR
+                } else {
+                    DiagnosticSeverity::WARNING
+                };
+                let message = format!(
+                    "Inconsistent indentation: expected {} spaces, found {}",
+                    u, step
+                );
+                out.push(coded(
+                    crate::util::diag(ws_range, sev, message),
+                    code::INCONSISTENT_INDENT,
+                ));
             }
         } else if stack.is_empty() && indent > 0 {
-            out.push(error(line_range(text, line_no, 0, ws.len()), "Unexpected indentation at top level"));
+            out.push(coded(
+                error(ws_range, "Unexpected indentation at top level"),
+                code::TOP_LEVEL_INDENT,
+            ));
         }
 
         // Illegal nesting checks against the parent.
-        if is_child {
-            if let Some(parent) = stack.last() {
-                match parent.kind {
-                    LineKind::Tag { inline_content: true, inline_code_opens_block: false } if lang == Lang::Haml => {
-                        out.push(error(line_range(text, parent.line, 0, lines[parent.line].len()),
-                            "Illegal nesting: content can't be both given on the same line and nested within it"));
-                    }
-                    LineKind::Text if lang == Lang::Haml => {
-                        out.push(error(line_range(text, parent.line, 0, lines[parent.line].len()),
-                            "Illegal nesting: nesting within plain text is illegal"));
-                    }
-                    LineKind::Doctype => {
-                        out.push(error(line_range(text, line_no, 0, raw.len()), "Nothing can be nested under a doctype"));
-                    }
-                    _ => {}
+        if let Some(parent) = stack.last_mut().filter(|_| is_child) {
+            let parent_range = line_range(text, parent.line, 0, lines[parent.line].len());
+            let line_content = line_range(text, line_no, ws.len(), raw.len());
+            let first_child = !parent.has_child;
+            parent.has_child = true;
+            match parent.kind {
+                LineKind::Tag {
+                    inline_content: true,
+                    inline_code_opens_block: false,
+                    ..
+                } if lang == Lang::Haml => {
+                    let message = "Illegal nesting: content can't be both given on the same line and nested within it";
+                    out.push(coded(error(parent_range, message), code::ILLEGAL_NESTING));
                 }
+                LineKind::Text if lang == Lang::Haml => {
+                    out.push(coded(
+                        error(
+                            parent_range,
+                            "Illegal nesting: nesting within plain text is illegal",
+                        ),
+                        code::ILLEGAL_NESTING,
+                    ));
+                }
+                LineKind::Doctype => {
+                    out.push(coded(
+                        error(line_content, "Nothing can be nested under a doctype"),
+                        code::DOCTYPE_CHILDREN,
+                    ));
+                }
+                LineKind::Tag { void: true, .. } if lang == Lang::Slim && first_child => {
+                    let message = format!(
+                        "`{}` is a void element and can't have children",
+                        tag_name(lines[parent.line])
+                    );
+                    out.push(coded(error(line_content, message), code::VOID_CHILDREN));
+                }
+                _ => {}
             }
         }
 
         // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(lang, &lines, i, text, &mut out);
-        stack.push(Frame { indent, kind, line: line_no });
+        let (kind, consumed) = classify(lang, &lines, i, text, extra_engines, &mut out);
+        let mut chain = None;
+        if let (
+            Lang::Slim,
+            LineKind::Control {
+                keyword: Some(keyword),
+            },
+        ) = (lang, kind)
+        {
+            chain = Some(keyword);
+            if let Some(openers) = branch_openers(keyword) {
+                chain = prev_sibling
+                    .and_then(|f| f.chain)
+                    .filter(|c| openers.contains(c));
+                if chain.is_none() {
+                    let message = format!(
+                        "`- {}` without a matching `- {}` at the same indentation",
+                        keyword,
+                        openers.join("`/`- ")
+                    );
+                    out.push(coded(
+                        error(line_range(text, line_no, ws.len(), raw.len()), message),
+                        code::UNMATCHED_BRANCH,
+                    ));
+                }
+            }
+        }
+        stack.push(Frame {
+            indent,
+            kind,
+            line: line_no,
+            chain,
+            has_child: false,
+        });
         i += consumed.max(1);
     }
     out
 }
 
+fn indent_width(ws: &str, lang: Lang) -> usize {
+    match lang {
+        Lang::Slim => ws.chars().fold(0, |col, c| {
+            if c == '\t' {
+                (col / SLIM_TABSIZE + 1) * SLIM_TABSIZE
+            } else {
+                col + 1
+            }
+        }),
+        Lang::Haml => ws
+            .chars()
+            .map(|c| if c == '\t' { HAML_TAB_WIDTH } else { 1 })
+            .sum(),
+    }
+}
+
+/// Keywords a branch line (`else`, `when`, …) may continue; `None` when `keyword` opens a chain.
+fn branch_openers(keyword: &str) -> Option<&'static [&'static str]> {
+    match keyword {
+        "else" => Some(&["if", "unless", "case", "begin", "do"]),
+        "elsif" => Some(&["if"]),
+        "when" | "in" => Some(&["case"]),
+        "rescue" | "ensure" => Some(&["begin", "do"]),
+        _ => None,
+    }
+}
+
 /// Most common positive indentation step between a line and its parent: the file's indent unit.
-fn detect_unit(lines: &[&str]) -> Option<usize> {
+fn detect_unit(lines: &[&str], lang: Lang) -> Option<usize> {
     let mut levels: Vec<usize> = vec![0];
     let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
     for raw in lines {
-        if raw.trim().is_empty() { continue; }
-        let indent = leading_ws(raw).chars().map(|c| if c == '\t' { 2 } else { 1 }).sum::<usize>();
-        while levels.last().map(|l| *l > indent).unwrap_or(false) { levels.pop(); }
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let indent = indent_width(leading_ws(raw), lang);
+        while levels.last().is_some_and(|l| *l > indent) {
+            levels.pop();
+        }
         let parent = *levels.last().unwrap_or(&0);
         if indent > parent {
             let step = indent - parent;
@@ -133,24 +337,37 @@ fn detect_unit(lines: &[&str]) -> Option<usize> {
         }
     }
     // Highest count wins; on a tie the smaller step (BTreeMap iterates ascending, so `>` keeps the first).
-    counts.into_iter().fold(None, |best: Option<(usize, usize)>, (step, n)| match best {
-        Some((_, bn)) if bn >= n => best,
-        _ => Some((step, n)),
-    }).map(|(step, _)| step)
+    counts
+        .into_iter()
+        .fold(None, |best: Option<(usize, usize)>, (step, n)| match best {
+            Some((_, bn)) if bn >= n => best,
+            _ => Some((step, n)),
+        })
+        .map(|(step, _)| step)
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(
+    lang: Lang,
+    lines: &[&str],
+    i: usize,
+    text: &str,
+    extra_engines: &[String],
+    out: &mut Vec<Diagnostic>,
+) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
+    let content_range = line_range(text, i, ws_len, raw.len());
     let c = raw.trim_start();
 
     // Doctype
-    if (lang == Lang::Haml && c.starts_with("!!!")) || (lang == Lang::Slim && c.starts_with("doctype")) {
+    if (lang == Lang::Haml && c.starts_with("!!!"))
+        || (lang == Lang::Slim && c.starts_with("doctype"))
+    {
         return (LineKind::Doctype, 1);
     }
     // Comments
-    if lang == Lang::Haml && (c.starts_with("-#") ) {
+    if lang == Lang::Haml && (c.starts_with("-#")) {
         return (LineKind::Verbatim, 1);
     }
     if lang == Lang::Slim && c.starts_with('/') {
@@ -164,7 +381,10 @@ fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diag
         if let Some(name) = c.strip_prefix(':') {
             if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
                 if !HAML_FILTERS.contains(&name) {
-                    out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name)));
+                    out.push(coded(
+                        warning(content_range, format!("Unknown Haml filter `:{}`", name)),
+                        code::UNKNOWN_FILTER,
+                    ));
                 }
                 return (LineKind::Verbatim, 1);
             }
@@ -173,8 +393,14 @@ fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diag
     if lang == Lang::Slim {
         if let Some(name) = c.strip_suffix(':') {
             if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-                if !SLIM_ENGINES.contains(&name) {
-                    out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown embedded engine `{}:`", name)));
+                if !SLIM_ENGINES.contains(&name) && !extra_engines.iter().any(|e| e == name) {
+                    out.push(coded(
+                        warning(
+                            content_range,
+                            format!("Unknown embedded engine `{}:`", name),
+                        ),
+                        code::UNKNOWN_ENGINE,
+                    ));
                 }
                 return (LineKind::Verbatim, 1);
             }
@@ -184,50 +410,215 @@ fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diag
         }
     }
     // Ruby lines
-    let ruby_prefix: Option<(&str, bool)> = if c.starts_with("-") {
-        Some((&c[1..], true))
-    } else if let Some(rest) = strip_output_prefix(lang, c) {
-        Some((rest, false))
-    } else { None };
+    let ruby_prefix: Option<(&str, bool)> = if let Some(rest) = c.strip_prefix('-') {
+        Some((rest, true))
+    } else {
+        strip_output_prefix(lang, c).map(|rest| (rest, false))
+    };
     if let Some((code, is_control)) = ruby_prefix {
         let (joined, consumed) = join_continuation(lang, lines, i, code);
-        check_explicit_end(lang, &joined, text, i, raw, out);
-        if lang == Lang::Haml && is_control && joined.trim().starts_with('#') && !joined.trim().starts_with("#{") {
-            // `-# comment` already handled; `- # foo` is a ruby comment: fine
+        check_explicit_end(lang, &joined, content_range, out);
+        if lang == Lang::Slim {
+            check_ruby_balance(&joined, content_range, out);
         }
-        return (if is_control { LineKind::Control } else { LineKind::Output }, consumed);
+        if !is_control {
+            return (LineKind::Output, consumed);
+        }
+        if lang == Lang::Slim {
+            check_silent_output_helper(
+                &joined,
+                text,
+                i,
+                ws_len + 1 + (code.len() - code.trim_start().len()),
+                out,
+            );
+        }
+        return (
+            LineKind::Control {
+                keyword: control_keyword(&joined),
+            },
+            consumed,
+        );
     }
     // Tags
     let is_tag = match lang {
         Lang::Haml => c.starts_with('%') || c.starts_with('.') || c.starts_with('#'),
-        Lang::Slim => c.starts_with('.') || c.starts_with('#') || c.chars().next().map(|ch| ch.is_ascii_alphabetic()).unwrap_or(false),
+        Lang::Slim => {
+            c.starts_with('.')
+                || c.starts_with('#')
+                || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
+        }
     };
     if is_tag {
         let (rest, consumed) = skip_tag_head(lang, lines, i, text, out);
         let rest_t = rest.trim();
         let mut inline_content = !rest_t.is_empty();
         let mut opens_block = false;
-        if let Some(code) = strip_output_prefix(lang, rest_t).or_else(|| if lang == Lang::Haml { rest_t.strip_prefix('~') } else { None }) {
+        let void = lang == Lang::Slim && (rest_t == "/" || VOID_ELEMENTS.contains(&tag_name(raw)));
+        if let Some(code) = strip_output_prefix(lang, rest_t).or_else(|| {
+            if lang == Lang::Haml {
+                rest_t.strip_prefix('~')
+            } else {
+                None
+            }
+        }) {
             let (joined, _) = join_continuation(lang, lines, i, code);
-            check_explicit_end(lang, &joined, text, i, raw, out);
-            opens_block = ends_with_block(&joined) || matches!(analyze(&joined).0, BlockEffect::Open(_));
-        } else if lang == Lang::Haml && (rest_t == "/" || rest_t.is_empty() || rest_t == "<" || rest_t == ">" || rest_t == "<>" || rest_t == "><") {
+            check_explicit_end(lang, &joined, content_range, out);
+            if lang == Lang::Slim {
+                check_ruby_balance(&joined, content_range, out);
+            }
+            opens_block =
+                ends_with_block(&joined) || matches!(analyze(&joined).0, BlockEffect::Open(_));
+        } else if lang == Lang::Haml
+            && (rest_t == "/"
+                || rest_t.is_empty()
+                || rest_t == "<"
+                || rest_t == ">"
+                || rest_t == "<>"
+                || rest_t == "><")
+        {
             inline_content = false;
         } else if lang == Lang::Slim && rest_t.starts_with(':') {
             // `li: a href="/"` inline tag — children allowed
             inline_content = false;
         }
-        return (LineKind::Tag { inline_content, inline_code_opens_block: opens_block }, consumed);
+        return (
+            LineKind::Tag {
+                inline_content,
+                inline_code_opens_block: opens_block,
+                void,
+            },
+            consumed,
+        );
     }
     (LineKind::Text, 1)
 }
 
-fn strip_output_prefix<'a>(lang: Lang, s: &'a str) -> Option<&'a str> {
+/// Slim tag name at the start of the line (`img.photo src=x` → `img`); empty for `.class`/`#id` shortcuts.
+fn tag_name(raw: &str) -> &str {
+    let c = raw.trim_start();
+    let end = c
+        .find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '_' | '-' | ':')))
+        .unwrap_or(c.len());
+    c[..end].trim_end_matches(':')
+}
+
+/// Leading branch keyword of a control line (`if`, `else`, …), or `do` when it ends with a block.
+fn control_keyword(code: &str) -> Option<&'static str> {
+    const KEYWORDS: &[&str] = &[
+        "if", "unless", "case", "begin", "else", "elsif", "when", "in", "rescue", "ensure",
+    ];
+    let first = code
+        .trim_start()
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .next()
+        .unwrap_or("");
+    KEYWORDS
+        .iter()
+        .copied()
+        .find(|k| *k == first)
+        .or_else(|| ends_with_block(code).then_some("do"))
+}
+
+/// `- form_with … do` builds HTML and returns it; with `-` that result is thrown away.
+fn check_silent_output_helper(
+    code: &str,
+    text: &str,
+    line: usize,
+    code_col: usize,
+    out: &mut Vec<Diagnostic>,
+) {
+    if !ends_with_block(code) {
+        return;
+    }
+    let trimmed = code.trim_start();
+    let call = trimmed.strip_prefix("tag.").map_or(trimmed, |_| "tag");
+    let name_len = call
+        .find(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .unwrap_or(call.len());
+    let name = &call[..name_len];
+    if name != "tag" && !OUTPUT_BLOCK_HELPERS.contains(&name) {
+        return;
+    }
+    let range = line_range(text, line, code_col, code_col + name_len);
+    out.push(coded(
+        warning(
+            range,
+            format!("`- {name} … do` discards the HTML it builds; use `= {name}`"),
+        ),
+        code::SILENT_OUTPUT_HELPER,
+    ));
+}
+
+fn check_ruby_balance(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
+    let Some(open) = unclosed_delimiter(code) else {
+        return;
+    };
+    let what = if matches!(open, '"' | '\'' | '`') {
+        "string"
+    } else {
+        "bracket"
+    };
+    out.push(coded(
+        error(range, format!("Unclosed {what} `{open}` in Ruby code")),
+        code::UNCLOSED_RUBY,
+    ));
+}
+
+/// Innermost bracket or string quote left open in a line of Ruby, ignoring a trailing `#` comment.
+/// Returns `None` on a closer that doesn't match: that's not a shape this scan can judge.
+fn unclosed_delimiter(code: &str) -> Option<char> {
+    // Interpolation `#{` inside a string is pushed as `#` so its `}` returns to the string.
+    let mut stack: Vec<char> = Vec::new();
+    let mut chars = code.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(&quote @ ('"' | '\'' | '`')) = stack.last() {
+            match ch {
+                '\\' => {
+                    chars.next();
+                }
+                '#' if quote != '\'' && chars.peek() == Some(&'{') => {
+                    chars.next();
+                    stack.push('#');
+                }
+                c if c == quote => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' | '`' | '(' | '[' | '{' => stack.push(ch),
+            ')' | ']' | '}' => {
+                let expected = match ch {
+                    ')' => '(',
+                    ']' => '[',
+                    _ if stack.last() == Some(&'#') => '#',
+                    _ => '{',
+                };
+                if stack.pop() != Some(expected) {
+                    return None;
+                }
+            }
+            '#' => break,
+            _ => {}
+        }
+    }
+    stack
+        .last()
+        .map(|&open| if open == '#' { '{' } else { open })
+}
+
+fn strip_output_prefix(lang: Lang, s: &str) -> Option<&str> {
     match lang {
-        Lang::Haml => s.strip_prefix("!=").or_else(|| s.strip_prefix("&=")).or_else(|| s.strip_prefix('=')),
+        Lang::Haml => s
+            .strip_prefix("!=")
+            .or_else(|| s.strip_prefix("&="))
+            .or_else(|| s.strip_prefix('=')),
         Lang::Slim => {
             let t = s.strip_prefix("==").or_else(|| s.strip_prefix('='))?;
-            Some(t.trim_start_matches(['<', '>']))
+            Some(t.trim_start_matches(['<', '>', '\'']))
         }
     }
 }
@@ -238,15 +629,25 @@ fn join_continuation(lang: Lang, lines: &[&str], i: usize, first: &str) -> (Stri
     let mut consumed = 1;
     loop {
         let t = code.trim_end();
-        let continues = t.ends_with(',') || t.ends_with('\\') || (lang == Lang::Haml && t.ends_with(" |"))
-            || t.ends_with("do") && false;
-        if !continues { break; }
-        let Some(next) = lines.get(i + consumed) else { break };
+        let continues =
+            t.ends_with(',') || t.ends_with('\\') || (lang == Lang::Haml && t.ends_with(" |"));
+        if !continues {
+            break;
+        }
+        let Some(next) = lines.get(i + consumed) else {
+            break;
+        };
         let next_t = next.trim();
         if lang == Lang::Haml && t.ends_with(" |") {
-            code = format!("{} {}", t.trim_end_matches('|').trim_end(), next_t.trim_end_matches('|').trim_end());
+            code = format!(
+                "{} {}",
+                t.trim_end_matches('|').trim_end(),
+                next_t.trim_end_matches('|').trim_end()
+            );
             consumed += 1;
-            if !next_t.ends_with('|') { break; }
+            if !next_t.ends_with('|') {
+                break;
+            }
             continue;
         }
         code = format!("{} {}", t.trim_end_matches('\\'), next_t);
@@ -255,33 +656,58 @@ fn join_continuation(lang: Lang, lines: &[&str], i: usize, first: &str) -> (Stri
     (code, consumed)
 }
 
-fn check_explicit_end(lang: Lang, code: &str, text: &str, line: usize, raw: &str, out: &mut Vec<Diagnostic>) {
+fn check_explicit_end(
+    lang: Lang,
+    code: &str,
+    range: tower_lsp::lsp_types::Range,
+    out: &mut Vec<Diagnostic>,
+) {
     let (_, _, closes) = analyze(code);
     if closes > 0 {
         let name = if lang == Lang::Haml { "Haml" } else { "Slim" };
-        out.push(error(line_range(text, line, leading_ws(raw).len(), raw.len()),
-            format!("`end` is not allowed: {} closes blocks by indentation", name)));
+        out.push(coded(
+            error(
+                range,
+                format!(
+                    "`end` is not allowed: {} closes blocks by indentation",
+                    name
+                ),
+            ),
+            code::EXPLICIT_END,
+        ));
     }
 }
 
 /// Skip over `%tag.class#id{...}(...)[...]` (Haml) or `tag.class#id attr=val (...)` (Slim),
 /// validating bracket balance (possibly across lines). Returns the remainder and lines consumed.
-fn skip_tag_head<'a>(lang: Lang, lines: &[&'a str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
+fn skip_tag_head(
+    lang: Lang,
+    lines: &[&str],
+    i: usize,
+    text: &str,
+    out: &mut Vec<Diagnostic>,
+) -> (String, usize) {
     let raw = lines[i];
+    let head_range = line_range(text, i, leading_ws(raw).len(), raw.len());
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
-    let bytes = |s: &String| s.as_bytes().to_vec();
     // tag name / classes / ids
-    let b = bytes(&s);
+    let b = s.as_bytes();
     while pos < b.len() {
         let ch = b[pos] as char;
-        if ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':') { pos += 1; } else { break; }
+        if ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':') {
+            pos += 1;
+        } else {
+            break;
+        }
     }
     // Slim: `li: a ...` — the colon ends the head; treat the rest as content
     loop {
         let b = s.as_bytes();
-        if pos >= b.len() { break; }
+        if pos >= b.len() {
+            break;
+        }
         let ch = b[pos] as char;
         let opener = match lang {
             Lang::Haml => matches!(ch, '{' | '(' | '['),
@@ -296,8 +722,13 @@ fn skip_tag_head<'a>(lang: Lang, lines: &[&'a str], i: usize, text: &str, out: &
                 match consume_attr(&s[pos..]) {
                     Ok(n) => pos += n,
                     Err(open_ch) => {
-                        out.push(error(line_range(text, i, leading_ws(raw).len(), raw.len()),
-                            format!("Unclosed `{}` in attribute value", open_ch)));
+                        out.push(coded(
+                            error(
+                                head_range,
+                                format!("Unclosed `{}` in attribute value", open_ch),
+                            ),
+                            code::UNCLOSED_ATTRIBUTE,
+                        ));
                         return (String::new(), consumed);
                     }
                 }
@@ -305,46 +736,67 @@ fn skip_tag_head<'a>(lang: Lang, lines: &[&'a str], i: usize, text: &str, out: &
             }
             break;
         }
-        if !opener { break; }
-        if ch == '*' { pos += 1; continue; }
-        let close = match ch { '{' => '}', '(' => ')', '[' => ']', _ => unreachable!() };
-        match find_balanced(&s[pos..], ch, close) {
-            Some(len) => pos += len,
-            None => {
-                // Try to extend across following lines (multiline attributes).
-                let mut extended = false;
-                while let Some(next) = lines.get(i + consumed) {
-                    consumed += 1;
-                    s.push('\n');
-                    s.push_str(next);
-                    if find_balanced(&s[pos..], ch, close).is_some() { extended = true; break; }
-                    if consumed > 20 { break; }
-                }
-                if extended {
-                    pos += find_balanced(&s[pos..], ch, close).unwrap();
-                } else {
-                    out.push(error(line_range(text, i, leading_ws(raw).len(), raw.len()),
-                        format!("Unclosed `{}` in tag attributes", ch)));
-                    return (String::new(), consumed);
-                }
+        if !opener {
+            break;
+        }
+        if ch == '*' {
+            pos += 1;
+            continue;
+        }
+        let close = match ch {
+            '{' => '}',
+            '(' => ')',
+            _ => ']',
+        };
+        if let Some(len) = find_balanced(&s[pos..], ch, close) {
+            pos += len;
+            continue;
+        }
+        // Try to extend across following lines (multiline attributes).
+        let mut balanced = None;
+        while let Some(next) = lines.get(i + consumed) {
+            consumed += 1;
+            s.push('\n');
+            s.push_str(next);
+            balanced = find_balanced(&s[pos..], ch, close);
+            if balanced.is_some() || consumed > 20 {
+                break;
             }
         }
+        let Some(len) = balanced else {
+            out.push(coded(
+                error(head_range, format!("Unclosed `{}` in tag attributes", ch)),
+                code::UNCLOSED_ATTRIBUTE,
+            ));
+            return (String::new(), consumed);
+        };
+        pos += len;
     }
     (s[pos..].to_string(), consumed)
 }
 
 fn looks_like_attr(s: &str) -> bool {
-    let name_len = s.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.')).count();
-    name_len > 0 && s[name_len..].starts_with('=') && !s[name_len..].starts_with("==") || (name_len > 0 && s[name_len..].starts_with("=="))
+    let name_len = s
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.'))
+        .count();
+    name_len > 0 && s[name_len..].starts_with('=')
 }
 
 /// Length of `name=value` where value is a quoted string, a balanced bracket group, or a bare word.
 /// Err(open) when a bracket in the value is never closed.
 fn consume_attr(s: &str) -> std::result::Result<usize, char> {
-    let name_len = s.chars().take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.')).count();
+    let name_len = s
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.'))
+        .count();
     let mut pos = name_len;
-    while s[pos..].starts_with('=') { pos += 1; }
-    while s[pos..].starts_with(' ') { pos += 1; }
+    while s[pos..].starts_with('=') {
+        pos += 1;
+    }
+    while s[pos..].starts_with(' ') {
+        pos += 1;
+    }
     let rest = &s[pos..];
     let first = rest.chars().next().unwrap_or(' ');
     let len = match first {
@@ -356,14 +808,22 @@ fn consume_attr(s: &str) -> std::result::Result<usize, char> {
             let mut last_open = '(';
             for (idx, ch) in rest.char_indices() {
                 match ch {
-                    '(' | '[' | '{' => { depth += 1; last_open = ch; }
+                    '(' | '[' | '{' => {
+                        depth += 1;
+                        last_open = ch;
+                    }
                     ')' | ']' | '}' => depth -= 1,
-                    ' ' if depth <= 0 => { n = idx; break; }
+                    ' ' if depth <= 0 => {
+                        n = idx;
+                        break;
+                    }
                     _ => {}
                 }
                 n = idx + ch.len_utf8();
             }
-            if depth > 0 { return Err(last_open); }
+            if depth > 0 {
+                return Err(last_open);
+            }
             n
         }
     };
@@ -373,9 +833,17 @@ fn consume_attr(s: &str) -> std::result::Result<usize, char> {
 fn find_quoted(s: &str, q: char) -> Option<usize> {
     let mut esc = false;
     for (idx, ch) in s.char_indices().skip(1) {
-        if esc { esc = false; continue; }
-        if ch == '\\' { esc = true; continue; }
-        if ch == q { return Some(idx + 1); }
+        if esc {
+            esc = false;
+            continue;
+        }
+        if ch == '\\' {
+            esc = true;
+            continue;
+        }
+        if ch == q {
+            return Some(idx + 1);
+        }
     }
     None
 }
@@ -387,7 +855,13 @@ fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
     let mut esc = false;
     for (idx, ch) in s.char_indices() {
         if let Some(q) = in_str {
-            if esc { esc = false; } else if ch == '\\' { esc = true; } else if ch == q { in_str = None; }
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == q {
+                in_str = None;
+            }
             continue;
         }
         match ch {
@@ -395,10 +869,219 @@ fn find_balanced(s: &str, open: char, close: char) -> Option<usize> {
             c if c == open => depth += 1,
             c if c == close => {
                 depth -= 1;
-                if depth == 0 { return Some(idx + ch.len_utf8()); }
+                if depth == 0 {
+                    return Some(idx + ch.len_utf8());
+                }
             }
             _ => {}
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower_lsp::lsp_types::NumberOrString;
+
+    /// (code, 0-based line, 0-based start column, severity) for each Slim diagnostic.
+    fn slim(text: &str) -> Vec<(String, u32, u32, DiagnosticSeverity)> {
+        slim_with(text, &[])
+    }
+
+    fn slim_with(
+        text: &str,
+        extra_engines: &[String],
+    ) -> Vec<(String, u32, u32, DiagnosticSeverity)> {
+        diagnostics(text, Lang::Slim, extra_engines)
+            .into_iter()
+            .map(|d| {
+                let Some(NumberOrString::String(code)) = d.code else {
+                    panic!("diagnostic without code: {}", d.message)
+                };
+                (
+                    code,
+                    d.range.start.line,
+                    d.range.start.character,
+                    d.severity.unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    const ERROR: DiagnosticSeverity = DiagnosticSeverity::ERROR;
+    const WARNING: DiagnosticSeverity = DiagnosticSeverity::WARNING;
+
+    fn one(
+        code: &str,
+        line: u32,
+        col: u32,
+        sev: DiagnosticSeverity,
+    ) -> Vec<(String, u32, u32, DiagnosticSeverity)> {
+        vec![(code.to_string(), line, col, sev)]
+    }
+
+    #[test]
+    fn slim_tabs_advance_to_next_multiple_of_four() {
+        assert_eq!(indent_width("\t", Lang::Slim), 4);
+        assert_eq!(indent_width("  \t", Lang::Slim), 4);
+        assert_eq!(indent_width("\t \t", Lang::Slim), 8);
+        assert_eq!(indent_width("     \t", Lang::Slim), 8);
+        assert_eq!(indent_width("\t", Lang::Haml), 2);
+        // A tab and four spaces are the same level, so mixing them is fine in Slim.
+        assert!(slim("div\n    p\n\tspan\n").is_empty());
+        assert!(slim("div\n    p\n  \t    span\n").is_empty());
+    }
+
+    #[test]
+    fn haml_still_rejects_mixed_indentation() {
+        let d = diagnostics("%div\n \t%p\n", Lang::Haml, &[]);
+        assert!(d
+            .iter()
+            .any(|d| d.code == Some(NumberOrString::String(code::MIXED_INDENT.into()))));
+    }
+
+    #[test]
+    fn inconsistent_indent() {
+        assert_eq!(
+            slim("div\n  p\n  p\n    a\n  ul\n   li\n"),
+            one(code::INCONSISTENT_INDENT, 5, 0, WARNING)
+        );
+    }
+
+    #[test]
+    fn bad_dedent() {
+        assert_eq!(
+            slim("div\n  p\n    a\n   span\n"),
+            one(code::BAD_DEDENT, 3, 0, ERROR)
+        );
+    }
+
+    #[test]
+    fn top_level_indent() {
+        assert_eq!(slim("  p\n"), one(code::TOP_LEVEL_INDENT, 0, 0, ERROR));
+    }
+
+    #[test]
+    fn doctype_children() {
+        assert_eq!(
+            slim("doctype html\n  p\n"),
+            one(code::DOCTYPE_CHILDREN, 1, 2, ERROR)
+        );
+    }
+
+    #[test]
+    fn unclosed_attribute() {
+        assert_eq!(
+            slim("div\n  a href=(foo\n"),
+            one(code::UNCLOSED_ATTRIBUTE, 1, 2, ERROR)
+        );
+    }
+
+    #[test]
+    fn explicit_end() {
+        assert_eq!(
+            slim("- items.each do\n  p\n- end\n"),
+            one(code::EXPLICIT_END, 2, 0, ERROR)
+        );
+    }
+
+    #[test]
+    fn unknown_engine_and_extra_engines() {
+        assert_eq!(
+            slim("mjml:\n  x\n"),
+            one(code::UNKNOWN_ENGINE, 0, 0, WARNING)
+        );
+        assert!(slim_with("mjml:\n  x\n", &["mjml".into()]).is_empty());
+        assert!(slim("javascript:\n  x\n").is_empty());
+    }
+
+    #[test]
+    fn unmatched_branch() {
+        assert!(slim("- if a\n  p\n- elsif b\n  p\n- else\n  p\n").is_empty());
+        assert!(slim("- case x\n- when 1\n  p\n- else\n  p\n").is_empty());
+        assert!(slim("- begin\n  p\n- rescue\n  p\n- ensure\n  p\n").is_empty());
+        assert_eq!(
+            slim("p\n- else\n  p\n"),
+            one(code::UNMATCHED_BRANCH, 1, 0, ERROR)
+        );
+        assert_eq!(
+            slim("- if a\n  p\n  - else\n    q\n"),
+            one(code::UNMATCHED_BRANCH, 2, 2, ERROR)
+        );
+        assert_eq!(
+            slim("- if a\n  p\n- when 1\n"),
+            one(code::UNMATCHED_BRANCH, 2, 0, ERROR)
+        );
+        assert_eq!(
+            slim("- unless a\n  p\n- elsif b\n"),
+            one(code::UNMATCHED_BRANCH, 2, 0, ERROR)
+        );
+    }
+
+    #[test]
+    fn void_children() {
+        assert_eq!(
+            slim("br\n  p x\n  p y\n"),
+            one(code::VOID_CHILDREN, 1, 2, ERROR)
+        );
+        assert_eq!(
+            slim("div\n  img/\n    p\n"),
+            one(code::VOID_CHILDREN, 2, 4, ERROR)
+        );
+        assert_eq!(
+            slim("input.big type=\"x\"\n  p\n"),
+            one(code::VOID_CHILDREN, 1, 2, ERROR)
+        );
+        assert!(slim("p = x\n  span y\n").is_empty());
+    }
+
+    #[test]
+    fn silent_output_helper() {
+        assert_eq!(
+            slim("- form_with model: @u do |f|\n  p\n"),
+            one(code::SILENT_OUTPUT_HELPER, 0, 2, WARNING)
+        );
+        assert_eq!(
+            slim("-  tag.div do\n  p\n"),
+            one(code::SILENT_OUTPUT_HELPER, 0, 3, WARNING)
+        );
+        assert!(slim("= form_with model: @u do |f|\n  p\n").is_empty());
+        assert!(slim("- content_for :x do\n  p\n").is_empty());
+    }
+
+    #[test]
+    fn unclosed_ruby() {
+        assert_eq!(slim("= foo(\n"), one(code::UNCLOSED_RUBY, 0, 0, ERROR));
+        assert_eq!(
+            slim("p = link_to \"x, y\n"),
+            one(code::UNCLOSED_RUBY, 0, 0, ERROR)
+        );
+        assert_eq!(
+            slim("- x = [1,\n  2\n"),
+            one(code::UNCLOSED_RUBY, 0, 0, ERROR)
+        );
+        assert!(
+            slim("- x = [1,\n  2]\n= \"#{a ? \"(\" : '['}\" # (\n= t('.x') if ok?\n").is_empty()
+        );
+        assert_eq!(unclosed_delimiter("foo(\"#{bar"), Some('{'));
+        assert_eq!(unclosed_delimiter("a)"), None);
+    }
+
+    #[test]
+    fn broken_fixture() {
+        let text = include_str!("../../test/broken/bad.html.slim");
+        assert_eq!(
+            slim(text),
+            vec![
+                (code::DOCTYPE_CHILDREN.to_string(), 1, 2, ERROR),
+                (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
+                (code::BAD_DEDENT.to_string(), 4, 0, ERROR),
+                (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 2, ERROR),
+                (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
+                (code::UNKNOWN_ENGINE.to_string(), 8, 2, WARNING),
+                (code::BAD_DEDENT.to_string(), 10, 0, ERROR),
+            ]
+        );
+    }
 }
