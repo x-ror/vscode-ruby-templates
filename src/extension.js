@@ -11,6 +11,7 @@ import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
+import { tagToClose } from "./autoClose.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -73,6 +74,7 @@ function activate(context) {
   context.subscriptions.push(output);
   registerHamlFormatting(context, output);
   registerErbFormatting(context, output);
+  registerErbAutoClose(context);
   startHamlLint(context, output);
   sub("rubyTemplates.restartServer", () => restartClient(context, output));
   context.subscriptions.push(
@@ -1054,6 +1056,30 @@ function runHamlLint(doc, args, signal) {
 // 127: `bundle exec` couldn't find the executable.
 const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
+
+/** Typing the `>` of a start tag in ERB adds its end tag, as VS Code does for plain HTML. */
+function registerErbAutoClose(context) {
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument(async (e) => {
+      if (e.document.languageId !== "erb" || e.reason !== undefined) return;
+      if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">")
+        return;
+      if (!cfg().get("erb.autoCloseTags", true)) return;
+      const editor = vscode.window.activeTextEditor;
+      if (editor?.document !== e.document || editor.selections.length !== 1)
+        return;
+      const at = e.contentChanges[0].range.start.translate(0, 1);
+      const { text } = e.document.lineAt(at.line);
+      const name = tagToClose(text.slice(0, at.character));
+      if (!name || text.slice(at.character).startsWith(`</${name}`)) return;
+      const inserted = await editor.edit((b) => b.insert(at, `</${name}>`), {
+        undoStopBefore: false,
+        undoStopAfter: false,
+      });
+      if (inserted) editor.selection = new vscode.Selection(at, at);
+    }),
+  );
+}
 
 /** Registered only while a formatter is chosen, so another extension's ERB formatter isn't shadowed. */
 function registerErbFormatting(context, output) {

@@ -24,6 +24,7 @@
 - erb_lint diagnostics on open and save (`rubyTemplates.erbLint.enabled`).
 - Completion of model attributes after `f.text_field :` from `db/schema.rb`.
 - ERB: HTML completion in template text: element names, the closing tag, attribute names.
+- ERB: typing `>` closes the HTML start tag (`rubyTemplates.erb.autoCloseTags`).
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

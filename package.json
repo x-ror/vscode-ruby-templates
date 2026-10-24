@@ -639,6 +639,11 @@
           "default": false,
           "description": "Run haml-lint through `bundle exec` when a Gemfile exists in the workspace."
         },
+        "rubyTemplates.erb.autoCloseTags": {
+          "type": "boolean",
+          "default": true,
+          "description": "Typing the `>` of an HTML start tag in ERB inserts its end tag after the cursor (like html.autoClosingTags for plain HTML)."
+        },
         "rubyTemplates.erb.formatter": {
           "type": "string",
           "enum": [

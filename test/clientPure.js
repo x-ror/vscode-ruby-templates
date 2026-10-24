@@ -4,6 +4,7 @@ import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
+import { tagToClose } from "../src/autoClose.js";
 
 // convertedFileName
 const cases = [
@@ -150,3 +151,21 @@ assert.deepStrictEqual(erbLintOffenses(erbLintReport), [
     message: "Input tag is missing an autocomplete attribute.",
   },
 ]);
+
+// tagToClose
+for (const [line, name] of [
+  ["<div>", "div"],
+  ['  <a href="<%= url %>" class="x">', "a"],
+  ["<my-el>", "my-el"],
+  ["<img src=x>", null],
+  ["<br/>", null],
+  ["<div/>", null],
+  ["<% if a > b %><p>", "p"],
+  ["<% if a >", null],
+  ["<%= x >", null],
+  ['<input value="a>b">', null],
+  ['<span title="a>b">', "span"],
+  ["a > b", null],
+]) {
+  assert.strictEqual(tagToClose(line), name, line);
+}

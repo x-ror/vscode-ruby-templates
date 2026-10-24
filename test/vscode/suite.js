@@ -80,6 +80,22 @@ const runOnSelection = async (rel, range, command) => {
 };
 
 const checks = {
+  async "auto-close an HTML tag in ERB"() {
+    const editor = await open("app/views/users/toggle.html.erb");
+    await editor.edit((b) =>
+      b.insert(new vscode.Position(1, 0), '<div class="<%= x %>"'),
+    );
+    editor.selection = new vscode.Selection(1, 21, 1, 21);
+    await vscode.commands.executeCommand("type", { text: ">" });
+    const line = await until("end tag", () => {
+      const text = editor.document.lineAt(1).text;
+      return text.endsWith("</div>") && text;
+    });
+    assert.strictEqual(line, '<div class="<%= x %>"></div>');
+    assert.strictEqual(editor.selection.active.character, 22);
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+  },
+
   async "toggle ERB tag"() {
     const editor = await open("app/views/users/toggle.html.erb");
     editor.selection = new vscode.Selection(0, 3, 0, 3);
