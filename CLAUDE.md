@@ -30,6 +30,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
 - JS: Prettier with its default rules (no config file): `npm run format` before committing, `npm run format:check` to verify.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
+- `.githooks/pre-commit` (enabled by `npm install` via `prepare`) formats staged JS and Rust files and re-stages them; it refuses files that also have unstaged changes.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
 
 ## Language idioms

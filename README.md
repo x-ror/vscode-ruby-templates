@@ -78,7 +78,7 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 ## Development
 
 ```sh
-npm install
+npm install           # also enables .githooks (pre-commit formats staged JS and Rust)
 npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
 npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__ (UPDATE=1 rewrites them)
 npm run test:server   # cargo test + diagnostics check on the samples

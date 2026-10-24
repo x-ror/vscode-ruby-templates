@@ -721,6 +721,7 @@
     }
   },
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "package": "npx @vscode/vsce package",
     "test:tokens": "node test/tokenize.js",
     "test:snippets": "node test/snippets.js",
