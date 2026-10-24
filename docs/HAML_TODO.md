@@ -125,7 +125,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Indentation inside filter bodies relative to the filter: nothing to report. Haml 7.5 accepts bodies that dedent below their first line or use spaces in a tab file (checked with the gem)
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
 - [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output). ERB has it now (`server/src/ruby_syntax.rs`); Haml and Slim need the implicit `end`s of indented blocks synthesized, with an offset map back to the template
-- [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
+- [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `bun run test:unit`)
 - [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/main.rs` `Options`)
 
 ## 10. Completion
@@ -181,7 +181,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Snippet lint (duplicate prefixes, stray `$`) covers `snippets/haml.json` (`test/snippets.js`, CI `test:snippets`)
 - [x] Sample covers `<`/`>`, self-closing `/`, `[]`, `/[if IE]`, `&`/`!` lines, `|` multiline, multiline `{}`, `()` boolean attributes, every filter (`test/sample.html.haml`)
 - [x] Rust unit tests for `server/src/haml_indent.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/haml_indent.rs` `tests`)
-- [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/haml_indent.rs` `broken_fixture`)
+- [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `bun run test:server` run (`server/src/haml_indent.rs` `broken_fixture`)
 - [x] Haml file in `test/e2e.js`: definition, hover, completion (including filter bodies), diagnostics, symbols, folding, rename; every result is asserted and a mismatch exits non-zero (`test/e2e.js` `check`)
 - [x] Fixture corpus of real-world Haml views (no false-positive diagnostics). Checked by hand with `--check` on the `app/views` of Mastodon, diaspora (Haml), Ruby Toolbox (Slim), Forem and rubygems.org (ERB): the false positives found (`=begin` blocks, multi-line `<% %>` with `if` on its own line, `key: if …`, gem view folders, `.rss`/`.atom`) are fixed with unit tests; the rest are real template bugs or app-registered formats (`:mobile`). The Slim formatter keeps the compiled output of all 86 Ruby Toolbox views, re-indented to 4 spaces first.
 

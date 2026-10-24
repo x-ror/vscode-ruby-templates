@@ -28,21 +28,22 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 - Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
-- JS: Prettier with its default rules (no config file): `npm run format` before committing, `npm run format:check` to verify.
+- JS: Prettier with its default rules (no config file): `bun run format` before committing, `bun run format:check` to verify.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
-- `.githooks/pre-commit` (enabled by `npm install` via `prepare`) formats staged JS and Rust files and re-stages them; it refuses files that also have unstaged changes.
+- `.githooks/pre-commit` (enabled by `bun install` via `prepare`) formats staged JS and Rust files and re-stages them; it refuses files that also have unstaged changes.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
 
 ## Language idioms
 
 - Rust: `cargo clippy` clean; borrow over `clone`; iterators where clearer; LSP positions are UTF-16.
 - JS:
+  - Bun is the toolchain (install, scripts, tests, bundling), but `src/` runs in VS Code's Node: no `Bun.*` or `bun:*` APIs there.
   - ES modules (`"type": "module"`, VS Code ≥ 1.100): `import`/`export`, never `require`/`module.exports`. Relative imports end in `.js`; paths from `import.meta.dirname`/`import.meta.url`; JSON via `JSON.parse(fs.readFileSync(…))`.
   - Node built-ins and the language before packages: `fs/promises`, `path`, `URL`, `child_process`, `Array`/`Object`/`Map`/`Set` methods, `structuredClone`, template literals. No lodash/underscore-style helpers.
   - `const` by default, `let` when reassigned, never `var`; `===`; optional chaining `?.` and `??` instead of manual null checks.
   - async/await over callbacks and `.then` chains; every promise awaited or its rejection handled.
   - Small pure functions; destructuring for options; no mutation of arguments.
-  - VS Code API: register every disposable in `context.subscriptions`; use built-in APIs (`workspace.fs`, `languages.*`) before custom code; syntax-check with `node --check <file>`.
+  - VS Code API: register every disposable in `context.subscriptions`; use built-in APIs (`workspace.fs`, `languages.*`) before custom code; syntax-check with `bun build --no-bundle <file>`.
 - Ruby/templates: Rails helpers and conventions; no business logic in views.
 
 ## Checks
@@ -50,11 +51,11 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 Run the ones that cover what you changed; all of them before a release.
 
 - Rust: `cargo fmt --manifest-path server/Cargo.toml --check`, `cargo clippy --manifest-path server/Cargo.toml`, `cargo test --manifest-path server/Cargo.toml` (also asserts `test/broken/bad.html.{haml,slim}`)
-- Server end to end: `npm run build:server && npm run test:server && node test/e2e.js` (e2e asserts and exits non-zero on a mismatch)
-- Grammars: `npm run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
-- JS: `npm run format:check`, `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
-- Slim formatter: `npm run test:format` (needs `ruby -rslim`)
-- Client in a real VS Code: `npm run test:vscode`, under `xvfb-run -a` on Linux without a display (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
+- Server end to end: `bun run build:server && bun run test:server && bun test/e2e.js` (e2e asserts and exits non-zero on a mismatch)
+- Grammars: `bun run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
+- JS: `bun run format:check`, `bun run test:unit`, `bun run test:slim`, `bun run test:snippets`, `bun run build` (the bundle VS Code loads); any JS file: `bun build --no-bundle <file>`
+- Slim formatter: `bun run test:format` (needs `ruby -rslim`)
+- Client in a real VS Code: `bun run test:vscode`, under `xvfb-run -a` on Linux without a display (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
 
 ## Where tests go
 

@@ -234,7 +234,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`server/src/erb.rs` `broken_fixture`)
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
-- [x] Extension-host tests (`@vscode/test-electron`): toggle, related-file switch, ERB formatter, erb_lint, server diagnostics and definition in a real VS Code (`test/vscode/`, `npm run test:vscode`, in CI)
+- [x] Extension-host tests (`@vscode/test-electron`): toggle, related-file switch, ERB formatter, erb_lint, server diagnostics and definition in a real VS Code (`test/vscode/`, `bun run test:vscode`, in CI)
 - [x] Fixture corpus of real-world Rails views (no false-positive diagnostics): checked by hand on Forem and rubygems.org `app/views` (the fixes it led to are listed under the corpus item in `docs/HAML_TODO.md`); the remaining HTML tag warnings on Forem are real mismatches (`<h3>…</h2>`).
 
 ## 17. Docs

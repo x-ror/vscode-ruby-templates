@@ -35,7 +35,7 @@ Legend as in `ERB_TODO.md`.
 
 ## Tests
 
-- [ ] `test/sample.html.liquid` covering every construct above, plus `'sample.html.liquid': 'text.html.liquid'` in `test/tokenize.js` `samples` and a baseline from `UPDATE=1 npm run test:tokens`. `test:tokens` fails on any unlisted `test/sample.*`.
+- [ ] `test/sample.html.liquid` covering every construct above, plus `'sample.html.liquid': 'text.html.liquid'` in `test/tokenize.js` `samples` and a baseline from `UPDATE=1 bun run test:tokens`. `test:tokens` fails on any unlisted `test/sample.*`.
 - [ ] `test:server` and CI (`.github/workflows/build.yml`) run `--check test/sample.*`, so the server's `.liquid` detection must land with the sample or the check exits 1 ("unknown template type").
 - [ ] Gate (phase 1), Rust unit test on a temp dir like `partials.rs` `model_render_partials`: `{% render "card" %}` in a `.liquid` file next to `_card.html.slim` → no definition, no link. Plus one `test/e2e.js` case (it asserts): definition on that render returns nothing.
 - [ ] `liquid.rs` unit tests (phase 2): refs with quotes / no quotes / `{%-`, `{{ x }}` ignored, `include_relative` path; resolve for Jekyll `_config.yml` and the `_x.liquid` fallback on a temp dir.
