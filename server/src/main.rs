@@ -215,54 +215,56 @@ fn is_html_format(format: &str) -> bool {
 const UNRESOLVED_RENDER: &str = "unresolved-render";
 const STRICT_LOCALS: &str = "strict-locals";
 
+/// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
+fn checked_renders<'a>(
+    views: &Path,
+    text: &'a str,
+    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+) -> Vec<(usize, &'a str, partials::RenderRef)> {
+    let mut out = Vec::new();
+    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
+        let checked =
+            partials::render_refs(line).into_iter().filter(|r| partials::in_app_views_dir(views, &r.name) && in_code(i, line_start, r));
+        out.extend(checked.map(|r| (i, line, r)));
+    }
+    out
+}
+
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
 fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
-    let mut out = Vec::new();
-    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        for r in partials::render_refs(line) {
-            let range = util::line_range(text, i, r.start, r.end);
-            if !partials::in_app_views_dir(&views, &r.name)
-                || !in_code(i, line_start, &r)
-                || !partials::resolve(path, &r).is_empty()
-                || partials::gem_view(&views, &r.name)
-            {
-                continue;
-            }
+    checked_renders(&views, text, in_code)
+        .into_iter()
+        .filter(|(_, _, r)| partials::resolve(path, r).is_empty() && !partials::gem_view(&views, &r.name))
+        .map(|(i, line, r)| {
             let message = format!("{} `{}` not found", r.kind.name(), r.name);
-            out.push(util::coded(util::warning(range, message), UNRESOLVED_RENDER));
-        }
-    }
-    out
+            util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
+        })
+        .collect()
 }
 
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
 fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
-    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        for r in partials::render_refs(line) {
-            // A partial's layout gets the partial's locals, which this check can't see.
-            if r.from_layout || !partials::in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) {
-                continue;
-            }
-            let Some(passed) = partials::passed_locals(line, &r) else { continue };
-            // Several variants/formats: which one Rails picks depends on the request.
-            let found = partials::resolve(path, &r);
-            let [file] = found.as_slice() else { continue };
-            let Some(sig) = partials::file_strict_locals(file) else { continue };
-            let missing: Vec<&str> =
-                sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
-            let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
-            let range = util::line_range(text, i, r.start, r.end);
-            if !missing.is_empty() {
-                let message = format!("Partial `{}` requires locals: {}", r.name, code_list(&missing));
-                out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
-            }
-            if !unknown.is_empty() {
-                let message = format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown));
-                out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
-            }
+    // A partial's layout gets the partial's locals, which this check can't see.
+    for (i, line, r) in checked_renders(&views, text, in_code).into_iter().filter(|(_, _, r)| !r.from_layout) {
+        let Some(passed) = partials::passed_locals(line, &r) else { continue };
+        // Several variants/formats: which one Rails picks depends on the request.
+        let found = partials::resolve(path, &r);
+        let [file] = found.as_slice() else { continue };
+        let Some(sig) = partials::file_strict_locals(file) else { continue };
+        let missing: Vec<&str> =
+            sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+        let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
+        let range = util::span_range(i, line, r.start, r.end);
+        if !missing.is_empty() {
+            let message = format!("Partial `{}` requires locals: {}", r.name, code_list(&missing));
+            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
+        }
+        if !unknown.is_empty() {
+            let message = format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown));
+            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
         }
     }
     out
