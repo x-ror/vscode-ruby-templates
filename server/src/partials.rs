@@ -220,7 +220,7 @@ pub fn resolve(current: &Path, r: &RenderRef) -> Vec<PathBuf> {
     };
     let basename = match r.kind {
         RenderKind::Partial => format!("_{}", base),
-        _ => base.clone(),
+        RenderKind::Template => base.clone(),
     };
     let mut dirs: Vec<PathBuf> = Vec::new();
     match (&dir, &views, r.kind) {

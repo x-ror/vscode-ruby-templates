@@ -77,7 +77,7 @@ fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBu
     if views_root(&source.path).is_some() {
         return match r.kind {
             RenderKind::Template => vec![],
-            _ => resolve(&source.path, &as_partial),
+            RenderKind::Partial => resolve(&source.path, &as_partial),
         };
     }
     let controller = source.path.components().any(|c| c.as_os_str() == "controllers");

@@ -613,7 +613,7 @@ impl LanguageServer for Backend {
                 Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines)))
             }
             TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
-            _ => Ok(None),
+            TemplateLang::Erb => Ok(None),
         }
     }
 
