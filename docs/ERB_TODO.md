@@ -15,7 +15,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `# comment` inside a code tag ends at `%>`, not at end of line (`syntaxes/erb.tmLanguage.json` `ruby-inner`)
 - [x] `=%>` closing tag scoped as punctuation; `<%_`/`_%>` deliberately not supported (Erubi only allows `-`/`=` before `%>`) (`syntaxes/erb.tmLanguage.json`)
 - [ ] `trim_mode: '%'` lines (lines starting with `%` are Ruby; `%%` escapes it) for plain-Ruby ERB files
-- [ ] Diagnostic: `%>` inside a Ruby string or `<%#` comment closes the tag early (ERB ends a tag at the first `%>`)
+- [x] Diagnostic: `%>` inside a Ruby string closes the tag early (`server/src/erb.rs` `UNTERMINATED_STRING`; skipped for tags with a heredoc). A `%>` inside `<%#` leaves no trace to detect.
 - [ ] Multi-line `<% ... %>` tags containing heredocs
 
 ## 2. File types and host languages
@@ -31,7 +31,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `.rb.erb` / `.yml.erb` (generators, `database.yml`) get Ruby/YAML host grammars (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 - [x] `.turbo_stream.erb` gets the `erb` id and HTML host via the `.erb` suffix (`package.json`); Turbo snippets tracked separately
 - [x] `.html+variant.erb` (e.g. `show.html+phone.erb`) recognized via the `.erb` suffix (`package.json`, `server/src/main.rs`); variant-aware lookup tracked under navigation
-- [ ] `filenamePatterns: ["*.tt"]` for Rails generator templates (e.g. `Gemfile.tt`)
+- [x] Rails generator templates open as their language: `lib/templates/{erb,slim}/**/*.{erb,slim}.tt` and `lib/generators/**/templates/**` (`package.json` `filenamePatterns`, like Haml's); no diagnostics, formatting or slim-lint there, since the generator's ERB is mixed in (`server/src/main.rs` `diagnostics`). Non-template `.tt` files (`Gemfile.tt`) are left alone
 - [ ] Host-specific language ids (e.g. `erb-js`) or a host-detection grammar so `editor.*` settings and comment toggling follow the host
 - [x] Server handles the same host variants (diagnostics shouldn't assume HTML) (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 
@@ -40,11 +40,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] HTML host via `text.html.basic` with ERB injected everywhere outside ERB tags (`syntaxes/erb.tmLanguage.json` `injections`)
 - [x] Embedded language mapping for ruby/js/css (`package.json` `grammars[erb].embeddedLanguages`)
 - [x] Token snapshot script for the sample (`test/tokenize.js`, `test/sample.html.erb`)
-- [ ] (?) ERB inside HTML attribute values (`class="<%= x %>"`): not in the sample
-- [ ] (?) ERB inside `<script>` and `<style>` blocks: not in the sample
-- [ ] (?) ERB inside HTML comments `<!-- <%= x %> -->`
-- [ ] ERB in attribute-name position, e.g. `<div <%= attrs %>>`
-- [ ] `test/tokenize.js` loads the real HTML/Ruby grammars instead of stubs so embedding is actually checked
+- [x] ERB inside HTML attribute values (`class="<%= x %>"`, single and double quotes) (`test/sample.html.erb`)
+- [x] ERB inside `<script>` and `<style>` blocks (`test/sample.html.erb`). A `<script>` whose JS holds `a < b` on the `</script>` line runs on as JS; that is VS Code's HTML/JS grammar, plain `.html` does the same
+- [x] ERB inside HTML comments `<!-- <%= x %> -->` (`test/sample.html.erb`)
+- [x] ERB in attribute-name position, e.g. `<div <%= attrs %>>` (`test/sample.html.erb`)
+- [x] `test/tokenize.js` loads the real HTML/Ruby grammars instead of stubs so embedding is actually checked (VS Code's grammars from the pinned `tm-grammars` dev dependency)
 - [x] Token snapshot assertions (diff against a committed baseline) instead of a dump (`test/tokenize.js`, `test/__snapshots__/`)
 - [ ] Semantic tokens from the server (instance vars, locals, helpers) to fix what TextMate gets wrong
 
@@ -63,7 +63,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
 - [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
-- [ ] Linked editing of HTML tag pairs
+- [x] Linked editing of HTML tag pairs, across ERB tags between them (`server/src/tags.rs` `linked_names`; needs `editor.linkedEditing`)
 - [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)
 - [ ] Line comment toggle for a single line inside a code tag (`# `) vs whole-tag toggle
 
@@ -83,7 +83,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `render @collection` / `render partial:, locals:` / `render layout: do` (`snippets/erb.json` `renderall`/`renderl`/`renderlayout`)
 - [x] `javascript_include_tag`, `favicon_link_tag`, `turbo_include_tags`, `asset_path` (`snippets/erb.json` `turbo_include_tags` is deprecated → `turbo_script`)
 - [x] Mailer text-part skeleton snippet (`mail_to` is already a completion in `server/src/helpers.rs`) (`snippets/erb.json` `mailer_text`)
-- [ ] Snippets for ViewComponent templates (`content`, `helpers.`, slots `with_*`)
+- [x] Snippets for ViewComponent templates: `rendercompb` (render with a slot block), `slot` (`with_*`), `slot?`, `content` (`pcontent` in ERB, like the other one-tag snippets), in ERB, Haml and Slim (`snippets/*.json`)
 
 ## 6. Commands and editing helpers
 
@@ -94,17 +94,17 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
 - [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
 - [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
-- [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
-- [ ] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`)
-- [ ] Create a missing partial from an unresolved `render "x"` (code action)
+- [x] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work (`rubyTemplates.preview.useRails`, `src/extension.js`)
+- [x] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`) (`rubyTemplates.extractPartial`, `src/extension.js`, `src/partial.js`)
+- [x] Create a missing partial from an unresolved `render "x"` (code action) (`server/src/main.rs` `code_action`, `partials::new_template_path`)
 
 ## 7. Formatting
 
-- [ ] Document formatting provider for ERB (Herb formatter, `htmlbeautifier`, or `erb-formatter`)
+- [x] Document formatting provider for ERB: `rubyTemplates.erb.formatter` = `htmlbeautifier` or `erb-format`, registered only when chosen (`src/extension.js` `registerErbFormatting`, `src/erbFormat.js`)
 - [ ] Range formatting
-- [ ] Configurable formatter executable plus `bundle exec` (reuse `rubyTemplates.preview.useBundler` pattern)
+- [x] Configurable formatter executable plus `bundle exec` (`rubyTemplates.commands.htmlbeautifier` / `.erbFormat`, `rubyTemplates.preview.useBundler`)
 - [ ] Normalize spaces inside tags (`<%=foo%>` → `<%= foo %>`) as a code action or format option
-- [ ] Format on save works (`editor.formatOnSave` via the provider)
+- [x] Format on save works (`editor.formatOnSave` via the provider)
 
 ## 8. Diagnostics and linting
 
@@ -117,15 +117,16 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Modifier `if`, `x = if … end`, `while … do`, keywords in strings/comments/symbol keys ignored (`server/src/ruby.rs` tests)
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/main.rs`)
 - [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
-- [ ] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): via Prism or tree-sitter-ruby over the compiled source
+- [x] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): tree-sitter-ruby over the tags joined like Erubi, offsets kept (`server/src/ruby_syntax.rs`); runs once tag and block structure is sound, first 3 errors. No false positives on the Forem / rubygems.org / Mastodon / diaspora corpus (1082 ERB views). A tag left open before the next `<%` is reported at its own opener (`unclosed-tag`)
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
 - [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
-- [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)
+- [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
-- [ ] Settings to enable/disable each built-in check and pick external linters
+- [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
+- [ ] Settings to pick external linters
 - [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
 - [x] Debounce diagnostics on change (`server/src/main.rs` `publish_later`, 200 ms)
 
@@ -136,7 +137,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Go to `FooComponent` `.rb` and sidecar template from `render FooComponent.new` (`server/src/partials.rs` `resolve_component`)
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
 - [x] `render @user` / `render @users` → `users/_user` by model naming convention (`server/src/partials.rs` `resolve_model`; namespaced models skipped)
-- [ ] `render partial: name_var` (non-literal partial name): show nothing, don't guess
+- [x] `render partial: name_var` (non-literal partial name): show nothing, don't guess (`RENDER_STR` only takes string literals)
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
 - [ ] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb`
@@ -148,9 +149,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
 - [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
-- [ ] ViewComponent: component `.rb` ↔ template file switch command
-- [ ] Find references: who renders this partial (workspace scan)
-- [ ] Workspace symbol search for partials/templates
+- [x] ViewComponent: component `.rb` ↔ template file switch command, sidecar folder included (`rubyTemplates.switchRelated`, `src/related.js`)
+- [x] Find references: who renders this partial (workspace scan) (`server/src/main.rs` `references`, `partial_rename::references`)
+- [x] Workspace symbol search for partials/templates by render name (`server/src/main.rs` `symbol`, `partials::named_templates`)
 
 ## 10. Completion
 
@@ -163,10 +164,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Block variables (`do |user|`) in scope
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
-- [ ] Model attributes after `f.text_field :` (from `db/schema.rb`)
+- [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
 - [ ] ViewComponent class names after `render `
-- [ ] Stimulus controller / action / target names in `data-*` attributes
-- [ ] Turbo stream actions after `turbo_stream.`
+- [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
+- [ ] Stimulus action method and target names
+- [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
 - [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
@@ -182,10 +184,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 12. Rename, references, symbols
 
-- [ ] Rename a partial file and update every `render "…"` that points at it
+- [x] Rename a partial file and update every `render "…"` that points at it (`server/src/partial_rename.rs`, `workspace/willRenameFiles`)
 - [ ] Rename a local across a partial and its callers
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
-- [ ] Breadcrumbs follow the symbol tree
+- [x] Breadcrumbs follow the symbol tree (VS Code builds them from `textDocument/documentSymbol`)
 - [ ] Find all references to an i18n key
 
 ## 13. Embedded HTML/CSS/JS language features
@@ -203,8 +205,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
 - [ ] ViewComponent previews (`spec/components/previews`) navigation
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
-- [ ] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command
+- [x] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command (`rubyTemplates.switchRelated`: any view's other formats)
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
+- [x] Jbuilder/Builder views get partial navigation (`docs/JBUILDER_TODO.md`, `TemplateLang::Ruby`)
 - [x] Jbuilder/other templates in the same dir don't confuse partial resolution (`server/src/partials.rs` `renders_format`)
 - [x] Hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` (`server/src/partials.rs` `RENDER_STR`)
 
@@ -227,12 +230,12 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] CI builds the server for 5 targets, runs `cargo test` on 4 (skipped for cross-built linux-arm64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
 - [x] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text) (`server/src/erb.rs` tests)
 - [x] `test/e2e.js` asserts results and exits non-zero on a mismatch
-- [ ] `test/e2e.js` runs in CI (its npm steps are `test:tokens`, `test:snippets`, `test:unit`, `test:slim`)
-- [ ] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`broken_fixture`); today nothing reads it
+- [x] `test/e2e.js` runs in CI on linux-x64 against the job's own build (`.github/workflows/build.yml`, `RUBY_TEMPLATES_LS`)
+- [x] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`server/src/erb.rs` `broken_fixture`)
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
-- [ ] Extension-host tests (`@vscode/test-electron`) for commands: toggle, wrap, convert
-- [ ] Fixture corpus of real-world Rails views (no false-positive diagnostics)
+- [x] Extension-host tests (`@vscode/test-electron`): toggle, related-file switch, ERB formatter, erb_lint, server diagnostics and definition in a real VS Code (`test/vscode/`, `npm run test:vscode`, in CI)
+- [x] Fixture corpus of real-world Rails views (no false-positive diagnostics): checked by hand on Forem and rubygems.org `app/views` (the fixes it led to are listed under the corpus item in `docs/HAML_TODO.md`); the remaining HTML tag warnings on Forem are real mismatches (`<h3>…</h2>`).
 
 ## 17. Docs
 

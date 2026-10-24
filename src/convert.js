@@ -2,11 +2,11 @@
 
 /**
  * Where a converted template is saved: index.html → index.html.haml, show.html.erb → show.html.haml,
- * show.html.haml.tt → show.html.slim.tt. `from` is the source language id.
+ * show.html.haml.tt → show.html.slim.tt, show.html.erubi → show.html.haml. `from` is the source language id.
  */
 function convertedFileName(fileName, from, target) {
   const renamed = fileName.replace(
-    /\.(erb|haml|rhtml|slim)(\.tt)?$/i,
+    /\.(erb|erubis?|haml|rhtml|slim)(\.tt)?$/i,
     `.${target}$2`,
   );
   return from !== "html" && renamed !== fileName

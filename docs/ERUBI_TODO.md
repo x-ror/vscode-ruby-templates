@@ -6,15 +6,15 @@ Legend as in `ERB_TODO.md`.
 
 ## Tasks
 
-- [ ] Add `.erubi`, `.erubis` to the `erb` language's `extensions` (`package.json` `contributes.languages[id=erb]`). The client needs no change: `documentSelector` is built from every `contributes.languages` id (`src/client.js` `startClient`), and the server accepts the `erb` language id (`server/src/main.rs` `TemplateLang::from_uri_or_id`).
-- [ ] Path fallback for documents without a language id, i.e. `--check` (`server/src/main.rs` `TemplateLang::from_uri_or_id`: add `.erubi`/`.erubis` next to `.erb`/`.rhtml`). Without it `ruby-templates-ls --check x.erubi` prints "unknown template type" and exits 1.
-- [ ] HTML-host detection for `x.html.erubi` so tag diagnostics, folding and HTML outline apply (`server/src/main.rs` `html_host`: it only checks `host_format(&file, ".erb")`; accept `.erubi`/`.erubis` too).
-- [ ] Converter file name (`src/extension.js` `convert`: `replace(/\.(erb|haml|rhtml|slim)$/, …)`): add `erubi|erubis`. Without it `newName === fileName` on `show.html.erubi`, and "Save as … → Overwrite" writes the Haml/Slim output over the source.
-- [ ] Nothing else: toggle/wrap/preview key off `editorLangId =~ /^erb/` and `engineOf` (`package.json` `keybindings`/`menus`, `src/extension.js`), which already cover the `erb` id.
+- [x] Add `.erubi`, `.erubis` to the `erb` language's `extensions` (`package.json` `contributes.languages[id=erb]`). The client needs no change: `documentSelector` is built from every `contributes.languages` id (`src/client.js` `startClient`), and the server accepts the `erb` language id (`server/src/main.rs` `TemplateLang::from_uri_or_id`).
+- [x] Path fallback for documents without a language id, i.e. `--check` (`server/src/main.rs` `TemplateLang::from_uri_or_id`: add `.erubi`/`.erubis` next to `.erb`/`.rhtml`). Without it `ruby-templates-ls --check x.erubi` prints "unknown template type" and exits 1.
+- [x] HTML-host detection for `x.html.erubi` so tag diagnostics, folding and HTML outline apply (`server/src/main.rs` `html_host`: it only checks `host_format(&file, ".erb")`; accept `.erubi`/`.erubis` too).
+- [x] Converter file name (`src/extension.js` `convert`: `replace(/\.(erb|haml|rhtml|slim)$/, …)`): add `erubi|erubis`. Without it `newName === fileName` on `show.html.erubi`, and "Save as … → Overwrite" writes the Haml/Slim output over the source.
+- [x] Nothing else: toggle/wrap/preview key off `editorLangId =~ /^erb/` and `engineOf` (`package.json` `keybindings`/`menus`, `src/extension.js`), which already cover the `erb` id.
 
 ## Tests
 
-- [ ] Extend `host_specific_erb_ids` with `x.erubi` → `Some(TemplateLang::Erb)` and `html_host_by_file_name` with `/v/show.html.erubi` → `true` (`server/src/main.rs` tests). These are the only new branches.
+- [x] Extend `host_specific_erb_ids` with `x.erubi` → `Some(TemplateLang::Erb)` and `html_host_by_file_name` with `/v/show.html.erubi` → `true` (`server/src/main.rs` tests). These are the only new branches.
 - No token sample: the grammar is unchanged. No e2e case: same code path as `.erb`.
 
 ## Open questions

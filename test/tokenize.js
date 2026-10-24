@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import vsctm from "vscode-textmate";
 import onig from "vscode-oniguruma";
+import { grammars as vendored } from "tm-grammars";
 const root = path.join(import.meta.dirname, "..");
 const wasm = fs.readFileSync(
   path.join(root, "node_modules/vscode-oniguruma/release/onig.wasm"),
@@ -24,7 +25,17 @@ const registry = new vsctm.Registry({
         fs.readFileSync(path.join(root, grammars[scope]), "utf8"),
         grammars[scope],
       );
-    // Stub for grammars VS Code ships (ruby, js, css, html…): mark words so we can see the embedding worked.
+    // VS Code's own grammars (html, ruby, js, css…), pinned through the tm-grammars dev dependency.
+    const builtin = vendored.find((g) => g.scopeName === scope);
+    if (builtin) {
+      const file = path.join(
+        root,
+        "node_modules/tm-grammars/grammars",
+        `${builtin.name}.json`,
+      );
+      return vsctm.parseRawGrammar(fs.readFileSync(file, "utf8"), file);
+    }
+    // Stub for anything else: mark words so we can see the embedding worked.
     return {
       scopeName: scope,
       patterns: [

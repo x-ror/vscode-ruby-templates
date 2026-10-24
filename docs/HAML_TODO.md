@@ -31,14 +31,14 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 - [x] Ruby hash `{}` with Ruby 1.9 `key: v`, `"data-x": v`, and hashrocket `:a => v` (embedded `source.ruby`) (`syntaxes/haml.tmLanguage.json` `hash-attributes`)
 - [x] Nested `data: {…}` hash (`test/sample.html.haml`)
-- [ ] (?) Nested `aria: {…}` hash: same rule as `data:`, not in the sample
+- [x] Nested `aria: {…}` / `data: {…}` hashes keep the attribute hash open past their `}` (`syntaxes/haml.tmLanguage.json` `ruby-braces`, also in `(…)` values and `#{}`; `test/sample.html.haml`)
 - [x] Multiline `{}` attribute hash spanning lines (`syntaxes/haml.tmLanguage.json` begin/end region; server joins lines in `server/src/haml_indent.rs` `skip_tag_head`)
 - [x] HTML-style `(name="v" other=ruby_expr)` attributes (`syntaxes/haml.tmLanguage.json` `html-attributes`, `test/sample.html.haml`)
 - [x] `#{}` inside double-quoted `()` attribute values (`syntaxes/haml.tmLanguage.json` `string-double`)
 - [x] Boolean attributes in `()` without a value (`%input(checked type="x")`) (`syntaxes/haml.tmLanguage.json` `html-attributes`; `test/sample.html.haml`)
 - [x] Object reference `[@user, :prefix]` (`syntaxes/haml.tmLanguage.json` `object-ref`)
-- [ ] (?) Attribute methods `%div{attrs_hash}` and combined `{…}(…)` on one tag: plain Ruby, not in the sample
-- [ ] (?) `class: [a, b]` / `id: [a, b]` arrays and `data: false`-style boolean values: plain Ruby, not in the sample
+- [x] Attribute methods `%div{attrs_hash}` and combined `{…}(…)` on one tag (`test/sample.html.haml`)
+- [x] `class: [a, b]` / `id: [a, b]` arrays and `data: false`-style boolean values (`test/sample.html.haml`)
 
 ## 3. Filters
 
@@ -121,12 +121,12 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Self-closing tag with content (`Self-closing tags can't have content.`) or children (`Illegal nesting: nesting within a self-closing tag is illegal.`) (`server/src/haml_indent.rs` `LineKind::SelfClosing`)
 - [x] `/ comment text` and `/[if IE] text` with nested content (`Illegal nesting: nesting within a tag that already has content is illegal.`); `/[if IE]` and `/![if !IE]` alone may have children (`server/src/haml_indent.rs` `LineKind::TextComment`)
 - [x] `#`/`.` with no name (`# heading`, `...more`): `Illegal element: classes and ids must have values.` (`server/src/haml_indent.rs` `classify`)
-- [ ] Indentation of `,` continuation lines (Haml checks them: `"\t    " used for indentation` in a tab file); continuation lines are skipped today
-- [ ] Indentation inside filter bodies relative to the filter (Haml requires the body to start with the filter's indent plus one unit); bodies are skipped today
+- [x] Indentation of `,` continuation lines: nothing to report. Haml 7.5 compiles `%p= link_to x,\n\t  y` and spaces-in-a-tab-file continuations without error (checked with the gem), so a check would be a false positive
+- [x] Indentation inside filter bodies relative to the filter: nothing to report. Haml 7.5 accepts bodies that dedent below their first line or use spaces in a tab file (checked with the gem)
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
-- [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output)
+- [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output). ERB has it now (`server/src/ruby_syntax.rs`); Haml and Slim need the implicit `end`s of indented blocks synthesized, with an offset map back to the template
 - [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
-- [ ] Settings to enable/disable each built-in check: blocked on plumbing. The server ignores `initializationOptions` and has no `workspace/didChangeConfiguration` handler (`server/src/main.rs` `initialize`), and the client passes no options (`src/client.js`); that plumbing comes first
+- [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/main.rs` `Options`)
 
 ## 10. Completion
 
@@ -135,7 +135,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Rails helpers on Ruby lines (`server/src/main.rs` `in_ruby_context`)
 - [x] Ruby context only in the code part: after `-`/`=`/`~`/`!=`/`&=` (line start or after a tag head), inside a tag's `{}` hash or `[]` object ref, or an open `#{`; not in `()` attributes, plain text, or after a Ruby `#` comment (`server/src/haml.rs` `in_ruby`, unit test `ruby_only_in_code`)
 - [x] Completion and hover use each line's role: Haml completion and hover only on structural lines (never in filter or `-#` bodies or `|` text), Rails helpers also on continuation lines of `-`/`=` code and multi-line `{}` hashes and in `:ruby` bodies (`server/src/haml_indent.rs` `haml_line_roles`, unit test `line_roles`; `server/src/main.rs` `completion`, `hover`; `test/e2e.js`)
-- [ ] Attribute-name completion on continuation lines of a multi-line `{}` hash (those lines get Ruby helpers instead)
+- [x] Attribute-name completion on continuation lines of a multi-line `{}` / `()` hash, `data: {` and `aria: {` included (`server/src/haml.rs` `continued_head`)
 - [x] Filter names after `:` at line start (`server/src/haml.rs` `completion_context`, `server/src/haml_indent.rs` `HAML_FILTERS`)
 - [x] `succeed` / `precede` / `surround` / `preserve` / `find_and_preserve` completion and hover, Haml files only (`server/src/helpers.rs` `HAML_HELPERS`, `server/src/main.rs` `helpers_for`)
 - [x] Attribute-name completion inside `{}` (`name: `, quoted `"http-equiv": `, `data: {}` / `aria: {}`, and old-style `:name => `), inside nested `data: {…}` (Rails/Turbo/Stimulus keys) and `aria: {…}`, and inside `()` (`name=""`, `aria-*`, `data-*`) (`server/src/haml.rs` `completion_context`, `server/src/helpers.rs` `HTML_ATTRIBUTES`/`DATA_KEYS`/`ARIA_KEYS`; unit test `completion_contexts`)
@@ -155,7 +155,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
 - [x] Folding by indentation: the server returns VS Code's off-side indentation ranges itself, since any provider answer replaces them (`server/src/outline.rs` `haml_folding_ranges`, `indentation_folds`)
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, `render`, `#id` and landmark tags, with ERB's symbol kinds, nested by indentation; filter and comment bodies skipped (`server/src/outline.rs` `haml_document_symbols`, unit test `haml_symbols_nest_by_indentation`)
-- [ ] Outline: ids given as attributes (`%div{id: "x"}`, `%div(id="x")`); only the `#id` shorthand is used
+- [x] Outline: literal ids given as attributes (`%div{id: "x"}`, `{:id => "x"}`, `%div(id="x")`) on the tag's first line, top level only (`server/src/outline.rs` `haml_attribute_id`)
 - [x] Folding for multiline `{}` attribute hashes, `|` blocks and `,` continuations whose lines aren't indented deeper, plus `-# region` markers (`server/src/outline.rs` `haml_folding_ranges`, `server/src/haml_indent.rs` `haml_structure`; unit test `haml_folds_indentation_regions_and_continuations`)
 - [x] Rename a partial and update every `render` in ERB, Haml and Slim files under `app/views` (`workspace/willRenameFiles`). A render changes only when every file Rails could pick for it (the first resolved directory, all variants/formats) moves, all to one name; one edit per render however many files move; `render` inside Ruby strings, comments, template text and filter bodies is left alone (`server/src/partial_rename.rs`, with `render_in_code` from `server/src/main.rs` for Haml/ERB; unit tests `partial_rename_updates_renders`, `partial_rename_needs_every_candidate_to_move`; `test/e2e.js`; limits in `README.md`)
 - [x] Rename a directory of partials, and `render partial:` strings in controllers/helpers (`.rb`) (`server/src/partial_rename.rs`, from the Slim work)
@@ -169,7 +169,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 ## 14. Rails-specific
 
 - [x] Strict locals `-# locals: (…)` highlighted as a signature (`syntaxes/haml.tmLanguage.json` `strict-locals`)
-- [ ] Strict locals: completion and diagnostics. ERB has none to share yet (`docs/ERB_TODO.md` "Strict locals: completion, hover, and diagnostics"); build both together
+- [x] Strict locals: completion and diagnostics (`server/src/main.rs` `local_completions`, `strict_locals_mismatches`, shared with ERB)
 - [x] ViewComponent sidecar `.html.haml` templates (`server/src/partials.rs` `resolve_component`, unit test `component_haml_sidecar`; `test/e2e.js`)
 - [x] `haml-rails` generator templates recognized as Haml: `lib/templates/haml/**/*.haml` by extension, `*.haml.tt` under `lib/templates/haml/` and `lib/generators/**/templates/` by `filenamePatterns` (`package.json` `contributes.languages[haml]`); structure diagnostics are skipped for `.tt`, whose column-0 ERB breaks Haml indentation (`server/src/main.rs` `diagnostics`, unit test `thor_templates_skip_haml_structure`)
 
@@ -183,7 +183,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Rust unit tests for `server/src/haml_indent.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/haml_indent.rs` `tests`)
 - [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/haml_indent.rs` `broken_fixture`)
 - [x] Haml file in `test/e2e.js`: definition, hover, completion (including filter bodies), diagnostics, symbols, folding, rename; every result is asserted and a mismatch exits non-zero (`test/e2e.js` `check`)
-- [ ] Fixture corpus of real-world Haml views (no false-positive diagnostics)
+- [x] Fixture corpus of real-world Haml views (no false-positive diagnostics). Checked by hand with `--check` on the `app/views` of Mastodon, diaspora (Haml), Ruby Toolbox (Slim), Forem and rubygems.org (ERB): the false positives found (`=begin` blocks, multi-line `<% %>` with `if` on its own line, `key: if …`, gem view folders, `.rss`/`.atom`) are fixed with unit tests; the rest are real template bugs or app-registered formats (`:mobile`). The Slim formatter keeps the compiled output of all 86 Ruby Toolbox views, re-indented to 4 spaces first.
 
 ## 16. Docs
 

@@ -1,8 +1,10 @@
 //! Haml editing features on one line: where Ruby is, what to complete, and hover docs for filters and prefixes.
 
-use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup};
+use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole, HAML_FILTERS};
+use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
 use crate::ruby;
-use crate::util::leading_ws;
+use crate::util::{completion_item, leading_ws};
+use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// What the cursor is completing, besides Ruby.
 #[derive(Debug, PartialEq, Eq)]
@@ -70,6 +72,68 @@ pub fn completion_context(line: &str, col: usize) -> Option<Completion<'_>> {
     };
     let (typed, rocket) = typed.strip_prefix(':').map_or((typed, false), |t| (t, true));
     Some(Completion::Attribute { typed, place, rocket })
+}
+
+/// A multi-line tag head up to byte `col` of line `at`, joined onto one line, when `at` continues a tag's
+/// open `{…}`/`(…)` attributes; `completion_context` reads it like a one-line head.
+pub fn continued_head(lines: &[&str], roles: &[LineRole], at: usize, col: usize) -> Option<String> {
+    let start = (0..at).rev().find(|&i| roles.get(i) == Some(&LineRole::Start))?;
+    let head = lines[start];
+    if !is_haml_tag(&head[leading_ws(head).len()..]) {
+        return None;
+    }
+    let mut joined = lines[start..at].join(" ");
+    joined.push(' ');
+    joined.push_str(lines.get(at)?.get(..col)?.trim_start());
+    Some(joined)
+}
+
+/// Items for a `completion_context`.
+pub fn completions(context: Completion) -> Vec<CompletionItem> {
+    match context {
+        Completion::Filter(typed) => HAML_FILTERS
+            .iter()
+            .filter(|name| name.starts_with(typed))
+            .map(|f| completion_item(*f, CompletionItemKind::MODULE, "Haml filter"))
+            .collect(),
+        Completion::Tag(typed) => HTML_TAGS
+            .iter()
+            .filter(|name| name.starts_with(typed))
+            .map(|t| completion_item(*t, CompletionItemKind::PROPERTY, "HTML element"))
+            .collect(),
+        Completion::Attribute { typed, place, rocket } => {
+            let names: Vec<String> = match place {
+                AttrPlace::Hash => HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
+                AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::AriaHash => ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::Html => HTML_ATTRIBUTES
+                    .iter()
+                    .map(|a| a.to_string())
+                    .chain(ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
+                    .chain(DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
+                    .collect(),
+            };
+            names
+                .into_iter()
+                .filter(|n| n.starts_with(typed))
+                .map(|name| {
+                    // The typed `:` of an old-style key stays; the snippet replaces only the name after it.
+                    let key = if name.contains('-') { format!("\"{name}\"") } else { name.clone() };
+                    let separator = if rocket { " =>" } else { ":" };
+                    let snippet = match place {
+                        AttrPlace::Html => format!("{name}=\"$1\""),
+                        AttrPlace::Hash if name == "data" || name == "aria" => format!("{key}{separator} {{$1}}"),
+                        _ => format!("{key}{separator} $1"),
+                    };
+                    CompletionItem {
+                        insert_text: Some(snippet),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        ..completion_item(name, CompletionItemKind::PROPERTY, "HTML attribute")
+                    }
+                })
+                .collect()
+        }
+    }
 }
 
 /// The partial key being typed in an attribute hash (with its `:` if old-style), and which hash (`data:`, `aria:` or the tag's own).
@@ -258,6 +322,20 @@ mod tests {
             let (line, col) = split(src);
             assert_eq!(in_ruby(&line, col), ruby, "{src:?}");
         }
+    }
+
+    #[test]
+    fn continued_heads_complete_attributes() {
+        let text = "%a{href: x,\n   cla\n  data: {\n    contr\n  }}\n- link_to x,\n  cla\n";
+        let lines: Vec<&str> = text.lines().collect();
+        let roles = crate::haml_indent::haml_line_roles(text);
+        let context = |at: usize| {
+            let head = continued_head(&lines, &roles, at, lines[at].len())?;
+            completion_context(&head, head.len()).map(|c| format!("{c:?}"))
+        };
+        assert_eq!(context(1).as_deref(), Some(r#"Attribute { typed: "cla", place: Hash, rocket: false }"#));
+        assert_eq!(context(3).as_deref(), Some(r#"Attribute { typed: "contr", place: DataHash, rocket: false }"#));
+        assert_eq!(context(6), None);
     }
 
     #[test]

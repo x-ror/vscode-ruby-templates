@@ -54,6 +54,7 @@ Run the ones that cover what you changed; all of them before a release.
 - Grammars: `npm run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
 - JS: `npm run format:check`, `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
 - Slim formatter: `npm run test:format` (needs `ruby -rslim`)
+- Client in a real VS Code: `xvfb-run -a npm run test:vscode` (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
 
 ## Where tests go
 
@@ -61,6 +62,7 @@ Run the ones that cover what you changed; all of them before a release.
 - LSP behaviour through the real server: a case in `test/e2e.js`.
 - Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).
 - JS helpers: the matching `test/*.js` run by `test:unit`/`test:slim`/`test:snippets`, with `assert`.
+- Client behaviour that needs VS Code (commands, providers, settings): a check in `test/vscode/suite.js`.
 - Broken-input diagnostics: `test/broken/*`, asserted from Rust via `include_str!` (`broken_fixture`); a fixture nothing reads isn't a test.
 
 ## Commits

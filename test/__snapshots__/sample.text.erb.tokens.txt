@@ -1,7 +1,10 @@
 "Hello <%= @user.name %>,"
    "Hello "                    
    "<%="                       meta.embedded.line > punctuation.section.embedded.begin
-   "@user.name"                meta.embedded.line > source.ruby > stub.source.ruby
+   "@"                         meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "user"                      meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "."                         meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "name"                      meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
    "%>"                        meta.embedded.line > punctuation.section.embedded.end
    ","                         
 "<%# comment %>"
@@ -10,17 +13,22 @@
    "%>"                        comment.block > punctuation.definition.comment.end
 "<% @items.each do |item| -%>"
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "@items.each"               meta.embedded.block > source.ruby > stub.source.ruby
-   "do"                        meta.embedded.block > source.ruby > stub.source.ruby
-   "|item|"                    meta.embedded.block > source.ruby > stub.source.ruby
+   "@"                         meta.embedded.block > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "items"                     meta.embedded.block > source.ruby > variable.other.readwrite.instance.ruby
+   "."                         meta.embedded.block > source.ruby > punctuation.separator.method.ruby
+   "each"                      meta.embedded.block > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "do"                        meta.embedded.block > source.ruby > keyword.control.start-block.ruby
+   "|"                         meta.embedded.block > source.ruby > meta.block.parameters.ruby > punctuation.separator.variable.ruby
+   "item"                      meta.embedded.block > source.ruby > meta.block.parameters.ruby > variable.other.block.ruby
+   "|"                         meta.embedded.block > source.ruby > meta.block.parameters.ruby > punctuation.separator.variable.ruby
    "-%>"                       meta.embedded.block > punctuation.section.embedded.end
 "- <%= item %>"
    "- "                        
    "<%="                       meta.embedded.line > punctuation.section.embedded.begin
-   "item"                      meta.embedded.line > source.ruby > stub.source.ruby
+   " item "                    meta.embedded.line > source.ruby
    "%>"                        meta.embedded.line > punctuation.section.embedded.end
 "<% end -%>"
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
+   "end"                       meta.embedded.block > source.ruby > keyword.control.ruby
    "-%>"                       meta.embedded.block > punctuation.section.embedded.end
 ""

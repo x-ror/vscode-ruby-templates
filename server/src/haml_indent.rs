@@ -1,10 +1,25 @@
 //! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
-use crate::util::{error, find_balanced, leading_ws, line_range, warning};
+use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
+
+/// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
+pub mod code {
+    pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
+    pub const BAD_DEDENT: &str = "bad-dedent";
+    pub const TOP_LEVEL_INDENT: &str = "top-level-indent";
+    pub const ILLEGAL_NESTING: &str = "illegal-nesting";
+    pub const DOCTYPE_CHILDREN: &str = "doctype-children";
+    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
+    pub const EXPLICIT_END: &str = "explicit-end";
+    pub const ILLEGAL_ELEMENT: &str = "illegal-element";
+    pub const UNKNOWN_FILTER: &str = "unknown-filter";
+    pub const SELF_CLOSING_CONTENT: &str = "self-closing-content";
+    pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
+}
 
 /// The filters Haml 6 and 7 register (`Haml::Filters`).
 pub const HAML_FILTERS: &[&str] = &[
@@ -166,21 +181,26 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
         let ws = leading_ws(raw);
         let mut tab_space_mismatch = false;
         if ws.contains('\t') && ws.contains(' ') {
-            out.push(error(line_range(text, line_no, 0, ws.len()), "Mixed tabs and spaces in indentation"));
+            let mixed = error(line_range(text, line_no, 0, ws.len()), "Mixed tabs and spaces in indentation");
+            out.push(coded(mixed, code::INCONSISTENT_INDENT));
         } else if let Some(doc_ws) = doc_indentation.filter(|d| !ws.is_empty() && ws.contains('\t') != d.contains('\t')) {
             tab_space_mismatch = true;
-            out.push(error(line_range(text, line_no, 0, ws.len()), inconsistent_indentation_message(ws, doc_ws)));
+            out.push(coded(
+                error(line_range(text, line_no, 0, ws.len()), inconsistent_indentation_message(ws, doc_ws)),
+                code::INCONSISTENT_INDENT,
+            ));
         }
 
         // Dedent to a level that never existed (checked before popping).
         let known_levels: Vec<usize> = std::iter::once(0).chain(stack.iter().map(|f| f.indent)).collect();
         let bad_dedent = indent < *known_levels.last().unwrap_or(&0) && !known_levels.contains(&indent);
         if bad_dedent {
-            let message = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
-                Some(doc_ws) => inconsistent_indentation_message(ws, doc_ws),
-                None => "Indentation does not match any outer level".to_string(),
+            // Off the indent unit, Haml reports it as inconsistent indentation; the code follows the message.
+            let (message, code) = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
+                Some(doc_ws) => (inconsistent_indentation_message(ws, doc_ws), code::INCONSISTENT_INDENT),
+                None => ("Indentation does not match any outer level".to_string(), code::BAD_DEDENT),
             };
-            out.push(error(line_range(text, line_no, 0, ws.len()), message));
+            out.push(coded(error(line_range(text, line_no, 0, ws.len()), message), code));
         }
 
         // Pop to the parent level.
@@ -200,13 +220,14 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
             if let Some(doc_ws) = doc_indentation {
                 let unit = indent_width(doc_ws);
                 if indent % unit != 0 {
-                    out.push(error(range, inconsistent_indentation_message(ws, doc_ws)));
+                    out.push(coded(error(range, inconsistent_indentation_message(ws, doc_ws)), code::INCONSISTENT_INDENT));
                 } else if step != unit {
-                    out.push(error(range, format!("Inconsistent indentation: expected {unit} spaces, found {step}")));
+                    let message = format!("Inconsistent indentation: expected {unit} spaces, found {step}");
+                    out.push(coded(error(range, message), code::INCONSISTENT_INDENT));
                 }
             }
         } else if stack.is_empty() && indent > 0 {
-            out.push(error(line_range(text, line_no, 0, ws.len()), "Unexpected indentation at top level"));
+            out.push(coded(error(line_range(text, line_no, 0, ws.len()), "Unexpected indentation at top level"), code::TOP_LEVEL_INDENT));
         }
 
         // Illegal nesting checks against the parent, reported once on the parent line.
@@ -227,16 +248,17 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
                 _ => None,
             };
             if let Some(message) = nesting_error {
-                out.push(error(line_range(text, parent.line, 0, parent_raw.len()), message));
+                out.push(coded(error(line_range(text, parent.line, 0, parent_raw.len()), message), code::ILLEGAL_NESTING));
             }
             if parent.kind == LineKind::Doctype {
-                out.push(error(line_range(text, line_no, 0, raw.len()), "Nothing can be nested under a doctype"));
+                let nested = error(line_range(text, line_no, 0, raw.len()), "Nothing can be nested under a doctype");
+                out.push(coded(nested, code::DOCTYPE_CHILDREN));
             }
             parent.has_children = true;
         }
 
         if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, stack.len()) {
-            out.push(error(line_range(text, line_no, ws.len(), raw.len()), message));
+            out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), message), code::UNMATCHED_BRANCH));
         }
 
         stack.push(Frame { indent, kind, line: line_no, has_children: false });
@@ -322,14 +344,16 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     if (c.starts_with('.') || (c.starts_with('#') && !c.starts_with("#{")))
         && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
     {
-        out.push(error(line_range(text, i, ws_len, raw.len()), "Illegal element: classes and ids must have values."));
+        let message = "Illegal element: classes and ids must have values.";
+        out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::ILLEGAL_ELEMENT));
         return (LineKind::Other, 1);
     }
     // Filters
     if let Some(name) = c.strip_prefix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
             if !HAML_FILTERS.contains(&name) {
-                out.push(warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name)));
+                let unknown = warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name));
+                out.push(coded(unknown, code::UNKNOWN_FILTER));
             }
             return (LineKind::Verbatim, 1);
         }
@@ -345,7 +369,8 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         let (rest, head_lines) = skip_tag_head(lines, i, text, out);
         if let Some(content) = rest.trim_start_matches(['<', '>']).strip_prefix('/') {
             if !content.trim().is_empty() {
-                out.push(error(line_range(text, i, ws_len, raw.len()), "Self-closing tags can't have content."));
+                let message = "Self-closing tags can't have content.";
+                out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::SELF_CLOSING_CONTENT));
             }
             return (LineKind::SelfClosing, head_lines);
         }
@@ -497,10 +522,8 @@ fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
 fn check_explicit_end(code: &str, text: &str, line: usize, raw: &str, out: &mut Vec<Diagnostic>) {
     let (_, _, closes) = analyze(code);
     if closes > 0 {
-        out.push(error(
-            line_range(text, line, leading_ws(raw).len(), raw.len()),
-            "`end` is not allowed: Haml closes blocks by indentation",
-        ));
+        let message = "`end` is not allowed: Haml closes blocks by indentation";
+        out.push(coded(error(line_range(text, line, leading_ws(raw).len(), raw.len()), message), code::EXPLICIT_END));
     }
 }
 
@@ -537,7 +560,8 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
                 if extended {
                     pos += find_balanced(&s[pos..], ch, close).unwrap();
                 } else {
-                    out.push(error(line_range(text, i, leading_ws(raw).len(), raw.len()), format!("Unclosed `{}` in tag attributes", ch)));
+                    let message = format!("Unclosed `{}` in tag attributes", ch);
+                    out.push(coded(error(line_range(text, i, leading_ws(raw).len(), raw.len()), message), code::UNCLOSED_ATTRIBUTE));
                     return (String::new(), consumed);
                 }
             }

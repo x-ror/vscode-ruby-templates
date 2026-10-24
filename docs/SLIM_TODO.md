@@ -52,7 +52,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `typescript:`, `livescript:`, `babel:`, `haml:`: not Slim 5 engines, not supported and no grammar rule (`README.md`). The server still accepts them (`server/src/slim_indent.rs` `SLIM_ENGINES`), see section 6
 - [x] Embedded engines with attributes (`scss class="x":`, `javascript nonce=content_security_policy_nonce:`) (`syntaxes/slim.tmLanguage.json` `embedded`, `test/sample.html.slim`)
 - [x] `#{}` inside `javascript:` / `css:` / `markdown:` blocks highlighted as Ruby, also inside the embedded grammar's strings (`syntaxes/slim.tmLanguage.json` `injections`, `test/sample.html.slim`; strings checked with a begin/end stub grammar, the snapshot stubs are single-token)
-- [ ] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js` shows `stub.source.*`). No VS Code or grammar packages exist on this machine, and loading them from a local install would make the snapshots machine-dependent; it needs the grammars vendored or added as a dev dependency
+- [x] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js`, from the pinned `tm-grammars` dev dependency, so snapshots are the same on every machine)
 
 ## 3. File types and language configuration
 
@@ -119,7 +119,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Unknown engine check accepts engines registered by the app (setting for extra engine names) (`rubyTemplates.slim.extraEngines`, `src/client.js` `initializationOptions.slim`)
 - [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/slim_indent.rs`): trimmed to Slim 5's list (`server/src/slim_indent.rs` `SLIM_ENGINES`)
 - [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)
-- [ ] Strict locals: missing/unknown locals passed to a Slim partial
+- [x] Strict locals: missing/unknown locals passed to a Slim partial (`server/src/main.rs` `strict_locals_mismatches`, language-independent)
 - [x] Settings to enable/disable each built-in Slim check (`rubyTemplates.slim.disabledDiagnostics`, codes in `server/src/slim_indent.rs` `code`)
 
 ## 7. Navigation, completion, hover
@@ -158,7 +158,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `test/e2e.js` opens `.slim` documents: diagnostics, definition, hover, completion, formatting (`test/e2e.js`)
 - [x] Slim formatter keeps the slim gem's compiled output, and is idempotent (`test/slim_format.js`, `test/format/`, `npm run test:format`)
 - [x] Sample lines for every `(?)` item in sections 1 and 2 (`test/sample.html.slim`, parsed with Slim 5.2.2 except the plugin-only `include` and `>` lines)
-- [ ] Fixture corpus of real-world Slim views with no false-positive diagnostics
+- [x] Fixture corpus of real-world Slim views with no false-positive diagnostics. Checked by hand with `--check` on the `app/views` of Mastodon, diaspora (Haml), Ruby Toolbox (Slim), Forem and rubygems.org (ERB): the false positives found (`=begin` blocks, multi-line `<% %>` with `if` on its own line, `key: if …`, gem view folders, `.rss`/`.atom`) are fixed with unit tests; the rest are real template bugs or app-registered formats (`:mobile`). The Slim formatter keeps the compiled output of all 86 Ruby Toolbox views, re-indented to 4 spaces first.
 
 ## 11. Docs
 

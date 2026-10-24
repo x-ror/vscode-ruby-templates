@@ -2,10 +2,17 @@
 
 use crate::erb;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{offset_to_position, warning};
+use crate::util::{coded, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
+
+/// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
+pub mod code {
+    pub const UNEXPECTED_CLOSE_TAG: &str = "unexpected-close-tag";
+    pub const MISMATCHED_CLOSE_TAG: &str = "mismatched-close-tag";
+    pub const UNCLOSED_ELEMENT: &str = "unclosed-element";
+}
 
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
@@ -161,6 +168,18 @@ pub fn elements(text: &str) -> Vec<Element> {
     elements
 }
 
+/// The open and close tag names of the element whose name holds byte `offset`, for linked editing.
+pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
+    elements(text).into_iter().find_map(|e| {
+        let open = (e.start + 1, e.start + 1 + e.name.len());
+        let close = (e.close_start + 2, e.close_start + 2 + e.name.len());
+        // An implied end (`<li>a<li>`) has no `</li>` to edit along.
+        let names = |(s, end): (usize, usize)| text.get(s..end).is_some_and(|n| n.eq_ignore_ascii_case(&e.name));
+        let holds = |(s, end): (usize, usize)| (s..=end).contains(&offset);
+        (names(open) && names(close) && (holds(open) || holds(close))).then_some([open, close])
+    })
+}
+
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
     let Some((html, events)) = split(text) else { return };
     let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
@@ -210,14 +229,17 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         if closing {
             match stack.last() {
                 None if partial => {}
-                None => out.push(warning(range(start, end), format!("Unexpected closing tag `</{name}>`"))),
+                None => {
+                    out.push(coded(warning(range(start, end), format!("Unexpected closing tag `</{name}>`")), code::UNEXPECTED_CLOSE_TAG))
+                }
                 Some(top) if top.name == name => {
                     elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
                     stack.pop();
                 }
                 Some(top) => {
                     let line = offset_to_position(text, top.start).line + 1;
-                    out.push(warning(range(start, end), format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name)));
+                    let message = format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name);
+                    out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
                     // ponytail: first mismatch only; recovery guesses would cascade into noise.
                     return;
                 }
@@ -243,7 +265,8 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         }
     }
     if blocks.is_empty() && !partial {
-        out.extend(stack.iter().map(|t| warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name))));
+        let unclosed = |t: &Tag| coded(warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name)), code::UNCLOSED_ELEMENT);
+        out.extend(stack.iter().map(unclosed));
     }
 }
 
@@ -327,6 +350,18 @@ mod tests {
         let pairs: Vec<(String, usize, usize)> =
             elements("<ul><li>a<li>b</li></ul><script>x</script>").into_iter().map(|e| (e.name, e.start, e.end)).collect();
         assert_eq!(pairs, [("li".to_string(), 9, 19), ("ul".to_string(), 0, 24), ("script".to_string(), 24, 42)]);
+    }
+
+    #[test]
+    fn linked_tag_names() {
+        let text = "<div class=\"a\"><% if x %><SPAN>b</span><% end %></div><ul><li>a<li>b</ul>";
+        let at = |needle: &str| text.find(needle).unwrap() + 1;
+        let names = |offset| linked_names(text, offset).map(|r| r.map(|(s, e)| &text[s..e]));
+        assert_eq!(names(at("div")), Some(["div", "div"]));
+        assert_eq!(names(text.rfind("div").unwrap()), Some(["div", "div"]));
+        assert_eq!(names(at("SPAN")), Some(["SPAN", "span"]));
+        assert_eq!(names(at("li")), None);
+        assert_eq!(names(at("class")), None);
     }
 
     #[test]

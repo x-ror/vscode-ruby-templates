@@ -410,6 +410,9 @@
       },
       "patterns": [
         {
+          "include": "#ruby-braces"
+        },
+        {
           "include": "source.ruby"
         }
       ]
@@ -470,6 +473,9 @@
               "begin": "\\{",
               "end": "\\}",
               "patterns": [
+                {
+                  "include": "#ruby-braces"
+                },
                 {
                   "include": "source.ruby"
                 }
@@ -688,6 +694,9 @@
       },
       "patterns": [
         {
+          "include": "#ruby-braces"
+        },
+        {
           "include": "source.ruby"
         }
       ]
@@ -718,6 +727,28 @@
         {
           "name": "constant.character.escape.haml",
           "match": "\\\\."
+        }
+      ]
+    },
+    "ruby-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.scope.begin.ruby"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.scope.end.ruby"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#ruby-braces"
+        },
+        {
+          "include": "source.ruby"
         }
       ]
     }

@@ -1,4 +1,6 @@
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
+};
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
@@ -33,10 +35,49 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
 }
 
+/// `%XX` escapes decoded; malformed escapes are kept as they are.
+pub fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Do `query`'s characters appear in `name` in order (`uscard` in `users/card`)?
+pub fn fuzzy_match(name: &str, query: &str) -> bool {
+    let mut chars = name.chars();
+    query.chars().all(|q| chars.any(|c| c == q))
+}
+
 /// Attach a stable `code` so users can filter or disable the diagnostic.
 pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
     d.code = Some(NumberOrString::String(code.into()));
     d
+}
+
+/// The string `code` of `d`, as set by `coded`.
+pub fn code(d: &Diagnostic) -> Option<&str> {
+    match &d.code {
+        Some(NumberOrString::String(code)) => Some(code),
+        _ => None,
+    }
+}
+
+pub fn completion_item(label: impl Into<String>, kind: CompletionItemKind, detail: impl Into<String>) -> CompletionItem {
+    CompletionItem { label: label.into(), kind: Some(kind), detail: Some(detail.into()), ..Default::default() }
 }
 
 /// Template indentation: spaces and tabs only (Haml and Slim don't indent with other Unicode whitespace).
@@ -97,6 +138,21 @@ pub fn byte_col(line: &str, character: u32) -> usize {
     line.len()
 }
 
+/// The byte offset in `text` and content of `pos`'s line, and `pos`'s byte column in it; past the end, an empty line.
+pub fn line_at(text: &str, pos: Position) -> (usize, &str, usize) {
+    let (line_start, line) = lines_with_offsets(text).nth(pos.line as usize).unwrap_or((text.len(), ""));
+    (line_start, line, byte_col(line, pos.character))
+}
+
+/// The identifier (`?`/`!` included) around byte `col` of `line`.
+pub fn word_at(line: &str, col: usize) -> &str {
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
+    let (before, after) = line.split_at(col.min(line.len()));
+    let start = before.trim_end_matches(is_word).len();
+    let end = line.len() - after.trim_start_matches(is_word).len();
+    &line[start..end]
+}
+
 /// Byte offset of an LSP position; a column past the line end clamps to it, a line past the end is `None`.
 pub fn position_to_offset(text: &str, pos: Position) -> Option<usize> {
     let mut line_start = 0;
@@ -128,6 +184,20 @@ mod tests {
     }
 
     #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("show.html%2Bphone.erb"), "show.html+phone.erb");
+        assert_eq!(percent_decode("%C3%A9%2"), "é%2");
+        assert_eq!(percent_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn fuzzy_matches_in_order() {
+        assert!(fuzzy_match("users/card", "uscard"));
+        assert!(fuzzy_match("users/card", ""));
+        assert!(!fuzzy_match("users/card", "cardus"));
+    }
+
+    #[test]
     fn applies_ranged_and_full_changes() {
         // 😀 is two UTF-16 units, é one; both are multibyte in UTF-8.
         let mut text = "é😀<%= a %>\r\nnext\n".to_string();
@@ -141,6 +211,25 @@ mod tests {
         assert_eq!(text, "é<%= user %>\nNext!\nend");
         apply_change(&mut text, edit(None, "fresh"));
         assert_eq!(text, "fresh");
+    }
+
+    #[test]
+    fn word_under_cursor() {
+        let cases = [
+            ("a user? b", 4, "user?"),
+            ("a user? b", 2, "user?"),
+            ("a user? b", 7, "user?"),
+            ("a user? b", 8, "b"),
+            ("a  b", 2, ""),
+            ("t(’greeting’)", 8, "greeting"),
+            ("— ok!", 5, "ok!"),
+            ("😀名前", 4, "名前"),
+            ("abc", 99, "abc"),
+            ("", 0, ""),
+        ];
+        for (line, col, word) in cases {
+            assert_eq!(word_at(line, col), word, "{line:?} at {col}");
+        }
     }
 
     #[test]

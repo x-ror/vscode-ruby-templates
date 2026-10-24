@@ -5,7 +5,7 @@ One extension for the three most common Ruby HTML template languages.
 ## Features
 
 **Syntax highlighting**
-- ERB: `<% %>`, `<%= %>`, `<%== %>`, `<%# %>`, `<%- -%>`, `<%%` literals, on top of the built-in HTML grammar.
+- ERB (also `.erubi` / `.erubis`): `<% %>`, `<%= %>`, `<%== %>`, `<%# %>`, `<%- -%>`, `<%%` literals, on top of the built-in HTML grammar.
 - Haml: `!!!`, `%tag.class#id`, `{ruby: hash}` / `(html attrs)` / `[object ref]` attributes, `- = != &= ~` lines, `-#` and `/` comments, `#{}` interpolation, filters (`:javascript`, `:css`, `:ruby`, `:scss`, `:sass`, `:coffee`, `:markdown`, `:erb`, …).
 - Slim: `doctype`, `tag.class#id`, inline `attr="x"` / `attr=ruby`, wrapped `()` `[]` `{}` attributes (also across lines) with boolean attrs, `*splat`, `li: a` inline tags, `a>` / `a<>` / `img/`, `|` / `'` text blocks and text continued under `p Some text`, `- = == =< =>` lines with `,` / `\` continuations, `/`, `/!` and `/[if IE]` comments, `#{}` and `#{{}}` interpolation, inline HTML `<div>` lines, `include` (`slim/include`), `>` text (`slim/smart`).
 - Slim embedded engines (attributes such as `javascript nonce=...:` allowed): `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:` and `erb:` use the target grammar, with `#{}` highlighted as Ruby in `javascript:`, `css:` and `markdown:`; `textile:`, `rdoc:`, `asciidoc:` and older engines (`less:`, `styl:`, `builder:`, …) are plain text with `#{}`. Slim 5 registers only `asciidoc`, `markdown`, `textile`, `rdoc`, `coffee`, `sass`, `scss`, `javascript`, `css` and `ruby`, so `typescript:`, `babel:`, `livescript:` and `haml:` get no engine rule.
@@ -20,12 +20,18 @@ One extension for the three most common Ruby HTML template languages.
 A small language server written in Rust (`server/`, built on tower-lsp and tree-sitter) adds what a TextMate grammar can't:
 
 - Diagnostics as you type:
-  - ERB: unclosed `<%` tags, blocks without `<% end %>`, stray `end`, `if`/`end` inside `<%= %>`.
+  - ERB: Ruby syntax errors inside tags (`<%= foo( %>`, `<% x = 1 y = 2 %>`), unclosed `<%` tags (also one left open before the next `<%`), `%>` inside a Ruby string (ERB ends the tag there), blocks without `<% end %>`, stray `end`, `if`/`end` inside `<%= %>`.
   - Haml / Slim: mixed tabs and spaces, inconsistent indentation, dedent to a level that doesn't exist, explicit `- end`, unclosed attribute brackets, unknown filters / embedded engines, nesting under a doctype, Haml illegal nesting (inline content + children).
+  - Each check has a code (shown in the Problems panel); turn one off with `rubyTemplates.erb.disabledDiagnostics`, `rubyTemplates.haml.disabledDiagnostics`, `rubyTemplates.slim.disabledDiagnostics` or (Jbuilder/Builder) `rubyTemplates.jbuilder.disabledDiagnostics`, e.g. `"rubyTemplates.erb.disabledDiagnostics": ["unclosed-element"]`.
+- Quick fix on an unresolved `render "dir/name"` warning: *Create partial `dir/_name.html.erb`* (the view's format and template language), in every language.
 - Go to definition (`F12` / Ctrl+click) on `render "users/card"`, `render partial: "row"`, `render template:`, `render layout:` and `render FooComponent.new` → opens the partial, template or component.
 - Hover on a render call shows the resolved file(s); hover on a Rails helper shows its signature. In Slim, hover on a line marker (`-`, `=`, `==`, `=<`, `=>`, `/`, `/!`, `/[if IE]`, `|`, `'`, `javascript:` and other engines) explains it.
-- Completion: partial names inside `render "…"`, form builder methods after `f.`, and Rails view helpers (`link_to`, `form_with`, `turbo_frame_tag`, `number_to_currency`, …) with snippet arguments. In Slim, helpers are offered only in Ruby (after `-`/`=`, in `attr=value`, `*splat`, `#{}`, `ruby:` bodies and continuation lines, not in text); HTML tag and embedded engine names (including `rubyTemplates.slim.extraEngines`) where a tag starts; common HTML attribute names where an attribute may start (`a hr`, `input(ty`).
+- Completion: partial names inside `render "…"`, form builder methods after `f.`, model attributes after `f.text_field :` (columns from `db/schema.rb` for the model of the enclosing `form_with model:`), Turbo Stream actions after `turbo_stream.`, Stimulus controller names in `data-controller` / `data-action` values, and Rails view helpers (`link_to`, `form_with`, `turbo_frame_tag`, `number_to_currency`, …) with snippet arguments. In Slim, helpers are offered only in Ruby (after `-`/`=`, in `attr=value`, `*splat`, `#{}`, `ruby:` bodies and continuation lines, not in text); HTML tag and embedded engine names (including `rubyTemplates.slim.extraEngines`) where a tag starts; common HTML attribute names where an attribute may start (`a hr`, `input(ty`).
 - Haml: completion of filter names after `:`, tags after `%`, attribute names in `{}` / `()` (including `data:` / `aria:` keys) and `succeed` / `precede` / `surround` / `preserve`; hover on filters and on `=`, `&=`, `!=`, `~`, `==`, `&`, `!`, `<`, `>`; an outline (`content_for`, forms, Turbo Frames, `render`, `#id` and landmark tags) and folding for multi-line attribute hashes and `|` blocks.
+- Jbuilder and Builder views (`*.json.jbuilder`, `*.xml.builder`) stay on the `ruby` language (so Ruby LSP keeps them) and get partial navigation, hover, links, completion and render warnings for `json.partial! "x"`, `json.array! @posts, partial: "posts/post", as: :post` and `xml << render(partial: "x")`.
+- Linked editing in HTML-host ERB (`.html.erb`, …): renaming `<div>` renames its `</div>` too, with ERB tags in between. Turn it on with `"[erb]": { "editor.linkedEditing": true }`.
+- *Go to Symbol in Workspace* (`Ctrl+T`) finds partials and templates by the name `render` uses: `uscard` → `users/card` (partial). It searches the workspace folders open at startup, plus the `app/views` of any open view (a folder added later counts once one of its views is open).
+- Find All References (`Shift+F12`) on a `render "…"`, or anywhere in a partial, lists the `render` calls that resolve to it in views, controllers, helpers and components (same search and limits as rename below).
 - Renaming or moving a partial in the Explorer updates the `render "…"` calls that point to it in ERB, Haml and Slim views. Renaming a folder under `app/views` re-qualifies the renders of the partials in it, and qualified `render partial: "dir/name"` calls in `app/controllers`, `app/helpers` and `app/components` are updated too. Limits: only the same `app` tree is searched (engines are not); a `render` is changed only when every variant Rails could pick for it (`_card.html.erb`, `_card.html+phone.erb`, …) moves to the same new name; moving a partial directly into `app/views` changes nothing; `render` text inside a Ruby string, comment or template text is left alone.
 - Slim formatting (*Format Document*): re-indents each Slim line to the editor's tab size in spaces, moves text blocks, engine bodies and continuation lines with their line (keeping their relative indentation), and strips trailing whitespace except where it is part of the output (`|`/`'` text, inline text, quoted attribute values, engine bodies). A file Slim would reject (or that uses `slim/smart` `>` lines) is left unchanged, and so is any file when the editor indents with tabs (`editor.insertSpaces: false`): the formatter only writes spaces. A byte order mark and whitespace-only lines at the end of the file are kept, since Slim compiles them. Format on save: `"[slim]": { "editor.formatOnSave": true }`. The formatter is registered for Slim and Skim only, through dynamic registration, so ERB and Haml keep their own formatters (clients without dynamic registration get no formatter).
 - `ruby-templates-ls --check file.slim …` runs the same diagnostics from the command line (exit code 1 on errors), handy for CI. `ruby-templates-ls --format file.slim` prints the file formatted with 2 spaces (exit code 1 if it can't be formatted safely).
@@ -41,6 +47,7 @@ The binary for your platform is bundled in `bin/<platform>/`. To build it yourse
 | Toggle Slim Line | `Ctrl+Alt+E` | Cycles the marker of each selected line: `-` → `=` → `==` → `/`; lines inside engine, comment and text blocks are left alone |
 | Wrap Selection in Slim Output | `Ctrl+Alt+W` | A whole plain line becomes `= foo`; part of a line, or a line starting with a marker, `#{foo}` |
 | Extract Selection to Slim Partial | | Moves the selected lines (dedented) to `_name.<format>.slim` (the file's format, else `html`) and leaves `= render "name"`; `dir/name` goes under `app/views/dir/` |
+| Switch to Related File | | Opens the view's other formats (`welcome.html.erb` ↔ `welcome.text.erb`, `show.json.jbuilder`) or a ViewComponent's class ↔ template (also in its sidecar folder); a list when there are several |
 | Preview Rendered HTML | `Ctrl+Alt+P` | Renders the current file with `slimrb` / `haml` / `erb` in a side panel, refreshes on save |
 | Show Compiled Ruby Source | | Shows the Ruby code the engine generates (great for debugging Slim/Haml) |
 | Toggle Haml Line Prefix | `Ctrl+Alt+E` | Cycles the current line(s) in Haml: `- x` → `= x` → `-# x` |
@@ -59,7 +66,13 @@ gem install html2haml          # ERB/HTML → Haml
 gem install haml_to_erb        # Haml → ERB
 gem install html2slim haml2slim  # ERB → Slim, Haml → Slim
 gem install haml_lint          # Haml lint diagnostics, haml-lint formatter
+gem install htmlbeautifier     # or erb-formatter: ERB formatting
+gem install erb_lint           # ERB lint diagnostics
 ```
+
+**erb_lint**: set `rubyTemplates.erbLint.enabled` to show `erb_lint`'s offenses (your `.erb_lint.yml`) on open and save; the editor's unsaved text is what gets linted. `rubyTemplates.commands.erbLint` sets the executable.
+
+**ERB formatting**: set `rubyTemplates.erb.formatter` to `htmlbeautifier` (`gem install htmlbeautifier`; re-indents to the editor's tab size) or `erb-format` (`gem install erb-formatter`; re-flows to a line width) and *Format Document* / format on save run it (`"[erb]": { "editor.formatOnSave": true }`). The default `none` leaves ERB formatting to other extensions.
 
 **haml-lint**: when `haml-lint` is installed, Haml files are linted on open and save and its offenses show up as diagnostics (`rubyTemplates.hamlLint.enabled`, `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`). Set `rubyTemplates.haml.formatter` to `haml-lint` to make *Format Document* run `haml-lint --auto-correct-only`; note that it applies your RuboCop config's safe corrections too, which can rewrite or drop Ruby code (for example a useless assignment).
 
@@ -71,6 +84,8 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 
 - Emmet works in `.html.erb` out of the box (the extension defaults `"emmet.includeLanguages": { "erb": "html" }`). VS Code's Emmet supports the `slim` id natively and expands to Slim syntax (`ul>li` → `ul` / `  li`); the extension maps `skim` to it too.
 - Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`, …) open as Slim; the void-element check (`img` with children) only runs for HTML hosts (`.html.slim`, `.html+variant.slim`, `.turbo_stream.slim` and bare `.slim`).
+- Partials resolve by Rails' default formats; a format an app registers itself (`Mime::Type.register "text/html", :mobile`) is read as part of the name, so `_card.mobile.haml` is not found for `render "card"`. Renders into a gem's view folder (`devise/…`, `spree/…`) aren't flagged when the gem is in `Gemfile.lock`.
+- Rails generator templates (`lib/templates/{erb,haml,slim}/**/*.tt`, `lib/generators/**/templates/**/*.{erb,haml,slim}.tt`) open in their template language; diagnostics, formatting and linters skip them because the generator's own ERB is mixed in.
 - Ruby LSP (Shopify) and this extension both register the `erb` language id, so they work together.
 - If you also have another Slim or Haml extension installed, VS Code picks one grammar; disable the other to avoid surprises.
 - Slim options set per app are not reflected in highlighting: custom `:shortcut`s (`&text`, `@role`), custom `attr_list_delims` / `code_attr_delims`, smart text's implicit text lines (only explicit `>` lines are recognized) and logic-less mode (`- section` / `= var` still show as Ruby). The translator plugin (`slim/translator`) changes nothing in the syntax, so it needs no support.
@@ -80,12 +95,13 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 ```sh
 npm install           # also enables .githooks (pre-commit formats staged JS and Rust)
 npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
-npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__ (UPDATE=1 rewrites them)
+npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
 npm run test:server   # cargo test + diagnostics check on the samples
 npm run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
 npm run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
 node test/e2e.js      # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
 npm run test:slim     # Slim editing helpers and onEnterRules
+xvfb-run -a npm run test:vscode  # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/)
 npm run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
 npm run package       # build the .vsix
 ```

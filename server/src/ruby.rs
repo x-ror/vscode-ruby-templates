@@ -7,10 +7,13 @@ use std::sync::LazyLock;
 static STRINGS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[A-Za-z_]\w*[?!]?|\d+|[^\w\s]").unwrap());
+// `=begin` … `=end` at line starts; kaminari's generated partials open with one.
+static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?ms)^=begin\b.*?(?:^=end\b[^\n]*|\z)").unwrap());
 
 /// Strip strings and comments so keywords inside them don't count.
 pub fn strip(code: &str) -> String {
-    let no_strings = STRINGS.replace_all(code, "\"\"");
+    let code = BLOCK_COMMENT.replace_all(code, "");
+    let no_strings = STRINGS.replace_all(&code, "\"\"");
     // Drop `# comment` to end of line, but keep `#{interpolation}`.
     let mut out = String::with_capacity(no_strings.len());
     for line in no_strings.split_inclusive('\n') {
@@ -40,14 +43,31 @@ pub enum CodeEnd {
 
 pub fn code_end(code: &str) -> CodeEnd {
     let mut quote = None;
+    // `"…#{` re-enters code: the enclosing strings and the brace depth inside each interpolation.
+    let mut interpolations: Vec<(char, usize)> = Vec::new();
     let mut chars = code.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some(_), '\\') => {
                 chars.next();
             }
+            (Some('"'), '#') if chars.peek() == Some(&'{') => {
+                chars.next();
+                interpolations.push(('"', 0));
+                quote = None;
+            }
             (Some(q), c) if c == q => quote = None,
             (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => {
+                if let Some((_, depth)) = interpolations.last_mut() {
+                    *depth += 1;
+                }
+            }
+            (None, '}') => match interpolations.last_mut() {
+                Some((_, 0)) => quote = interpolations.pop().map(|(q, _)| q),
+                Some((_, depth)) => *depth -= 1,
+                None => {}
+            },
             (None, '#') if chars.peek() != Some(&'{') => return CodeEnd::Comment,
             _ => {}
         }
@@ -83,7 +103,8 @@ const PREFIX_OK: &[&str] =
 /// Net block effect of a Ruby snippet. `end` count and opener count are also returned.
 pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
     let stripped = strip(code);
-    let tokens: Vec<&str> = TOKEN.find_iter(&stripped).map(|m| m.as_str()).collect();
+    let matches: Vec<regex::Match> = TOKEN.find_iter(&stripped).collect();
+    let tokens: Vec<&str> = matches.iter().map(|m| m.as_str()).collect();
     let mut opens = 0usize;
     let mut closes = 0usize;
     let mut has_continue = false;
@@ -92,10 +113,15 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
     for (i, &tok) in tokens.iter().enumerate() {
         let prev = if i > 0 { tokens[i - 1] } else { "" };
         let next = tokens.get(i + 1).copied().unwrap_or("");
+        // `:if` and `if:` touch their colon; `actors: if x` is a hash value.
+        let symbol = prev == ":" && matches[i - 1].end() == matches[i].start();
+        let key = next == ":" && matches[i].end() == matches[i + 1].start();
         // `obj.class`, `foo.if`, `class: "x"`, `:if` are not keywords.
-        if prev == "." || prev == "&." || (next == ":") || prev == ":" || prev == "def" {
+        if prev == "." || prev == "&." || key || symbol || prev == "def" {
             continue;
         }
+        // A line break ends a statement unless the line ends in `\`.
+        let new_line = i > 0 && prev != "\\" && stripped[matches[i - 1].end()..matches[i].start()].contains('\n');
         match tok {
             "end" => closes += 1,
             "do" => {
@@ -107,7 +133,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
             }
             "if" | "unless" | "while" | "until" => {
                 // Modifier form (`x if y`) does not open a block.
-                let statement_start = i == 0 || PREFIX_OK.contains(&prev);
+                let statement_start = i == 0 || new_line || PREFIX_OK.contains(&prev);
                 if statement_start {
                     opens += 1;
                     if tok == "while" || tok == "until" {
@@ -119,6 +145,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
                 opens += 1;
                 loop_opened = true;
             }
+            "def" if endless_def(&tokens, &matches, i) => {}
             t if OPENERS.contains(&t) => opens += 1,
             t if CONTINUERS.contains(&t) && i == 0 => has_continue = true,
             _ => {}
@@ -135,6 +162,32 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
         BlockEffect::Neutral
     };
     (effect, opens, closes)
+}
+
+/// `def f = 1`, `def f(a) = a`: an endless method has no `end`. A setter's `=` touches its name (`def x=(v)`).
+fn endless_def(tokens: &[&str], matches: &[regex::Match], def: usize) -> bool {
+    let name = def + 1;
+    // `def self.f` / `def obj.f`
+    let name = if tokens.get(name + 1) == Some(&".") { name + 2 } else { name };
+    let Some(name_match) = matches.get(name) else { return false };
+    let mut next = name + 1;
+    let has_params = tokens.get(next) == Some(&"(");
+    if has_params {
+        let mut depth = 0usize;
+        while let Some(&t) = tokens.get(next) {
+            depth = match t {
+                "(" => depth + 1,
+                ")" => depth - 1,
+                _ => depth,
+            };
+            next += 1;
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    let Some(eq) = matches.get(next).filter(|m| m.as_str() == "=") else { return false };
+    has_params || eq.start() > name_match.end()
 }
 
 /// Does the snippet end with a block that expects nested template content (`do`, `do |x|`)?
@@ -154,6 +207,42 @@ pub fn ends_with_block(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endless_methods_open_nothing() {
+        for code in ["def f = 1", "def f(a) = a + 1", "def self.f = 1", "def f(*, **, &) = g(*, **, &)"] {
+            assert_eq!(analyze(code).0, BlockEffect::Neutral, "{code}");
+        }
+        for code in ["def x=(v)", "def f(a)", "def ==(o)", "def f"] {
+            assert_eq!(analyze(code).0, BlockEffect::Open(1), "{code}");
+        }
+    }
+
+    #[test]
+    fn interpolation_is_code() {
+        assert_eq!(code_end("html = \"#{"), CodeEnd::Code);
+        assert_eq!(code_end("x = \"#{a} b"), CodeEnd::String);
+        assert_eq!(code_end("x = \"#{ {a: 1}[:a] }"), CodeEnd::String);
+        assert_eq!(code_end("x = '#{"), CodeEnd::String);
+        assert_eq!(code_end("x = \"#{y # note"), CodeEnd::Comment);
+    }
+
+    #[test]
+    fn line_breaks_start_statements() {
+        assert_eq!(analyze("\nroles = []\nif admin\n  roles = [1]\nend\n").0, BlockEffect::Neutral);
+        assert_eq!(analyze("tags = list\nif flare").0, BlockEffect::Open(1));
+        assert_eq!(analyze("x = long_call \\\n  if y").0, BlockEffect::Neutral);
+        assert_eq!(analyze("t(\"k\",\n  actors: if one\n    a\n  else\n    b\n  end)").0, BlockEffect::Neutral);
+        assert_eq!(analyze("link_to x, if: y").0, BlockEffect::Neutral);
+        assert_eq!(analyze("validate :x, :if => :y").0, BlockEffect::Neutral);
+    }
+
+    #[test]
+    fn block_comments_hide_keywords() {
+        assert_eq!(analyze("\n=begin\nfor each page\n- if any\n=end\n").0, BlockEffect::Neutral);
+        assert_eq!(analyze("=begin\nunclosed for").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = 1 # =begin\ny.each do").0, BlockEffect::Open(1));
+    }
+
     #[test]
     fn basics() {
         assert_eq!(analyze("@users.each do |u|").0, BlockEffect::Open(1));

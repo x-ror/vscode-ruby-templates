@@ -57,13 +57,20 @@ async function doStart(context, output) {
     { command, transport: TransportKind.stdio },
     {
       // Scheme-less selectors also match git diff sides and chat code blocks, duplicating diagnostics.
-      documentSelector:
-        context.extension.packageJSON.contributes.languages.flatMap(
-          ({ id }) => [
+      // `ruby` is contributed only for Jbuilder/Builder views; other Ruby files are not templates.
+      documentSelector: [
+        ...context.extension.packageJSON.contributes.languages
+          .filter(({ id }) => id !== "ruby")
+          .flatMap(({ id }) => [
             { scheme: "file", language: id },
             { scheme: "untitled", language: id },
-          ],
-        ),
+          ]),
+        {
+          scheme: "file",
+          language: "ruby",
+          pattern: "**/*.{jbuilder,builder}",
+        },
+      ],
       outputChannel: output,
       // Our catch below reports the failure; returning false stops the client from also showing its own.
       initializationFailedHandler: () => false,
@@ -71,6 +78,13 @@ async function doStart(context, output) {
         slim: {
           extraEngines: config.get("slim.extraEngines", []),
           disabledDiagnostics: config.get("slim.disabledDiagnostics", []),
+        },
+        erb: { disabledDiagnostics: config.get("erb.disabledDiagnostics", []) },
+        haml: {
+          disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
+        },
+        jbuilder: {
+          disabledDiagnostics: config.get("jbuilder.disabledDiagnostics", []),
         },
       },
       synchronize: { fileEvents: watchers },

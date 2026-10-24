@@ -4,14 +4,17 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { isDeepStrictEqual } from "util";
-const bin = path.join(
-  import.meta.dirname,
-  "..",
-  "server",
-  "target",
-  "release",
-  "ruby-templates-ls",
-);
+// CI builds per target (`server/target/<triple>/release`) and passes the binary in.
+const bin =
+  process.env.RUBY_TEMPLATES_LS ??
+  path.join(
+    import.meta.dirname,
+    "..",
+    "server",
+    "target",
+    "release",
+    "ruby-templates-ls",
+  );
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-"));
 const views = path.join(root, "app", "views");
 fs.mkdirSync(path.join(views, "users"), { recursive: true });
@@ -30,6 +33,10 @@ fs.writeFileSync(
   "class BadgeComponent; end\n",
 );
 fs.writeFileSync(path.join(views, "users", "_user.html.erb"), "<p></p>\n");
+fs.writeFileSync(
+  path.join(views, "users", "_user.json.jbuilder"),
+  "json.name user.name\n",
+);
 fs.mkdirSync(path.join(root, "app", "javascript", "controllers"), {
   recursive: true,
 });
@@ -39,6 +46,11 @@ fs.writeFileSync(
 );
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
+fs.mkdirSync(path.join(root, "db"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "db", "schema.rb"),
+  'create_table "users", force: :cascade do |t|\n  t.string "name"\n  t.string "nickname"\n  t.string "email"\nend\n',
+);
 fs.mkdirSync(path.join(root, "config", "locales"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "config", "locales", "en.yml"),
@@ -331,7 +343,10 @@ const check = (label, actual, expected) => {
         )
       : "none";
   };
+  // Lines 4 and 13 are tags left open for the completion checks; each swallows the tags up to the next `%>`.
   check("diagnostics", diagnostics(uri), [
+    "4: Unclosed ERB tag: missing `%>` before the next `<%`",
+    "13: Unclosed ERB tag: missing `%>` before the next `<%`",
     "7: Partial `shared/missing` not found",
   ]);
 
@@ -603,6 +618,157 @@ const check = (label, actual, expected) => {
       },
     },
     true,
+  );
+  const missing = {
+    start: { line: 6, character: 12 },
+    end: { line: 6, character: 26 },
+  };
+  const actions = await send("textDocument/codeAction", {
+    textDocument: { uri },
+    range: missing,
+    context: {
+      diagnostics: [
+        { range: missing, code: "unresolved-render", message: "not found" },
+      ],
+    },
+  });
+  check(
+    "codeAction create partial",
+    actions.result?.map((a) => [
+      a.title,
+      rel(a.edit.documentChanges[0].uri),
+      a.edit.documentChanges[0].kind,
+    ]),
+    [
+      [
+        "Create partial `shared/_missing.html.erb`",
+        "/app/views/shared/_missing.html.erb",
+        "create",
+      ],
+    ],
+  );
+  const symbols = await send("workspace/symbol", { query: "shfoot" });
+  check(
+    "workspace/symbol shfoot",
+    symbols.result?.map((s) => `${s.name} ${s.containerName}`),
+    ["shared/footer partial"],
+  );
+  const linked = await req("textDocument/linkedEditingRange", uri, 8, 2);
+  check(
+    "linkedEditingRange nav",
+    linked.result?.ranges.map((r) => `${r.start.line}:${r.start.character}`),
+    ["8:1", "10:2"],
+  );
+  const refs = await send("textDocument/references", {
+    textDocument: { uri },
+    position: { line: 1, character: 16 },
+    context: { includeDeclaration: false },
+  });
+  check(
+    "references shared/footer",
+    refs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
+    ["/app/views/users/index.html.erb 1", "/app/views/users/show.html.haml 3"],
+  );
+  const streamUri =
+    "file://" + path.join(views, "users", "create.turbo_stream.erb");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: streamUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= turbo_stream.rep %>\n",
+      },
+    },
+    true,
+  );
+  check(
+    "turbo_stream. completion",
+    labels(await req("textDocument/completion", streamUri, 0, 20)),
+    ["replace", "replace_all"],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 2 },
+      contentChanges: [{ text: '<div data-action="click->he">\n' }],
+    },
+    true,
+  );
+  check(
+    "stimulus completion",
+    labels(await req("textDocument/completion", streamUri, 0, 27)),
+    ["hello"],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 3 },
+      contentChanges: [
+        { text: '<p>render "users/card"</p> <%= render "users/card" %>\n' },
+      ],
+    },
+    true,
+  );
+  const streamLinks = await send("textDocument/documentLink", {
+    textDocument: { uri: streamUri },
+  });
+  check(
+    "documentLink skips prose",
+    streamLinks.result?.map((l) => l.range.start.character),
+    [39],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 4 },
+      contentChanges: [
+        {
+          text: "<%= form_with model: @user do |f| %>\n  <%= f.text_field :n\n",
+        },
+      ],
+    },
+    true,
+  );
+  check(
+    "schema attribute completion",
+    labels(await req("textDocument/completion", streamUri, 1, 21)),
+    ["name", "nickname"],
+  );
+  const jbuilderUri =
+    "file://" + path.join(views, "users", "index.json.jbuilder");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: jbuilderUri,
+        languageId: "ruby",
+        version: 1,
+        text: 'json.array! @users, partial: "users/user", as: :user\njson.partial! "users/user", user: @user\n',
+      },
+    },
+    true,
+  );
+  check(
+    "jbuilder array! partial:",
+    targets(await req("textDocument/definition", jbuilderUri, 0, 33)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "jbuilder partial!",
+    targets(await req("textDocument/definition", jbuilderUri, 1, 18)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "jbuilder completion",
+    labels(
+      await send("textDocument/completion", {
+        textDocument: { uri: jbuilderUri },
+        position: { line: 1, character: 21 },
+      }),
+    ),
+    ["users/user"],
   );
   const card = path.join(views, "users", "_card.html.slim");
   const renamed = await send("workspace/willRenameFiles", {

@@ -1,27 +1,43 @@
 "{"
-   "{"                         
+   "{"                         meta.structure.dictionary.json > punctuation.definition.dictionary.begin.json
 "  \"name\": \"<%= @user.name %>\","
-   "\"name\""                  stub.source.json
-   ":"                         stub.source.json
-   "\"<%= @user.name %>\""     stub.source.json
-   ","                         stub.source.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "name"                      meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.begin.json
+   "<%="                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "user"                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "."                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "name"                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "%>"                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.end.json
+   ","                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.pair.json
 "  <% if @admin %>\"admin\": true, <% end %>"
-   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "if"                        meta.embedded.block > source.ruby > stub.source.ruby
-   "@admin"                    meta.embedded.block > source.ruby > stub.source.ruby
-   "%>"                        meta.embedded.block > punctuation.section.embedded.end
-   "\"admin\""                 stub.source.json
-   ":"                         stub.source.json
-   "true,"                     stub.source.json
-   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
-   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+   "<%"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.begin
+   "if"                        meta.structure.dictionary.json > meta.embedded.block > source.ruby > keyword.control.ruby
+   "@"                         meta.structure.dictionary.json > meta.embedded.block > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "admin"                     meta.structure.dictionary.json > meta.embedded.block > source.ruby > variable.other.readwrite.instance.ruby
+   "%>"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.end
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "admin"                     meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "true"                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > constant.language.json
+   ","                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.pair.json
+   "<%"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.begin
+   "end"                       meta.structure.dictionary.json > meta.embedded.block > source.ruby > keyword.control.ruby
+   "%>"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.end
 "  \"count\": <%= @count -%>"
-   "\"count\""                 stub.source.json
-   ":"                         stub.source.json
-   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
-   "@count"                    meta.embedded.line > source.ruby > stub.source.ruby
-   "-%>"                       meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "count"                     meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "<%="                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "count"                     meta.structure.dictionary.json > meta.structure.dictionary.value.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "-%>"                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > meta.embedded.line > punctuation.section.embedded.end
 "}"
-   "}"                         
+   "}"                         meta.structure.dictionary.json > punctuation.definition.dictionary.end.json
 ""

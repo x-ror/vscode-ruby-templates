@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
-static RENDER_STR: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
+static RENDER_STR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
+});
+// Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
+// ponytail: stops at any `#`, so a `partial:` after `"#x"` or an interpolation is missed (no ref, no warning).
+static JSON_PARTIAL_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"json\.\w+!?[\s(][^#]*?\bpartial\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
 // After a bare `render "y", layout: …` it's just a local.
 static RENDER_LAYOUT_KEY: LazyLock<Regex> = LazyLock::new(|| {
@@ -25,6 +30,15 @@ pub enum RenderKind {
     Template,
 }
 
+impl RenderKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            RenderKind::Partial => "Partial",
+            RenderKind::Template => "Template",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderRef {
     pub kind: RenderKind,
@@ -32,6 +46,8 @@ pub struct RenderRef {
     /// Byte range of the string literal (without quotes) inside the line.
     pub start: usize,
     pub end: usize,
+    /// Byte start of the call (`render`, `json.partial!`, `json.array!`) the string belongs to.
+    pub call: usize,
     /// The `layout:` of a `render partial:|template:` call; it receives that call's locals.
     pub from_layout: bool,
 }
@@ -40,18 +56,21 @@ pub struct RenderRef {
 /// ActionView 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
-    let render_ref = |kind: Option<regex::Match>, m: regex::Match, from_layout| {
+    let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
         let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
-        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), from_layout }
+        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), call: call.start(), from_layout }
     };
-    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(1), cap.get(2)?, false)));
+    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(2)?, false)));
     // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
     let layouts = RENDER_LAYOUT_KEY
         .captures_iter(line)
         .filter(|cap| split_args(&cap[2]).is_some())
-        .filter_map(|cap| Some(render_ref(cap.get(1), cap.get(3)?, true)));
-    let mut refs: Vec<RenderRef> = calls.chain(layouts).collect();
+        .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(3)?, true)));
+    let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, None, cap.get(1)?, false)));
+    let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(json).collect();
     refs.sort_by_key(|r| r.start);
+    // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
+    refs.dedup_by_key(|r| r.start);
     refs
 }
 
@@ -96,7 +115,8 @@ pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-const KNOWN_FORMATS: [&str; 28] = [
+// `Mime::SET` of a fresh Rails app; formats an app registers itself (`Mime::Type.register "text/html", :mobile`) are unknown.
+const KNOWN_FORMATS: [&str; 35] = [
     "html",
     "text",
     "js",
@@ -123,7 +143,14 @@ const KNOWN_FORMATS: [&str; 28] = [
     "gzip",
     "json",
     "xml",
+    "rss",
+    "atom",
     "yaml",
+    "m4a",
+    "otf",
+    "ttf",
+    "woff",
+    "woff2",
     "turbo_stream",
 ];
 
@@ -166,6 +193,30 @@ pub fn template_format(path: &Path) -> Option<&str> {
     template_suffix(fname, template_stem(fname))?
 }
 
+/// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>.<ext>` in the view's format
+/// (variant dropped) and template language, so the view finds it.
+pub fn new_template_path(current: &Path, r: &RenderRef) -> Option<PathBuf> {
+    let (dir, base) = r.name.rsplit_once('/')?;
+    if base.is_empty() || dir.split('/').any(|part| part == "..") {
+        return None;
+    }
+    let ext = current.extension()?.to_str()?;
+    let prefix = if r.kind == RenderKind::Partial { "_" } else { "" };
+    let file = match template_format(current) {
+        Some(format) => format!("{prefix}{base}.{format}.{ext}"),
+        None => format!("{prefix}{base}.{ext}"),
+    };
+    Some(views_root(current)?.join(dir).join(file))
+}
+
+/// The `resolve` results Rails would actually pick from: it stops at the first folder with a match, so later
+/// ones (`application/`) are shadowed.
+pub fn first_folder_only(mut found: Vec<PathBuf>) -> Vec<PathBuf> {
+    let first = found.first().and_then(|f| f.parent()).map(Path::to_path_buf);
+    found.retain(|f| f.parent() == first.as_deref());
+    found
+}
+
 /// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
 /// format-less files match any.
 // ponytail: turbo_stream gets the JS fallback too, so its HTML partials aren't flagged unresolved.
@@ -200,7 +251,7 @@ fn ends_with_consonant_y(word: &str) -> bool {
     word.strip_suffix('y').and_then(|w| w.chars().last()).is_some_and(|c| !"aeiou".contains(c))
 }
 
-fn pluralize(word: &str) -> String {
+pub fn pluralize(word: &str) -> String {
     if uncountable(word) {
         return word.to_string();
     }
@@ -216,7 +267,7 @@ fn pluralize(word: &str) -> String {
     format!("{word}s")
 }
 
-fn singularize(word: &str) -> String {
+pub fn singularize(word: &str) -> String {
     if uncountable(word) {
         return word.to_string();
     }
@@ -256,6 +307,27 @@ pub fn views_root(file: &Path) -> Option<PathBuf> {
 
 pub fn app_root(file: &Path) -> Option<PathBuf> {
     views_root(file).and_then(|v| v.parent().map(|p| p.to_path_buf()))
+}
+
+// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
+// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
+// neither is knowable without reading controllers or the bundle.
+pub fn in_app_views_dir(views: &Path, name: &str) -> bool {
+    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
+}
+
+/// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
+/// name (`devise/`, `spree/` from `spree_core`), and the app overrides only some of them, so the rest aren't on disk.
+pub fn gem_view(views: &Path, name: &str) -> bool {
+    let Some((top, _)) = name.split_once('/') else { return false };
+    let Some(lock) = views.parent().and_then(Path::parent).and_then(|root| std::fs::read_to_string(root.join("Gemfile.lock")).ok()) else {
+        return false;
+    };
+    // Gemfile.lock lists each resolved gem as `    name (version)` under `specs:`.
+    lock.lines()
+        .filter_map(|l| l.strip_prefix("    ")?.split_once(" ("))
+        .map(|(gem, _)| gem)
+        .any(|gem| gem == top || gem.strip_prefix(top).is_some_and(|rest| rest.starts_with(['_', '-'])))
 }
 
 /// All template files matching `dir/<prefix>name.*`.
@@ -325,7 +397,7 @@ pub fn resolve_component(current: &Path, name: &str) -> Vec<PathBuf> {
     out
 }
 
-fn snake_case(s: &str) -> String {
+pub fn snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
         if ch.is_uppercase() {
@@ -361,10 +433,18 @@ pub fn render_candidates(current: &Path, kind: RenderKind, files: &[PathBuf]) ->
     let same_dir =
         current.parent().filter(|_| partial).into_iter().flat_map(|d| templates_in(d, files, true)).filter(|(name, _)| !name.contains('/'));
     let nested = views.iter().flat_map(|v| templates_in(v, files, partial)).filter(|(name, _)| name.contains('/'));
-    let mut out: Vec<_> = same_dir.chain(nested).collect();
+    // Same filter as `resolve`: a name it would not find isn't worth offering.
+    let mut out: Vec<_> = same_dir.chain(nested).filter(|(_, p)| renders_format(current, p)).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out.dedup_by(|a, b| a.0 == b.0);
     out
+}
+
+/// Every partial and template among `files` under `views`, by the name `render` uses for it.
+pub fn named_templates(views: &Path, files: &[PathBuf]) -> Vec<(String, RenderKind, PathBuf)> {
+    let partials = templates_in(views, files, true).map(|(name, p)| (name, RenderKind::Partial, p));
+    let templates = templates_in(views, files, false).map(|(name, p)| (name, RenderKind::Template, p));
+    partials.chain(templates).collect()
 }
 
 /// Partials (`_x.*`) or non-partial templates among `files` under `root`, named `dir/x` relative to `root`.
@@ -393,7 +473,7 @@ fn template_name(p: &Path, partial: bool) -> Option<String> {
 pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
     static OPEN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(concat!(
-            r#"(?:render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
+            r#"(?:(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
             r#"|render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
         ))
         .unwrap()
@@ -430,6 +510,10 @@ pub fn strict_locals(text: &str) -> Option<StrictLocals> {
         }
     }
     Some(sig)
+}
+
+pub fn file_strict_locals(file: &Path) -> Option<StrictLocals> {
+    strict_locals(&std::fs::read_to_string(file).ok()?)
 }
 
 /// `name: value` → `(name, value)`; `value` is empty for `name:`.
@@ -484,7 +568,12 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
         _ => return None,
     };
     let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
+    let jbuilder = line[r.call..].starts_with("json.");
     let pairs = match (options_form, args) {
+        // Jbuilder reads a lone `locals:` as the locals hash, like the options form.
+        (false, [locals]) if jbuilder && keyword_arg(locals).is_some_and(|(name, _)| name == "locals") => {
+            split_args(keyword_arg(locals)?.1.strip_prefix('{')?.strip_suffix('}')?)?
+        }
         (false, args) => args.to_vec(),
         (true, []) => vec![],
         (true, [locals]) => match keyword_arg(locals)? {
@@ -493,12 +582,52 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
         },
         (true, _) => return None,
     };
-    pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect()
+    let names: Vec<&str> = pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect::<Option<_>>()?;
+    // Jbuilder takes these out of the locals; `as:` names the local the collection items arrive in.
+    if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
+        return None;
+    }
+    Some(names)
 }
+
+const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn feed_formats() {
+        assert_eq!(template_format(Path::new("index.rss.builder")), Some("rss"));
+        assert_eq!(template_format(Path::new("feed.atom.builder")), Some("atom"));
+        assert_eq!(template_stem("_entry.atom.builder"), "_entry");
+    }
+
+    #[test]
+    fn new_template_paths() {
+        let views = Path::new("/r/app/views");
+        let path = |current: &str, line: &str| new_template_path(&views.join(current), &render_refs(line)[0]);
+        assert_eq!(path("users/show.html+phone.slim", r#"= render "shared/card""#), Some(views.join("shared/_card.html.slim")));
+        assert_eq!(path("users/index.json.jbuilder", r#"json.partial! "users/user""#), Some(views.join("users/_user.json.jbuilder")));
+        assert_eq!(path("users/show.de.erb", r#"render template: "a/b""#), Some(views.join("a/b.erb")));
+        assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
+        assert_eq!(path("users/show.html.erb", r#"render "../../config/x""#), None);
+        assert_eq!(path("users/show.html.erb", r#"render "shared/""#), None);
+        assert_eq!(new_template_path(Path::new("/tmp/x.html.erb"), &render_refs(r#"render "a/b""#)[0]), None);
+    }
+
+    #[test]
+    fn jbuilder_refs() {
+        let names = |line: &str| render_refs(line).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"json.partial! "users/user", user: u"#), ["users/user"]);
+        assert_eq!(names(r#"json.partial!("users/user")"#), ["users/user"]);
+        assert_eq!(names(r#"json.partial! partial: 'users/user', locals: { user: u }"#), ["users/user"]);
+        assert_eq!(names(r#"json.array! @users, partial: "users/user", as: :user"#), ["users/user"]);
+        assert_eq!(names(r#"json.array!(@users, :partial => "users/user", :as => :user)"#), ["users/user"]);
+        assert_eq!(names(r#"json.comments @post.comments, partial: "comments/comment", as: :comment"#), ["comments/comment"]);
+        assert_eq!(names(r#"xml << render(partial: "items/item", locals: { i: i })"#), ["items/item"]);
+        assert_eq!(names(r#"<%= render partial: "x" %>"#), ["x"]);
+    }
+
     #[test]
     fn refs() {
         let l = r#"<%= render "users/card", user: u %>"#;
@@ -517,6 +646,8 @@ mod tests {
         assert!(render_string_prefix(r#"render partial: "x", locals: { layout: "ad"#, 41).is_none());
         assert!(render_string_prefix(r#"render "x", layout: "ad"#, 23).is_none());
         assert!(render_string_prefix(r#"page_layout "ad"#, 15).is_none());
+        assert_eq!(render_string_prefix(r#"json.partial! "po"#, 17).unwrap(), (RenderKind::Partial, "po".to_string()));
+        assert_eq!(render_string_prefix(r#"json.partial! partial: 'po"#, 26).unwrap(), (RenderKind::Partial, "po".to_string()));
         assert_eq!(snake_case("CardComponent"), "card_component");
         let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.kind, r.name)).collect::<Vec<_>>();
         let p = |n: &str| (RenderKind::Partial, n.to_string());
@@ -660,6 +791,7 @@ mod tests {
             "users/index.html.erb",
             "users/index.json.jbuilder",
             "users/_card.html.erb",
+            "users/_row.json.jbuilder",
             "layouts/application.html.erb",
             "layouts/admin/base.html.erb",
             "layouts/_nav.html.erb",
@@ -715,6 +847,13 @@ mod tests {
         assert_eq!(passed(r#"<%= render "card" %>"#), Some(vec![]));
         assert_eq!(passed(r#"<%= render partial: "card", locals: { a: 1, b: [2] } %>"#), Some(vec!["a", "b"]));
         assert_eq!(passed(r#"= render(partial: "card")"#), Some(vec![]));
+        assert_eq!(passed(r#"json.partial! "posts/post", post: p"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"json.partial! partial: "posts/post", locals: { post: p }"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"json.partial! "posts/post", collection: @posts, as: :post"#), None);
+        assert_eq!(passed(r#"json.array! @posts, partial: "posts/post", as: :post"#), None);
+        assert_eq!(passed(r#"<%= render "card", collection: @cards %>"#), Some(vec!["collection"]));
+        assert_eq!(passed(r#"json.partial! "posts/post", locals: { post: @post }"#), Some(vec!["post"]));
+        assert_eq!(passed(r#"<%= @x.to_json.html_safe %><%= render "card", as: 1 %>"#), Some(vec!["as"]));
         for skip in [
             r#"<%= render partial: "card", collection: @cards %>"#,
             r#"<%= render "card", **opts %>"#,

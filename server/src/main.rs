@@ -9,6 +9,8 @@ mod outline;
 mod partial_rename;
 mod partials;
 mod ruby;
+mod ruby_syntax;
+mod schema;
 mod slim_complete;
 mod slim_format;
 mod slim_hover;
@@ -35,6 +37,8 @@ enum TemplateLang {
     Haml,
     Slim,
     Skim,
+    /// Jbuilder and Builder views: plain Ruby, attached through the `ruby` language id.
+    Ruby,
 }
 
 impl TemplateLang {
@@ -47,7 +51,10 @@ impl TemplateLang {
             _ => {}
         }
         let path = uri.path().to_ascii_lowercase();
-        if path.ends_with(".erb") || path.ends_with(".rhtml") {
+        if path.ends_with(".jbuilder") || path.ends_with(".builder") {
+            return Some(Self::Ruby);
+        }
+        if ERB_EXTENSIONS.iter().any(|ext| path.ends_with(ext)) || path.ends_with(".rhtml") {
             Some(Self::Erb)
         } else if path.ends_with(".haml") {
             Some(Self::Haml)
@@ -69,24 +76,26 @@ struct Doc {
 
 type LocaleFiles = Arc<Vec<(PathBuf, Vec<i18n::Translation>)>>;
 
-/// `initializationOptions.slim`, from the `rubyTemplates.slim.*` settings.
+/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml,jbuilder}.*` settings.
 #[derive(Default, Debug, PartialEq)]
-struct SlimOptions {
+struct Options {
     extra_engines: Vec<String>,
-    disabled_diagnostics: Vec<String>,
+    disabled_slim: Vec<String>,
+    disabled_erb: Vec<String>,
+    disabled_haml: Vec<String>,
+    disabled_jbuilder: Vec<String>,
 }
 
-impl SlimOptions {
+impl Options {
     /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
     fn from_init(init: Option<&serde_json::Value>) -> (Self, Vec<String>) {
-        let slim = init.and_then(|v| v.get("slim"));
         let mut ignored = Vec::new();
-        let mut strings = |name: &str| -> Vec<String> {
-            let Some(value) = slim.and_then(|s| s.get(name)) else {
+        let mut strings = |section: &str, name: &str| -> Vec<String> {
+            let Some(value) = init.and_then(|v| v.get(section)?.get(name)) else {
                 return vec![];
             };
             let Some(items) = value.as_array() else {
-                ignored.push(format!("slim.{name}: expected an array, got {value}"));
+                ignored.push(format!("{section}.{name}: expected an array, got {value}"));
                 return vec![];
             };
             items
@@ -94,14 +103,30 @@ impl SlimOptions {
                 .filter_map(|item| {
                     let s = item.as_str().map(String::from);
                     if s.is_none() {
-                        ignored.push(format!("slim.{name}: expected a string, got {item}"));
+                        ignored.push(format!("{section}.{name}: expected a string, got {item}"));
                     }
                     s
                 })
                 .collect()
         };
-        let options = Self { extra_engines: strings("extraEngines"), disabled_diagnostics: strings("disabledDiagnostics") };
+        let options = Self {
+            extra_engines: strings("slim", "extraEngines"),
+            disabled_slim: strings("slim", "disabledDiagnostics"),
+            disabled_erb: strings("erb", "disabledDiagnostics"),
+            disabled_haml: strings("haml", "disabledDiagnostics"),
+            disabled_jbuilder: strings("jbuilder", "disabledDiagnostics"),
+        };
         (options, ignored)
+    }
+
+    /// Diagnostic codes turned off for `lang`; Skim shares Slim's setting.
+    fn disabled(&self, lang: TemplateLang) -> &[String] {
+        match lang {
+            TemplateLang::Slim | TemplateLang::Skim => &self.disabled_slim,
+            TemplateLang::Erb => &self.disabled_erb,
+            TemplateLang::Haml => &self.disabled_haml,
+            TemplateLang::Ruby => &self.disabled_jbuilder,
+        }
     }
 }
 
@@ -113,7 +138,9 @@ struct Backend {
     /// Parsed locale files per config/locales directory.
     locales: DashMap<PathBuf, LocaleFiles>,
     // Set once in `initialize`; the client restarts the server when these settings change.
-    slim: Arc<OnceLock<SlimOptions>>,
+    options: Arc<OnceLock<Options>>,
+    /// Workspace folders from `initialize`, for workspace symbols before any view is open.
+    roots: OnceLock<Vec<PathBuf>>,
     /// Formatting is registered for Slim/Skim only, and only when the client supports dynamic registration:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
@@ -121,46 +148,52 @@ struct Backend {
 
 const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
 
-fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
+fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
+    // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
+    // lines, and their partials live outside app/views, so no check applies.
+    if uri.path().to_ascii_lowercase().ends_with(".tt") {
+        return vec![];
+    }
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
-        // Thor templates (`*.haml.tt`) interleave column-0 ERB with the Haml, so its structure can't be checked.
-        TemplateLang::Haml if uri.path().to_ascii_lowercase().ends_with(".tt") => vec![],
         TemplateLang::Haml => haml_indent::diagnostics(&doc.text),
-        TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &slim.extra_engines),
+        TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &options.extra_engines),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
-        TemplateLang::Skim => slim_indent::diagnostics(&doc.text, &slim.extra_engines)
+        TemplateLang::Skim => slim_indent::diagnostics(&doc.text, &options.extra_engines)
             .into_iter()
-            .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim_indent::code::RUBY.contains(&c.as_str())))
+            .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
             .collect(),
+        // Syntax errors are Ruby LSP's job; only the render checks below apply.
+        TemplateLang::Ruby => vec![],
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if doc.lang == TemplateLang::Slim && !slim_html_host(uri) {
-        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if c == slim_indent::code::VOID_CHILDREN));
+        out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
         out.extend(tags::diagnostics(&doc.text, partial));
     }
     if let Ok(path) = uri.to_file_path() {
-        let in_code = render_filter(doc.lang, &doc.text, &slim.extra_engines);
+        let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
         out.extend(unresolved_renders(&path, &doc.text, &in_code));
         out.extend(strict_locals_mismatches(&path, &doc.text, &in_code));
     }
-    if matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
-        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c)));
-    }
+    let disabled = options.disabled(doc.lang);
+    out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
     out
 }
 
-/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
+const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
+
+/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     if file.ends_with(".rhtml") {
         return true;
     }
-    host_format(&file, ".erb").is_some_and(is_html_format)
+    ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format))
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
@@ -168,12 +201,13 @@ fn slim_html_host(uri: &Url) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
-/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`.
+/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`. URIs that aren't
+/// file paths here (`untitled:`, a drive-less `file:///v/x` on Windows) are decoded by hand.
 fn file_name(uri: &Url) -> String {
     uri.to_file_path()
         .ok()
         .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
-        .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
+        .unwrap_or_else(|| util::percent_decode(uri.path().rsplit('/').next().unwrap_or_default()))
 }
 
 /// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.
@@ -185,48 +219,60 @@ fn is_html_format(format: &str) -> bool {
     format == "html" || format.starts_with("html+") || format == "turbo_stream"
 }
 
-/// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, usize) -> bool) -> Vec<Diagnostic> {
-    let Some(views) = partials::views_root(path) else { return vec![] };
+/// Diagnostic codes every language shares.
+const UNRESOLVED_RENDER: &str = "unresolved-render";
+const STRICT_LOCALS: &str = "strict-locals";
+
+/// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
+fn checked_renders<'a>(
+    views: &Path,
+    text: &'a str,
+    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+) -> Vec<(usize, &'a str, partials::RenderRef)> {
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        for r in partials::render_refs(line) {
-            let range = util::line_range(text, i, r.start, r.end);
-            if !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, r.start) || !partials::resolve(path, &r).is_empty() {
-                continue;
-            }
-            let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
-            out.push(util::coded(util::warning(range, message), "unresolved-render"));
-        }
+        let checked =
+            partials::render_refs(line).into_iter().filter(|r| partials::in_app_views_dir(views, &r.name) && in_code(i, line_start, r));
+        out.extend(checked.map(|r| (i, line, r)));
     }
     out
 }
 
+/// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
+fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
+    let Some(views) = partials::views_root(path) else { return vec![] };
+    checked_renders(&views, text, in_code)
+        .into_iter()
+        .filter(|(_, _, r)| partials::resolve(path, r).is_empty() && !partials::gem_view(&views, &r.name))
+        .map(|(i, line, r)| {
+            let message = format!("{} `{}` not found", r.kind.name(), r.name);
+            util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
+        })
+        .collect()
+}
+
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, usize) -> bool) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
-    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        for r in partials::render_refs(line) {
-            // A partial's layout gets the partial's locals, which this check can't see.
-            if r.from_layout || !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, r.start) {
-                continue;
-            }
-            let Some(passed) = partials::passed_locals(line, &r) else { continue };
-            // Several variants/formats: which one Rails picks depends on the request.
-            let found = partials::resolve(path, &r);
-            let [file] = found.as_slice() else { continue };
-            let Some(sig) = file_signature(file) else { continue };
-            let missing: Vec<&str> =
-                sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
-            let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
-            let range = util::line_range(text, i, r.start, r.end);
-            if !missing.is_empty() {
-                out.push(util::warning(range, format!("Partial `{}` requires locals: {}", r.name, code_list(&missing))));
-            }
-            if !unknown.is_empty() {
-                out.push(util::warning(range, format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown))));
-            }
+    // A partial's layout gets the partial's locals, which this check can't see.
+    for (i, line, r) in checked_renders(&views, text, in_code).into_iter().filter(|(_, _, r)| !r.from_layout) {
+        let Some(passed) = partials::passed_locals(line, &r) else { continue };
+        // Several variants/formats: which one Rails picks depends on the request.
+        let found = partials::resolve(path, &r);
+        let [file] = found.as_slice() else { continue };
+        let Some(sig) = partials::file_strict_locals(file) else { continue };
+        let missing: Vec<&str> =
+            sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+        let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
+        let range = util::span_range(i, line, r.start, r.end);
+        if !missing.is_empty() {
+            let message = format!("Partial `{}` requires locals: {}", r.name, code_list(&missing));
+            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
+        }
+        if !unknown.is_empty() {
+            let message = format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown));
+            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
         }
     }
     out
@@ -236,25 +282,14 @@ fn code_list(names: &[&str]) -> String {
     names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
 }
 
-fn file_signature(file: &Path) -> Option<partials::StrictLocals> {
-    partials::strict_locals(&std::fs::read_to_string(file).ok()?)
-}
-
-// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
-// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
-// neither is knowable without reading controllers or the bundle.
-fn in_app_views_dir(views: &Path, name: &str) -> bool {
-    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
-}
-
 fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
     let found = partials::resolve(path, r);
     if found.is_empty() {
-        return format!("**{}** `{}`\n\nNo matching template found.", kind_name(r.kind), r.name);
+        return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
     let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
-    let mut md = format!("**{}** `{}`\n\n{}", kind_name(r.kind), r.name, list.join("\n"));
-    if let Some(sig) = file_signature(&found[0]) {
+    let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
+    if let Some(sig) = partials::file_strict_locals(&found[0]) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
@@ -275,12 +310,24 @@ fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize
 }
 
 /// Full key of the `t("…")` literal under `col`, when the call is Ruby.
-fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize) -> Option<String> {
+fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize, extra_engines: &[String]) -> Option<String> {
     let (start, end) = i18n::key_at(line, col)?;
-    if !in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
+    if !code_at(doc.lang, &doc.text, line_start + start, extra_engines) {
         return None;
     }
     i18n::full_key(path, &line[start..end])
+}
+
+/// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
+fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> bool {
+    match lang {
+        TemplateLang::Slim => slim_parser::in_ruby(text, &slim_parser::parse(text, extra_engines), offset),
+        _ => in_ruby_context(lang, text, &erb::code_spans(text), offset),
+    }
+}
+
+fn markdown_hover(value: String) -> Option<Hover> {
+    Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None })
 }
 
 fn helper_hover(h: &helpers::Helper) -> String {
@@ -297,11 +344,9 @@ fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
     sig.locals
         .into_iter()
         .filter(|(name, _)| name.starts_with(typed))
-        .map(|(name, default)| CompletionItem {
-            label: name,
-            kind: Some(CompletionItemKind::VARIABLE),
-            detail: Some(default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"))),
-            ..Default::default()
+        .map(|(name, default)| {
+            let detail = default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"));
+            util::completion_item(name, CompletionItemKind::VARIABLE, detail)
         })
         .collect()
 }
@@ -322,14 +367,20 @@ fn line_roles(lang: TemplateLang, text: &str) -> Vec<LineRole> {
 
 /// Is the `render` whose string starts at byte `start` of the line at `line_start` a call in Ruby code, not template
 /// text, a Ruby comment or a Ruby string (`link_to "render 'x'"`)? `spans` are `erb::code_spans(text)`.
-fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usize, usize)], line_start: usize, start: usize) -> bool {
+fn render_in_code(
+    lang: TemplateLang,
+    role: LineRole,
+    text: &str,
+    spans: &[(usize, usize)],
+    line_start: usize,
+    r: &partials::RenderRef,
+) -> bool {
     let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
-    let Some(call) = line[..start].rfind("render") else { return false };
-    let in_ruby = || in_ruby_context(lang, text, spans, line_start + start);
+    let in_ruby = || in_ruby_context(lang, text, spans, line_start + r.start);
     let code_start = match (lang, role) {
         // A tag opened on an earlier line puts the whole line before `render` in Ruby.
-        (TemplateLang::Erb, _) => in_ruby().then(|| line[..call].rfind("<%").map_or(0, |open| open + 2)),
-        (TemplateLang::Haml, LineRole::Start) => haml_indent::haml_code_start(line).filter(|&code| code <= call),
+        (TemplateLang::Erb, _) => in_ruby().then(|| line[..r.call].rfind("<%").map_or(0, |open| open + 2)),
+        (TemplateLang::Haml, LineRole::Start) => haml_indent::haml_code_start(line).filter(|&code| code <= r.call),
         (TemplateLang::Haml, LineRole::Ruby) => Some(0),
         (TemplateLang::Haml, LineRole::Text) => None,
         (TemplateLang::Slim, _) => {
@@ -341,20 +392,29 @@ fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usiz
             prefix.filter(|_| in_ruby()).map(marker_end)
         }
         (TemplateLang::Skim, _) => None,
+        (TemplateLang::Ruby, _) => in_ruby().then_some(0),
     };
-    code_start.is_some_and(|code| code <= call && ruby::code_end(&line[code..call]) == ruby::CodeEnd::Code)
+    code_start.is_some_and(|code| code <= r.call && ruby::code_end(&line[code..r.call]) == ruby::CodeEnd::Code)
 }
 
-/// `render_in_code` for each `render` in `text`, as `(line index, line start, byte start in line)`; Slim lines
+/// `render_in_code` for each render ref in `text`, given its line index and line start; Slim lines
 /// also have to be Ruby to Slim's parser.
-fn render_filter<'a>(lang: TemplateLang, text: &'a str, extra_engines: &[String]) -> impl Fn(usize, usize, usize) -> bool + 'a {
+fn render_filter<'a>(
+    lang: TemplateLang,
+    text: &'a str,
+    extra_engines: &[String],
+) -> impl Fn(usize, usize, &partials::RenderRef) -> bool + 'a {
     let roles = line_roles(lang, text);
     let spans = erb::code_spans(text);
     let slim = (lang == TemplateLang::Slim).then(|| slim_parser::parse(text, extra_engines));
-    move |i, line_start, start| {
-        render_in_code(lang, roles[i], text, &spans, line_start, start)
-            && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + start))
+    move |i, line_start, r| {
+        render_in_code(lang, roles[i], text, &spans, line_start, r)
+            && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + r.start))
     }
+}
+
+fn file_location(file: impl AsRef<Path>) -> Option<Location> {
+    Some(Location::new(Url::from_file_path(file).ok()?, Range::default()))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -365,12 +425,12 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
 }
 
 impl Backend {
-    fn slim_options(&self) -> &SlimOptions {
-        self.slim.get_or_init(SlimOptions::default)
+    fn options(&self) -> &Options {
+        self.options.get_or_init(Options::default)
     }
 
     async fn publish(&self, uri: Url) {
-        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc, self.slim_options()), doc.version)) else {
+        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc, self.options()), doc.version)) else {
             return;
         };
         self.client.publish_diagnostics(uri, diags, Some(version)).await;
@@ -378,11 +438,13 @@ impl Backend {
 
     /// Publish after `DIAGNOSTICS_DEBOUNCE`, unless a newer change to the document supersedes this one.
     fn publish_later(&self, uri: Url, version: i32) {
-        let (client, docs, slim) = (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.slim));
+        let (client, docs, options) = (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.options));
         tokio::spawn(async move {
             tokio::time::sleep(DIAGNOSTICS_DEBOUNCE).await;
-            let slim = slim.get_or_init(SlimOptions::default);
-            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc, slim)) else { return };
+            let options = options.get_or_init(Options::default);
+            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc, options)) else {
+                return;
+            };
             client.publish_diagnostics(uri, diags, Some(version)).await;
         });
     }
@@ -391,7 +453,12 @@ impl Backend {
         let Some(views) = partials::views_root(current) else {
             return Arc::new(current.parent().map(|dir| partials::files_under(dir, 1)).unwrap_or_default());
         };
-        self.templates.entry(views.clone()).or_insert_with(|| Arc::new(partials::files_under(&views, usize::MAX))).clone()
+        self.views_files(&views)
+    }
+
+    /// Every file under an app/views root, cached until a watched-file event says otherwise.
+    fn views_files(&self, views: &Path) -> Arc<Vec<PathBuf>> {
+        self.templates.entry(views.to_path_buf()).or_insert_with(|| Arc::new(partials::files_under(views, usize::MAX))).clone()
     }
 
     fn locale_files(&self, current: &Path) -> LocaleFiles {
@@ -399,21 +466,26 @@ impl Backend {
         self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
     }
 
-    /// The line's byte offset in `text` and its content.
-    fn line_at(text: &str, line: u32) -> (usize, &str) {
-        util::lines_with_offsets(text).nth(line as usize).unwrap_or((text.len(), ""))
+    /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
+    /// and drive colons where `Url::from_file_path` doesn't.
+    fn open_texts(&self) -> HashMap<PathBuf, String> {
+        self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect()
     }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let (slim, ignored) = SlimOptions::from_init(params.initialization_options.as_ref());
+        let (options, ignored) = Options::from_init(params.initialization_options.as_ref());
         for message in ignored {
             let message = format!("ignoring initializationOptions.{message}");
             self.client.log_message(MessageType::WARNING, message).await;
         }
-        let _ = self.slim.set(slim);
+        let _ = self.options.set(options);
+        #[allow(deprecated)]
+        let root_uri = params.root_uri.iter().cloned();
+        let folders = params.workspace_folders.unwrap_or_default().into_iter().map(|f| f.uri);
+        let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| u.to_file_path().ok()).collect());
         let dynamic_formatting =
             params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
         let _ = self.dynamic_formatting.set(dynamic_formatting);
@@ -434,6 +506,13 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                    ..Default::default()
+                })),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: None,
                     file_operations: Some(WorkspaceFileOperationsServerCapabilities {
@@ -509,10 +588,9 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
 
-        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col) {
+        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
             let files = self.locale_files(&path);
             let locs: Vec<Location> = i18n::lookup(&files, &key)
                 .filter_map(|(file, t)| {
@@ -531,18 +609,22 @@ impl LanguageServer for Backend {
         } else {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
-        let locs: Vec<Location> =
-            targets.into_iter().filter_map(|t| Url::from_file_path(t).ok()).map(|u| Location::new(u, Range::default())).collect();
-        Ok(if locs.is_empty() { None } else { Some(GotoDefinitionResponse::Array(locs)) })
+        let locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
         let mut links = Vec::new();
-        for (i, line) in doc.text.lines().enumerate() {
-            let renders = partials::render_refs(line).into_iter().map(|r| (r.start, r.end, partials::resolve(&path, &r)));
+        for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
+            // Same renders as diagnostics and references: code only, and the file Rails would pick.
+            let renders = partials::render_refs(line)
+                .into_iter()
+                .filter(|r| in_code(i, line_start, r))
+                .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
                 let Some(target) = found.into_iter().next() else { continue };
                 let Ok(t) = Url::from_file_path(&target) else { continue };
@@ -562,31 +644,26 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         if doc.lang == TemplateLang::Slim {
-            let parsed = slim_parser::parse(&doc.text, &self.slim_options().extra_engines);
+            let parsed = slim_parser::parse(&doc.text, &self.options().extra_engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
-            if let Some(value) = marker {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
-                    range: None,
-                }));
+            if let Some(md) = marker {
+                return Ok(markdown_hover(md));
             }
         }
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
-        let markdown = |value: String| {
-            Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }))
-        };
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
         if doc.lang == TemplateLang::Erb {
             if let Some(md) = erb::tag_doc(line, col) {
-                return markdown(md.to_string());
+                return Ok(markdown_hover(md.to_string()));
             }
         }
         if let Ok(path) = uri.to_file_path() {
             if let Some(r) = partials::render_ref_at(line, col) {
-                return markdown(render_hover(&path, &r));
+                return Ok(markdown_hover(render_hover(&path, &r)));
             }
-            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&self.locale_files(&path), &key)) {
-                return markdown(md);
+            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines)
+                .and_then(|key| i18n::hover(&self.locale_files(&path), &key))
+            {
+                return Ok(markdown_hover(md));
             }
         }
         let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
@@ -594,11 +671,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         if let Some(md) = haml::hover(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return markdown(md);
+            return Ok(markdown_hover(md));
         }
-        let word = word_at(line, col);
+        let word = util::word_at(line, col);
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
-            return markdown(helper_hover(h));
+            return Ok(markdown_hover(helper_hover(h)));
         }
         Ok(None)
     }
@@ -609,11 +686,9 @@ impl LanguageServer for Backend {
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         match doc.lang {
             TemplateLang::Haml => Ok(Some(outline::haml_folding_ranges(&doc.text))),
-            TemplateLang::Slim | TemplateLang::Skim => {
-                Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines)))
-            }
+            TemplateLang::Slim | TemplateLang::Skim => Ok(Some(slim_outline::folding_ranges(&doc.text, &self.options().extra_engines))),
             TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
-            TemplateLang::Erb => Ok(None),
+            TemplateLang::Erb | TemplateLang::Ruby => Ok(None),
         }
     }
 
@@ -623,9 +698,109 @@ impl LanguageServer for Backend {
         let symbols = match doc.lang {
             TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
             TemplateLang::Haml => outline::haml_document_symbols(&doc.text),
-            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.slim_options().extra_engines),
+            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.options().extra_engines),
+            TemplateLang::Ruby => return Ok(None),
         };
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = p.text_document.uri;
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
+        let actions = unresolved
+            .filter_map(|d| {
+                let (_, line, start) = util::line_at(&doc.text, d.range.start);
+                let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
+                let target = partials::new_template_path(&path, &r)?;
+                let create = CreateFile {
+                    uri: Url::from_file_path(&target).ok()?,
+                    options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
+                    annotation_id: None,
+                };
+                let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+                Some(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![d]),
+                    edit: Some(WorkspaceEdit {
+                        document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
+                        ..Default::default()
+                    }),
+                    is_preferred: Some(true),
+                    ..Default::default()
+                }))
+            })
+            .collect();
+        Ok(Some(actions))
+    }
+
+    /// Who renders the partial under the cursor's `render "…"`, or the current partial anywhere else in it.
+    async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = p.text_document_position.text_document.uri;
+        let pos = p.text_document_position.position;
+        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(views) = partials::views_root(&path) else { return Ok(None) };
+        let files = {
+            let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+            let (_, line, col) = util::line_at(&doc.text, pos);
+            let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
+            match (partials::render_ref_at(line, col), model) {
+                (Some(r), _) => partials::first_folder_only(partials::resolve(&path, &r)),
+                (None, Some((_, _, name))) => partials::resolve_model(&path, name),
+                // On a component render the question isn't about this partial.
+                (None, None) if partials::component_ref_at(line, col).is_some() => return Ok(None),
+                (None, None) if file_name(&uri).starts_with('_') => vec![path],
+                (None, None) => return Ok(None),
+            }
+        };
+        let sources = partial_rename::sources(&views, &self.open_texts());
+        let mut locations = partial_rename::references(&files, &sources, &self.options().extra_engines);
+        if p.context.include_declaration {
+            locations.extend(files.iter().filter_map(file_location));
+        }
+        Ok(Some(locations))
+    }
+
+    async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
+        let uri = p.text_document_position_params.text_document.uri;
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri)) else { return Ok(None) };
+        let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
+        let to_range = |(s, e)| Range::new(util::offset_to_position(&doc.text, s), util::offset_to_position(&doc.text, e));
+        Ok(tags::linked_names(&doc.text, offset)
+            .map(|names| LinkedEditingRanges { ranges: names.map(to_range).to_vec(), word_pattern: None }))
+    }
+
+    /// Partials and templates by their render name (`users/card`), matched like VS Code's fuzzy filter.
+    async fn symbol(&self, p: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = p.query.to_lowercase();
+        let open = self.docs.iter().filter_map(|d| partials::views_root(&d.key().to_file_path().ok()?)).collect::<Vec<_>>();
+        let mut roots: Vec<PathBuf> =
+            self.roots.get().into_iter().flatten().map(|r| r.join("app/views")).filter(|v| v.is_dir()).chain(open).collect();
+        roots.sort();
+        roots.dedup();
+        let mut out = Vec::new();
+        for views in roots {
+            let is_template = |f: &&PathBuf| Url::from_file_path(f).is_ok_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
+            let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
+            for (name, kind, file) in partials::named_templates(&views, &templates) {
+                if !util::fuzzy_match(&name.to_lowercase(), &query) {
+                    continue;
+                }
+                let Some(location) = file_location(&file) else { continue };
+                #[allow(deprecated)]
+                out.push(SymbolInformation {
+                    name,
+                    kind: SymbolKind::FILE,
+                    tags: None,
+                    deprecated: None,
+                    location,
+                    container_name: Some(kind.name().to_lowercase()),
+                });
+            }
+        }
+        Ok(Some(out))
     }
 
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
@@ -634,27 +809,27 @@ impl LanguageServer for Backend {
         let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| partials::views_root(old)).collect();
         roots.sort();
         roots.dedup();
-        // Keyed by path: VS Code's URIs percent-encode `+`, `@` and drive colons where `Url::from_file_path` doesn't.
-        let open: HashMap<PathBuf, String> =
-            self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect();
+        let open = self.open_texts();
         let mut changes = HashMap::new();
         for views in roots {
             let sources = partial_rename::sources(&views, &open);
-            changes.extend(partial_rename::render_edits(&renames, &sources, &self.slim_options().extra_engines));
+            changes.extend(partial_rename::render_edits(&renames, &sources, &self.options().extra_engines));
         }
         Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
-        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
+        // Generator templates' ERB lines aren't Slim the formatter could move safely.
+        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) || p.text_document.uri.path().to_ascii_lowercase().ends_with(".tt")
+        {
             return Ok(None);
         }
         // Indentation is always spaces; a tab-indented file is left as it is.
         if !p.options.insert_spaces {
             return Ok(None);
         }
-        let engines = &self.slim_options().extra_engines;
+        let engines = &self.options().extra_engines;
         let Some(formatted) = slim_format::format(&doc.text, p.options.tab_size as usize, engines) else { return Ok(None) };
         if formatted == doc.text {
             return Ok(Some(vec![]));
@@ -667,83 +842,68 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = util::byte_col(line, pos.character);
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];
 
-        // 1. Partial/template/layout names inside render "..."
+        let path = uri.to_file_path().ok();
+        let items = |items| Ok(Some(CompletionResponse::Array(items)));
+
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
-            let Ok(path) = uri.to_file_path() else { return Ok(None) };
-            let items: Vec<CompletionItem> = partials::render_candidates(&path, kind, &self.template_files(&path))
-                .into_iter()
-                .filter(|(name, _)| name.starts_with(&prefix) || prefix.is_empty())
-                .map(|(name, file)| CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::FILE),
-                    detail: Some(file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
-                    insert_text: Some(name),
-                    ..Default::default()
-                })
-                .collect();
-            return Ok(Some(CompletionResponse::Array(items)));
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            return items(render_completions(path, kind, &prefix, &self.template_files(path)));
+        }
+        let i18n_prefix = i18n::completion_prefix(line, col)
+            .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
+        if let Some((start, end, prefix)) = i18n_prefix {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, start, end);
+            return items(i18n_completions(&self.locale_files(path), path, prefix, range));
+        }
+        if let Some((start, typed)) = stimulus::completion_prefix(line, col) {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, start, col);
+            return items(stimulus_completions(path, typed, range));
+        }
+        if let Some(typed) = schema::attribute_prefix(before) {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };
+            let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
+            return items(
+                columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
+            );
+        }
+        if let Some(found) = receiver_completions(before) {
+            return items(found);
         }
 
-        // 2. i18n keys inside t("...")
-        if let Some((start, end, prefix)) = i18n::completion_prefix(line, col) {
-            if in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
-                let Ok(path) = uri.to_file_path() else { return Ok(None) };
-                let range = util::span_range(pos.line as usize, line, start, end);
-                let items = i18n::completions(&self.locale_files(&path), &path, prefix)
-                    .into_iter()
-                    .map(|(key, value)| CompletionItem {
-                        label: key.clone(),
-                        kind: Some(CompletionItemKind::CONSTANT),
-                        detail: Some(value),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key))),
-                        ..Default::default()
-                    })
-                    .collect();
-                return Ok(Some(CompletionResponse::Array(items)));
+        // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
+        let roles = line_roles(doc.lang, &doc.text);
+        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        if doc.lang == TemplateLang::Haml {
+            if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
+                return items(haml::completions(context));
+            }
+            let lines: Vec<&str> = doc.text.lines().collect();
+            let head = haml::continued_head(&lines, &roles, pos.line as usize, col).filter(|_| role == LineRole::Ruby);
+            if let Some(context) = head.as_deref().and_then(|head| haml::completion_context(head, head.len())) {
+                return items(haml::completions(context));
             }
         }
 
-        // 3. Form builder methods after `f.` / `form.` / `ff.`
-        if let Some(idx) = before.rfind('.') {
-            let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
-            let typed = &before[idx + 1..];
-            if matches!(recv, "f" | "form" | "ff" | "builder" | "fields") && typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                let items = helpers::FORM_BUILDER
-                    .iter()
-                    .filter(|m| m.starts_with(typed))
-                    .map(|m| CompletionItem {
-                        label: m.to_string(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some("ActionView::Helpers::FormBuilder".into()),
-                        ..Default::default()
-                    })
-                    .collect();
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
-        }
-
-        // 4. Haml tag, filter and attribute names; Slim tag, engine and attribute names.
-        let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
-        if let Some(context) = haml::completion_context(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return Ok(Some(CompletionResponse::Array(haml_completions(context))));
-        }
-
-        // 5. Rails helpers, only when we're in a Ruby context.
+        // Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
-                let engines = &self.slim_options().extra_engines;
+                let engines = &self.options().extra_engines;
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
-                if let Some(items) = slim_complete::items(&doc.text, offset, &parsed, engines) {
-                    return Ok(Some(CompletionResponse::Array(items)));
+                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines) {
+                    return items(markup);
                 }
                 // An unclosed `#{` being typed is Ruby too, for completion only.
                 slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
             }
+            // Ruby LSP completes Ruby files; offering view helpers on every identifier would duplicate it.
+            (TemplateLang::Ruby, _) => false,
             (_, LineRole::Start) => in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col),
             (_, LineRole::Ruby) => !ruby::comment_before(before),
             (_, LineRole::Text) => false,
@@ -755,89 +915,79 @@ impl LanguageServer for Backend {
         if typed.is_empty() {
             return Ok(None);
         }
-        let mut items = local_completions(&doc.text, typed);
-        items.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
-            label: h.name.to_string(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some(h.detail.to_string()),
-            insert_text: Some(h.snippet.to_string()),
-            insert_text_format: Some(InsertTextFormat::SNIPPET),
-            ..Default::default()
-        }));
-        Ok(Some(CompletionResponse::Array(items)))
+        let mut found = local_completions(&doc.text, typed);
+        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        items(found)
+    }
+}
+
+/// Partial, template or layout names for the `render "…"` string being typed.
+fn render_completions(path: &Path, kind: partials::RenderKind, prefix: &str, templates: &[PathBuf]) -> Vec<CompletionItem> {
+    partials::render_candidates(path, kind, templates)
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(prefix))
+        .map(|(name, file)| {
+            let detail = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            CompletionItem { insert_text: Some(name.clone()), ..util::completion_item(name, CompletionItemKind::FILE, detail) }
+        })
+        .collect()
+}
+
+/// i18n keys for the `t("…")` string being typed; each replaces `range`.
+fn i18n_completions(locales: &[(PathBuf, Vec<i18n::Translation>)], path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
+    i18n::completions(locales, path, prefix)
+        .into_iter()
+        .map(|(key, value)| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
+            ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
+        })
+        .collect()
+}
+
+/// Stimulus controller identifiers for a `data-controller` / `data-action` value; each replaces `range`.
+fn stimulus_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    stimulus::controllers(path)
+        .into_iter()
+        .filter(|id| id.starts_with(typed))
+        .map(|id| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
+            ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
+        })
+        .collect()
+}
+
+/// Form builder methods after `f.` / `form.` / `ff.`…, Turbo Stream actions after `turbo_stream.`.
+fn receiver_completions(before: &str) -> Option<Vec<CompletionItem>> {
+    let idx = before.rfind('.')?;
+    let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
+    let typed = &before[idx + 1..];
+    if !typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    match recv {
+        "f" | "form" | "ff" | "builder" | "fields" => Some(
+            helpers::FORM_BUILDER
+                .iter()
+                .filter(|m| m.starts_with(typed))
+                .map(|m| util::completion_item(*m, CompletionItemKind::METHOD, "ActionView::Helpers::FormBuilder"))
+                .collect(),
+        ),
+        "turbo_stream" => Some(helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(helper_item).collect()),
+        _ => None,
+    }
+}
+
+fn helper_item(h: &helpers::Helper) -> CompletionItem {
+    CompletionItem {
+        insert_text: Some(h.snippet.to_string()),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        ..util::completion_item(h.name, CompletionItemKind::FUNCTION, h.detail)
     }
 }
 
 fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Helper> {
     let haml_only = if lang == TemplateLang::Haml { helpers::HAML_HELPERS } else { &[] };
     helpers::HELPERS.iter().chain(haml_only)
-}
-
-fn haml_completions(context: haml::Completion) -> Vec<CompletionItem> {
-    use haml::{AttrPlace, Completion};
-    let item = |label: String, kind, detail: &str, snippet: Option<String>| CompletionItem {
-        label,
-        kind: Some(kind),
-        detail: Some(detail.to_string()),
-        insert_text_format: snippet.is_some().then_some(InsertTextFormat::SNIPPET),
-        insert_text: snippet,
-        ..Default::default()
-    };
-    match context {
-        Completion::Filter(typed) => haml_indent::HAML_FILTERS
-            .iter()
-            .filter(|name| name.starts_with(typed))
-            .map(|f| item(f.to_string(), CompletionItemKind::MODULE, "Haml filter", None))
-            .collect(),
-        Completion::Tag(typed) => helpers::HTML_TAGS
-            .iter()
-            .filter(|name| name.starts_with(typed))
-            .map(|t| item(t.to_string(), CompletionItemKind::PROPERTY, "HTML element", None))
-            .collect(),
-        Completion::Attribute { typed, place, rocket } => {
-            let names: Vec<String> = match place {
-                AttrPlace::Hash => helpers::HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
-                AttrPlace::DataHash => helpers::DATA_KEYS.iter().map(|k| k.to_string()).collect(),
-                AttrPlace::AriaHash => helpers::ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
-                AttrPlace::Html => helpers::HTML_ATTRIBUTES
-                    .iter()
-                    .map(|a| a.to_string())
-                    .chain(helpers::ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
-                    .chain(helpers::DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
-                    .collect(),
-            };
-            names
-                .into_iter()
-                .filter(|n| n.starts_with(typed))
-                .map(|name| {
-                    // The typed `:` of an old-style key stays; the snippet replaces only the name after it.
-                    let key = if name.contains('-') { format!("\"{name}\"") } else { name.clone() };
-                    let separator = if rocket { " =>" } else { ":" };
-                    let snippet = match place {
-                        AttrPlace::Html => format!("{name}=\"$1\""),
-                        AttrPlace::Hash if name == "data" || name == "aria" => format!("{key}{separator} {{$1}}"),
-                        _ => format!("{key}{separator} $1"),
-                    };
-                    item(name, CompletionItemKind::PROPERTY, "HTML attribute", Some(snippet))
-                })
-                .collect()
-        }
-    }
-}
-
-fn kind_name(k: partials::RenderKind) -> &'static str {
-    match k {
-        partials::RenderKind::Partial => "Partial",
-        partials::RenderKind::Template => "Template",
-    }
-}
-
-fn word_at(line: &str, col: usize) -> &str {
-    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
-    let (before, after) = line.split_at(col.min(line.len()));
-    let start = before.trim_end_matches(is_word).len();
-    let end = line.len() - after.trim_start_matches(is_word).len();
-    &line[start..end]
 }
 
 /// Is byte `offset` of `text` in Ruby: inside an ERB code tag (`spans` from `erb::code_spans`, may cross lines)
@@ -854,6 +1004,7 @@ fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, usize)], off
         }
         // Skim code is CoffeeScript: no Rails helpers, renders or form builders.
         TemplateLang::Skim => false,
+        TemplateLang::Ruby => !ruby::comment_before(&text[line_start..offset]),
         TemplateLang::Slim => {
             let before = &text[line_start..offset];
             let t = before.trim_start();
@@ -899,7 +1050,7 @@ async fn main() {
                 failed = true;
                 continue;
             };
-            let diags = diagnostics(&uri, &Doc { lang, text, version: 0 }, &SlimOptions::default());
+            let diags = diagnostics(&uri, &Doc { lang, text, version: 0 }, &Options::default());
             for d in &diags {
                 let sev = match d.severity {
                     Some(DiagnosticSeverity::ERROR) => "error",
@@ -921,7 +1072,8 @@ async fn main() {
         docs: Arc::default(),
         templates: DashMap::new(),
         locales: DashMap::new(),
-        slim: Arc::default(),
+        options: Arc::default(),
+        roots: OnceLock::new(),
         dynamic_formatting: OnceLock::new(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
@@ -930,6 +1082,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn watched_file_events_invalidate_caches() {
         let views = Path::new("/r/app/views");
@@ -943,25 +1096,6 @@ mod tests {
         let locales = Path::new("/r/config/locales");
         assert!(stale(locales, &event("/r/config/locales/en.yml", FileChangeType::CHANGED), true));
         assert!(!stale(locales, &[], true));
-    }
-
-    #[test]
-    fn word_under_cursor() {
-        let cases = [
-            ("a user? b", 4, "user?"),
-            ("a user? b", 2, "user?"),
-            ("a user? b", 7, "user?"),
-            ("a user? b", 8, "b"),
-            ("a  b", 2, ""),
-            ("t(’greeting’)", 8, "greeting"),
-            ("— ok!", 5, "ok!"),
-            ("😀名前", 4, "名前"),
-            ("abc", 99, "abc"),
-            ("", 0, ""),
-        ];
-        for (line, col, word) in cases {
-            assert_eq!(word_at(line, col), word, "{line:?} at {col}");
-        }
     }
 
     #[test]
@@ -979,6 +1113,9 @@ mod tests {
             ("/v.html/nginx.erb", false),
             ("/v/users/show.de.erb", false),
             ("/v/users/show.de.html.erb", true),
+            ("/v/show.html.erubi", true),
+            ("/v/show.html.erubis", true),
+            ("/v/feed.xml.erubi", false),
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
@@ -989,7 +1126,7 @@ mod tests {
         let text = "img\n  | x\n";
         let has_void = |path: &str| {
             let uri = Url::parse(path).unwrap();
-            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &SlimOptions::default())
+            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &Options::default())
                 .iter()
                 .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
         };
@@ -1011,15 +1148,92 @@ mod tests {
     }
 
     #[test]
-    fn slim_options_keep_valid_fields() {
+    fn options_keep_valid_fields() {
         let init = serde_json::json!({
-            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] }
+            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] },
+            "erb": { "disabledDiagnostics": ["unclosed-element"] },
+            "haml": { "disabledDiagnostics": "illegal-nesting" }
         });
-        let (options, ignored) = SlimOptions::from_init(Some(&init));
-        let expected = SlimOptions { extra_engines: vec![], disabled_diagnostics: vec!["bad-dedent".into()] };
+        let (options, ignored) = Options::from_init(Some(&init));
+        let expected =
+            Options { disabled_slim: vec!["bad-dedent".into()], disabled_erb: vec!["unclosed-element".into()], ..Options::default() };
         assert_eq!(options, expected);
-        assert_eq!(ignored.len(), 2, "{ignored:?}");
-        assert_eq!(SlimOptions::from_init(None), (SlimOptions::default(), vec![]));
+        assert_eq!(ignored.len(), 3, "{ignored:?}");
+        assert_eq!(Options::from_init(None), (Options::default(), vec![]));
+    }
+
+    #[test]
+    fn disabled_diagnostics_per_language() {
+        let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
+            let uri = Url::parse(path).unwrap();
+            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, options)
+                .into_iter()
+                .map(|d| match d.code {
+                    Some(NumberOrString::String(c)) => c,
+                    _ => panic!("uncoded diagnostic: {}", d.message),
+                })
+                .collect()
+        };
+
+        let haml = "%p hi\n  %b x\n- end\n:nope\n%br/ x\n";
+        let all = Options::default();
+        let erb_path = "file:///v/show.html.erb";
+        // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.
+        let erb_cases = [("<% end %>\n", erb::code::STRAY_END), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
+        for (text, code) in erb_cases {
+            assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
+        }
+        let options = Options {
+            disabled_erb: vec![erb::code::STRAY_END.into(), tags::code::UNCLOSED_ELEMENT.into()],
+            disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
+            ..Options::default()
+        };
+        assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
+        let haml_path = "file:///v/show.html.haml";
+        assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
+        let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);
+        assert!(!haml_codes.contains(&haml_indent::code::ILLEGAL_NESTING.to_string()), "{haml_codes:?}");
+        assert!(!haml_codes.is_empty());
+        // Every check carries a code, or the setting can't turn it off.
+        assert!(!codes(erb_path, TemplateLang::Erb, include_str!("../../test/broken/bad.html.erb"), &all).is_empty());
+        assert!(!codes(haml_path, TemplateLang::Haml, include_str!("../../test/broken/bad.html.haml"), &all).is_empty());
+    }
+
+    #[test]
+    fn settings_list_every_diagnostic_code() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+        let setting = |lang: &str| -> BTreeSet<String> {
+            let key = format!("rubyTemplates.{lang}.disabledDiagnostics");
+            let items = &manifest["contributes"]["configuration"]["properties"][&key]["items"]["enum"];
+            items.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+        };
+        let declared = |sources: &[&str]| -> BTreeSet<String> {
+            let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z0-9-]+)""#).unwrap();
+            let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
+            sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
+        };
+        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs")]));
+        assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
+        assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
+        assert_eq!(setting("jbuilder"), declared(&[]));
+        // A literal code would bypass the constants this test collects.
+        let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
+        for src in [
+            include_str!("main.rs"),
+            include_str!("erb.rs"),
+            include_str!("tags.rs"),
+            include_str!("haml_indent.rs"),
+            include_str!("slim_indent.rs"),
+        ] {
+            assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
+        }
+    }
+
+    #[test]
+    fn slim_code_at_asks_the_parser() {
+        let text = "p See (t(\".a\"))\n= t(\".b\")\n";
+        assert!(!code_at(TemplateLang::Slim, text, text.find(".a").unwrap(), &[]));
+        assert!(code_at(TemplateLang::Slim, text, text.find(".b").unwrap(), &[]));
     }
 
     #[test]
@@ -1028,7 +1242,7 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
         let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n- end = start + 10\n  p\n    a\n   span\n";
         let codes = |lang| -> Vec<String> {
-            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &SlimOptions::default())
+            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &Options::default())
                 .into_iter()
                 .filter_map(|d| match d.code {
                     Some(NumberOrString::String(c)) => Some(c),
@@ -1050,6 +1264,9 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
         let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
+        for path in ["file:///views/x.erubi", "file:///views/x.html.ERUBIS"] {
+            assert_eq!(TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), None), Some(TemplateLang::Erb), "{path}");
+        }
     }
 
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
@@ -1136,12 +1353,14 @@ mod tests {
     }
 
     #[test]
-    fn thor_templates_skip_haml_structure() {
+    fn thor_templates_skip_structure_checks() {
         let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
         let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), version: 0 };
         let uri = |name: &str| Url::parse(&format!("file:///app/lib/templates/haml/scaffold/{name}")).unwrap();
-        assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &SlimOptions::default()).is_empty());
-        assert!(!diagnostics(&uri("index.html.haml"), &doc(), &SlimOptions::default()).is_empty());
+        assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &Options::default()).is_empty());
+        assert!(!diagnostics(&uri("index.html.haml"), &doc(), &Options::default()).is_empty());
+        let erb = Doc { lang: TemplateLang::Erb, text: "<%% if x %>\n<% attributes.each do |a| -%>\n<div>\n".into(), version: 0 };
+        assert!(diagnostics(&uri("_form.html.erb.tt"), &erb, &Options::default()).is_empty());
     }
 
     #[test]
@@ -1224,6 +1443,17 @@ mod tests {
             "=' render \"users/a\"\n==' render \"users/b\"\n=> render \"users/c\"\np = render \"users/d\"\n| render \"users/e\"\n";
         let lines: Vec<u32> = unresolved(TemplateLang::Slim, &slim, slim_text).iter().map(|d| d.range.start.line).collect();
         assert_eq!(lines, vec![0, 1, 2]);
+        for dir in ["devise/shared", "spree/admin", "admin"] {
+            std::fs::create_dir_all(root.join("app/views").join(dir)).unwrap();
+        }
+        std::fs::write(
+            root.join("Gemfile.lock"),
+            "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n",
+        )
+        .unwrap();
+        let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"admin/x\" %>";
+        let lines: Vec<String> = unresolved(TemplateLang::Erb, &file, gem_text).into_iter().map(|d| d.message).collect();
+        assert_eq!(lines, ["Partial `admin/x` not found"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
         std::fs::remove_dir_all(&root).unwrap();
@@ -1274,6 +1504,38 @@ mod tests {
                 ("Partial `users/card` does not accept locals: `colour`".to_string(), at(1, 12, 22)),
             ]
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn jbuilder_and_builder_views() {
+        let lang = |path: &str, id| TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), id);
+        assert_eq!(lang("file:///app/views/users/index.json.jbuilder", Some("ruby")), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/views/feed.atom.builder", Some("ruby")), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/views/users/index.json.jbuilder", None), Some(TemplateLang::Ruby));
+        assert_eq!(lang("file:///app/models/user.rb", Some("ruby")), None);
+
+        let root = std::env::temp_dir().join(format!("rt-jbuilder-{}", std::process::id()));
+        let posts = root.join("app/views/posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        std::fs::write(posts.join("_post.json.jbuilder"), "# locals: (post:)\njson.title post.title\n").unwrap();
+        let file = posts.join("index.json.jbuilder");
+        let text = concat!(
+            "json.array! @posts, partial: \"posts/post\", as: :post\n",
+            "json.partial! \"posts/post\", collection: @posts, as: :post\n",
+            "json.partial! \"posts/missing\"\n",
+            "# json.partial! \"posts/old\"\n",
+            "json.partial! \"posts/post\", post: @post, extra: 1\n",
+            "json.array! @x, title: \"render\", partial: \"posts/missing3\"\n",
+        );
+        let lines = |d: Vec<Diagnostic>| d.iter().map(|d| (d.range.start.line, d.message.clone())).collect::<Vec<_>>();
+        assert_eq!(
+            lines(unresolved(TemplateLang::Ruby, &file, text)),
+            [(2, "Partial `posts/missing` not found".to_string()), (5, "Partial `posts/missing3` not found".to_string())]
+        );
+        let mismatches = strict_locals_mismatches(&file, text, render_filter(TemplateLang::Ruby, text, &[]));
+        assert_eq!(lines(mismatches), [(4, "Partial `posts/post` does not accept locals: `extra`".to_string())]);
+        assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -6,16 +6,16 @@ Legend as in `ERB_TODO.md`.
 
 ## Tasks
 
-- [ ] Nothing extra in `package.json` / `src/client.js`: the Jbuilder entries already list `.builder` (`contributes.languages[id=ruby]`, `documentSelector` pattern `**/*.{jbuilder,builder}`).
-- [ ] Server detection: `.builder` maps to `TemplateLang::Ruby` in `TemplateLang::from_uri_or_id` (`server/src/main.rs`), done in the Jbuilder change.
-- [ ] `xml << render(partial: "items/item", locals: { i: i })` and `xml << render "items/item"` already match `RENDER_STR` (`server/src/partials.rs`; checked). Once `in_ruby_context`/`render_in_code` accept `TemplateLang::Ruby`, definition, hover, links, unresolved-render warnings and completion work with no new code.
+- [x] Nothing extra in `package.json` / `src/client.js`: the Jbuilder entries already list `.builder` (`contributes.languages[id=ruby]`, `documentSelector` pattern `**/*.{jbuilder,builder}`).
+- [x] Server detection: `.builder` maps to `TemplateLang::Ruby` in `TemplateLang::from_uri_or_id` (`server/src/main.rs`), done in the Jbuilder change.
+- [x] `xml << render(partial: "items/item", locals: { i: i })` and `xml << render "items/item"` already match `RENDER_STR` (`server/src/partials.rs`; checked). Once `in_ruby_context`/`render_in_code` accept `TemplateLang::Ruby`, definition, hover, links, unresolved-render warnings and completion work with no new code.
 - [x] Legacy `render(:partial => "items/item")`, `:template =>`, `:layout =>` in every language (`server/src/partials.rs` `RENDER_STR`, `RENDER_LAYOUT_KEY`, `render_string_prefix`).
 - [x] Format filter: `partials::renders_format`, unchanged (format segment of the current file name; bare `x.builder` doesn't filter).
 
 ## Tests
 
 - [x] `partials.rs` `refs`: hash-rocket `:partial =>`/`:template =>`/`:layout =>` refs and completion.
-- [ ] `main.rs`: `from_uri_or_id(feed.atom.builder, Some("ruby"))` → `Ruby`.
+- [x] `main.rs`: `from_uri_or_id(feed.atom.builder, Some("ruby"))` → `Ruby`.
 - No e2e case beyond Jbuilder's: same code path. No token sample (no grammar).
 
 ## Open questions

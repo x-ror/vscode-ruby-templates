@@ -8,6 +8,9 @@ import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
+import { relatedFiles, relatedDirs } from "./related.js";
+import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
+import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -32,6 +35,9 @@ const SERVER_SETTINGS = [
   "rubyTemplates.server",
   "rubyTemplates.slim.extraEngines",
   "rubyTemplates.slim.disabledDiagnostics",
+  "rubyTemplates.erb.disabledDiagnostics",
+  "rubyTemplates.haml.disabledDiagnostics",
+  "rubyTemplates.jbuilder.disabledDiagnostics",
 ];
 
 /** @type {vscode.WebviewPanel | undefined} */
@@ -53,6 +59,7 @@ function activate(context) {
   sub("rubyTemplates.convertToSlim", () => convert("slim"));
   sub("rubyTemplates.convertToErb", () => convert("erb"));
   sub("rubyTemplates.extractPartial", extractPartial);
+  sub("rubyTemplates.switchRelated", switchRelated);
   sub("rubyTemplates.toggleHamlPrefix", toggleActiveHamlLines);
   sub("rubyTemplates.reindentHaml", reindentActiveHaml);
   sub("rubyTemplates.toggleSlimTag", toggleSlimTag);
@@ -65,6 +72,7 @@ function activate(context) {
   });
   context.subscriptions.push(output);
   registerHamlFormatting(context, output);
+  registerErbFormatting(context, output);
   startHamlLint(context, output);
   sub("rubyTemplates.restartServer", () => restartClient(context, output));
   context.subscriptions.push(
@@ -75,6 +83,7 @@ function activate(context) {
   );
   void startClient(context, output);
   registerSlimLint(context, output);
+  registerErbLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -214,6 +223,49 @@ const RENDER_CALL = {
 };
 
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
+/** Open the view's other formats (`.html.erb` ↔ `.text.erb`) or a component's class ↔ template. */
+async function switchRelated() {
+  const doc = vscode.window.activeTextEditor?.document;
+  if (doc?.uri.scheme !== "file") return;
+  const dir = path.dirname(doc.uri.fsPath);
+  const name = path.basename(doc.uri.fsPath);
+  const candidates = [];
+  for (const folder of [dir, ...relatedDirs(dir, name, path.sep)]) {
+    let entries;
+    try {
+      entries = await vscode.workspace.fs.readDirectory(
+        vscode.Uri.file(folder),
+      );
+    } catch {
+      continue; // most components have no sidecar folder
+    }
+    const files = entries
+      .filter(([, type]) => type === vscode.FileType.File)
+      .map(([n]) => n);
+    candidates.push(
+      ...relatedFiles(name, files).map((n) => path.join(folder, n)),
+    );
+  }
+  if (!candidates.length) {
+    vscode.window.showInformationMessage(`No related file for ${name}.`);
+    return;
+  }
+  const picked =
+    candidates.length === 1
+      ? candidates[0]
+      : (
+          await vscode.window.showQuickPick(
+            candidates.map((file) => ({
+              label: path.basename(file),
+              description: vscode.workspace.asRelativePath(path.dirname(file)),
+              file,
+            })),
+            { placeHolder: "Related file" },
+          )
+        )?.file;
+  if (picked) await vscode.window.showTextDocument(vscode.Uri.file(picked));
+}
+
 async function extractPartial() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.selection.isEmpty) return;
@@ -685,6 +737,99 @@ async function showCompiledSource() {
   });
 }
 
+// ---------------------------------------------------------------- erb_lint
+
+/** Lint ERB views on open and save with `erb_lint --stdin`, so the editor's text is what gets linted. */
+function registerErbLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection("erb_lint");
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+  let reportedMissing = false;
+
+  const lint = async (doc) => {
+    if (!/^erb/.test(doc.languageId) || doc.uri.scheme !== "file") return;
+    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
+    if (!cfg().get("erbLint.enabled", false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
+    const bin = cfg().get("commands.erbLint", "erb_lint");
+    const r = await run(
+      bin,
+      ["--format", "json", "--stdin", doc.uri.fsPath],
+      { cwd: workspaceFolderFor(doc) },
+      doc.getText(),
+    );
+    // A run that was in flight when the linter was turned off must not bring its offenses back.
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (!cfg().get("erbLint.enabled", false)) return;
+    if (toolMissing(r)) {
+      if (!reportedMissing)
+        vscode.window.showWarningMessage(
+          `"${bin}" was not found. Install it with: gem install erb_lint — or set rubyTemplates.commands.erbLint.`,
+        );
+      reportedMissing = true;
+      return;
+    }
+    if (!ERB_LINT_OK_CODES.has(r.code)) {
+      output.appendLine(`[erb_lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
+      return;
+    }
+    try {
+      const diagnostics = erbLintOffenses(r.stdout).map(
+        ({ line, column, endLine, endColumn, linter, message }) => {
+          const d = new vscode.Diagnostic(
+            new vscode.Range(
+              line,
+              utf16Column(doc, line, column),
+              endLine,
+              utf16Column(doc, endLine, endColumn),
+            ),
+            message,
+            vscode.DiagnosticSeverity.Warning,
+          );
+          d.source = "erb_lint";
+          d.code = linter;
+          return d;
+        },
+      );
+      lints.set(doc.uri, diagnostics);
+    } catch (e) {
+      output.appendLine(
+        `[erb_lint] unreadable JSON for ${doc.uri.fsPath}: ${e.message}`,
+      );
+    }
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidOpenTextDocument(lint),
+    vscode.workspace.onDidSaveTextDocument(lint),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration("rubyTemplates.erbLint") &&
+        !e.affectsConfiguration("rubyTemplates.commands.erbLint")
+      )
+        return;
+      reportedMissing = false;
+      if (cfg().get("erbLint.enabled", false))
+        vscode.workspace.textDocuments.forEach(lint);
+      else lints.clear();
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(lint);
+}
+
+/** erb_lint counts columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
+function utf16Column(doc, line, column) {
+  if (line >= doc.lineCount) return column;
+  return [...doc.lineAt(line).text].slice(0, column).join("").length;
+}
+
 // ---------------------------------------------------------------- slim-lint
 
 function registerSlimLint(context, output) {
@@ -700,6 +845,8 @@ function registerSlimLint(context, output) {
 
   const lint = async (doc) => {
     if (doc.languageId !== "slim" || doc.uri.scheme !== "file") return;
+    // Generator templates (`*.slim.tt`) hold ERB tags that slim-lint would misreport.
+    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
     if (!cfg().get("slimLint.enabled", false)) return;
     const key = doc.uri.toString();
     const runId = (latestRun.get(key) ?? 0) + 1;
@@ -905,8 +1052,66 @@ function runHamlLint(doc, args, signal) {
 }
 
 // 127: `bundle exec` couldn't find the executable.
-const hamlLintMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
+const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
+
+/** Registered only while a formatter is chosen, so another extension's ERB formatter isn't shadowed. */
+function registerErbFormatting(context, output) {
+  let registration;
+  const update = () => {
+    registration?.dispose();
+    registration = undefined;
+    const tool = cfg().get("erb.formatter", "none");
+    if (!ERB_FORMATTERS[tool]) return;
+    registration = vscode.languages.registerDocumentFormattingEditProvider(
+      "erb",
+      {
+        provideDocumentFormattingEdits: (doc, options) =>
+          formatErb(doc, options, tool, output),
+      },
+    );
+  };
+  update();
+  context.subscriptions.push(
+    { dispose: () => registration?.dispose() },
+    vscode.workspace.onDidChangeConfiguration(
+      (e) => e.affectsConfiguration("rubyTemplates.erb.formatter") && update(),
+    ),
+  );
+}
+
+async function formatErb(doc, options, tool, output) {
+  const { command, gem } = ERB_FORMATTERS[tool];
+  const bin = cfg().get(`commands.${command}`, tool);
+  const { version } = doc;
+  const r = await run(
+    bin,
+    erbFormatterArgs(tool, options),
+    { cwd: workspaceFolderFor(doc) },
+    doc.getText(),
+  );
+  if (toolMissing(r)) {
+    vscode.window.showErrorMessage(
+      `${bin} was not found. Install it with: gem install ${gem} — or set rubyTemplates.commands.${command}.`,
+    );
+    return [];
+  }
+  if (r.code !== 0) {
+    output.appendLine(
+      `[${tool}] format ${doc.uri.fsPath} failed:\n${r.stderr || r.stdout}`,
+    );
+    vscode.window.showErrorMessage(`${tool} failed: ${firstLine(r)}`);
+    return [];
+  }
+  if (!r.stdout || r.stdout === doc.getText() || doc.version !== version)
+    return [];
+  return [
+    vscode.TextEdit.replace(
+      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+      r.stdout,
+    ),
+  ];
+}
 
 function registerHamlFormatting(context, output) {
   context.subscriptions.push(
@@ -926,7 +1131,7 @@ function registerHamlFormatting(context, output) {
 async function formatWithHamlLint(doc, output) {
   const { version } = doc;
   const r = await runHamlLint(doc, ["--auto-correct-only", "--stderr"]);
-  if (hamlLintMissing(r)) {
+  if (toolMissing(r)) {
     vscode.window.showErrorMessage(
       "haml-lint was not found. Install it with: gem install haml_lint — or set rubyTemplates.commands.hamlLint.",
     );
@@ -986,7 +1191,7 @@ function startHamlLint(context, output) {
     const r = await runHamlLint(doc, ["--reporter", "json"], controller.signal);
     if (controller.signal.aborted) return;
     pending.delete(doc.uri.toString());
-    if (hamlLintMissing(r)) {
+    if (toolMissing(r)) {
       if (!reportedMissing)
         output.appendLine(
           "[haml-lint] not found; Haml lint diagnostics are off. Install it with: gem install haml_lint",
@@ -1018,7 +1223,7 @@ function startHamlLint(context, output) {
     )
       return;
     // Generator templates (`*.haml.tt`) hold ERB tags that haml-lint would misreport.
-    if (doc.uri.path.endsWith(".tt")) return;
+    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
     const key = doc.uri.toString();
     cancel(key);
     const controller = new AbortController();

@@ -303,6 +303,66 @@ pub const FORM_BUILDER: &[&str] = &[
     "field_name",
 ];
 
+/// `Turbo::Streams::TagBuilder` (turbo-rails 2), for `turbo_stream.`.
+pub const TURBO_STREAM: &[Helper] = &[
+    h!(
+        "append",
+        "append(target, content = nil, **rendering) — adds to the end of target",
+        "append ${1::target}, partial: \"${2:partial}\""
+    ),
+    h!(
+        "prepend",
+        "prepend(target, content = nil, **rendering) — adds to the start of target",
+        "prepend ${1::target}, partial: \"${2:partial}\""
+    ),
+    h!(
+        "replace",
+        "replace(target, content = nil, method: nil, **rendering) — replaces target; `method: :morph` morphs",
+        "replace ${1:@record}"
+    ),
+    h!("update", "update(target, content = nil, method: nil, **rendering) — replaces target's content", "update ${1:@record}"),
+    h!("remove", "remove(target) — removes target", "remove ${1:@record}"),
+    h!("before", "before(target, content = nil, **rendering) — inserts before target", "before ${1::target}, partial: \"${2:partial}\""),
+    h!("after", "after(target, content = nil, **rendering) — inserts after target", "after ${1::target}, partial: \"${2:partial}\""),
+    h!("refresh", "refresh(request_id: nil, **attributes) — asks the page to refresh (morph)", "refresh"),
+    h!(
+        "append_all",
+        "append_all(targets, content = nil, **rendering) — CSS selector targets",
+        "append_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!(
+        "prepend_all",
+        "prepend_all(targets, content = nil, **rendering) — CSS selector targets",
+        "prepend_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!(
+        "replace_all",
+        "replace_all(targets, content = nil, method: nil, **rendering) — CSS selector targets",
+        "replace_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!(
+        "update_all",
+        "update_all(targets, content = nil, method: nil, **rendering) — CSS selector targets",
+        "update_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!("remove_all", "remove_all(targets) — CSS selector targets", "remove_all \"${1:.selector}\""),
+    h!(
+        "before_all",
+        "before_all(targets, content = nil, **rendering) — CSS selector targets",
+        "before_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!(
+        "after_all",
+        "after_all(targets, content = nil, **rendering) — CSS selector targets",
+        "after_all \"${1:.selector}\", partial: \"${2:partial}\""
+    ),
+    h!(
+        "action",
+        "action(name, target, content = nil, allow_inferred_rendering: true, **rendering) — custom action",
+        "action :${1:name}, ${2::target}"
+    ),
+];
+
 /// `Haml::RailsHelpers` (Haml 6/7); offered only in Haml files.
 pub const HAML_HELPERS: &[Helper] = &[
     h!("succeed", "succeed(str, &block) — block output, then str with no space between", "succeed \"${1:.}\" do"),
@@ -599,6 +659,13 @@ mod tests {
 
     fn url(name: &str) -> Option<String> {
         HELPERS.iter().find(|h| h.name == name)?.doc_url()
+    }
+
+    #[test]
+    fn snippet_placeholders_balance() {
+        for h in HELPERS.iter().chain(HAML_HELPERS).chain(TURBO_STREAM) {
+            assert_eq!(h.snippet.matches("${").count(), h.snippet.matches('}').count() - h.snippet.matches("#{").count(), "{}", h.snippet);
+        }
     }
 
     #[test]
