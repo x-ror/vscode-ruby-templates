@@ -222,14 +222,14 @@ fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &p
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             let range = util::line_range(text, i, r.start, r.end);
-            if !in_app_views_dir(&views, &r.name)
+            if !partials::in_app_views_dir(&views, &r.name)
                 || !in_code(i, line_start, &r)
                 || !partials::resolve(path, &r).is_empty()
                 || partials::gem_view(&views, &r.name)
             {
                 continue;
             }
-            let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
+            let message = format!("{} `{}` not found", r.kind.name(), r.name);
             out.push(util::coded(util::warning(range, message), UNRESOLVED_RENDER));
         }
     }
@@ -243,14 +243,14 @@ fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usi
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             // A partial's layout gets the partial's locals, which this check can't see.
-            if r.from_layout || !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) {
+            if r.from_layout || !partials::in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) {
                 continue;
             }
             let Some(passed) = partials::passed_locals(line, &r) else { continue };
             // Several variants/formats: which one Rails picks depends on the request.
             let found = partials::resolve(path, &r);
             let [file] = found.as_slice() else { continue };
-            let Some(sig) = file_signature(file) else { continue };
+            let Some(sig) = partials::file_strict_locals(file) else { continue };
             let missing: Vec<&str> =
                 sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
             let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
@@ -272,25 +272,14 @@ fn code_list(names: &[&str]) -> String {
     names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
 }
 
-fn file_signature(file: &Path) -> Option<partials::StrictLocals> {
-    partials::strict_locals(&std::fs::read_to_string(file).ok()?)
-}
-
-// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
-// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
-// neither is knowable without reading controllers or the bundle.
-fn in_app_views_dir(views: &Path, name: &str) -> bool {
-    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
-}
-
 fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
     let found = partials::resolve(path, r);
     if found.is_empty() {
-        return format!("**{}** `{}`\n\nNo matching template found.", kind_name(r.kind), r.name);
+        return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
     let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
-    let mut md = format!("**{}** `{}`\n\n{}", kind_name(r.kind), r.name, list.join("\n"));
-    if let Some(sig) = file_signature(&found[0]) {
+    let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
+    if let Some(sig) = partials::file_strict_locals(&found[0]) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
@@ -696,7 +685,7 @@ impl LanguageServer for Backend {
                 };
                 let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
                 Some(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Create {} `{shown}`", kind_name(r.kind).to_lowercase()),
+                    title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![d]),
                     edit: Some(WorkspaceEdit {
@@ -905,13 +894,6 @@ fn helper_item(h: &helpers::Helper) -> CompletionItem {
 fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Helper> {
     let haml_only = if lang == TemplateLang::Haml { helpers::HAML_HELPERS } else { &[] };
     helpers::HELPERS.iter().chain(haml_only)
-}
-
-fn kind_name(k: partials::RenderKind) -> &'static str {
-    match k {
-        partials::RenderKind::Partial => "Partial",
-        partials::RenderKind::Template => "Template",
-    }
 }
 
 fn word_at(line: &str, col: usize) -> &str {

@@ -30,6 +30,15 @@ pub enum RenderKind {
     Template,
 }
 
+impl RenderKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            RenderKind::Partial => "Partial",
+            RenderKind::Template => "Template",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RenderRef {
     pub kind: RenderKind,
@@ -300,6 +309,13 @@ pub fn app_root(file: &Path) -> Option<PathBuf> {
     views_root(file).and_then(|v| v.parent().map(|p| p.to_path_buf()))
 }
 
+// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
+// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
+// neither is knowable without reading controllers or the bundle.
+pub fn in_app_views_dir(views: &Path, name: &str) -> bool {
+    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
+}
+
 /// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
 /// name (`devise/`, `spree/` from `spree_core`), and the app overrides only some of them, so the rest aren't on disk.
 pub fn gem_view(views: &Path, name: &str) -> bool {
@@ -487,6 +503,10 @@ pub fn strict_locals(text: &str) -> Option<StrictLocals> {
         }
     }
     Some(sig)
+}
+
+pub fn file_strict_locals(file: &Path) -> Option<StrictLocals> {
+    strict_locals(&std::fs::read_to_string(file).ok()?)
 }
 
 /// `name: value` → `(name, value)`; `value` is empty for `name:`.
