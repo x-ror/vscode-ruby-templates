@@ -186,14 +186,25 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
 
 const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
-/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`.
+/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
+/// format (`app/views/pages/about.de.erb`), which is HTML in practice.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     if file.ends_with(".rhtml") {
         return true;
     }
-    ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format))
+    if ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format)) {
+        return true;
+    }
+    // The URI's own path, not `to_file_path`, which a drive-less test URI fails on Windows.
+    let in_views = partials::views_root(Path::new(&util::percent_decode(uri.path()))).is_some();
+    let original = file_name(uri);
+    let parts: Vec<&str> = original.split('.').collect();
+    in_views
+        && parts.len() == 3
+        && partials::is_locale(parts[1])
+        && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
@@ -1116,6 +1127,10 @@ mod tests {
             ("/v.html/config.yml.erb", false),
             ("/v.html/nginx.erb", false),
             ("/v/users/show.de.erb", false),
+            ("/r/app/views/pages/about.de.erb", true),
+            ("/r/app/views/pages/about.pt-BR.erb", true),
+            ("/r/app/views/pages/about.erb", false),
+            ("/r/app/views/pages/about.yml.erb", false),
             ("/v/users/show.de.html.erb", true),
             ("/v/show.html.erubi", true),
             ("/v/show.html.erubis", true),
