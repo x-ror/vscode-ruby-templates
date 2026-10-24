@@ -56,9 +56,14 @@ async function doStart(context, output) {
     "Ruby Templates Language Server",
     { command, transport: TransportKind.stdio },
     {
-      documentSelector: context.extension.packageJSON.contributes.languages.map(
-        ({ id }) => ({ language: id }),
-      ),
+      // Scheme-less selectors also match git diff sides and chat code blocks, duplicating diagnostics.
+      documentSelector:
+        context.extension.packageJSON.contributes.languages.flatMap(
+          ({ id }) => [
+            { scheme: "file", language: id },
+            { scheme: "untitled", language: id },
+          ],
+        ),
       outputChannel: output,
       // Our catch below reports the failure; returning false stops the client from also showing its own.
       initializationFailedHandler: () => false,
