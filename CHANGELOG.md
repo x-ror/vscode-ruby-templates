@@ -1,61 +1,45 @@
 # Changelog
 
-## Unreleased
-
-- Symlinked folders under `app/views` (and the other template folders) are followed by partial completion, find references and rename.
-- **Breaking:** requires VS Code 1.100 or newer: the extension is now an ES module (`vscode-languageclient` 11 alone needs 1.91).
-- Partials: hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` get navigation, completion and diagnostics.
-- Partials resolve only in the view's format: `render "users/user"` from `index.html.erb` no longer offers `_user.json.jbuilder`. Format-less partials still match; JS and turbo_stream views also take HTML partials.
-- Erubi / Erubis: `.erubi` and `.erubis` files open as ERB, with the same diagnostics and navigation; `x.html.erubi` gets the HTML tag checks.
-- Jbuilder / Builder views (`.jbuilder`, `.builder`, kept on the `ruby` language): go to definition, hover, links, completion and unresolved / strict-locals warnings for `json.partial! "x"`, `json.array! @xs, partial: "x"` and `xml << render(...)`; renaming a partial updates them too.
-- Every ERB and Haml diagnostic has a code; `rubyTemplates.erb.disabledDiagnostics` and `rubyTemplates.haml.disabledDiagnostics` turn checks off like the Slim setting. Strict-locals warnings are coded `strict-locals` in all languages.
-- Quick fix: create the missing partial or template of an unresolved `render "dir/name"`, in the view's format and template language.
-- Find All References on a partial lists the `render` calls that resolve to it.
-- Completion of Turbo Stream actions after `turbo_stream.` (`append`, `replace`, `remove`, `refresh`, `*_all`, `action`).
-- Completion of Stimulus controller names in `data-controller="…"`, `data-action="…->…"` and `data: { controller: "…" }`.
-- ERB: warn when `%>` inside a Ruby string ends the tag early (`<%= "50%>" %>`).
-- Fewer false warnings, found on real apps: `=begin`/`=end` comments in ERB tags, `.rss`/`.atom` (and font) formats, and `render "devise/…"` views shipped by a gem in `Gemfile.lock`.
-- ERB and Slim generator templates (`*.erb.tt`, `*.slim.tt` under `lib/templates` or `lib/generators`) open as ERB / Slim, without diagnostics or formatting.
-- ERB: linked editing of HTML open/close tag names (`editor.linkedEditing`).
-- Go to Symbol in Workspace lists partials and templates by their render name.
-- Command *Switch to Related File*: a view's other formats (mailer HTML ↔ text) and a ViewComponent's class ↔ template.
-- Haml highlighting: a nested hash (`%a{data: {id: 1}} text`) no longer ends the attribute hash at its inner `}`.
-- ERB: Ruby syntax errors inside tags, from tree-sitter-ruby over the template's Ruby as Erubi joins it; an open tag swallowing the next ones is reported where it opens.
-- ERB formatting through `htmlbeautifier` or `erb-format` (`rubyTemplates.erb.formatter`), with `bundle exec` support.
-- erb_lint diagnostics on open and save (`rubyTemplates.erbLint.enabled`).
-- Completion of model attributes after `f.text_field :` from `db/schema.rb`.
-- ERB: HTML completion in template text: element names, the closing tag, attribute names.
-- ERB: typing `>` closes the HTML start tag (`rubyTemplates.erb.autoCloseTags`).
-- ERB: `img-missing-alt`, `duplicate-id`, `prefer-image-tag` and `unsafe-output` checks for HTML views.
-- ERB: typing a whole `<%= x %>` no longer leaves the auto-inserted ` %>` behind (`<%= x %> %>`).
-- ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.erbSpacing`).
-- Completion of ViewComponent classes after `render ` (`Admin::UserCardComponent.new(…)`) from `app/components`.
-- Completion of Stimulus action methods after `hello#` in `data-action` and of `static targets` names in `data-hello-target` / `hello_target:`, read from the controller file.
-- Find All References on a `t("…")` key: the calls with the same full key anywhere in `app/` and `lib/`, and its locale entries.
-- ERB preview and *Show Compiled Ruby Source* use Erubi like Rails (`<%=` escapes, `<%==` is raw), through `rubyTemplates.commands.ruby`; stdlib ERB when the `erubi` gem is missing. **Breaking:** the `rubyTemplates.commands.erb` setting is gone.
-- herb-lint diagnostics on open and save on HTML views (`rubyTemplates.herbLint.enabled`), from the project's `node_modules/.bin` or `PATH`.
-- Controllers: go to definition from `def show` to its templates, and links from `layout "admin"` and `render :edit` / `render "x"` to their views.
-- Go to definition on a helper call in a view opens its `def` in `app/helpers` or a controller's `helper_method`.
-- *Switch to Related File* from a view also offers its controller or mailer, at the action's `def`.
-- Route helpers: `*_path` / `*_url` completion, hover (verbs, path, `controller#action`) and go to definition, from the app's routes through `bin/rails runner` (`rubyTemplates.routes.enabled`).
-- Instance variable completion after `@` and go to definition, from the view's controller action and its `before_action` callbacks.
-- Go to definition on a partial's local lists the `render` calls that pass it.
-- ViewComponent slots: `with_*` completion in a `render X.new do |c|` block and slot readers in the component's template; *Switch to Related File* also goes between a component and its preview.
-- Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
-- Haml: a line indented several levels at once gets Haml's own message, "The line was indented N levels deeper than the previous line."
-- Windows: *Extract Selection to Slim Partial* keeps the template's line endings instead of writing CRLF.
-- CI packages a `.vsix` for all five platforms, Intel macOS included, each with only its own server binary.
-
 ## 0.1.0
 
-- Rust language server: diagnostics for ERB/Haml/Slim, go to partial/component, hover, completions for partials, form builder methods and Rails helpers, `--check` CLI mode.
+First release. Requires VS Code 1.100 or newer.
 
-- Syntax highlighting for ERB (`.erb`, `.html.erb`, `.rhtml`), Haml (`.haml`) and Slim (`.slim`, `.skim`).
-- Embedded Ruby, JavaScript, CSS, SCSS, Sass, CoffeeScript and Markdown inside filters / embedded blocks.
-- Language configuration: brackets, auto-closing pairs, comment toggling, indentation rules, folding.
-- Rails-oriented snippets for all three languages.
-- Commands: toggle ERB tag, wrap selection in ERB, HTML preview, show compiled Ruby, ERB→Haml, ERB/Haml→Slim converters.
-- Language server, Haml: completion of filters, tags, attribute names and Haml helpers; hover on filters and line prefixes; outline and folding. Renaming a partial updates `render` calls in ERB, Haml and Slim views. `*.haml.tt` generator templates open as Haml (no structure diagnostics).
-- Haml: toggle `-`/`=`/`-#` (`Ctrl+Alt+E`), extract selection to a partial (also ERB), re-indent formatter, optional `haml-lint` formatter and diagnostics, Haml→ERB (`haml_to_erb`) and HTML→Haml converters.
-- Slim commands: toggle line marker (`-` / `=` / `==` / `/`), wrap selection in `=` / `#{}`, extract selection to partial, Slim→ERB (`slimrb --erb`); `rubyTemplates.preview.useRails` renders the preview through `bin/rails runner`, `rubyTemplates.slim.compileForRails` compiles with `slimrb --rails`.
-- Slim `onEnterRules`: indent after `|` / `'` text lines, keep indent after `,` / `\` continuations.
+### Languages
+
+- ERB (`.erb`, `.html.erb`, `.rhtml`, `.html+variant.erb`), Haml (`.haml`) and Slim (`.slim`, `.skim`), with host grammars for `.js.erb`, `.css.erb`, `.json.erb`, `.text.erb`, `.xml.erb`, `.md.erb`, `.rb.erb` and `.yml.erb`.
+- Erubi / Erubis (`.erubi`, `.erubis`) open as ERB, with the same diagnostics and navigation.
+- Jbuilder and Builder views (`.jbuilder`, `.builder`, kept on the `ruby` language): partial navigation, hover, completion and warnings for `json.partial!`, `json.array! @xs, partial: "x"` and `xml << render(...)`.
+- Generator templates (`*.erb.tt`, `*.slim.tt`, `*.haml.tt` under `lib/templates` or `lib/generators`) open as ERB / Slim / Haml, without diagnostics or formatting.
+- Embedded Ruby, JavaScript, CSS, SCSS, Sass, CoffeeScript and Markdown inside filters and embedded blocks; language configuration (brackets, auto-closing pairs, comment toggling, indentation, folding, `onEnterRules`).
+- Rails-oriented snippets for all three languages, including Hotwire and ViewComponent.
+
+### Language server
+
+- Diagnostics for ERB, Haml and Slim: unclosed and malformed tags, unbalanced or stray `end`, `else` outside a block, block helpers in the wrong tag, unclosed or mismatched HTML tags, Ruby syntax errors in ERB tags, `%>` inside a string, and HTML checks for views (`img-missing-alt`, `duplicate-id`, `prefer-image-tag`, `unsafe-output`). Every ERB and Haml diagnostic has a code; `rubyTemplates.erb.disabledDiagnostics`, `rubyTemplates.haml.disabledDiagnostics` and the Slim setting turn checks off. Haml and Slim also report their own structure errors, such as a line indented several levels at once.
+- Partials: go to definition, links, hover, completion, find references and rename for `render "x"`, `render partial:`, `template:`, `layout:`, hash-rocket forms, `render @user` and `render FooComponent.new`. Partials resolve in the view's format and variant, and across symlinked folders. Unresolved renders and strict-locals mismatches are warnings, with a quick fix that creates the missing partial.
+- Strict locals (`<%# locals: (…) %>`): completion, hover and diagnostics.
+- Controllers and helpers: go to definition from `def show` to its templates, from `layout "admin"` and `render :edit` to their views, and from a helper call to its `def` in `app/helpers` or a `helper_method`.
+- Instance variables: completion after `@` and go to definition, from the view's controller action and its `before_action` callbacks.
+- Route helpers: completion, hover and go to definition from the app's routes (`rubyTemplates.routes.enabled`).
+- i18n: completion, hover, go to definition and find references for `t("…")` keys, from `config/locales`.
+- Rails helpers: completion with snippet arguments, form builder methods after `f.`, model attributes after `f.text_field :` from `db/schema.rb`, Turbo Stream actions after `turbo_stream.`, asset paths.
+- Stimulus: controller names in `data-controller` and `data-action`, action methods after `hello#`, and `static targets` names.
+- ViewComponent: class completion after `render `, `with_*` slot completion and slot readers, go to the component's class and template.
+- HTML in ERB: element, closing tag and attribute completion; typing `>` closes the start tag (`rubyTemplates.erb.autoCloseTags`); linked editing of tag names; code actions that add spaces inside `<%=foo%>` tags.
+- Haml: completion of filters, tags, attributes and helpers; hover on filters and line prefixes. Slim: completion, hover and formatting through a port of `Slim::Parser`.
+- Outline, breadcrumbs, folding, and Go to Symbol in Workspace by render name.
+- `ruby-templates-ls --check` runs the diagnostics from the command line.
+
+### Commands and formatting
+
+- Toggle ERB tag, wrap selection in ERB; toggle Haml `-`/`=`/`-#` and Slim line markers; wrap in `=` / `#{}`.
+- Extract selection to a partial (ERB, Haml, Slim).
+- Switch to Related File: a view's other formats, its controller or mailer action, and a ViewComponent's class, template and preview.
+- Preview rendered HTML and show compiled Ruby, through Erubi like Rails (`rubyTemplates.commands.ruby`), or inside the Rails app (`rubyTemplates.preview.useRails`).
+- Converters: ERB → Haml / Slim, Haml → ERB / Slim, Slim → ERB, HTML → Haml.
+- Formatting: ERB through `htmlbeautifier` or `erb-format` (`rubyTemplates.erb.formatter`), Haml re-indent or `haml-lint`, Slim formatter.
+- Linters on open and save: `erb_lint`, `herb-lint`, `haml-lint` and `slim-lint`.
+
+### Packaging
+
+- One `.vsix` per platform (Linux x64 / arm64, macOS x64 / arm64, Windows x64), each with only its own server binary.
