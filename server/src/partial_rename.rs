@@ -3,7 +3,7 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::partials::{
-    first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
+    app_root, first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
 };
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{i18n, render_filter, ruby, slim_outline, TemplateLang};
@@ -49,10 +49,6 @@ fn new_ref_name(written: &str, source: &Path, target: &Path, renames: &[(PathBuf
     qualified.rsplit('/').next().map(str::to_string)
 }
 
-fn app_views(path: &Path) -> Option<PathBuf> {
-    path.ancestors().find(|a| a.file_name().is_some_and(|n| n == "app")).map(|app| app.join("views"))
-}
-
 /// The references `find` sees on each line that are inside code, as (byte start, byte end, reference).
 fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<RenderRef>) -> Vec<(usize, usize, RenderRef)> {
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
@@ -85,7 +81,7 @@ fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBu
     }
     let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
-    match app_views(&source.path) {
+    match app_root(&source.path).map(|app| app.join("views")) {
         Some(views) if partial && r.name.contains('/') => resolve(&views.join("_"), &as_partial),
         _ => vec![],
     }

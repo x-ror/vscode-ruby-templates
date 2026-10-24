@@ -305,8 +305,13 @@ pub fn views_root(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The Rails `app` folder of a file in app/views, app/components or any other app/ folder. Views come first:
+/// `app/views/app/x.html.erb` is in a views subfolder named `app`.
 pub fn app_root(file: &Path) -> Option<PathBuf> {
-    views_root(file).and_then(|v| v.parent().map(|p| p.to_path_buf()))
+    match views_root(file) {
+        Some(views) => views.parent().map(Path::to_path_buf),
+        None => file.ancestors().skip(1).find(|dir| dir.file_name().is_some_and(|n| n == "app")).map(Path::to_path_buf),
+    }
 }
 
 // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
@@ -419,7 +424,12 @@ pub fn component_classes(current: &Path) -> Vec<(String, PathBuf)> {
 
 /// `user_card` → `UserCard`.
 fn camel_case(s: &str) -> String {
-    s.split('_').filter(|w| !w.is_empty()).map(|w| w[..1].to_ascii_uppercase() + &w[1..]).collect()
+    s.split('_')
+        .flat_map(|w| {
+            let mut chars = w.chars();
+            chars.next().map(|first| first.to_uppercase().chain(chars).collect::<String>())
+        })
+        .collect()
 }
 
 pub fn snake_case(s: &str) -> String {
@@ -901,6 +911,7 @@ mod tests {
             "app/components/button_component.rb",
             "app/components/button_component.html.erb",
             "app/components/helpers.rb",
+            "app/components/über_component.rb",
         ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -908,7 +919,10 @@ mod tests {
         }
         std::fs::create_dir_all(root.join("app/views/home")).unwrap();
         let names: Vec<String> = component_classes(&root.join("app/views/home/index.html.erb")).into_iter().map(|(n, _)| n).collect();
-        assert_eq!(names, ["Admin::UserCardComponent", "ButtonComponent"]);
+        assert_eq!(names, ["Admin::UserCardComponent", "ButtonComponent", "ÜberComponent"]);
+        let from_component: Vec<String> =
+            component_classes(&root.join("app/components/button_component.html.erb")).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(from_component, names);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
