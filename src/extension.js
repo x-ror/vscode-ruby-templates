@@ -594,19 +594,22 @@ async function openPreview(context) {
 }
 
 async function renderPreview(doc) {
-  if (!previewPanel) return;
+  const panel = previewPanel;
+  if (!panel) return;
   const r = await renderToHtml(doc);
+  // The panel may have closed, or moved to another document, during a slow render.
+  if (previewPanel !== panel || previewUri !== doc.uri.toString()) return;
   const esc = (s) =>
     s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   if (r.err && r.err.code === "ENOENT") {
-    previewPanel.webview.html = errorPage(
+    panel.webview.html = errorPage(
       "Renderer not found",
       missingToolMessage(r.err.path, doc.languageId),
     );
     return;
   }
   if (r.code !== 0) {
-    previewPanel.webview.html = errorPage(
+    panel.webview.html = errorPage(
       "Render failed",
       r.stderr || r.stdout,
       engineOf(doc.languageId) === "erb"
@@ -615,7 +618,7 @@ async function renderPreview(doc) {
     );
     return;
   }
-  previewPanel.webview.html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  panel.webview.html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body{font-family:system-ui,sans-serif;margin:0}
   .bar{display:flex;gap:1rem;align-items:center;padding:.4rem .8rem;font-size:12px;background:var(--vscode-editorWidget-background);border-bottom:1px solid var(--vscode-widget-border,#444)}
