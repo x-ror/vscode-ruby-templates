@@ -160,7 +160,6 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
     // Haml measures every line against the first indented one.
     let doc_indentation =
         visits.iter().map(|v| leading_ws(lines[v.line])).find(|ws| !ws.is_empty()).filter(|ws| !(ws.contains('\t') && ws.contains(' ')));
-    let unit = doc_indentation.map(indent_width);
 
     for &Visit { line: line_no, indent, kind, .. } in visits {
         let raw = lines[line_no];
@@ -170,14 +169,7 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
             out.push(error(line_range(text, line_no, 0, ws.len()), "Mixed tabs and spaces in indentation"));
         } else if let Some(doc_ws) = doc_indentation.filter(|d| !ws.is_empty() && ws.contains('\t') != d.contains('\t')) {
             tab_space_mismatch = true;
-            out.push(error(
-                line_range(text, line_no, 0, ws.len()),
-                format!(
-                    "Inconsistent indentation: {} used for indentation, but the rest of the document was indented using {}.",
-                    human_indentation(ws),
-                    human_indentation(doc_ws)
-                ),
-            ));
+            out.push(error(line_range(text, line_no, 0, ws.len()), inconsistent_indentation_message(ws, doc_ws)));
         }
 
         // Dedent to a level that never existed (checked before popping).
@@ -201,19 +193,13 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
         if is_child && !bad_dedent && !tab_space_mismatch {
             let step = indent - parent_indent;
             let range = line_range(text, line_no, 0, ws.len());
-            match (unit, doc_indentation) {
-                (Some(u), Some(doc_ws)) if indent % u != 0 => out.push(error(
-                    range,
-                    format!(
-                        "Inconsistent indentation: {} used for indentation, but the rest of the document was indented using {}.",
-                        human_indentation(ws),
-                        human_indentation(doc_ws)
-                    ),
-                )),
-                (Some(u), _) if step != u => {
-                    out.push(error(range, format!("Inconsistent indentation: expected {} spaces, found {}", u, step)))
+            if let Some(doc_ws) = doc_indentation {
+                let unit = indent_width(doc_ws);
+                if indent % unit != 0 {
+                    out.push(error(range, inconsistent_indentation_message(ws, doc_ws)));
+                } else if step != unit {
+                    out.push(error(range, format!("Inconsistent indentation: expected {unit} spaces, found {step}")));
                 }
-                _ => {}
             }
         } else if stack.is_empty() && indent > 0 {
             out.push(error(line_range(text, line_no, 0, ws.len()), "Unexpected indentation at top level"));
@@ -257,6 +243,15 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
 fn haml_tag_name(content: &str) -> &str {
     let Some(rest) = content.strip_prefix('%') else { return "div" };
     &rest[..rest.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '-' | '_' | ':'))).unwrap_or(rest.len())]
+}
+
+/// Haml's error for a line indented unlike the first indented line.
+fn inconsistent_indentation_message(ws: &str, doc_ws: &str) -> String {
+    format!(
+        "Inconsistent indentation: {} used for indentation, but the rest of the document was indented using {}.",
+        human_indentation(ws),
+        human_indentation(doc_ws)
+    )
 }
 
 /// Haml's wording for an indentation string: "2 spaces", "1 tab".
@@ -592,6 +587,7 @@ mod tests {
                     "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
                 ),
             ),
+            ("%div\n  %p\n      %b", (2, 0, 6, "Inconsistent indentation: expected 2 spaces, found 4")),
             (" %p", (0, 0, 1, "Unexpected indentation at top level")),
             ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
             (
