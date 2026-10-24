@@ -742,4 +742,116 @@ mod tests {
         assert_eq!(found, [components.join("card_component.rb"), components.join("card_component.html.haml")]);
         std::fs::remove_dir_all(&root).unwrap();
     }
+
+    /// Files of `dir` under a fresh temp `app/views`, and a resolver from `view` (path under app/views) to file names.
+    fn partial_tree(tag: &str, files: &[&str]) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("rt-{tag}-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in files {
+            let p = views.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        (root, views)
+    }
+
+    fn resolved_names(views: &Path, view: &str, render: &str) -> Vec<String> {
+        let r = render_refs(render).remove(0);
+        resolve(&views.join(view), &r).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn locale_only_partial_resolves_from_any_format() {
+        let (root, views) = partial_tree("locale-only", &["shared/_greeting.de.erb"]);
+        for view in ["users/show.html.erb", "users/index.json.jbuilder", "users/show.erb"] {
+            assert_eq!(resolved_names(&views, view, r#"render "shared/greeting""#), ["_greeting.de.erb"], "{view}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn locale_and_format_partial_follows_view_format() {
+        let (root, views) = partial_tree("locale-format", &["users/_card.en.html.erb", "users/_clip.js.erb", "users/_event.ics.erb"]);
+        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "card""#), ["_card.en.html.erb"]);
+        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "card""#).is_empty());
+        // `js` has locale shape but is a format: it must not read as format-less and match JSON views.
+        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "clip""#).is_empty());
+        assert_eq!(resolved_names(&views, "users/index.js.erb", r#"render "clip""#), ["_clip.js.erb"]);
+        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "event""#).is_empty());
+        assert_eq!(resolved_names(&views, "users/index.ics.erb", r#"render "event""#), ["_event.ics.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn variant_named_partial_is_not_the_bare_name() {
+        let (root, views) = partial_tree("variant-name", &["users/_user.v2.html.erb", "users/_user.html.erb"]);
+        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "user""#), ["_user.html.erb"]);
+        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "user.v2""#), ["_user.v2.html.erb"]);
+        let only_v2 = partial_tree("variant-only", &["users/_user.v2.html.erb"]);
+        assert!(resolved_names(&only_v2.1, "users/show.html.erb", r#"render "user""#).is_empty());
+        assert!(resolve_model(&only_v2.1.join("users/show.html.erb"), "user").is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&only_v2.0).unwrap();
+    }
+
+    #[test]
+    fn completion_names_drop_locale_format_and_keep_variant_looking_stems() {
+        let (root, views) = partial_tree(
+            "names",
+            &["users/_user.v2.html.erb", "users/_card.en.html.erb", "users/_row.html+phone.erb", "users/index.de.html.erb"],
+        );
+        let current = views.join("users/show.html.erb");
+        let files = files_under(&views, usize::MAX);
+        let names = |kind| render_candidates(&current, kind, &files).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        assert_eq!(names(RenderKind::Partial), ["card", "row", "user.v2", "users/card", "users/row", "users/user.v2"]);
+        assert_eq!(names(RenderKind::Template), ["users/index"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn suffix_edge_cases() {
+        for (fname, suffix) in [
+            ("user.ics.erb", Some(Some("ics"))),
+            ("user.en.+phone.erb", Some(None)),
+            ("user.html.ERB", Some(Some("html"))),
+            ("user.EN.erb", None),
+            ("user.en.xx.erb", None),
+            ("user.erb.erb", None),
+        ] {
+            assert_eq!(template_suffix(fname, "user"), suffix, "{fname}");
+        }
+    }
+
+    #[test]
+    fn render_ref_at_covers_quotes_but_not_beyond() {
+        let line = r#"<%= render "users/card" %>"#;
+        let open_quote = line.find('"').unwrap();
+        let end = open_quote + 1 + "users/card".len();
+        assert!(render_ref_at(line, open_quote - 1).is_none());
+        assert!(render_ref_at(line, open_quote).is_some());
+        assert!(render_ref_at(line, end + 1).is_some());
+        assert!(render_ref_at(line, end + 2).is_none());
+    }
+
+    #[test]
+    fn component_ref_at_covers_exactly_the_class_name() {
+        let line = "= render Users::CardComponent.new";
+        let start = line.find("Users").unwrap();
+        let end = start + "Users::CardComponent".len();
+        assert!(component_ref_at(line, start - 1).is_none());
+        assert!(component_ref_at(line, start).is_some());
+        assert!(component_ref_at(line, end).is_some());
+        assert!(component_ref_at(line, end + 1).is_none());
+    }
+
+    #[test]
+    fn split_args_honors_escapes_and_nested_quotes() {
+        assert_eq!(split_args(r#"a: "x\",y", b: 1"#), Some(vec![r#"a: "x\",y""#, "b: 1"]));
+        assert_eq!(split_args(r#"a: "x\\", b: 1"#), Some(vec![r#"a: "x\\""#, "b: 1"]));
+        assert_eq!(split_args(r#"a: "it's, ok", b: 1"#), Some(vec![r#"a: "it's, ok""#, "b: 1"]));
+        assert_eq!(split_args(r#"a: 'say "hi", ok', b: 1"#), Some(vec![r#"a: 'say "hi", ok'"#, "b: 1"]));
+        assert_eq!(split_args(r#"a: "x\""#), None);
+        assert_eq!(split_args("a: f(1, 2), b: [3, 4]"), Some(vec!["a: f(1, 2)", "b: [3, 4]"]));
+        assert_eq!(split_args("a: )"), None);
+    }
 }

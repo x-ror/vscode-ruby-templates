@@ -155,6 +155,7 @@ pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_en
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower_lsp::lsp_types::Position;
 
     struct Tree(PathBuf);
 
@@ -293,6 +294,59 @@ mod tests {
             [
                 ("app/controllers/users_controller.rb".into(), 0, 17, "users/tile".into()),
                 ("app/helpers/cards_helper.rb".into(), 0, 8, "users/tile".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn variant_named_neighbour_does_not_block_rename() {
+        let t = Tree::new("v2", &["app/views/users/_user.html.erb", "app/views/users/_user.v2.html.erb"]);
+        let sources = [t.source("app/views/users/index.html.erb", ERB, "<%= render \"user\" %>\n")];
+        let got = t.edits(&[("app/views/users/_user.html.erb", "app/views/users/_member.html.erb")], &sources);
+        assert_eq!(got, [("app/views/users/index.html.erb".into(), 0, 12, "member".into())]);
+    }
+
+    #[test]
+    fn edit_ranges_cover_the_name_on_later_lines() {
+        let t = Tree::new("ranges", &["app/views/users/_card.html.slim"]);
+        let rename = [(t.path("app/views/users/_card.html.slim"), t.path("app/views/users/_tile.html.slim"))];
+        let range_of = |source: Source| {
+            let edits = render_edits(&rename, &[source], &[]);
+            let edit = edits.into_values().next().unwrap().remove(0);
+            (edit.range.start, edit.range.end)
+        };
+        let at = |line, start, end| (Position::new(line, start), Position::new(line, end));
+        let erb = t.source("app/views/home/show.html.erb", ERB, "é<p></p>\n<%= render \"users/card\" %>\n");
+        assert_eq!(range_of(erb), at(1, 12, 22));
+        let slim = t.source("app/views/users/index.html.slim", SLIM, "p é\n= render \"card\"\n");
+        assert_eq!(range_of(slim), at(1, 10, 14));
+    }
+
+    #[test]
+    fn sources_include_ruby_files_and_prefer_open_text() {
+        let t = Tree::new(
+            "sources",
+            &[
+                "app/views/users/index.html.erb",
+                "app/views/users/notes.txt",
+                "app/controllers/users_controller.rb",
+                "app/helpers/h.rb",
+                "app/models/user.rb",
+            ],
+        );
+        let open = HashMap::from([(t.path("app/views/users/index.html.erb"), "unsaved".to_string())]);
+        let mut found: Vec<_> = sources(&t.path("app/views"), &open)
+            .into_iter()
+            .map(|s| (s.path.strip_prefix(&t.0).unwrap().to_string_lossy().into_owned(), s.lang.is_none(), s.text))
+            .collect();
+        found.sort();
+        let ruby = |p: &str| (p.to_string(), true, String::new());
+        assert_eq!(
+            found,
+            [
+                ruby("app/controllers/users_controller.rb"),
+                ruby("app/helpers/h.rb"),
+                ("app/views/users/index.html.erb".to_string(), false, "unsaved".to_string()),
             ]
         );
     }
