@@ -319,6 +319,10 @@ fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize
     i18n::full_key(path, &line[start..end])
 }
 
+fn markdown_hover(value: String) -> Option<Hover> {
+    Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None })
+}
+
 fn helper_hover(h: &helpers::Helper) -> String {
     let signature = format!("```ruby\n{}\n```", h.detail);
     match h.doc_url() {
@@ -621,28 +625,22 @@ impl LanguageServer for Backend {
         if doc.lang == TemplateLang::Slim {
             let parsed = slim_parser::parse(&doc.text, &self.options().extra_engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
-            if let Some(value) = marker {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
-                    range: None,
-                }));
+            if let Some(md) = marker {
+                return Ok(markdown_hover(md));
             }
         }
         let (line_start, line, col) = util::line_at(&doc.text, pos);
-        let markdown = |value: String| {
-            Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }))
-        };
         if doc.lang == TemplateLang::Erb {
             if let Some(md) = erb::tag_doc(line, col) {
-                return markdown(md.to_string());
+                return Ok(markdown_hover(md.to_string()));
             }
         }
         if let Ok(path) = uri.to_file_path() {
             if let Some(r) = partials::render_ref_at(line, col) {
-                return markdown(render_hover(&path, &r));
+                return Ok(markdown_hover(render_hover(&path, &r)));
             }
             if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&self.locale_files(&path), &key)) {
-                return markdown(md);
+                return Ok(markdown_hover(md));
             }
         }
         let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
@@ -650,11 +648,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         if let Some(md) = haml::hover(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return markdown(md);
+            return Ok(markdown_hover(md));
         }
         let word = word_at(line, col);
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
-            return markdown(helper_hover(h));
+            return Ok(markdown_hover(helper_hover(h)));
         }
         Ok(None)
     }
