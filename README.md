@@ -101,6 +101,7 @@ npm run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle
 npm run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
 node test/e2e.js      # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
 npm run test:slim     # Slim editing helpers and onEnterRules
+xvfb-run -a npm run test:vscode  # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/)
 npm run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
 npm run package       # build the .vsix
 ```

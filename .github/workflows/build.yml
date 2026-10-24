@@ -77,6 +77,8 @@ jobs:
       - run: npm run test:snippets
       - run: npm run test:unit
       - run: npm run test:slim
+      # Commands and the language server inside a downloaded VS Code; tools that aren't installed are skipped.
+      - run: xvfb-run -a npm run test:vscode
       - name: Package one .vsix per platform
         run: |
           for plat in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
