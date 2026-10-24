@@ -639,6 +639,31 @@
           "default": false,
           "description": "Run haml-lint through `bundle exec` when a Gemfile exists in the workspace."
         },
+        "rubyTemplates.erb.formatter": {
+          "type": "string",
+          "enum": [
+            "none",
+            "htmlbeautifier",
+            "erb-format"
+          ],
+          "enumDescriptions": [
+            "No ERB formatter from this extension (another extension's stays in charge).",
+            "htmlbeautifier (gem install htmlbeautifier): re-indents HTML and ERB blocks to the editor's tab size, keeps line breaks.",
+            "erb-format (gem install erb-formatter): re-flows tags and attributes to a line width."
+          ],
+          "default": "none",
+          "description": "What Format Document does in ERB files. Runs through bundle exec when rubyTemplates.preview.useBundler is on."
+        },
+        "rubyTemplates.commands.htmlbeautifier": {
+          "type": "string",
+          "default": "htmlbeautifier",
+          "description": "Executable for the htmlbeautifier ERB formatter."
+        },
+        "rubyTemplates.commands.erbFormat": {
+          "type": "string",
+          "default": "erb-format",
+          "description": "Executable for the erb-format ERB formatter (gem install erb-formatter)."
+        },
         "rubyTemplates.haml.formatter": {
           "type": "string",
           "enum": [

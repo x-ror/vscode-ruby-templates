@@ -9,6 +9,7 @@ import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
+import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -70,6 +71,7 @@ function activate(context) {
   });
   context.subscriptions.push(output);
   registerHamlFormatting(context, output);
+  registerErbFormatting(context, output);
   startHamlLint(context, output);
   sub("rubyTemplates.restartServer", () => restartClient(context, output));
   context.subscriptions.push(
@@ -955,8 +957,66 @@ function runHamlLint(doc, args, signal) {
 }
 
 // 127: `bundle exec` couldn't find the executable.
-const hamlLintMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
+const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
+
+/** Registered only while a formatter is chosen, so another extension's ERB formatter isn't shadowed. */
+function registerErbFormatting(context, output) {
+  let registration;
+  const update = () => {
+    registration?.dispose();
+    registration = undefined;
+    const tool = cfg().get("erb.formatter", "none");
+    if (!ERB_FORMATTERS[tool]) return;
+    registration = vscode.languages.registerDocumentFormattingEditProvider(
+      "erb",
+      {
+        provideDocumentFormattingEdits: (doc, options) =>
+          formatErb(doc, options, tool, output),
+      },
+    );
+  };
+  update();
+  context.subscriptions.push(
+    { dispose: () => registration?.dispose() },
+    vscode.workspace.onDidChangeConfiguration(
+      (e) => e.affectsConfiguration("rubyTemplates.erb.formatter") && update(),
+    ),
+  );
+}
+
+async function formatErb(doc, options, tool, output) {
+  const { command, gem } = ERB_FORMATTERS[tool];
+  const bin = cfg().get(`commands.${command}`, tool);
+  const { version } = doc;
+  const r = await run(
+    bin,
+    erbFormatterArgs(tool, options),
+    { cwd: workspaceFolderFor(doc) },
+    doc.getText(),
+  );
+  if (toolMissing(r)) {
+    vscode.window.showErrorMessage(
+      `${bin} was not found. Install it with: gem install ${gem} — or set rubyTemplates.commands.${command}.`,
+    );
+    return [];
+  }
+  if (r.code !== 0) {
+    output.appendLine(
+      `[${tool}] format ${doc.uri.fsPath} failed:\n${r.stderr || r.stdout}`,
+    );
+    vscode.window.showErrorMessage(`${tool} failed: ${firstLine(r)}`);
+    return [];
+  }
+  if (!r.stdout || r.stdout === doc.getText() || doc.version !== version)
+    return [];
+  return [
+    vscode.TextEdit.replace(
+      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
+      r.stdout,
+    ),
+  ];
+}
 
 function registerHamlFormatting(context, output) {
   context.subscriptions.push(
@@ -976,7 +1036,7 @@ function registerHamlFormatting(context, output) {
 async function formatWithHamlLint(doc, output) {
   const { version } = doc;
   const r = await runHamlLint(doc, ["--auto-correct-only", "--stderr"]);
-  if (hamlLintMissing(r)) {
+  if (toolMissing(r)) {
     vscode.window.showErrorMessage(
       "haml-lint was not found. Install it with: gem install haml_lint — or set rubyTemplates.commands.hamlLint.",
     );
@@ -1036,7 +1096,7 @@ function startHamlLint(context, output) {
     const r = await runHamlLint(doc, ["--reporter", "json"], controller.signal);
     if (controller.signal.aborted) return;
     pending.delete(doc.uri.toString());
-    if (hamlLintMissing(r)) {
+    if (toolMissing(r)) {
       if (!reportedMissing)
         output.appendLine(
           "[haml-lint] not found; Haml lint diagnostics are off. Install it with: gem install haml_lint",

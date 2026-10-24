@@ -2,6 +2,7 @@ import assert from "node:assert";
 import { convertedFileName } from "../src/convert.js";
 import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
+import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 
 // convertedFileName
 const cases = [
@@ -82,3 +83,18 @@ assert.deepStrictEqual(
   ["/a/components"],
 );
 assert.deepStrictEqual(relatedDirs("/a/views/users", "show.html.erb"), []);
+
+// erbFormatterArgs
+assert.deepStrictEqual(
+  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: true }),
+  ["--tab-stops", "4"],
+);
+assert.deepStrictEqual(
+  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: false }),
+  ["--tab"],
+);
+assert.deepStrictEqual(
+  erbFormatterArgs("erb-format", { tabSize: 2, insertSpaces: true }),
+  ["--stdin"],
+);
+assert.ok(Object.keys(ERB_FORMATTERS).every((k) => k !== "none"));

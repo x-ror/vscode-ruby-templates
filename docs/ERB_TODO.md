@@ -100,11 +100,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 7. Formatting
 
-- [ ] Document formatting provider for ERB (Herb formatter, `htmlbeautifier`, or `erb-formatter`)
+- [x] Document formatting provider for ERB: `rubyTemplates.erb.formatter` = `htmlbeautifier` or `erb-format`, registered only when chosen (`src/extension.js` `registerErbFormatting`, `src/erbFormat.js`)
 - [ ] Range formatting
-- [ ] Configurable formatter executable plus `bundle exec` (reuse `rubyTemplates.preview.useBundler` pattern)
+- [x] Configurable formatter executable plus `bundle exec` (`rubyTemplates.commands.htmlbeautifier` / `.erbFormat`, `rubyTemplates.preview.useBundler`)
 - [ ] Normalize spaces inside tags (`<%=foo%>` → `<%= foo %>`) as a code action or format option
-- [ ] Format on save works (`editor.formatOnSave` via the provider)
+- [x] Format on save works (`editor.formatOnSave` via the provider)
 
 ## 8. Diagnostics and linting
 
