@@ -642,6 +642,47 @@ mod tests {
     }
 
     #[test]
+    fn indent_unit_is_the_first_indented_line() {
+        let four = "Inconsistent indentation: 6 spaces used for indentation, but the rest of the document was indented using 4 spaces.";
+        // Haml 6: a 4-space first indent makes a 2-space child step a non-multiple.
+        assert_eq!(haml("%div\n    %p\n      %b\n"), vec![at(2, 0, 6, four)]);
+        assert_eq!(haml("- if x\n    %p\n      %b\n    %i\n"), vec![at(2, 0, 6, four)]);
+        assert_eq!(haml("%div\n    %p\n        %b\n    %i\n"), vec![]);
+        assert_eq!(haml("%div\n\t%p\n\t\t%b\n\t%i\n"), vec![]);
+        // Haml: "indented 2 levels deeper"; the message differs but the line is the same.
+        let got = haml("%div\n\t%p\n\t\t\t%b\n");
+        assert_eq!(got.iter().map(|d| d.0).collect::<Vec<_>>(), [2]);
+    }
+
+    #[test]
+    #[ignore = "bug: a dedent to a non-multiple of the indent unit reports bad-dedent; Haml 6 says \"Inconsistent indentation: …\" on that line"]
+    fn off_unit_dedent_uses_haml_message() {
+        let cases = [
+            (
+                "%div\n  %p\n    %b\n   %i\n",
+                at(
+                    3,
+                    0,
+                    3,
+                    "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
+                ),
+            ),
+            (
+                "%div\n    %p\n  %b\n",
+                at(
+                    2,
+                    0,
+                    2,
+                    "Inconsistent indentation: 2 spaces used for indentation, but the rest of the document was indented using 4 spaces.",
+                ),
+            ),
+        ];
+        for (src, expected) in cases {
+            assert_eq!(haml(src), vec![expected], "{src:?}");
+        }
+    }
+
+    #[test]
     fn duplicate_children_report_once() {
         assert_eq!(haml("%p text\n  %a\n  %b").len(), 1);
     }

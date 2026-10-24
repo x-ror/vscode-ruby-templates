@@ -630,6 +630,49 @@ mod tests {
     }
 
     #[test]
+    fn inline_text_makes_deeper_lines_text() {
+        // Slim 5 parses all of these without error: every deeper line after inline text is text.
+        for ok in [
+            "p Hello\n   world\n  more\n",
+            "p Hello\n  span\n    a\n   b\n",
+            "a> Link\n  b\n     c\n",
+            "p #{x}\n  more\n",
+            "p(class=\"x\") text\n  span x\n   y\n",
+            "p class=\"x\" text\n  more\n",
+            "div *{a: 1} text\n  span x\n   y\n",
+        ] {
+            assert_eq!(slim(ok), vec![], "{ok:?}");
+        }
+    }
+
+    #[test]
+    fn tag_without_inline_text_keeps_structure_checks() {
+        // Slim 5 raises "Malformed indentation" for the `   b` line after each of these heads.
+        for head in ["p(class=\"x\")", "p class=\"x\"", "p= x", "p x=1", "div"] {
+            let text = format!("{head}\n  span\n    a\n   b\n");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "bug: `p<`/`p>`/`p<>` (whitespace modifier, no text) is classified as a text block, so its children lose structure checks"]
+    fn whitespace_modifier_tag_keeps_structure_checks() {
+        for head in ["p<", "p>", "p<>", "p.a.b<"] {
+            let text = format!("{head}\n  span\n    a\n   b\n");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "bug: `div *attrs` / `p *{a: 1}` (space-separated splat, no text) is classified as a text block, so its children lose structure checks"]
+    fn splat_attributes_tag_keeps_structure_checks() {
+        for head in ["div *attrs", "p.a *{a: 1}"] {
+            let text = format!("{head}\n  span\n    a\n   b\n");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+        }
+    }
+
+    #[test]
     fn doctype_children() {
         assert_eq!(slim("doctype html\n  p\n"), one(code::DOCTYPE_CHILDREN, 1, 2, ERROR));
     }
