@@ -79,7 +79,6 @@ async function doStart(context, output) {
   client = started;
   try {
     await started.start();
-    context.subscriptions.push(started);
   } catch (e) {
     client = undefined;
     await disposeQuietly(started, output);
