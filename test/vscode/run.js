@@ -32,6 +32,25 @@ write(
 );
 write("app/views/users/lint.html.erb", "<%=foo%>\n");
 write(".erb_lint.yml", "linters:\n  SpaceAroundErbTag:\n    enabled: true\n");
+write("app/views/users/wrap.html.erb", "hello world\n");
+write("app/views/users/wrap_empty.html.erb", "\n");
+write(
+  "app/views/users/toggle.html.slim",
+  "- foo\n= bar\n== baz\n/ qux\njavascript:\n  - not a marker\n",
+);
+write("app/views/users/wrap.html.slim", "p\n  hello world\n");
+write("app/views/users/toggle.html.haml", "- foo\n= bar\n-# baz\n%p\n");
+write("app/views/users/reindent.html.haml", "%div\n    %p\n      %b x\n");
+write("app/views/users/format.html.haml", "%ul\n  %li\n     %b x\n");
+write("app/views/users/format.html.slim", "div\n    p= x\n    p y\n");
+write(
+  "app/views/users/extract.html.erb",
+  "<div>\n  <p>a</p>\n  <p>b</p>\n</div>\n",
+);
+write("app/views/users/extract.html.haml", "%div\n  %p a\n  %p b\n");
+write("app/views/users/extract.html.slim", "div\n  p a\n  p b\n");
+write("app/views/users/lint.html.haml", "%p\n  = foo   \n");
+write("app/views/users/lint.html.slim", "p \n  = foo\n");
 // Where `gem install` puts executables; the formatter and linter checks skip tools that aren't there.
 const gemBin = (() => {
   try {
