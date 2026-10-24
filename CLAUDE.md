@@ -28,7 +28,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 - Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
-- JS: no formatter dependency. 2 spaces, single quotes, semicolons, lines ≤ 140 (same as Rust). Several `test/*.js` still use double quotes; don't mix styles inside a file, convert in a `style:` commit.
+- JS: Prettier with its default rules (no config file): `npm run format` before committing, `npm run format:check` to verify.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
 
@@ -50,7 +50,7 @@ Run the ones that cover what you changed; all of them before a release.
 - Rust: `cargo fmt --manifest-path server/Cargo.toml --check`, `cargo clippy --manifest-path server/Cargo.toml`, `cargo test --manifest-path server/Cargo.toml` (also asserts `test/broken/bad.html.{haml,slim}`)
 - Server end to end: `npm run build:server && npm run test:server && node test/e2e.js` (e2e asserts and exits non-zero on a mismatch)
 - Grammars: `npm run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
-- JS helpers: `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
+- JS: `npm run format:check`, `npm run test:unit`, `npm run test:slim`, `npm run test:snippets`; any JS file: `node --check <file>`
 - Slim formatter: `npm run test:format` (needs `ruby -rslim`)
 
 ## Where tests go
