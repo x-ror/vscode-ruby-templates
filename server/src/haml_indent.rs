@@ -141,7 +141,7 @@ pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
             let body = if content.trim_end() == ":ruby" { LineRole::Ruby } else { LineRole::Text };
             let next = visits.get(n + 1).map_or(lines.len(), |next| next.line);
             // Blank lines after the body belong to whatever comes next.
-            let last = (v.line + 1..next).rev().find(|&i| !lines[i].trim().is_empty()).map_or(v.line, |i| i);
+            let last = (v.line + 1..next).rev().find(|&i| !lines[i].trim().is_empty()).unwrap_or(v.line);
             roles[v.line + 1..=last].fill(body);
         }
     }
