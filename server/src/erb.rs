@@ -299,4 +299,11 @@ mod tests {
         assert_eq!(doc("<% f", 2), None);
         assert_eq!(doc("a -%>", 0), None);
     }
+
+    #[test]
+    fn return_modifier_does_not_open_a_block() {
+        assert!(diagnostics("<% return unless current_user %>\n<p>hi</p>").is_empty());
+        assert!(diagnostics("<% return if x %>").is_empty());
+        assert!(only("<% if x %>\n<p>hi</p>").message.starts_with("Block `if x` is never closed"));
+    }
 }

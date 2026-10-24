@@ -169,4 +169,49 @@ mod tests {
         assert!(ends_with_block("form_with model: @u do |f|"));
         assert!(!ends_with_block("link_to 'x', y"));
     }
+
+    #[test]
+    fn strip_drops_comments_keeps_interpolation_and_newlines() {
+        assert_eq!(strip("a # c\nb"), "a \nb");
+        assert_eq!(strip("a\nb\n"), "a\nb\n");
+        assert_eq!(strip("a # c"), "a ");
+        assert_eq!(strip("x = #{y} # c\n"), "x = #{y} \n");
+        assert_eq!(strip("puts 'a # b' # c"), "puts \"\" ");
+    }
+
+    #[test]
+    fn code_end_tracks_quotes_escapes_and_comments() {
+        assert_eq!(code_end("x = 1"), CodeEnd::Code);
+        assert_eq!(code_end("x = \"a"), CodeEnd::String);
+        assert_eq!(code_end("x = \"a\" + 'b"), CodeEnd::String);
+        assert_eq!(code_end(r#"x = "a\"b"#), CodeEnd::String);
+        assert_eq!(code_end(r#"x = "a\\" + 1"#), CodeEnd::Code);
+        assert_eq!(code_end(r#"x = "it's""#), CodeEnd::Code);
+        assert_eq!(code_end(r#"x = 'say "hi"'"#), CodeEnd::Code);
+        assert_eq!(code_end("x = \"a # b\""), CodeEnd::Code);
+        assert_eq!(code_end("x = 1 # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = #{y}"), CodeEnd::Code);
+        assert!(comment_before("link_to x # why"));
+        assert!(!comment_before("link_to x"));
+    }
+
+    #[test]
+    fn analyze_counts_nested_blocks_loops_and_modifiers() {
+        assert_eq!(analyze("if a"), (BlockEffect::Open(1), 1, 0));
+        assert_eq!(analyze("if a; if b"), (BlockEffect::Open(2), 2, 0));
+        assert_eq!(analyze("end; if a; if b"), (BlockEffect::Open(1), 2, 1));
+        assert_eq!(analyze("x = :if").0, BlockEffect::Neutral);
+        assert_eq!(analyze("def end").0, BlockEffect::Open(1));
+        assert_eq!(analyze("end; end"), (BlockEffect::Close(2), 0, 2));
+        assert_eq!(analyze("if a; end; end"), (BlockEffect::Close(1), 1, 2));
+        assert_eq!(analyze("for x in xs").0, BlockEffect::Open(1));
+        assert_eq!(analyze("for x in xs do").0, BlockEffect::Open(1));
+        assert_eq!(analyze("until done do").0, BlockEffect::Open(1));
+        assert_eq!(analyze("elsif b").0, BlockEffect::Continue);
+        assert_eq!(analyze("x = y rescue nil").0, BlockEffect::Neutral);
+        assert_eq!(analyze("return if x").0, BlockEffect::Neutral);
+        assert_eq!(analyze("return unless current_user").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = 1 if (a)").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = (if a then 1 else 2 end)").0, BlockEffect::Neutral);
+    }
 }

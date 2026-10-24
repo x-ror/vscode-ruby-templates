@@ -142,4 +142,17 @@ mod tests {
         apply_change(&mut text, edit(None, "fresh"));
         assert_eq!(text, "fresh");
     }
+
+    #[test]
+    fn find_balanced_ignores_brackets_inside_strings() {
+        let len = |s: &str| find_balanced(s, '(', ')');
+        assert_eq!(len("(a (b) c) tail"), Some(9));
+        assert_eq!(len(r#"("a)" + 1) x"#), Some(10));
+        assert_eq!(len(r#"("it's)") x"#), Some(9));
+        assert_eq!(len(r#"('say "hi)') x"#), Some(12));
+        assert_eq!(len(r#"("a\")") x"#), Some(8));
+        assert_eq!(len(r#"("é)")"#), Some(r#"("é)")"#.len()));
+        assert_eq!(len(r#"("a)""#), None);
+        assert_eq!(len("(a"), None);
+    }
 }
