@@ -176,9 +176,9 @@ fn file_name(uri: &Url) -> String {
         .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
 }
 
-/// The `format` of `name.format.ext`; `None` when `file` doesn't end in `ext` or has no format part.
+/// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.
 fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
-    file.strip_suffix(ext)?.rsplit_once('.').map(|(_, format)| format)
+    file.ends_with(ext).then(|| partials::template_format(Path::new(file)))?
 }
 
 fn is_html_format(format: &str) -> bool {
@@ -977,6 +977,8 @@ mod tests {
             ("/v/mailer/welcome.text.erb", false),
             ("/v.html/config.yml.erb", false),
             ("/v.html/nginx.erb", false),
+            ("/v/users/show.de.erb", false),
+            ("/v/users/show.de.html.erb", true),
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
@@ -997,6 +999,8 @@ mod tests {
             ("file:///v/show.html%2Bphone.slim", true),
             ("file:///v/show.xml%2Bfeed.slim", false),
             ("file:///v/show.slim", true),
+            ("file:///v/show.de.slim", true),
+            ("file:///v/show.de.xml.slim", false),
             ("untitled:Untitled-1", true),
             ("file:///v/feed.xml.slim", false),
             ("file:///v/welcome.text.slim", false),

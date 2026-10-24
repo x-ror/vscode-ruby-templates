@@ -161,7 +161,7 @@ pub fn template_stem(fname: &str) -> &str {
 }
 
 /// `html` of `show.html+phone.erb` (variant dropped); `None` for `show.erb` and locale-only `show.de.erb`.
-fn template_format(path: &Path) -> Option<&str> {
+pub fn template_format(path: &Path) -> Option<&str> {
     let fname = path.file_name()?.to_str()?;
     template_suffix(fname, template_stem(fname))?
 }
