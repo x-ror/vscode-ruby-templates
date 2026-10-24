@@ -17,22 +17,91 @@ static HASH_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\b(?:(controll
 static OPEN_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:data-(controller|action)["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(controller|action):)\s*["']([^"']*)$"#).unwrap()
 });
+// An unfinished `data-x-target="…` or `x_target: "…` value in a `data:` hash.
+static OPEN_TARGET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?:data-([\w-]+)-target["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(\w+)_target:)\s*["']([^"']*)$"#).unwrap());
+static TARGETS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+targets\s*=\s*\[([^\]]*)\]").unwrap());
+static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']([\w-]+)["']"#).unwrap());
+// `name(args) {`, `async name() {`, TS `name(): void {`, or a `name = (e) =>` class field, at the start of a line.
+static METHOD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?m)^([ \t]+)(?:(?:async|public|protected|override)\s+)*([A-Za-z_$][\w$]*)\s*(?:\([^)]*\)\s*(?::[^{;]*)?\{|=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>)",
+    )
+    .unwrap()
+});
+const NOT_ACTIONS: &[&str] =
+    &["if", "for", "while", "switch", "catch", "return", "function", "constructor", "initialize", "connect", "disconnect"];
 
-/// The identifier being typed at byte `col`: its start and the typed part. In an action value only the part
-/// after `->` and before `#` names a controller.
-pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, &str)> {
+/// What a Stimulus attribute value is naming at the cursor.
+#[derive(Debug, PartialEq)]
+pub enum Slot {
+    Controller,
+    /// After `id#` in an action descriptor.
+    Method(String),
+    /// In a `data-id-target` value.
+    Target(String),
+}
+
+/// The name being typed at byte `col`: its start, the typed part, and what it names. In an action value the part
+/// after `->` and before `#` names a controller, the part after `#` one of its methods.
+pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, &str, Slot)> {
     let before = line.get(..col)?;
+    if let Some(cap) = OPEN_TARGET.captures(before) {
+        let controller = cap.get(1).or(cap.get(2))?.as_str().replace('_', "-");
+        let (start, typed) = last_token(cap.get(3)?);
+        return typed.chars().all(is_name_char).then_some((start, typed, Slot::Target(controller)));
+    }
     let cap = OPEN_VALUE.captures(before)?;
-    let value = cap.get(3)?;
-    let token_start = value.as_str().rfind(char::is_whitespace).map_or(0, |i| i + 1);
-    let token = &value.as_str()[token_start..];
+    let (token_start, token) = last_token(cap.get(3)?);
     let is_action = cap.get(1).or(cap.get(2))?.as_str() == "action";
     let skip = if is_action { token.rfind("->").map_or(0, |i| i + 2) } else { 0 };
     let typed = &token[skip..];
-    if is_action && typed.contains(['#', ':']) || !typed.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+    if let Some((controller, method)) = typed.split_once('#').filter(|_| is_action) {
+        let named = is_identifier(controller) && method.chars().all(is_name_char);
+        return named.then(|| (token_start + skip + controller.len() + 1, method, Slot::Method(controller.to_string())));
+    }
+    if is_action && typed.contains(':') || !typed.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
         return None;
     }
-    Some((value.start() + token_start + skip, typed))
+    Some((token_start + skip, typed, Slot::Controller))
+}
+
+/// The start and text of the space-separated token a value ends with.
+fn last_token(value: regex::Match<'_>) -> (usize, &str) {
+    let start = value.as_str().rfind(char::is_whitespace).map_or(0, |i| i + 1);
+    (value.start() + start, &value.as_str()[start..])
+}
+
+fn is_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+fn is_identifier(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// The names in a controller's `static targets = [...]`.
+pub fn targets(source: &str) -> Vec<String> {
+    let Some(list) = TARGETS.captures(source).and_then(|cap| cap.get(1)) else { return vec![] };
+    QUOTED.captures_iter(list.as_str()).map(|cap| cap[1].to_string()).collect()
+}
+
+/// Methods an action can call: the controller class's members, lifecycle callbacks left out.
+pub fn methods(source: &str) -> Vec<String> {
+    let mut members = METHOD.captures_iter(source).map(|cap| (cap.get(1).map_or(0, |m| m.len()), cap[2].to_string()));
+    // Class members share the first member's indentation; deeper matches are nested functions or object literals.
+    let Some((indent, first)) = members.next() else { return vec![] };
+    let mut out: Vec<String> = std::iter::once(first)
+        .chain(members.filter(|(i, _)| *i == indent).map(|(_, name)| name))
+        .filter(|name| {
+            !NOT_ACTIONS.contains(&name.as_str())
+                && !name.ends_with("TargetConnected")
+                && !name.ends_with("TargetDisconnected")
+                && !name.ends_with("ValueChanged")
+        })
+        .collect();
+    out.dedup();
+    out
 }
 
 /// The identifiers stimulus-loading registers for the files under app/javascript/controllers.
@@ -151,17 +220,64 @@ mod tests {
 
     #[test]
     fn completion_prefixes() {
-        let at_end = |line: &str| completion_prefix(line, line.len()).map(|(s, typed)| (s, typed.to_string()));
-        assert_eq!(at_end(r#"<div data-controller="he"#), Some((22, "he".into())));
-        assert_eq!(at_end(r#"<div data-controller="hello da"#), Some((28, "da".into())));
-        assert_eq!(at_end(r#"<div data-controller=""#), Some((22, "".into())));
-        assert_eq!(at_end(r#"<div data-action="click->he"#), Some((25, "he".into())));
-        assert_eq!(at_end(r#"<div data-action="he"#), Some((18, "he".into())));
-        assert_eq!(at_end(r#"%div{data: {controller: "x", action: "click->y"#), Some((45, "y".into())));
-        assert_eq!(at_end(r#"div data-controller='a--"#), Some((21, "a--".into())));
-        for line in [r#"<div data-action="click->hello#gr"#, r#"<div data-controller="x">"#, r#"<%= link_to "x", controller: "us"#] {
+        let at_end = |line: &str| completion_prefix(line, line.len()).map(|(s, typed, slot)| (s, typed.to_string(), slot));
+        let controller = |s, typed: &str| Some((s, typed.to_string(), Slot::Controller));
+        assert_eq!(at_end(r#"<div data-controller="he"#), controller(22, "he"));
+        assert_eq!(at_end(r#"<div data-controller="hello da"#), controller(28, "da"));
+        assert_eq!(at_end(r#"<div data-controller=""#), controller(22, ""));
+        assert_eq!(at_end(r#"<div data-action="click->he"#), controller(25, "he"));
+        assert_eq!(at_end(r#"<div data-action="he"#), controller(18, "he"));
+        assert_eq!(at_end(r#"%div{data: {controller: "x", action: "click->y"#), controller(45, "y"));
+        assert_eq!(at_end(r#"div data-controller='a--"#), controller(21, "a--"));
+        assert_eq!(at_end(r#"<div data-action="click->hello#gr"#), Some((31, "gr".into(), Slot::Method("hello".into()))));
+        assert_eq!(at_end(r#"<a data-action="x#a admin--users#"#), Some((33, "".into(), Slot::Method("admin--users".into()))));
+        assert_eq!(at_end(r#"<input data-date-picker-target="a in"#), Some((34, "in".into(), Slot::Target("date-picker".into()))));
+        assert_eq!(
+            at_end(r#"= f.text_field :x, data: { date_picker_target: ""#),
+            Some((48, "".into(), Slot::Target("date-picker".into())))
+        );
+        for line in [
+            r#"<div data-action="click->hello#go:prevent"#,
+            r#"<div data-action="click->#go"#,
+            r#"<div data-controller="x">"#,
+            r#"<%= link_to "x", controller: "us"#,
+        ] {
             assert_eq!(at_end(line), None, "{line}");
         }
+    }
+
+    #[test]
+    fn controller_members() {
+        let source = r#"import { Controller } from "@hotwired/stimulus"
+export default class extends Controller {
+  static targets = [ "name",
+    'output' ]
+  static values = { url: String }
+
+  connect() {
+    this.items = { open() {} }
+    if (this.hasNameTarget) {
+      fetch(this.urlValue).then((r) => r.json())
+    }
+  }
+
+  async greet(event) {
+    this.outputTarget.textContent = `Hi ${this.nameTarget.value}`
+  }
+
+  reset = () => {
+    this.nameTarget.value = ""
+  }
+
+  nameTargetConnected(element) {}
+
+  submit(): void {
+  }
+}
+"#;
+        assert_eq!(targets(source), ["name", "output"]);
+        assert_eq!(methods(source), ["greet", "reset", "submit"]);
+        assert!(targets("export default class extends Controller {}").is_empty());
     }
 
     #[test]

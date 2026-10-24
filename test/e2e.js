@@ -42,7 +42,7 @@ fs.mkdirSync(path.join(root, "app", "javascript", "controllers"), {
 });
 fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
-  "",
+  'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
 );
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
@@ -816,6 +816,24 @@ const check = (label, actual, expected) => {
     "component completion",
     components.result?.map((i) => [i.label, i.textEdit.newText]),
     [["BadgeComponent", "BadgeComponent.new($1)"]],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 9 },
+      contentChanges: [
+        { text: '<b data-action="hello#">\n<i data-hello-target="">\n' },
+      ],
+    },
+    true,
+  );
+  check(
+    "stimulus action and target completion",
+    [
+      labels(await req("textDocument/completion", streamUri, 0, 22)),
+      labels(await req("textDocument/completion", streamUri, 1, 22)),
+    ],
+    [["greet"], ["name"]],
   );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");

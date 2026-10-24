@@ -167,7 +167,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
 - [x] ViewComponent class names after `render ` (from `app/components/**/*_component.rb`, inserted as `Name.new(…)`)
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
-- [ ] Stimulus action method and target names
+- [x] Stimulus action method and target names: methods after `id#` in `data-action`, `static targets` in `data-id-target` / `id_target:` (`stimulus.rs` `methods`, `targets`)
 - [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
 - [x] HTML tag/attribute completion in ERB: elements after `<`, the open element after `</`, attributes (with `data-*`/`aria-*`) in a start tag, outside ERB tags of HTML-host views (`server/src/erb_complete.rs`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)

@@ -910,10 +910,10 @@ impl LanguageServer for Backend {
             let range = util::span_range(pos.line as usize, line, start, end);
             return items(i18n_completions(&self.locale_files(path), path, prefix, range));
         }
-        if let Some((start, typed)) = stimulus::completion_prefix(line, col) {
+        if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, col);
-            return items(stimulus_completions(path, typed, range));
+            return items(stimulus_completions(path, typed, slot, range));
         }
         // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
         let roles = line_roles(doc.lang, &doc.text);
@@ -1007,14 +1007,20 @@ fn i18n_completions(locales: &[(PathBuf, Vec<i18n::Translation>)], path: &Path, 
         .collect()
 }
 
-/// Stimulus controller identifiers for a `data-controller` / `data-action` value; each replaces `range`.
-fn stimulus_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
-    stimulus::controllers(path)
+/// Stimulus controllers, or a controller's action methods or targets, for a `data-*` value; each replaces `range`.
+fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: Range) -> Vec<CompletionItem> {
+    let source = |id: &str| stimulus::resolve(path, id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+    let (names, kind, detail) = match slot {
+        stimulus::Slot::Controller => (stimulus::controllers(path), CompletionItemKind::CLASS, "Stimulus controller".to_string()),
+        stimulus::Slot::Method(id) => (stimulus::methods(&source(&id)), CompletionItemKind::METHOD, format!("{id} action")),
+        stimulus::Slot::Target(id) => (stimulus::targets(&source(&id)), CompletionItemKind::FIELD, format!("{id} target")),
+    };
+    names
         .into_iter()
-        .filter(|id| id.starts_with(typed))
-        .map(|id| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
-            ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
+        .filter(|name| name.starts_with(typed))
+        .map(|name| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, name.clone()))),
+            ..util::completion_item(name, kind, detail.clone())
         })
         .collect()
 }
