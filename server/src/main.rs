@@ -444,6 +444,12 @@ impl Backend {
         self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
     }
 
+    /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
+    /// and drive colons where `Url::from_file_path` doesn't.
+    fn open_texts(&self) -> HashMap<PathBuf, String> {
+        self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect()
+    }
+
     /// The line's byte offset in `text` and its content.
     fn line_at(text: &str, line: u32) -> (usize, &str) {
         util::lines_with_offsets(text).nth(line as usize).unwrap_or((text.len(), ""))
@@ -479,6 +485,7 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
                     code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
                     ..Default::default()
@@ -708,15 +715,32 @@ impl LanguageServer for Backend {
         Ok(Some(actions))
     }
 
+    /// Who renders the partial under the cursor's `render "…"`, or the current partial anywhere else in it.
+    async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = p.text_document_position.text_document.uri;
+        let pos = p.text_document_position.position;
+        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(views) = partials::views_root(&path) else { return Ok(None) };
+        let files = {
+            let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+            let (_, line) = Self::line_at(&doc.text, pos.line);
+            match partials::render_ref_at(line, util::byte_col(line, pos.character)) {
+                Some(r) => partials::resolve(&path, &r),
+                None if file_name(&uri).starts_with('_') => vec![path],
+                None => return Ok(None),
+            }
+        };
+        let sources = partial_rename::sources(&views, &self.open_texts());
+        Ok(Some(partial_rename::references(&files, &sources, &self.options().extra_engines)))
+    }
+
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
         let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
         let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| partials::views_root(old)).collect();
         roots.sort();
         roots.dedup();
-        // Keyed by path: VS Code's URIs percent-encode `+`, `@` and drive colons where `Url::from_file_path` doesn't.
-        let open: HashMap<PathBuf, String> =
-            self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect();
+        let open = self.open_texts();
         let mut changes = HashMap::new();
         for views in roots {
             let sources = partial_rename::sources(&views, &open);

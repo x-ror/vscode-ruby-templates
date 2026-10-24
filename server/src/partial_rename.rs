@@ -1,5 +1,5 @@
 //! `workspace/willRenameFiles`: rewrite literal `render` references to partials that are renamed or moved,
-//! one at a time or with their folder.
+//! one at a time or with their folder. `textDocument/references`: the same references to given files.
 
 use crate::partials::{render_refs, resolve, template_stem, views_root, RenderKind, RenderRef};
 use crate::util::{lines_with_offsets, offset_to_position};
@@ -8,7 +8,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Range, TextEdit, Url};
+use tower_lsp::lsp_types::{Location, Range, TextEdit, Url};
 use walkdir::WalkDir;
 
 static PARTIAL_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"partial\s*(?::|=>)\s*["']$"#).unwrap());
@@ -88,6 +88,27 @@ fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBu
     }
 }
 
+/// `targets` of the reference whose string starts at byte `start` of `source`.
+fn ref_targets(source: &Source, start: usize, r: &RenderRef) -> Vec<PathBuf> {
+    let explicit_partial = source.lang.is_none() && PARTIAL_KEY.is_match(source.text[..start].rsplit('\n').next().unwrap_or(""));
+    targets(source, r, explicit_partial)
+}
+
+/// Every reference in `sources` that resolves to one of `files`.
+pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    let mut out = Vec::new();
+    for source in sources {
+        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        for (start, end, r) in code_refs(source, extra_engines) {
+            if ref_targets(source, start, &r).iter().any(|t| files.contains(t)) {
+                let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+                out.push(Location::new(uri.clone(), range));
+            }
+        }
+    }
+    out
+}
+
 /// Folders outside app/views whose code renders partials.
 const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 
@@ -129,8 +150,7 @@ pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_en
             if !may_match(&r.name) {
                 continue;
             }
-            let explicit_partial = source.lang.is_none() && PARTIAL_KEY.is_match(source.text[..start].rsplit('\n').next().unwrap_or(""));
-            let found = targets(source, &r, explicit_partial);
+            let found = ref_targets(source, start, &r);
             // Rails picks from the first folder that has a match; later ones (`application/`) are shadowed.
             let first_dir = found.first().and_then(|t| t.parent());
             let names: Option<Vec<String>> = found
@@ -294,6 +314,34 @@ mod tests {
             [
                 ("app/controllers/users_controller.rb".into(), 0, 17, "users/tile".into()),
                 ("app/helpers/cards_helper.rb".into(), 0, 8, "users/tile".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn references_find_renders_of_a_partial() {
+        let t = Tree::new("refs", &["app/views/users/_card.html.slim", "app/views/shared/_card.html.erb"]);
+        let sources = [
+            t.source("app/views/users/index.html.erb", ERB, "<%= render \"card\" %>\n<p>render \"card\"</p>\n"),
+            t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\"\n= render \"shared/card\"\n"),
+            t.source("app/views/users/index.json.jbuilder", Some(TemplateLang::Ruby), "json.partial! \"users/card\"\n"),
+            t.source("app/controllers/users_controller.rb", None, "render partial: \"users/card\"\n"),
+        ];
+        let card = t.path("app/views/users/_card.html.slim");
+        let mut got: Vec<(String, u32, u32)> = references(&[card], &sources, &[])
+            .into_iter()
+            .map(|l| {
+                let file = l.uri.to_file_path().unwrap().strip_prefix(&t.0).unwrap().to_string_lossy().into_owned();
+                (file, l.range.start.line, l.range.start.character)
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("app/controllers/users_controller.rb".into(), 0, 17),
+                ("app/views/home/show.html.slim".into(), 0, 10),
+                ("app/views/users/index.html.erb".into(), 0, 12),
             ]
         );
     }

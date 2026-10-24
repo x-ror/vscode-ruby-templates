@@ -150,7 +150,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
 - [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
 - [ ] ViewComponent: component `.rb` ↔ template file switch command
-- [ ] Find references: who renders this partial (workspace scan)
+- [x] Find references: who renders this partial (workspace scan) (`server/src/main.rs` `references`, `partial_rename::references`)
 - [ ] Workspace symbol search for partials/templates
 
 ## 10. Completion

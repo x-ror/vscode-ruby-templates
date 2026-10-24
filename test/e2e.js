@@ -636,6 +636,16 @@ const check = (label, actual, expected) => {
       ],
     ],
   );
+  const refs = await send("textDocument/references", {
+    textDocument: { uri },
+    position: { line: 1, character: 16 },
+    context: { includeDeclaration: false },
+  });
+  check(
+    "references shared/footer",
+    refs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
+    ["/app/views/users/index.html.erb 1", "/app/views/users/show.html.haml 3"],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(
