@@ -98,10 +98,63 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     out
 }
 
-fn truncate(s: &str, n: usize) -> String {
+pub fn truncate(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() }
 }
 
+/// Ruby code of each ERB tag as sorted `(start, end)` byte bounds: `start` is just after `<%`, `end` the `>` of
+/// `%>` (an offset there still belongs to the tag), or the text's end when unclosed. `<%#` comments and `<%%`
+/// literals are left out. Like ERB, a tag ends at the first `%>`, even inside a string.
+pub fn code_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    while let Some(i) = text[pos..].find("<%") {
+        let open = pos + i;
+        let close = text[open + 2..].find("%>").map(|c| open + 2 + c);
+        let tag = &text[open..];
+        if !tag.starts_with("<%#") && !tag.starts_with("<%%") {
+            spans.push((open + 2, close.map_or(text.len(), |c| c + 1)));
+        }
+        let Some(close) = close else { break };
+        pos = close + 2;
+    }
+    spans
+}
+
+/// Start of the span from `code_spans` that contains byte `offset`.
+pub fn span_at(spans: &[(usize, usize)], offset: usize) -> Option<usize> {
+    let after = spans.partition_point(|&(start, _)| start <= offset);
+    let (start, end) = spans[..after].last()?;
+    (offset <= *end).then_some(*start)
+}
+
+// Longest first. Semantics are Erubi's as configured by Rails (`trim: true`, `<%==` unescaped).
+const OPENERS: &[(&str, &str)] = &[
+    ("<%==", "**`<%==`** outputs the value **without** HTML escaping (like `raw`)."),
+    ("<%=", "**`<%=`** outputs the value, HTML-escaped unless it is `html_safe`."),
+    ("<%-", "**`<%-`** runs Ruby without output; Erubi treats it like `<%` (stdlib ERB with `trim_mode: '-'` strips the indentation before it)."),
+    ("<%#", "**`<%#`** ERB comment: neither run nor output."),
+    ("<%%", "**`<%%`** literal `<%`: the tag is output as text, not run."),
+    ("<%", "**`<%`** runs Ruby without output; alone on a line it leaves no blank line."),
+];
+const CLOSERS: &[(&str, &str)] = &[
+    ("-%>", "**`-%>`** closes the tag and drops the newline after `<%= … -%>` (code tags alone on a line drop it anyway)."),
+    ("=%>", "**`=%>`** closes the tag; Erubi treats it like `-%>`."),
+    ("%>", "**`%>`** closes the ERB tag."),
+];
+
+/// Markdown explaining the ERB tag delimiter under byte `col` of `line`.
+pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
+    let token_at = |start: usize, tokens: &[(&str, &'static str)]| {
+        let rest = &line[start..];
+        tokens.iter().find(|(t, _)| rest.starts_with(t)).filter(|(t, _)| (start..start + t.len()).contains(&col)).map(|&(_, doc)| doc)
+    };
+    let opener = line.match_indices("<%").find_map(|(i, _)| token_at(i, OPENERS));
+    opener.or_else(|| line.match_indices("%>").find_map(|(i, _)| {
+        let start = if i > 0 && matches!(line.as_bytes()[i - 1], b'-' | b'=') { i - 1 } else { i };
+        token_at(start, CLOSERS)
+    }))
+}
 
 #[cfg(test)]
 mod tests {
@@ -200,5 +253,38 @@ mod tests {
         let d = only("é\n  😀<% items_with_a_very_long_name.each_with_index do |item, i| %>");
         assert_eq!(d.message, "Block `items_with_a_very_long_name.each_with_in…` is never closed: missing `<% end %>`");
         assert_eq!(d.range.start, Position::new(1, 4));
+    }
+
+    #[test]
+    fn code_spans_cross_lines() {
+        let code_start = |text: &str, offset| span_at(&code_spans(text), offset);
+        let text = "<p>\n<%= link_to \"x\",\n  user_path(u) %> after <%# note %> <%% lit %> <% open";
+        let at = |needle: &str| text.find(needle).unwrap();
+        assert_eq!(code_start(text, at("user_path")), Some(at("<%=") + 2));
+        assert_eq!(code_start(text, at("%> after") + 1), Some(at("<%=") + 2));
+        assert_eq!(code_start(text, at("after")), None);
+        assert_eq!(code_start(text, at("note")), None);
+        assert_eq!(code_start(text, at("lit")), None);
+        assert_eq!(code_start(text, at("open")), Some(at("<% open") + 2));
+        assert_eq!(code_start(text, at("<p>")), None);
+    }
+
+    #[test]
+    fn tag_docs() {
+        let line = "<%== a -%> <%= b =%> <%- c %> <%# d %> <%% e %> <% f %>";
+        let doc = |needle: &str, shift: usize| tag_doc(line, line.find(needle).unwrap() + shift).map(|d| d.split("**").nth(1).unwrap());
+        assert_eq!(doc("<%==", 3), Some("`<%==`"));
+        assert_eq!(doc("-%>", 0), Some("`-%>`"));
+        assert_eq!(doc("-%>", 2), Some("`-%>`"));
+        assert_eq!(doc("<%=", 0), Some("`<%==`"));
+        assert_eq!(doc("<%= b", 2), Some("`<%=`"));
+        assert_eq!(doc("=%>", 1), Some("`=%>`"));
+        assert_eq!(doc("<%-", 2), Some("`<%-`"));
+        assert_eq!(doc("<%#", 2), Some("`<%#`"));
+        assert_eq!(doc("<%%", 2), Some("`<%%`"));
+        assert_eq!(doc("<% f", 1), Some("`<%`"));
+        assert_eq!(doc("f %>", 2), Some("`%>`"));
+        assert_eq!(doc("<% f", 2), None);
+        assert_eq!(doc("a -%>", 0), None);
     }
 }

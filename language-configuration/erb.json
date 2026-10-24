@@ -18,13 +18,22 @@
     }
   },
   "indentationRules": {
-    "increaseIndentPattern": "<%[-=]?\\s*(if|unless|while|until|for|case|begin|do|def|class|module|else|elsif|when|rescue|ensure)\\b(?!.*\\bend\\b\\s*-?%>)|(<%[-=]?[^%]*\\bdo\\b(\\s*\\|[^|]*\\|)?\\s*-?%>)|<(?!area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr|\\?|!|/)([-_.A-Za-z0-9]+)(?=\\s|>)\\b[^>]*>(?!.*</\\2>)",
+    "increaseIndentPattern": "<%[-=]?\\s*(if|unless|while|until|for|case|begin|do|def|class|module|else|elsif|when|rescue|ensure)\\b(?!.*\\bend\\b\\s*[-=]?%>)|(<%(?!#)[-=]?[^%]*\\bdo\\b(?:\\s*\\|[^|]*\\|)?\\s*[-=]?%>)|<(?!area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr|\\?|!|/)([-_.A-Za-z0-9]+)(?=\\s|>)\\b[^>]*>(?!.*</\\3>)",
     "decreaseIndentPattern": "^\\s*(<%-?\\s*(end|else|elsif|when|rescue|ensure)\\b.*%>|</[-_.A-Za-z0-9]+\\s*>)"
   },
   "wordPattern": "(-?\\d*\\.\\d\\w*)|([A-Za-z_@$][\\w-]*[?!]?)",
   "onEnterRules": [
     {
-      "beforeText": "<%[-=]?\\s*(if|unless|while|until|for|case|begin|def|class|module)\\b(?!.*\\bend\\b).*%>\\s*$",
+      "beforeText": "<%[-=#]{0,2}\\s*$",
+      "afterText": "^\\s*[-=]?%>",
+      "action": { "indent": "indentOutdent" }
+    },
+    {
+      "beforeText": "<%[-=]{0,2}\\s*(if|unless|while|until|for|case|begin|def|class|module|else|elsif|when|rescue|ensure)\\b(?!.*\\bend\\b).*%>\\s*$",
+      "action": { "indent": "indent" }
+    },
+    {
+      "beforeText": "<%(?!#)[-=]{0,2}(?:[^%]|%(?!>))*\\bdo\\b(?:\\s*\\|[^|]*\\|)?\\s*[-=]?%>\\s*$",
       "action": { "indent": "indent" }
     }
   ]

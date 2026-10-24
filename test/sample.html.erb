@@ -1,4 +1,6 @@
 <%# Comment here %>
+<%# locals: (title:, count: 0, tags: ["a", "b"], **options) -%>
+<%# locals: (user:) TODO %><p class="x">(a) %></p>
 <div class="users">
   <% @users.each do |user| %>
     <%= link_to user.name, user_path(user), class: "name" %>

@@ -59,8 +59,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Indent on Enter after an opening `<% if/unless/... %>` (`language-configuration/erb.json` `onEnterRules`)
 - [x] Word pattern includes `@ivar`, `$global`, `predicate?` (`language-configuration/erb.json` `wordPattern`)
 - [x] Default `tabSize: 2`, spaces (`package.json` `configurationDefaults["[erb]"]`)
-- [ ] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered)
-- [ ] `onEnterRules` that keep the cursor between `<% %>` on Enter
+- [x] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered) (`language-configuration/erb.json`, `test/langconfig.js`)
+- [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
 - [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
 - [ ] Linked editing of HTML tag pairs
@@ -92,7 +92,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Preview rendered HTML via `erb -T -` (`src/extension.js` `renderToHtml`)
 - [x] Show compiled Ruby via `erb -x` (`src/extension.js` `compileToRuby`)
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
-- [ ] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`)
+- [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
 - [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
 - [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
 - [ ] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`)
@@ -121,13 +121,13 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
 - [ ] Duplicate HTML `id` attributes and other HTML validity checks
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
-- [ ] Strict locals: missing required local / unknown local passed to `render`
+- [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
 - [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
 - [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
 - [ ] Settings to enable/disable each built-in check and pick external linters
-- [ ] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files
-- [ ] Debounce diagnostics on change
+- [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
+- [x] Debounce diagnostics on change (`server/src/main.rs` `publish_later`, 200 ms)
 
 ## 9. Navigation
 
@@ -135,7 +135,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial lookup in the same dir, `app/views/<dir>`, `app/views/application`, and `app/views/layouts` for `layout:` (`server/src/partials.rs` `resolve`)
 - [x] Go to `FooComponent` `.rb` and sidecar template from `render FooComponent.new` (`server/src/partials.rs` `resolve_component`)
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
-- [ ] `render @user` / `render @users` → `users/_user` by model naming convention
+- [x] `render @user` / `render @users` → `users/_user` by model naming convention (`server/src/partials.rs` `resolve_model`; namespaced models skipped)
 - [ ] `render partial: name_var` (non-literal partial name): show nothing, don't guess
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
@@ -144,10 +144,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Helper method → definition in `app/helpers/**` (and gem helpers through Ruby LSP)
 - [ ] Locals: go to where a local is passed (`render … locals:`) from its use in the partial
 - [ ] Instance variables → assignment in the controller action
-- [ ] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path)
+- [x] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path) (`server/src/i18n.rs`)
 - [ ] Route helpers `*_path` / `*_url` → `config/routes.rb`
-- [ ] Asset paths in `image_tag` / `stylesheet_link_tag` → file
-- [ ] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js`
+- [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
+- [x] Stimulus `data-controller="x"` → `app/javascript/controllers/x_controller.js` (`server/src/stimulus.rs`)
 - [ ] ViewComponent: component `.rb` ↔ template file switch command
 - [ ] Find references: who renders this partial (workspace scan)
 - [ ] Workspace symbol search for partials/templates
@@ -157,28 +157,28 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial names inside `render "…"` (`server/src/partials.rs` `partial_candidates`, `server/src/main.rs`)
 - [x] Form builder methods after `f.` / `form.` / `ff.` / `builder.` / `fields.` (`server/src/helpers.rs` `FORM_BUILDER`)
 - [x] ~78 Rails view helpers with snippet arguments, only inside `<% %>` (`server/src/helpers.rs` `HELPERS`, `server/src/main.rs` `in_ruby_context`)
-- [ ] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`)
+- [x] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`) (`server/src/partials.rs` `render_candidates`; `render layout:` resolves to a partial like Rails)
 - [ ] Instance variables used in the matching controller action
-- [ ] Locals from `<%# locals: %>` or from callers' `render … locals:`
+- [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
-- [ ] i18n keys from `config/locales`
+- [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
 - [ ] Model attributes after `f.text_field :` (from `db/schema.rb`)
 - [ ] ViewComponent class names after `render `
 - [ ] Stimulus controller / action / target names in `data-*` attributes
 - [ ] Turbo stream actions after `turbo_stream.`
 - [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
-- [ ] `in_ruby_context` handles tags spanning several lines (it only looks at the current line)
+- [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
 ## 11. Hover
 
 - [x] Hover on render call lists resolved file(s) or "No matching template found" (`server/src/main.rs` `hover`)
 - [x] Hover on a known Rails helper shows its signature (`server/src/main.rs`, `server/src/helpers.rs`)
-- [ ] Partial hover shows its strict locals signature
-- [ ] i18n key hover shows the translations
+- [x] Partial hover shows its strict locals signature (`server/src/main.rs` `render_hover`)
+- [x] i18n key hover shows the translations (`server/src/i18n.rs`; missing locales listed)
 - [ ] Route helper hover shows verb + path
-- [ ] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim)
-- [ ] Helper docs link to api.rubyonrails.org
+- [x] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim) (`server/src/erb.rs` `tag_doc`)
+- [x] Helper docs link to api.rubyonrails.org (`server/src/helpers.rs` `doc_url`)
 
 ## 12. Rename, references, symbols
 
@@ -198,8 +198,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 14. Rails-specific
 
-- [ ] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment
-- [ ] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11)
+- [x] Strict locals `<%# locals: (…) -%>`: highlight the comment as a signature, not a plain comment (`syntaxes/erb.tmLanguage.json` `erb-strict-locals`)
+- [x] Strict locals: completion, hover, and diagnostics (see sections 8, 10, 11) (see items above)
 - [ ] ViewComponent slots (`renders_one` / `renders_many` → `with_*` completion)
 - [ ] ViewComponent previews (`spec/components/previews`) navigation
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
@@ -212,8 +212,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Client starts the bundled per-platform binary, falls back to dev builds and PATH (`src/client.js` `findServer`)
 - [x] `rubyTemplates.server.enabled` / `server.path` settings, restart command, restart on config change (`package.json`, `src/extension.js`)
 - [x] Client watches `**/app/views/**` (`src/client.js`)
-- [ ] Server uses those watched-file events (no `did_change_watched_files` handler; partial list is rescanned per request)
-- [ ] Cache the partial index per workspace instead of walking `app/views` on every completion
+- [x] Server uses those watched-file events (no `did_change_watched_files` handler; partial list is rescanned per request) (`server/src/main.rs` `did_change_watched_files`, `stale`)
+- [x] Cache the partial index per workspace instead of walking `app/views` on every completion (`server/src/main.rs` template/locale caches)
 - [ ] Multi-root workspaces: resolve each file against its own Rails root
 - [ ] Non-`file://` URIs (untitled, remote) degrade gracefully everywhere
 - [ ] Windows paths in `resolve` / `partial_candidates` (separator handling only partly covered)
