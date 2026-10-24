@@ -778,83 +778,43 @@ impl LanguageServer for Backend {
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];
 
-        // 1. Partial/template/layout names inside render "..."
+        let path = uri.to_file_path().ok();
+        let items = |items| Ok(Some(CompletionResponse::Array(items)));
+
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
-            let Ok(path) = uri.to_file_path() else { return Ok(None) };
-            let items: Vec<CompletionItem> = partials::render_candidates(&path, kind, &self.template_files(&path))
-                .into_iter()
-                .filter(|(name, _)| name.starts_with(&prefix) || prefix.is_empty())
-                .map(|(name, file)| {
-                    let detail = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-                    CompletionItem { insert_text: Some(name.clone()), ..util::completion_item(name, CompletionItemKind::FILE, detail) }
-                })
-                .collect();
-            return Ok(Some(CompletionResponse::Array(items)));
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            return items(render_completions(path, kind, &prefix, &self.template_files(path)));
         }
-
-        // 2. i18n keys inside t("...")
-        if let Some((start, end, prefix)) = i18n::completion_prefix(line, col) {
-            if in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
-                let Ok(path) = uri.to_file_path() else { return Ok(None) };
-                let range = util::span_range(pos.line as usize, line, start, end);
-                let items = i18n::completions(&self.locale_files(&path), &path, prefix)
-                    .into_iter()
-                    .map(|(key, value)| CompletionItem {
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
-                        ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
-                    })
-                    .collect();
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
+        let i18n_prefix = i18n::completion_prefix(line, col)
+            .filter(|&(start, ..)| in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start));
+        if let Some((start, end, prefix)) = i18n_prefix {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, start, end);
+            return items(i18n_completions(&self.locale_files(path), path, prefix, range));
         }
-
-        // 2b. Stimulus controller identifiers in `data-controller` / `data-action` values.
         if let Some((start, typed)) = stimulus::completion_prefix(line, col) {
-            let Ok(path) = uri.to_file_path() else { return Ok(None) };
+            let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, col);
-            let items = stimulus::controllers(&path)
-                .into_iter()
-                .filter(|id| id.starts_with(typed))
-                .map(|id| CompletionItem {
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
-                    ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
-                })
-                .collect();
-            return Ok(Some(CompletionResponse::Array(items)));
+            return items(stimulus_completions(path, typed, range));
+        }
+        if let Some(found) = receiver_completions(before) {
+            return items(found);
         }
 
-        // 3. Form builder methods after `f.` / `form.` / `ff.`, Turbo Stream actions after `turbo_stream.`
-        if let Some(idx) = before.rfind('.') {
-            let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
-            let typed = &before[idx + 1..];
-            if matches!(recv, "f" | "form" | "ff" | "builder" | "fields") && typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                let items = helpers::FORM_BUILDER
-                    .iter()
-                    .filter(|m| m.starts_with(typed))
-                    .map(|m| util::completion_item(*m, CompletionItemKind::METHOD, "ActionView::Helpers::FormBuilder"))
-                    .collect();
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
-            if recv == "turbo_stream" && typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                let items = helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(helper_item).collect();
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
-        }
-
-        // 4. Haml tag, filter and attribute names; Slim tag, engine and attribute names.
+        // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
         let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
         if let Some(context) = haml::completion_context(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return Ok(Some(CompletionResponse::Array(haml::completions(context))));
+            return items(haml::completions(context));
         }
 
-        // 5. Rails helpers, only when we're in a Ruby context.
+        // Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
                 let engines = &self.options().extra_engines;
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
-                if let Some(items) = slim_complete::items(&doc.text, offset, &parsed, engines) {
-                    return Ok(Some(CompletionResponse::Array(items)));
+                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines) {
+                    return items(markup);
                 }
                 // An unclosed `#{` being typed is Ruby too, for completion only.
                 slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
@@ -872,9 +832,65 @@ impl LanguageServer for Backend {
         if typed.is_empty() {
             return Ok(None);
         }
-        let mut items = local_completions(&doc.text, typed);
-        items.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
-        Ok(Some(CompletionResponse::Array(items)))
+        let mut found = local_completions(&doc.text, typed);
+        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        items(found)
+    }
+}
+
+/// Partial, template or layout names for the `render "…"` string being typed.
+fn render_completions(path: &Path, kind: partials::RenderKind, prefix: &str, templates: &[PathBuf]) -> Vec<CompletionItem> {
+    partials::render_candidates(path, kind, templates)
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(prefix) || prefix.is_empty())
+        .map(|(name, file)| {
+            let detail = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+            CompletionItem { insert_text: Some(name.clone()), ..util::completion_item(name, CompletionItemKind::FILE, detail) }
+        })
+        .collect()
+}
+
+/// i18n keys for the `t("…")` string being typed; each replaces `range`.
+fn i18n_completions(locales: &[(PathBuf, Vec<i18n::Translation>)], path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
+    i18n::completions(locales, path, prefix)
+        .into_iter()
+        .map(|(key, value)| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
+            ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
+        })
+        .collect()
+}
+
+/// Stimulus controller identifiers for a `data-controller` / `data-action` value; each replaces `range`.
+fn stimulus_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    stimulus::controllers(path)
+        .into_iter()
+        .filter(|id| id.starts_with(typed))
+        .map(|id| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
+            ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
+        })
+        .collect()
+}
+
+/// Form builder methods after `f.` / `form.` / `ff.`…, Turbo Stream actions after `turbo_stream.`.
+fn receiver_completions(before: &str) -> Option<Vec<CompletionItem>> {
+    let idx = before.rfind('.')?;
+    let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
+    let typed = &before[idx + 1..];
+    if !typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    match recv {
+        "f" | "form" | "ff" | "builder" | "fields" => Some(
+            helpers::FORM_BUILDER
+                .iter()
+                .filter(|m| m.starts_with(typed))
+                .map(|m| util::completion_item(*m, CompletionItemKind::METHOD, "ActionView::Helpers::FormBuilder"))
+                .collect(),
+        ),
+        "turbo_stream" => Some(helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(helper_item).collect()),
+        _ => None,
     }
 }
 
