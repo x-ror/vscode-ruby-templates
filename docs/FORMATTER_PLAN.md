@@ -20,17 +20,17 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ### 2. ERB formatter
 
-- [ ] Indentation from HTML nesting and ERB blocks (`if`/`else`/`elsif`/`end`, `do … end`, `case`/`when`), void elements, comments, multi-line tags, `<pre>`/`<textarea>` untouched, `<script>`/`<style>` moved as a unit
-- [ ] Branches that leave different tags open: region left unchanged
-- [ ] Non-HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …) unchanged
-- [ ] Unit tests per construct; invariant tests on `test/sample.*`
-- [ ] Corpora: zero invariant violations, zero crashes
-- [ ] Compared with `htmlbeautifier`; intentional differences listed below
+- [x] Indentation from HTML nesting and ERB blocks (`if`/`else`/`elsif`/`end`, `do … end`, `case`/`when`), void elements, comments, multi-line tags, `<pre>`/`<textarea>` untouched, `<script>`/`<style>` moved as a unit
+- [x] Branches that leave different tags open: region left unchanged
+- [x] Non-HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …) unchanged
+- [x] Unit tests per construct; invariant tests on `test/sample.*`
+- [x] Corpora: zero invariant violations, zero crashes
+- [x] Compared with `htmlbeautifier`; intentional differences listed below
 
 ### 3. Haml and Slim
 
-- [ ] `format` covers Haml (re-indent) and Slim (`slim_format.rs`) with the same invariants
-- [ ] `bun run test:format` passes
+- [x] `format` covers Haml (re-indent) and Slim (`slim_format.rs`) with the same invariants
+- [x] `bun run test:format` passes
 
 ### 4. Config
 
@@ -66,4 +66,19 @@ None yet.
 - `git push` to `feat/formatter` works. `gh` is installed but its token is rejected (`gh auth status`), so the draft PR goes through the GitHub connector instead.
 - Stage 1 review: fixed exit codes for invariant failures and unreadable files, folder-walk noise, multi-file stdout, symlinked folders, the non-whitespace guard (ASCII whitespace only). Deferred, not rejected: `trim_trailing_whitespace` and the blank-line steps had no reader yet; stage 2 (ERB) and stage 4 (config) use them.
 - Found on the way: `index.js.erb` under `app/views` was taken for a localized HTML view (`js` looks like a locale), so tag checks ran on it; fixed in `lang.rs` with a test.
+- ERB (stage 2): `erb_format.rs` reads the `tags.rs` token stream (`tags::tokens`, refactored out of the tag checks so both agree on structure). A markup line gets one unit per open element and ERB block; `<% end %>`/`<% else %>` line up with their opening even under tags a branch left open; leading end tags dedent their line. Units (`<script>`, `<style>`, comments, multi-line tags, multi-line ERB tags) move with their first line; a unit whose lines can't follow (indented less than the first line, or Ruby with a heredoc or a string/`%`-literal/regexp/backtick across a line break, or a JS template literal in a script) keeps itself and every unit around it in place. `<pre>`, `<textarea>`, `<title>` bodies and quoted values spanning lines keep every byte. Optional-end elements (`<li>`, `<p>`, …) indent only when they have an end tag, paired as `tags.rs` pairs them.
+- Multi-line HTML tags: "first line only" read as "only the first line gets a level; continuation lines move with it", except inside a quoted value (clarification 4 treats multi-line ERB tags the same way).
+- Branches that leave different tags open: indentation is kept from the line where the nesting becomes uncertain to the end of the file (per-path stacks would be needed to resume); `--verbose` names the line.
+- Corpus results (stage 2/3), `RUBY_TEMPLATES_CORPUS=… cargo test --release corpus -- --ignored`: 2,163 templates × 5 indentation variants (as is, dedented, doubled, tabs, CRLF) × 5 settings = 46,064 formatted variants, 0 invariant violations, 0 panics; 1,236 refused as in doubt, 6,775 not handled (non-HTML ERB, Jbuilder). The run found and fixed: two Slim indentation-check false positives that the 4-space variants turned into "would add a diagnostic" (continuation lines and engine bodies counted as structure, `25ce868`), and `final_newline = false` not being stable with trailing empty lines.
+- Haml compiled output: all 331 Mastodon Haml views with doubled indentation and trailing spaces, formatted, compile to the same Ruby as before formatting (haml 7.5.1, temporaries renamed); the unchanged originals were already formatted. `test/format/nested.haml` keeps that in `bun run test:format`.
+- htmlbeautifier 1.4.3 (`-b 1000`, so it keeps blank lines like we do) on the 1,425 `.html.erb` views: 1,167 identical; 103 where it adds or joins lines; 126 that differ in indentation only; 20 we leave unchanged as in doubt; 7 it fails on; 2 other. Differences we keep on purpose:
+  - We never add or join lines (it moves `<tr>` and friends onto their own lines).
+  - Continuation lines of multi-line ERB and HTML tags keep their offset to the first line; it re-indents each to its own level (most of the 126).
+  - Optional-end elements without an end tag don't indent; it indents after every `<p>`, so one missing or extra `</p>` shifts the rest of its file (e.g. Forem `users/_response_templates`, `_auth_provider_settings`).
+  - ERB between attributes of a tag and `>` at column 0 don't confuse the nesting (Whitehall `_child_of_banner`, rubygems `onboarding/gems/edit`).
+  - Trailing whitespace is trimmed; it keeps it on text lines.
+  - Files in doubt (mismatched tags, a `javascript_tag` block) are left alone; it formats them anyway.
+- Haml (stage 3): ported to `haml_format.rs` (not `haml_indent.rs`, which only checks structure). The unit stays the file's own (first indented line), as Haml reads it and as the client's re-indenter did; indent settings don't convert Haml. Trailing whitespace is trimmed on structural lines only (Haml strips it there; filter bodies keep it). Haml's indentation errors are what it fixes, so only other errors leave a file alone. The extension's Format Document, Format Selection and _Re-indent Haml_ ask the server; the JS re-indenter and its tests are gone.
+- Slim (stage 3): unchanged `slim_format.rs` behind the same entry point; tabs and files Slim rejects are left alone, and blank lines are content (Slim compiles every line).
+- Stage 2 review: fixed the literal detection (`%()`, backticks, regexps, comments), the ERB-in-end-tag panic, unit pinning, a quadratic fixpoint and the Slim check hiding errors after an unclosed `[`; `.gitignore`'s `bin/` had kept `server/src/bin/ruby-templates.rs` out of the branch until `e6b6ec4` (the commits before it don't build from a clean clone).
 - Corpora (outside the repo, shallow sparse clones of `app/views` and `app/components`): Forem, Mastodon, rubygems.org, Whitehall, freeats. The network allowed it.
