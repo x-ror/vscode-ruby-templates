@@ -50,10 +50,13 @@ pub fn full_key(current: &Path, key: &str) -> Option<String> {
     if key.starts_with('.') { Some(format!("{}{key}", lazy_scope(current)?)) } else { Some(key.to_string()) }
 }
 
-// ponytail: parsed on every request (well under a millisecond for a few thousand lines); cache by mtime if apps with huge locale trees lag.
-pub fn locale_files(current: &Path) -> Vec<(PathBuf, Vec<Translation>)> {
-    let Some(rails) = app_root(current).and_then(|app| app.parent().map(Path::to_path_buf)) else { return vec![] };
-    WalkDir::new(rails.join("config/locales")).sort_by_file_name().into_iter().flatten()
+/// The Rails app's `config/locales`, which need not exist yet.
+pub fn locales_dir(current: &Path) -> Option<PathBuf> {
+    Some(app_root(current)?.parent()?.join("config/locales"))
+}
+
+pub fn locale_files(dir: &Path) -> Vec<(PathBuf, Vec<Translation>)> {
+    WalkDir::new(dir).sort_by_file_name().into_iter().flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "yml" || x == "yaml"))
         .filter_map(|e| Some((e.path().to_path_buf(), parse(&std::fs::read_to_string(e.path()).ok()?))))
         .collect()
@@ -271,7 +274,7 @@ mod tests {
         std::fs::write(locales.join("uk.yml"), "uk:\n  hello: Привіт\n").unwrap();
         std::fs::write(locales.join("models/de.yaml"), "de:\n  users:\n    form:\n      title: Neu\n").unwrap();
         let partial = root.join("app/views/users/_form.html.erb");
-        let files = locale_files(&partial);
+        let files = locale_files(&locales_dir(&partial).unwrap());
 
         let defs: Vec<(PathBuf, usize)> = lookup(&files, "hello").map(|(p, t)| (p.to_path_buf(), t.line)).collect();
         assert_eq!(defs, [(locales.join("en.yml"), 1), (locales.join("uk.yml"), 1)]);

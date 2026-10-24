@@ -126,8 +126,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
 - [ ] Settings to enable/disable each built-in check and pick external linters
-- [ ] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files
-- [ ] Debounce diagnostics on change
+- [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
+- [x] Debounce diagnostics on change (`server/src/main.rs` `publish_later`, 200 ms)
 
 ## 9. Navigation
 
@@ -212,8 +212,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Client starts the bundled per-platform binary, falls back to dev builds and PATH (`src/client.js` `findServer`)
 - [x] `rubyTemplates.server.enabled` / `server.path` settings, restart command, restart on config change (`package.json`, `src/extension.js`)
 - [x] Client watches `**/app/views/**` (`src/client.js`)
-- [ ] Server uses those watched-file events (no `did_change_watched_files` handler; partial list is rescanned per request)
-- [ ] Cache the partial index per workspace instead of walking `app/views` on every completion
+- [x] Server uses those watched-file events (no `did_change_watched_files` handler; partial list is rescanned per request) (`server/src/main.rs` `did_change_watched_files`, `stale`)
+- [x] Cache the partial index per workspace instead of walking `app/views` on every completion (`server/src/main.rs` template/locale caches)
 - [ ] Multi-root workspaces: resolve each file against its own Rails root
 - [ ] Non-`file://` URIs (untitled, remote) degrade gracefully everywhere
 - [ ] Windows paths in `resolve` / `partial_candidates` (separator handling only partly covered)

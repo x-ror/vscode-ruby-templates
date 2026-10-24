@@ -12,6 +12,8 @@ mod util;
 
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -35,12 +37,20 @@ impl TemplateLang {
     }
 }
 
-struct Doc { lang: TemplateLang, text: String }
+struct Doc { lang: TemplateLang, text: String, version: i32 }
+
+type LocaleFiles = Arc<Vec<(PathBuf, Vec<i18n::Translation>)>>;
 
 struct Backend {
     client: Client,
-    docs: DashMap<Url, Doc>,
+    docs: Arc<DashMap<Url, Doc>>,
+    /// Files under each app/views root, for render completion.
+    templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
+    /// Parsed locale files per config/locales directory.
+    locales: DashMap<PathBuf, LocaleFiles>,
 }
+
+const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
 
 fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
     let mut out = match doc.lang {
@@ -191,27 +201,43 @@ fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
     }).collect()
 }
 
+/// Whether the watched-file `events` make the cache for `root` stale. Listings change only when files are
+/// created or deleted; `contents` caches also on edits. Deleting an ancestor of `root` counts too.
+fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> bool {
+    events.iter().any(|(path, kind)| (contents || *kind != FileChangeType::CHANGED) && (path.starts_with(root) || root.starts_with(path)))
+}
+
 impl Backend {
     async fn publish(&self, uri: Url) {
-        let diags = match self.docs.get(&uri) {
-            Some(doc) => diagnostics(&uri, &doc),
-            None => vec![],
+        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc), doc.version)) else { return };
+        self.client.publish_diagnostics(uri, diags, Some(version)).await;
+    }
+
+    /// Publish after `DIAGNOSTICS_DEBOUNCE`, unless a newer change to the document supersedes this one.
+    fn publish_later(&self, uri: Url, version: i32) {
+        let (client, docs) = (self.client.clone(), Arc::clone(&self.docs));
+        tokio::spawn(async move {
+            tokio::time::sleep(DIAGNOSTICS_DEBOUNCE).await;
+            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc)) else { return };
+            client.publish_diagnostics(uri, diags, Some(version)).await;
+        });
+    }
+
+    fn template_files(&self, current: &Path) -> Arc<Vec<PathBuf>> {
+        let Some(views) = partials::views_root(current) else {
+            return Arc::new(current.parent().map(|dir| partials::files_under(dir, 1)).unwrap_or_default());
         };
-        self.client.publish_diagnostics(uri, diags, None).await;
+        self.templates.entry(views.clone()).or_insert_with(|| Arc::new(partials::files_under(&views, usize::MAX))).clone()
+    }
+
+    fn locale_files(&self, current: &Path) -> LocaleFiles {
+        let Some(dir) = i18n::locales_dir(current) else { return LocaleFiles::default() };
+        self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
     }
 
     /// The line's byte offset in `text` and its content.
     fn line_at(text: &str, line: u32) -> (usize, &str) {
         util::lines_with_offsets(text).nth(line as usize).unwrap_or((text.len(), ""))
-    }
-
-    fn byte_col(line: &str, character: u32) -> usize {
-        let mut units = 0u32;
-        for (idx, ch) in line.char_indices() {
-            if units >= character { return idx; }
-            units += ch.len_utf16() as u32;
-        }
-        line.len()
     }
 }
 
@@ -221,7 +247,7 @@ impl LanguageServer for Backend {
         Ok(InitializeResult {
             server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["\"".into(), "'".into(), ".".into(), "/".into()]),
@@ -245,17 +271,31 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
         let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else { return };
-        self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text });
+        self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
         self.publish(p.text_document.uri).await;
     }
 
     async fn did_change(&self, p: DidChangeTextDocumentParams) {
-        if let Some(change) = p.content_changes.into_iter().last() {
-            if let Some(mut doc) = self.docs.get_mut(&p.text_document.uri) {
-                doc.text = change.text;
+        let version = p.text_document.version;
+        {
+            let Some(mut doc) = self.docs.get_mut(&p.text_document.uri) else { return };
+            for change in p.content_changes {
+                util::apply_change(&mut doc.text, change);
             }
+            doc.version = version;
         }
-        self.publish(p.text_document.uri).await;
+        self.publish_later(p.text_document.uri, version);
+    }
+
+    async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
+        let events: Vec<(PathBuf, FileChangeType)> = p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
+        self.templates.retain(|root, _| !stale(root, &events, false));
+        self.locales.retain(|root, _| !stale(root, &events, true));
+        // Unresolved-render and strict-locals warnings read other templates from disk.
+        let open: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
+        for uri in open {
+            self.publish(uri).await;
+        }
     }
 
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
@@ -269,10 +309,10 @@ impl LanguageServer for Backend {
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = Self::byte_col(line, pos.character);
+        let col = util::byte_col(line, pos.character);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col) {
-            let files = i18n::locale_files(&path);
+            let files = self.locale_files(&path);
             let locs: Vec<Location> = i18n::lookup(&files, &key)
                 .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(Position::new(t.line as u32, 0), Position::new(t.line as u32, 0)))))
                 .collect();
@@ -319,7 +359,7 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = Self::byte_col(line, pos.character);
+        let col = util::byte_col(line, pos.character);
         let markdown = |value: String| Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None }));
         if doc.lang == TemplateLang::Erb {
             if let Some(md) = erb::tag_doc(line, col) {
@@ -330,7 +370,7 @@ impl LanguageServer for Backend {
             if let Some(r) = partials::render_ref_at(line, col) {
                 return markdown(render_hover(&path, &r));
             }
-            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&i18n::locale_files(&path), &key)) {
+            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&self.locale_files(&path), &key)) {
                 return markdown(md);
             }
         }
@@ -365,13 +405,13 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line) = Self::line_at(&doc.text, pos.line);
-        let col = Self::byte_col(line, pos.character);
+        let col = util::byte_col(line, pos.character);
         let before = &line[..col.min(line.len())];
 
         // 1. Partial/template/layout names inside render "..."
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Ok(path) = uri.to_file_path() else { return Ok(None) };
-            let items: Vec<CompletionItem> = partials::render_candidates(&path, kind)
+            let items: Vec<CompletionItem> = partials::render_candidates(&path, kind, &self.template_files(&path))
                 .into_iter()
                 .filter(|(name, _)| name.starts_with(&prefix) || prefix.is_empty())
                 .map(|(name, file)| CompletionItem {
@@ -390,7 +430,7 @@ impl LanguageServer for Backend {
             if in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
                 let Ok(path) = uri.to_file_path() else { return Ok(None) };
                 let range = util::span_range(pos.line as usize, line, start, end);
-                let items = i18n::completions(&i18n::locale_files(&path), &path, prefix).into_iter().map(|(key, value)| CompletionItem {
+                let items = i18n::completions(&self.locale_files(&path), &path, prefix).into_iter().map(|(key, value)| CompletionItem {
                     label: key.clone(),
                     kind: Some(CompletionItemKind::CONSTANT),
                     detail: Some(value),
@@ -487,7 +527,7 @@ async fn main() {
             let Ok(text) = std::fs::read_to_string(f) else { eprintln!("cannot read {}", f); failed = true; continue };
             let Ok(uri) = Url::from_file_path(std::fs::canonicalize(f).unwrap_or_else(|_| PathBuf::from(f))) else { continue };
             let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { eprintln!("{}: unknown template type", f); failed = true; continue };
-            let diags = diagnostics(&uri, &Doc { lang, text });
+            let diags = diagnostics(&uri, &Doc { lang, text, version: 0 });
             for d in &diags {
                 let sev = match d.severity { Some(DiagnosticSeverity::ERROR) => "error", Some(DiagnosticSeverity::WARNING) => "warning", _ => "info" };
                 println!("{}:{}:{}: {}: {}", f, d.range.start.line + 1, d.range.start.character + 1, sev, d.message);
@@ -498,13 +538,28 @@ async fn main() {
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend { client, docs: DashMap::new() });
+    let (service, socket) = LspService::new(|client| Backend { client, docs: Arc::default(), templates: DashMap::new(), locales: DashMap::new() });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn watched_file_events_invalidate_caches() {
+        let views = Path::new("/r/app/views");
+        let event = |path: &str, kind| vec![(PathBuf::from(path), kind)];
+        assert!(stale(views, &event("/r/app/views/users/_card.html.erb", FileChangeType::CREATED), false));
+        assert!(stale(views, &event("/r/app/views/users", FileChangeType::DELETED), false));
+        assert!(stale(views, &event("/r/app", FileChangeType::DELETED), false));
+        assert!(!stale(views, &event("/r/app/views/users/_card.html.erb", FileChangeType::CHANGED), false));
+        assert!(!stale(views, &event("/r/app/views_old/x.erb", FileChangeType::CREATED), false));
+        assert!(!stale(views, &event("/other/app/views/x.erb", FileChangeType::DELETED), false));
+        let locales = Path::new("/r/config/locales");
+        assert!(stale(locales, &event("/r/config/locales/en.yml", FileChangeType::CHANGED), true));
+        assert!(!stale(locales, &[], true));
+    }
+
     #[test]
     fn html_host_by_file_name() {
         for (path, html) in [

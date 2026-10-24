@@ -220,37 +220,37 @@ fn snake_case(s: &str) -> String {
     out
 }
 
+/// Every file under `root`; the listing `render_candidates` names come from.
+pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    WalkDir::new(root).min_depth(1).max_depth(max_depth).into_iter().flatten()
+        // `path().is_file()` follows symlinks; walkdir's file_type() doesn't.
+        .filter(|e| e.path().is_file()).map(walkdir::DirEntry::into_path).collect()
+}
+
 /// Names `render` can complete for `kind`: partials (same-dir bare names, then `dir/name` under app/views)
-/// or non-partial templates as `dir/name`.
-pub fn render_candidates(current: &Path, kind: RenderKind) -> Vec<(String, PathBuf)> {
+/// or non-partial templates as `dir/name`. `files` lists app/views, or the current directory outside one.
+pub fn render_candidates(current: &Path, kind: RenderKind, files: &[PathBuf]) -> Vec<(String, PathBuf)> {
     let views = views_root(current);
-    let mut out = match (kind, &views) {
-        (RenderKind::Partial, _) => {
-            let mut out: Vec<_> = current.parent().map(|d| templates_under(d, true, 1)).unwrap_or_default();
-            out.extend(views.iter().flat_map(|v| templates_under(v, true, 6)).filter(|(name, _)| name.contains('/')));
-            out
-        }
-        (RenderKind::Template, Some(v)) => templates_under(v, false, 6).into_iter().filter(|(name, _)| name.contains('/')).collect(),
-        (RenderKind::Template, None) => vec![],
-    };
+    let partial = kind == RenderKind::Partial;
+    let same_dir = current.parent().filter(|_| partial).into_iter().flat_map(|d| templates_in(d, files, true)).filter(|(name, _)| !name.contains('/'));
+    let nested = views.iter().flat_map(|v| templates_in(v, files, partial)).filter(|(name, _)| name.contains('/'));
+    let mut out: Vec<_> = same_dir.chain(nested).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out.dedup_by(|a, b| a.0 == b.0);
     out
 }
 
-/// Partials (`_x.*`) or non-partial templates under `root`, named `dir/x` relative to `root`.
-fn templates_under(root: &Path, partial: bool, max_depth: usize) -> Vec<(String, PathBuf)> {
-    WalkDir::new(root).min_depth(1).max_depth(max_depth).into_iter().flatten().filter_map(|e| {
-        let p = e.path();
+/// Partials (`_x.*`) or non-partial templates among `files` under `root`, named `dir/x` relative to `root`.
+fn templates_in<'a>(root: &'a Path, files: &'a [PathBuf], partial: bool) -> impl Iterator<Item = (String, PathBuf)> + 'a {
+    files.iter().filter_map(move |p| {
         let name = template_name(p, partial)?;
         let rel_dir = p.parent()?.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
         let full = if rel_dir.is_empty() { name } else { format!("{rel_dir}/{name}") };
-        Some((full, p.to_path_buf()))
-    }).collect()
+        Some((full, p.clone()))
+    })
 }
 
 fn template_name(p: &Path, partial: bool) -> Option<String> {
-    if !p.is_file() { return None; }
     let fname = p.file_name()?.to_str()?;
     let stem = match fname.strip_prefix('_') {
         Some(stem) if partial => stem,
@@ -456,7 +456,8 @@ mod tests {
             std::fs::write(p, "").unwrap();
         }
         let current = views.join("users/show.html.erb");
-        let names = |kind| render_candidates(&current, kind).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        let files = files_under(&views, usize::MAX);
+        let names = |kind| render_candidates(&current, kind, &files).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names(RenderKind::Partial), ["card", "layouts/nav", "users/card"]);
         assert_eq!(names(RenderKind::Template), ["layouts/admin/base", "layouts/application", "users/index"]);
         std::fs::remove_dir_all(&root).unwrap();
