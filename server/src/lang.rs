@@ -61,6 +61,7 @@ pub fn html_host(uri: &Url) -> bool {
     in_views
         && parts.len() == 3
         && partials::is_locale(parts[1])
+        && partials::template_format(Path::new(&file)).is_none()
         && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
 }
 

@@ -1250,6 +1250,8 @@ mod tests {
             ("/r/app/views/pages/about.pt-BR.erb", true),
             ("/r/app/views/pages/about.erb", false),
             ("/r/app/views/pages/about.yml.erb", false),
+            ("/r/app/views/pages/index.js.erb", false),
+            ("/r/app/views/pages/feed.rss.erb", false),
             ("/v/users/show.de.html.erb", true),
             ("/v/show.html.erubi", true),
             ("/v/show.html.erubis", true),
