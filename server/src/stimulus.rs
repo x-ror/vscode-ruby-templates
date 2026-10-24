@@ -25,10 +25,11 @@ static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']([\w-]+)["']
 // `name(args) {`, `async name() {`, TS `name(): void {`, or a `name = (e) =>` class field, at the start of a line.
 static METHOD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?m)^([ \t]+)(?:(?:async|public|protected|override)\s+)*([A-Za-z_$][\w$]*)\s*(?:\([^)]*\)\s*(?::[^{;]*)?\{|=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>)",
+        r"(?m)^([ \t]+)(?:(?:async|public|protected|override)\s+)*([A-Za-z_$][\w$]*)\s*(?:\((?:[^()]|\([^()]*\))*\)\s*(?::[^{;]*)?\{|=\s*(?:async\s*)?(?:\((?:[^()]|\([^()]*\))*\)|\w+)\s*=>)",
     )
     .unwrap()
 });
+static CLASS_BODY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\b[^{]*\{").unwrap());
 const NOT_ACTIONS: &[&str] =
     &["if", "for", "while", "switch", "catch", "return", "function", "constructor", "initialize", "connect", "disconnect"];
 
@@ -88,7 +89,8 @@ pub fn targets(source: &str) -> Vec<String> {
 
 /// Methods an action can call: the controller class's members, lifecycle callbacks left out.
 pub fn methods(source: &str) -> Vec<String> {
-    let mut members = METHOD.captures_iter(source).map(|cap| (cap.get(1).map_or(0, |m| m.len()), cap[2].to_string()));
+    let Some(class) = CLASS_BODY.find(source) else { return vec![] };
+    let mut members = METHOD.captures_iter(&source[class.end()..]).map(|cap| (cap.get(1).map_or(0, |m| m.len()), cap[2].to_string()));
     // Class members share the first member's indentation; deeper matches are nested functions or object literals.
     let Some((indent, first)) = members.next() else { return vec![] };
     let mut out: Vec<String> = std::iter::once(first)
@@ -249,6 +251,9 @@ mod tests {
     #[test]
     fn controller_members() {
         let source = r#"import { Controller } from "@hotwired/stimulus"
+const options = {
+    onOpen() {},
+}
 export default class extends Controller {
   static targets = [ "name",
     'output' ]
@@ -273,10 +278,12 @@ export default class extends Controller {
 
   submit(): void {
   }
+
+  search(event = new Event("x", { bubbles: true })) {}
 }
 "#;
         assert_eq!(targets(source), ["name", "output"]);
-        assert_eq!(methods(source), ["greet", "reset", "submit"]);
+        assert_eq!(methods(source), ["greet", "reset", "submit", "search"]);
         assert!(targets("export default class extends Controller {}").is_empty());
     }
 
