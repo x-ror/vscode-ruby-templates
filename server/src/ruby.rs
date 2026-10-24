@@ -86,7 +86,8 @@ const PREFIX_OK: &[&str] =
 /// Net block effect of a Ruby snippet. `end` count and opener count are also returned.
 pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
     let stripped = strip(code);
-    let tokens: Vec<&str> = TOKEN.find_iter(&stripped).map(|m| m.as_str()).collect();
+    let matches: Vec<regex::Match> = TOKEN.find_iter(&stripped).collect();
+    let tokens: Vec<&str> = matches.iter().map(|m| m.as_str()).collect();
     let mut opens = 0usize;
     let mut closes = 0usize;
     let mut has_continue = false;
@@ -95,10 +96,15 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
     for (i, &tok) in tokens.iter().enumerate() {
         let prev = if i > 0 { tokens[i - 1] } else { "" };
         let next = tokens.get(i + 1).copied().unwrap_or("");
+        // `:if` and `if:` touch their colon; `actors: if x` is a hash value.
+        let symbol = prev == ":" && matches[i - 1].end() == matches[i].start();
+        let key = next == ":" && matches[i].end() == matches[i + 1].start();
         // `obj.class`, `foo.if`, `class: "x"`, `:if` are not keywords.
-        if prev == "." || prev == "&." || (next == ":") || prev == ":" || prev == "def" {
+        if prev == "." || prev == "&." || key || symbol || prev == "def" {
             continue;
         }
+        // A line break ends a statement unless the line ends in `\`.
+        let new_line = i > 0 && prev != "\\" && stripped[matches[i - 1].end()..matches[i].start()].contains('\n');
         match tok {
             "end" => closes += 1,
             "do" => {
@@ -110,7 +116,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
             }
             "if" | "unless" | "while" | "until" => {
                 // Modifier form (`x if y`) does not open a block.
-                let statement_start = i == 0 || PREFIX_OK.contains(&prev);
+                let statement_start = i == 0 || new_line || PREFIX_OK.contains(&prev);
                 if statement_start {
                     opens += 1;
                     if tok == "while" || tok == "until" {
@@ -157,6 +163,16 @@ pub fn ends_with_block(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn line_breaks_start_statements() {
+        assert_eq!(analyze("\nroles = []\nif admin\n  roles = [1]\nend\n").0, BlockEffect::Neutral);
+        assert_eq!(analyze("tags = list\nif flare").0, BlockEffect::Open(1));
+        assert_eq!(analyze("x = long_call \\\n  if y").0, BlockEffect::Neutral);
+        assert_eq!(analyze("t(\"k\",\n  actors: if one\n    a\n  else\n    b\n  end)").0, BlockEffect::Neutral);
+        assert_eq!(analyze("link_to x, if: y").0, BlockEffect::Neutral);
+        assert_eq!(analyze("validate :x, :if => :y").0, BlockEffect::Neutral);
+    }
+
     #[test]
     fn block_comments_hide_keywords() {
         assert_eq!(analyze("\n=begin\nfor each page\n- if any\n=end\n").0, BlockEffect::Neutral);

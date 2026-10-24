@@ -108,7 +108,9 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         let is_output = text[node.start_byte()..].starts_with("<%=");
         let t = snippet.trim();
         if is_output {
-            if t.starts_with("if ") || t.starts_with("unless ") || t == "end" || t.starts_with("end ") {
+            // `<%= if a then b else c end %>` is one balanced expression.
+            let control_flow = t.starts_with("if ") || t.starts_with("unless ") || t == "end" || t.starts_with("end ");
+            if control_flow && effect != BlockEffect::Neutral {
                 let message = "Control flow in an output tag `<%= %>`; did you mean `<% %>`?";
                 out.push(coded(warning(range, message), code::OUTPUT_CONTROL_FLOW));
             }
@@ -201,6 +203,12 @@ mod tests {
 
     fn span(line: u32, start: u32, end: u32) -> Range {
         Range::new(Position::new(line, start), Position::new(line, end))
+    }
+
+    #[test]
+    fn balanced_if_expression_in_output_tag_is_fine() {
+        assert!(diagnostics("<%= if a\n  b\nelse\n  c\nend %>").is_empty());
+        assert_eq!(only("<%= if a %>x<% end %>").code, Some(NumberOrString::String(code::OUTPUT_CONTROL_FLOW.into())));
     }
 
     #[test]
