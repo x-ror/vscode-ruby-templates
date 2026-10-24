@@ -53,7 +53,7 @@ fs.writeFileSync(
   "module UsersHelper\n  def format_price(x)\n  end\nend\n",
 );
 const controllerText =
-  'class UsersController < ApplicationController\n  layout "admin"\n\n  def index\n    render :index\n  end\nend\n';
+  'class UsersController < ApplicationController\n  layout "admin"\n\n  def index\n    render :index\n  end\n  before_action :set_menu\n\n  def set_menu\n    @menu = Menu.first\n  end\nend\n';
 const controllerFile = path.join(
   root,
   "app",
@@ -766,6 +766,46 @@ const check = (label, actual, expected) => {
     [["/app/helpers/users_helper.rb:1"], null],
   );
   await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 2 },
+      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n" }],
+    },
+    true,
+  );
+  const cardUri = "file://" + path.join(views, "users", "_card.html.slim");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: cardUri,
+        languageId: "slim",
+        version: 1,
+        text: "p = user.name\n",
+      },
+    },
+    true,
+  );
+  const at = (r) =>
+    r.result?.map(
+      (l) => `${rel(l.uri)}:${l.range.start.line}:${l.range.start.character}`,
+    );
+  check(
+    "ivars and locals",
+    [
+      (await req("textDocument/completion", helperUri, 0, 6)).result?.map(
+        (i) => [i.label, i.textEdit.range.start.character],
+      ),
+      at(await req("textDocument/definition", helperUri, 1, 6)),
+      at(await req("textDocument/definition", cardUri, 0, 5)),
+    ],
+    [
+      [["@menu", 4]],
+      ["/app/controllers/users_controller.rb:9:0"],
+      ["/app/views/users/index.html.erb:0:19"],
+    ],
+  );
+  await send(
     "rubyTemplates/routes",
     {
       root,
@@ -790,7 +830,7 @@ const check = (label, actual, expected) => {
   await send(
     "textDocument/didChange",
     {
-      textDocument: { uri: helperUri, version: 2 },
+      textDocument: { uri: helperUri, version: 3 },
       contentChanges: [
         { text: '<%= link_to "x", users_p %>\n<%= users_path %>\n' },
       ],

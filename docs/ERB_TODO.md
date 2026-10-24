@@ -143,8 +143,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb` (`server/src/controllers.rs`)
 - [x] Template → controller action (*Switch to Related File*, `src/related.js` `actionSource`) and controller action → template (`def show`, `render :edit`; `server/src/controllers.rs`)
 - [x] Helper method → definition in `app/helpers/**` and controllers' `helper_method`s (`server/src/helper_defs.rs`); gem helpers stay with Ruby LSP
-- [ ] Locals: go to where a local is passed (`render … locals:`) from its use in the partial
-- [ ] Instance variables → assignment in the controller action
+- [x] Locals: go to where a local is passed (`render "card", user: u`) from its use in the partial, else its strict-locals comment (`partial_rename::local_passes`)
+- [x] Instance variables → assignment in the controller action or a `before_action` callback that runs for it (`server/src/ivars.rs`)
 - [x] i18n key `t(".key")` / `t("a.b")` → `config/locales/*.yml` (lazy lookup scope from the view path) (`server/src/i18n.rs`)
 - [x] Route helpers `*_path` / `*_url` → `config/routes.rb` (the route's source location, Rails 7.1+; `server/src/routes.rs`)
 - [x] Asset paths in `image_tag` / `stylesheet_link_tag` → file (`server/src/assets.rs`)
@@ -159,7 +159,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Form builder methods after `f.` / `form.` / `ff.` / `builder.` / `fields.` (`server/src/helpers.rs` `FORM_BUILDER`)
 - [x] ~78 Rails view helpers with snippet arguments, only inside `<% %>` (`server/src/helpers.rs` `HELPERS`, `server/src/main.rs` `in_ruby_context`)
 - [x] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`) (`server/src/partials.rs` `render_candidates`; `render layout:` resolves to a partial like Rails)
-- [ ] Instance variables used in the matching controller action
+- [x] Instance variables assigned in the matching controller action and its `before_action` callbacks (`only:` / `except:`, ApplicationController's too); every action's for a partial
 - [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/main.rs` `local_completions`; callers' `render … locals:` still open)
 - [ ] Block variables (`do |user|`) in scope
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)

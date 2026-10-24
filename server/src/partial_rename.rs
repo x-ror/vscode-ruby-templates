@@ -3,7 +3,8 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::partials::{
-    app_root, first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
+    app_root, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind,
+    RenderRef,
 };
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{i18n, render_filter, ruby, slim_outline, TemplateLang};
@@ -134,6 +135,31 @@ pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String
         for (start, end, _) in named.chain(models) {
             let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
             out.push(Location::new(uri.clone(), range));
+        }
+    }
+    out
+}
+
+/// The `render` calls of `partial` that pass `local` (`render "card", user: u`), at the local's key.
+pub fn local_passes(partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    let files = [partial.to_path_buf()];
+    let stems = partial_stems(&files);
+    let mut out = Vec::new();
+    for source in sources {
+        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        for (start, _, r) in code_refs(source, extra_engines, render_refs) {
+            if !may_name(&stems, &r.name) || !ref_targets(source, start, &r).contains(&files[0]) {
+                continue;
+            }
+            let line_start = start - r.start;
+            let line = source.text[line_start..].lines().next().unwrap_or("");
+            if !passed_locals(line, &r).is_some_and(|names| names.contains(&local)) {
+                continue;
+            }
+            // The key itself, `user:` after the partial name; the call's start when it's spelled another way.
+            let at = line[r.end..].find(&format!("{local}:")).map_or(r.call, |i| r.end + i);
+            let position = offset_to_position(&source.text, line_start + at);
+            out.push(Location::new(uri.clone(), Range::new(position, position)));
         }
     }
     out
@@ -382,6 +408,24 @@ mod tests {
                 ("app/helpers/cards_helper.rb".into(), 0, 8, "users/tile".into()),
             ]
         );
+    }
+
+    #[test]
+    fn local_passes_find_callers() {
+        let t = Tree::new("locals", &["app/views/users/_card.html.erb"]);
+        let sources = [
+            t.source("app/views/users/index.html.erb", ERB, "<%= render \"card\", user: u, size: 1 %>\n<%= render \"card\", size: 2 %>\n"),
+            t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\", user: current_user\n"),
+            t.source("app/views/home/other.html.erb", ERB, "<%= render \"other\", user: u %>\n"),
+        ];
+        let card = t.path("app/views/users/_card.html.erb");
+        let mut got: Vec<(String, u32, u32)> = local_passes(&card, "user", &sources, &[])
+            .into_iter()
+            .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
+            .collect();
+        got.sort();
+        assert_eq!(got, [("app/views/home/show.html.slim".into(), 0, 23), ("app/views/users/index.html.erb".into(), 0, 19)]);
+        assert!(local_passes(&card, "missing", &sources, &[]).is_empty());
     }
 
     #[test]

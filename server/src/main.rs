@@ -9,6 +9,7 @@ mod helpers;
 mod html;
 mod html_lint;
 mod i18n;
+mod ivars;
 mod outline;
 mod partial_rename;
 mod partials;
@@ -549,6 +550,31 @@ impl Backend {
         self.routes.insert(root, Arc::new(parsed));
     }
 
+    /// Where the `@ivar` or partial local under `col` comes from: its assignments in the controller, or the
+    /// `render` calls passing the local (else the strict-locals comment declaring it).
+    fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Vec<Location> {
+        let at_line = |file: &Path, line: usize| {
+            let start = Position::new(line as u32, 0);
+            Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
+        };
+        let word = util::word_at(line, col);
+        let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
+        if before.ends_with('@') && !before.ends_with("@@") {
+            return ivars::for_view(path).into_iter().filter(|a| a.name == word).filter_map(|a| at_line(&a.file, a.line)).collect();
+        }
+        let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
+        let Some(name) = helper_defs::name_at(line, col).filter(|_| is_partial) else { return vec![] };
+        let Some(views) = partials::views_root(path) else { return vec![] };
+        let sources = partial_rename::sources(&views, &self.open_texts());
+        let passes = partial_rename::local_passes(path, name, &sources, &self.options().extra_engines);
+        if !passes.is_empty() {
+            return passes;
+        }
+        let declared = partials::strict_locals(text).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
+        let comment = text.lines().position(|l| l.contains("locals:"));
+        comment.filter(|_| declared).and_then(|line| at_line(path, line)).into_iter().collect()
+    }
+
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
         let root = partials::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
@@ -585,7 +611,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<"].map(String::from).to_vec()),
+                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<", "@"].map(String::from).to_vec()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -712,6 +738,10 @@ impl LanguageServer for Backend {
             convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
+        let in_code = || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if locs.is_empty() && in_code() {
+            locs.extend(self.variable_definitions(&doc.text, &path, line, col));
+        }
         if locs.is_empty() {
             let helper =
                 helper_defs::name_at(line, col).filter(|_| code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines));
@@ -1059,6 +1089,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
+        let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
+        if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
+            let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
+            return items(ivar_completions(path, typed, range));
+        }
         if typed.is_empty() {
             return Ok(None);
         }
@@ -1111,6 +1146,24 @@ fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: R
         .map(|name| CompletionItem {
             text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, name.clone()))),
             ..util::completion_item(name, kind, detail.clone())
+        })
+        .collect()
+}
+
+/// `@name` for the instance variables the view's controller action assigns; each replaces `range`.
+fn ivar_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    let mut seen = std::collections::HashSet::new();
+    ivars::for_view(path)
+        .into_iter()
+        .filter(|a| a.name.starts_with(typed) && seen.insert(a.name.clone()))
+        .map(|a| {
+            let label = format!("@{}", a.name);
+            let from = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+            CompletionItem {
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
+                filter_text: Some(label.clone()),
+                ..util::completion_item(label, CompletionItemKind::VARIABLE, format!("assigned in {from}:{}", a.line + 1))
+            }
         })
         .collect()
 }
