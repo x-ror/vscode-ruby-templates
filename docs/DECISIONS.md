@@ -85,7 +85,7 @@ Status: pending
 
 ### D9. Windows check
 
-The cmd.exe path for Ruby tools was checked by code review only. The Windows CI job runs only the Rust tests.
+The cmd.exe path for Ruby tools was checked by code review only. The Windows CI job runs the Rust tests and the LSP end-to-end test, but no Ruby tool.
 
 - **A:** test once by hand on a Windows machine with the haml and slim gems installed.
 - **B:** add a Windows CI job with Ruby that runs the converter end to end.
@@ -119,7 +119,6 @@ Status: pending
 
 ## Open bugs
 
-- `test/broken/bad.html.erb` is not asserted by any test. The Haml and Slim fixtures are.
-- For a jump of several levels, the Haml message ("expected N spaces, found M") differs from Haml's own ("indented N levels deeper").
+- herb-lint on Windows lints nothing below the folder it runs in ("excluded by configuration patterns", `filesChecked: 0`): its exclude check gets backslash relative paths. Upstream (herb-tools); `--force` would bypass the user's excludes.
 - `KNOWN_FORMATS` is a fixed list, so a custom-registered MIME format is treated as a variant.
 - See also D7 (symlinks) and D8 (completion in plain text). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.
