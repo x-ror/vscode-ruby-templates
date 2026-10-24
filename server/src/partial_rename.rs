@@ -189,8 +189,12 @@ pub fn render_edits(
             }
             let explicit_partial = source.lang.is_none()
                 && PARTIAL_KEY.is_match(source.text[..start].rsplit('\n').next().unwrap_or(""));
-            let names: Option<Vec<String>> = targets(source, &r, explicit_partial)
+            let found = targets(source, &r, explicit_partial);
+            // Rails picks from the first folder that has a match; later ones (`application/`) are shadowed.
+            let first_dir = found.first().and_then(|t| t.parent());
+            let names: Option<Vec<String>> = found
                 .iter()
+                .filter(|t| t.parent() == first_dir)
                 .map(|t| new_ref_name(&r.name, &source.path, &moved(t, renames)?, renames))
                 .collect();
             let Some(names) = names else { continue };

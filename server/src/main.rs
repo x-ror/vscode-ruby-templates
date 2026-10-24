@@ -318,7 +318,9 @@ fn render_in_code(lang: TemplateLang, role: LineRole, text: &str, spans: &[(usiz
         (TemplateLang::Slim, _) => {
             let ws = util::leading_ws(line).len();
             let prefix = ["!=", "&=", "=", "-"].into_iter().find(|p| line[ws..].starts_with(p));
-            prefix.filter(|_| in_ruby()).map(|p| ws + p.len())
+            // `==`, `=<`, `=>`, `='` and the like: the rest of the marker isn't Ruby.
+            let marker_end = |p: &str| ws + p.len() + line[ws + p.len()..].len() - line[ws + p.len()..].trim_start_matches(['=', '<', '>', '\'']).len();
+            prefix.filter(|_| in_ruby()).map(marker_end)
         }
         (TemplateLang::Skim, _) => None,
     };
@@ -419,6 +421,8 @@ impl LanguageServer for Backend {
                         will_rename: Some(FileOperationRegistrationOptions {
                             filters: vec![
                                 rename_filter("**/_*.{erb,haml,slim,skim}", FileOperationPatternKind::File),
+                                // Partials of other formats (`_card.json.jbuilder`) can be rendered from views too.
+                                rename_filter("**/app/views/**/_*", FileOperationPatternKind::File),
                                 rename_filter("**/app/views/**", FileOperationPatternKind::Folder),
                             ],
                         }),
@@ -1018,6 +1022,7 @@ mod tests {
         assert!(rename(&[both[0].clone(), (phone, views.join("shared/_other.html+phone.erb"))]).is_empty());
         // `users/_badge` shadows `application/_badge` for users/show.
         assert!(rename(&[(views.join("application/_badge.html.erb"), views.join("application/_pill.html.erb"))]).is_empty());
+        assert_eq!(rename(&[(views.join("users/_badge.html.erb"), views.join("users/_pill.html.erb"))]), ["show.html.erb 0:12 pill"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1101,6 +1106,10 @@ mod tests {
         let lines: Vec<u32> = unresolved(TemplateLang::Haml, &haml, haml_text).iter().map(|d| d.range.start.line).collect();
         assert_eq!(lines, vec![0, 1, 2, 3, 4, 5]);
         assert!(unresolved(TemplateLang::Skim, &users.join("show.skim"), "= render \"users/x\"").is_empty());
+        let slim = users.join("show.html.slim");
+        let slim_text = "=' render \"users/a\"\n==' render \"users/b\"\n=> render \"users/c\"\np = render \"users/d\"\n| render \"users/e\"\n";
+        let lines: Vec<u32> = unresolved(TemplateLang::Slim, &slim, slim_text).iter().map(|d| d.range.start.line).collect();
+        assert_eq!(lines, vec![0, 1, 2]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
         std::fs::remove_dir_all(&root).unwrap();
