@@ -124,12 +124,13 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 
 ## Built-in formatter
 
-One formatter for HTML ERB views (`.html.erb`, `.html+variant.erb`, `.turbo_stream.erb`, `.html.erubi`, `.html.erubis`, `.rhtml`, localized views without a format), Haml and Slim, in the language server and in the `ruby-templates` command line. It changes **only whitespace**: the leading indentation of lines, trailing whitespace, blank lines, the final newline and line endings. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
+One formatter for HTML ERB views (`.html.erb`, `.html+variant.erb`, `.turbo_stream.erb`, `.html.erubi`, `.html.erubis`, `.rhtml`, localized views without a format), Haml and Slim, in the language server and in the `ruby-templates` command line. It changes **only whitespace**: the leading indentation of lines, trailing whitespace, blank lines, the final newline and line endings. It never wraps or joins lines and never reorders attributes; Ruby code changes only in the indentation of a multi-line tag's continuation lines, which move with the tag.
 
 - **ERB**: a line gets one indent unit per open HTML element and ERB block (`<% if %>` … `<% else %>` … `<% end %>`, `do … end`, `case`/`when`); end tags and `<% end %>` at the start of a line dedent it. `<script>`, `<style>`, comments, multi-line tags and multi-line ERB tags move as one unit with their first line, keeping their relative indentation. `<pre>`, `<textarea>` and `<title>` bodies, quoted attribute values across lines, and Ruby holding a heredoc or a string across lines keep every byte. `<li>`, `<p>` and the other optional-end elements indent only when they have an end tag. Where ERB branches leave different tags open (`<% if a %><div><% end %>`), the rest of the file keeps its indentation.
+- ERB with `builtin`, Haml and Slim formatting run in the language server: with `rubyTemplates.server.enabled` off, or before the server is up, _Format Document_ changes nothing (_Re-indent Haml_ says so).
 - **Haml**: every level becomes the file's own indent unit (its first indented line, as Haml reads it); filter and `-#` bodies and continuation lines move with their head. Also _Format Selection_ and _Re-indent Haml_.
 - **Slim**: as described above.
-- A file the formatter is in doubt about (broken ERB, mismatched tags, a `javascript_tag do` block, a Haml or Slim file its engine would reject) comes back unchanged, and the reason is logged. Files that aren't HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …), Jbuilder views and generator templates (`*.tt`) are never formatted.
+- A file the formatter is in doubt about (broken ERB, mismatched tags, a `javascript_tag do` block, a Slim file Slim would reject, a Haml file with errors other than its indentation, which is what the Haml formatter fixes) comes back unchanged, and the reason is logged. Files that aren't HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …), Jbuilder views and generator templates (`*.tt`) are never formatted.
 - Every change is checked before it is returned: the result must be stable when formatted again, keep every non-whitespace character, and add no diagnostic.
 
 **Settings** come from the editor (in VS Code), `.editorconfig`, then the few erb_lint / haml-lint / slim-lint linters that check the same whitespace (`FinalNewline`, `TrailingWhitespace`, `ExtraNewline`, …), then defaults (2 spaces). The table is in [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md); it reads those files only to agree with them, it is not those tools.
@@ -146,7 +147,7 @@ npx ruby-templates format --stdin-filepath show.html.erb < x     # from stdin, f
 npx ruby-templates format --verbose --check app/views            # also the settings, config files read and keys ignored
 ```
 
-Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors, files that aren't templates, or a formatter bug caught by its checks. Folders are walked for template files, skipping hidden folders and `node_modules`.
+Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors, a formatter bug caught by its checks, or a file named to `check` that isn't a template (`format` passes such files through unchanged and says why). `ruby-templates-ls --check` takes folders too. Folders are walked for template files, skipping hidden folders and `node_modules`.
 
 **Not supported**: reflowing long lines or attributes (use `erb-format`), indenting embedded JavaScript or CSS by their own syntax, Ruby code formatting (use RuboCop through erb_lint or haml-lint), converting a Haml file's indent unit, Slim files indented with tabs, and resuming indentation after ERB branches that leave different tags open.
 

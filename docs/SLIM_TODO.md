@@ -57,7 +57,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 3. File types and language configuration
 
 - [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/lang.rs` `TemplateLang::from_uri_or_id`, `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
+- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/lang.rs` `TemplateLang::from_uri_or_id`; `server/src/lsp.rs` `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/lsp.rs` `folding_range`)
@@ -110,7 +110,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Unknown embedded engine warning (`server/src/slim_indent.rs` `SLIM_ENGINES`; `test/broken/bad.html.slim` line 9)
 - [x] `,` / `\` continuation lines joined before analysis (`server/src/slim_indent.rs` `join_continuation`)
 - [x] Unresolved `= render "dir/name"` warning (`server/src/lsp.rs` `unresolved_renders`; checked from a `.slim` document)
-- [x] CLI `ruby-templates-ls --check file.slim` (`server/src/lsp.rs`, CI runs it on `test/sample.*`)
+- [x] CLI `ruby-templates-ls --check file.slim` (`server/src/cli.rs`, CI runs it on `test/sample.*`)
 - [x] Tabs counted as Slim does (`tabsize` default 4; the server counts a tab as 2 columns) (`server/src/slim_indent.rs` `indent_width`, tab stops of 4 for Slim)
 - [x] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today) (`server/src/slim_indent.rs` `unmatched-branch`)
 - [x] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported): bracket/quote balance only, as a warning; no Ruby parser (`server/src/slim_indent.rs` `unclosed-ruby`)

@@ -18,7 +18,7 @@ Ruby LSP (`shopify.ruby-lsp`) already maps `.jbuilder` and `.builder` to `ruby`.
 
 ### Server
 
-- [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/lsp.rs`). Plain `.rb` must still return `None`.
+- [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/lang.rs`). Plain `.rb` must still return `None`.
 - [x] Matches that need a `Ruby` arm (`server/src/lsp.rs`):
   - `diagnostics`: no template diagnostics (Ruby LSP reports syntax errors). `unresolved_renders`/`strict_locals_mismatches` already run for every language; only the arm is new.
   - `render_in_code`: `(TemplateLang::Ruby, _) => in_ruby().then_some(0)`. It matches every language, so the compiler asks for this arm. `line_roles` falls back to `LineRole::Start` and needs nothing.
