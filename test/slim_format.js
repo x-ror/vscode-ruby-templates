@@ -57,14 +57,16 @@ function checkSlim() {
   console.log("slim formatting keeps compiled output ok");
 }
 
-const cli = path.join(
-  import.meta.dirname,
-  "..",
-  "server",
-  "target",
-  "release",
-  "ruby-templates",
-);
+const cli =
+  process.env.RUBY_TEMPLATES ??
+  path.join(
+    import.meta.dirname,
+    "..",
+    "server",
+    "target",
+    "release",
+    `ruby-templates${process.platform === "win32" ? ".exe" : ""}`,
+  );
 // Haml numbers its temporaries per process; the numbers aren't output.
 const compileHaml = (source) =>
   execFileSync(

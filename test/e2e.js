@@ -671,7 +671,7 @@ const check = (label, actual, expected) => {
       rangeEdits[0].newText === "    %i",
     JSON.stringify(rangeEdits),
   );
-  // Without dynamic registration nothing is advertised, so ERB/Haml never see a formatter that does nothing.
+  // Without dynamic registration nothing is advertised: the client's own ERB and Haml providers decide when to ask.
   const staticFormatting = init.result.capabilities.documentFormattingProvider;
   expect(
     "no static formatter",
