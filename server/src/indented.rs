@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lang { Slim, Haml }
 
-const SLIM_ENGINES: &[&str] = &["ruby", "javascript", "css", "sass", "scss", "less", "coffee", "markdown", "textile", "rdoc", "erb", "builder", "nokogiri", "wiki", "creole", "mediawiki", "asciidoc", "org", "styl", "stylus", "livescript", "babel", "typescript", "haml"];
+pub(crate) const SLIM_ENGINES: &[&str] = &["ruby", "javascript", "css", "sass", "scss", "less", "coffee", "markdown", "textile", "rdoc", "erb", "builder", "nokogiri", "wiki", "creole", "mediawiki", "asciidoc", "org", "styl", "stylus", "livescript", "babel", "typescript", "haml"];
 const HAML_FILTERS: &[&str] = &["plain", "escaped", "preserve", "cdata", "javascript", "css", "ruby", "erb", "markdown", "sass", "scss", "less", "coffee", "textile", "maruku", "styl", "stylus", "builder", "nokogiri", "wiki", "creole", "mediawiki"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

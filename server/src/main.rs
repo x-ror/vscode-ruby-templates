@@ -2,8 +2,10 @@ mod erb;
 mod helpers;
 mod indented;
 mod outline;
+mod partial_rename;
 mod partials;
 mod ruby;
+mod slim_outline;
 mod tags;
 mod util;
 
@@ -135,6 +137,22 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: None,
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".into()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/_*.{erb,haml,slim,skim}".into(),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                }),
                 ..Default::default()
             },
         })
@@ -243,20 +261,47 @@ impl LanguageServer for Backend {
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
-        // what folds Haml/Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
-        if doc.lang != TemplateLang::Erb || !html_host(&p.text_document.uri) {
-            return Ok(None);
+        // what folds Haml, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
+        match doc.lang {
+            TemplateLang::Slim => Ok(Some(slim_outline::folding_ranges(&doc.text))),
+            TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
+            _ => Ok(None),
         }
-        Ok(Some(outline::folding_ranges(&doc.text)))
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        if doc.lang != TemplateLang::Erb {
-            return Ok(None);
-        }
-        Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
+        let symbols = match doc.lang {
+            TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
+            TemplateLang::Slim => slim_outline::document_symbols(&doc.text),
+            TemplateLang::Haml => return Ok(None),
+        };
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
+        let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
+        let Some(views) = renames.first().and_then(|(old, _)| partials::views_root(old)) else { return Ok(None) };
+        let sources: Vec<partial_rename::Source> = walkdir::WalkDir::new(&views)
+            .into_iter()
+            .flatten()
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|e| {
+                let path = e.into_path();
+                let uri = Url::from_file_path(&path).ok()?;
+                let lang = TemplateLang::from_uri_or_id(&uri, None)?;
+                // Open documents may hold unsaved edits; the disk copy would give stale positions.
+                let text = match self.docs.get(&uri) {
+                    Some(doc) => doc.text.clone(),
+                    None => std::fs::read_to_string(&path).ok()?,
+                };
+                Some(partial_rename::Source { path, lang, text })
+            })
+            .collect();
+        let changes = partial_rename::render_edits(&renames, &sources);
+        Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {

@@ -1,4 +1,5 @@
 // Minimal LSP smoke test against a fake Rails tree: definition, hover, completion, diagnostics.
+const assert = require('assert');
 const cp = require('child_process'), fs = require('fs'), path = require('path'), os = require('os');
 const bin = path.join(__dirname, '..', 'server', 'target', 'release', 'ruby-templates-ls');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-e2e-'));
@@ -13,6 +14,10 @@ const file = path.join(views, 'users', 'index.html.erb');
 const text = '<%= render "card", user: u %>\n<%= render "shared/footer" %>\n<%= render BadgeComponent.new %>\n<%= render "sh\n<%= f.text_\n<%= link_to\n<%= render "shared/missing" %>\n<% content_for :aside do %>\n<nav>\n<%= render "card" %>\n</nav>\n<% end %>\n';
 fs.writeFileSync(file, text);
 const uri = 'file://' + file;
+const slimFile = path.join(views, 'users', 'show.html.slim');
+const slimText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+fs.writeFileSync(slimFile, slimText);
+const slimUri = 'file://' + slimFile;
 
 const proc = cp.spawn(bin);
 let id = 0, buf = Buffer.alloc(0); const pending = new Map(); const notes = [];
@@ -59,6 +64,18 @@ const rel = p => p.replace(root, '');
   const syms = await send('textDocument/documentSymbol', { textDocument: { uri } });
   const tree = s => s.children ? `${s.name} [${s.children.map(tree).join(', ')}]` : s.name;
   console.log('documentSymbols        →', (syms.result || []).map(tree));
+  await send('textDocument/didOpen', { textDocument: { uri: slimUri, languageId: 'slim', version: 1, text: slimText } }, true);
+  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: slimUri } });
+  console.log('slim documentSymbols   →', slimSyms.result.map(tree));
+  assert.deepStrictEqual(slimSyms.result.map(tree), ['main#page [content_for :aside [nav [render "card"]]]', 'javascript:']);
+  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: slimUri } });
+  const slimRanges = slimFolds.result.map(f => `${f.startLine}-${f.endLine}`);
+  console.log('slim foldingRanges     →', slimRanges);
+  assert.deepStrictEqual(slimRanges, ['0-5', '1-2', '3-5', '7-8']);
+  const renamed = await send('workspace/willRenameFiles', { files: [{ oldUri: 'file://' + path.join(views, 'users', '_card.html.slim'), newUri: 'file://' + path.join(views, 'users', '_tile.html.slim') }] });
+  const renameEdits = Object.entries(renamed.result.changes).map(([u, es]) => `${rel(decodeURIComponent(new URL(u).pathname))}: ${es.map(e => `${e.range.start.line}:${e.range.start.character} ${e.newText}`).join(', ')}`).sort();
+  console.log('willRenameFiles _card  →', renameEdits);
+  assert.deepStrictEqual(renameEdits, ['/app/views/users/index.html.erb: 0:12 tile, 9:12 tile', '/app/views/users/show.html.slim: 2:18 tile']);
   await new Promise(r => setTimeout(r, 200));
   const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics');
   console.log('diagnostics            →', diag ? diag.params.diagnostics.map(d => `${d.range.start.line + 1}: ${d.message}`) : 'none');
