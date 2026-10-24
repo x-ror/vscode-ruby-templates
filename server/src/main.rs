@@ -833,9 +833,10 @@ fn kind_name(k: partials::RenderKind) -> &'static str {
 }
 
 fn word_at(line: &str, col: usize) -> &str {
-    let is_w = |c: char| c.is_alphanumeric() || c == '_' || c == '?' || c == '!';
-    let start = line[..col.min(line.len())].char_indices().rev().find(|&(_, c)| !is_w(c)).map_or(0, |(i, c)| i + c.len_utf8());
-    let end = line[col.min(line.len())..].find(|c: char| !is_w(c)).map(|i| i + col).unwrap_or(line.len());
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
+    let (before, after) = line.split_at(col.min(line.len()));
+    let start = before.trim_end_matches(is_word).len();
+    let end = line.len() - after.trim_start_matches(is_word).len();
     &line[start..end]
 }
 
@@ -942,6 +943,25 @@ mod tests {
         let locales = Path::new("/r/config/locales");
         assert!(stale(locales, &event("/r/config/locales/en.yml", FileChangeType::CHANGED), true));
         assert!(!stale(locales, &[], true));
+    }
+
+    #[test]
+    fn word_under_cursor() {
+        let cases = [
+            ("a user? b", 4, "user?"),
+            ("a user? b", 2, "user?"),
+            ("a user? b", 7, "user?"),
+            ("a user? b", 8, "b"),
+            ("a  b", 2, ""),
+            ("t(’greeting’)", 8, "greeting"),
+            ("— ok!", 5, "ok!"),
+            ("😀名前", 4, "名前"),
+            ("abc", 99, "abc"),
+            ("", 0, ""),
+        ];
+        for (line, col, word) in cases {
+            assert_eq!(word_at(line, col), word, "{line:?} at {col}");
+        }
     }
 
     #[test]
