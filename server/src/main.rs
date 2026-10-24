@@ -302,12 +302,20 @@ fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize
 }
 
 /// Full key of the `t("…")` literal under `col`, when the call is Ruby.
-fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize) -> Option<String> {
+fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize, extra_engines: &[String]) -> Option<String> {
     let (start, end) = i18n::key_at(line, col)?;
-    if !in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start) {
+    if !code_at(doc.lang, &doc.text, line_start + start, extra_engines) {
         return None;
     }
     i18n::full_key(path, &line[start..end])
+}
+
+/// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
+fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> bool {
+    match lang {
+        TemplateLang::Slim => slim_parser::in_ruby(text, &slim_parser::parse(text, extra_engines), offset),
+        _ => in_ruby_context(lang, text, &erb::code_spans(text), offset),
+    }
 }
 
 fn markdown_hover(value: String) -> Option<Hover> {
@@ -563,7 +571,7 @@ impl LanguageServer for Backend {
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
-        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col) {
+        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
             let files = self.locale_files(&path);
             let locs: Vec<Location> = i18n::lookup(&files, &key)
                 .filter_map(|(file, t)| {
@@ -590,9 +598,14 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
         let mut links = Vec::new();
-        for (i, line) in doc.text.lines().enumerate() {
-            let renders = partials::render_refs(line).into_iter().map(|r| (r.start, r.end, partials::resolve(&path, &r)));
+        for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
+            // Same renders as diagnostics and references: code only, and the file Rails would pick.
+            let renders = partials::render_refs(line)
+                .into_iter()
+                .filter(|r| in_code(i, line_start, r))
+                .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
                 let Some(target) = found.into_iter().next() else { continue };
                 let Ok(t) = Url::from_file_path(&target) else { continue };
@@ -628,7 +641,9 @@ impl LanguageServer for Backend {
             if let Some(r) = partials::render_ref_at(line, col) {
                 return Ok(markdown_hover(render_hover(&path, &r)));
             }
-            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col).and_then(|key| i18n::hover(&self.locale_files(&path), &key)) {
+            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines)
+                .and_then(|key| i18n::hover(&self.locale_files(&path), &key))
+            {
                 return Ok(markdown_hover(md));
             }
         }
@@ -777,7 +792,7 @@ impl LanguageServer for Backend {
             return items(render_completions(path, kind, &prefix, &self.template_files(path)));
         }
         let i18n_prefix = i18n::completion_prefix(line, col)
-            .filter(|&(start, ..)| in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + start));
+            .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
@@ -1134,6 +1149,13 @@ mod tests {
         ] {
             assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
         }
+    }
+
+    #[test]
+    fn slim_code_at_asks_the_parser() {
+        let text = "p See (t(\".a\"))\n= t(\".b\")\n";
+        assert!(!code_at(TemplateLang::Slim, text, text.find(".a").unwrap(), &[]));
+        assert!(code_at(TemplateLang::Slim, text, text.find(".b").unwrap(), &[]));
     }
 
     #[test]

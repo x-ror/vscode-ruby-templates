@@ -5,7 +5,7 @@ use crate::partials::{
     first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
 };
 use crate::util::{lines_with_offsets, offset_to_position};
-use crate::{render_filter, slim_outline, TemplateLang};
+use crate::{render_filter, ruby, slim_outline, TemplateLang};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,7 +64,7 @@ fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<Re
     for (i, (offset, line)) in lines_with_offsets(&source.text).enumerate() {
         let in_code = |r: &RenderRef| match &template_code {
             Some(in_code) => in_code(i, offset, r),
-            None => !line.trim_start().starts_with('#'),
+            None => ruby::code_end(&line[..r.call]) == ruby::CodeEnd::Code,
         };
         out.extend(find(line).into_iter().filter(in_code).map(shift(offset)));
     }
@@ -330,7 +330,7 @@ mod tests {
             t.source(
                 "app/controllers/users_controller.rb",
                 None,
-                "render partial: \"users/card\"\nrender \"users/card\"\n# render partial: \"users/card\"\n",
+                "render partial: \"users/card\"\nrender \"users/card\"\n# render partial: \"users/card\"\nnote = \"render partial: 'users/card'\"\nx = 1 # render partial: \"users/card\"\n",
             ),
             t.source("app/helpers/cards_helper.rb", None, "render(\"users/card\")\nrender \"card\"\n"),
         ];

@@ -678,6 +678,24 @@ const check = (label, actual, expected) => {
     labels(await req("textDocument/completion", streamUri, 0, 27)),
     ["hello"],
   );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 3 },
+      contentChanges: [
+        { text: '<p>render "users/card"</p> <%= render "users/card" %>\n' },
+      ],
+    },
+    true,
+  );
+  const streamLinks = await send("textDocument/documentLink", {
+    textDocument: { uri: streamUri },
+  });
+  check(
+    "documentLink skips prose",
+    streamLinks.result?.map((l) => l.range.start.character),
+    [39],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(
