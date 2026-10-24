@@ -477,6 +477,10 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                    ..Default::default()
+                })),
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: None,
                     file_operations: Some(WorkspaceFileOperationsServerCapabilities {
@@ -668,6 +672,38 @@ impl LanguageServer for Backend {
             TemplateLang::Ruby => return Ok(None),
         };
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = p.text_document.uri;
+        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let unresolved = p.context.diagnostics.into_iter().filter(|d| d.code == Some(NumberOrString::String(UNRESOLVED_RENDER.into())));
+        let actions = unresolved
+            .filter_map(|d| {
+                let (_, line) = Self::line_at(&doc.text, d.range.start.line);
+                let r = partials::render_ref_at(line, util::byte_col(line, d.range.start.character))?;
+                let target = partials::new_template_path(&path, &r)?;
+                let create = CreateFile {
+                    uri: Url::from_file_path(&target).ok()?,
+                    options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
+                    annotation_id: None,
+                };
+                let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+                Some(CodeActionOrCommand::CodeAction(CodeAction {
+                    title: format!("Create {} `{shown}`", kind_name(r.kind).to_lowercase()),
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    diagnostics: Some(vec![d]),
+                    edit: Some(WorkspaceEdit {
+                        document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
+                        ..Default::default()
+                    }),
+                    is_preferred: Some(true),
+                    ..Default::default()
+                }))
+            })
+            .collect();
+        Ok(Some(actions))
     }
 
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {

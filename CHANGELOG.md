@@ -8,6 +8,7 @@
 - Erubi / Erubis: `.erubi` and `.erubis` files open as ERB, with the same diagnostics and navigation; `x.html.erubi` gets the HTML tag checks.
 - Jbuilder / Builder views (`.jbuilder`, `.builder`, kept on the `ruby` language): go to definition, hover, links, completion and unresolved / strict-locals warnings for `json.partial! "x"`, `json.array! @xs, partial: "x"` and `xml << render(...)`; renaming a partial updates them too.
 - Every ERB and Haml diagnostic has a code; `rubyTemplates.erb.disabledDiagnostics` and `rubyTemplates.haml.disabledDiagnostics` turn checks off like the Slim setting. Strict-locals warnings are coded `strict-locals` in all languages.
+- Quick fix: create the missing partial or template of an unresolved `render "dir/name"`, in the view's format and template language.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

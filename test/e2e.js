@@ -608,6 +608,34 @@ const check = (label, actual, expected) => {
     },
     true,
   );
+  const missing = {
+    start: { line: 6, character: 12 },
+    end: { line: 6, character: 26 },
+  };
+  const actions = await send("textDocument/codeAction", {
+    textDocument: { uri },
+    range: missing,
+    context: {
+      diagnostics: [
+        { range: missing, code: "unresolved-render", message: "not found" },
+      ],
+    },
+  });
+  check(
+    "codeAction create partial",
+    actions.result?.map((a) => [
+      a.title,
+      rel(a.edit.documentChanges[0].uri),
+      a.edit.documentChanges[0].kind,
+    ]),
+    [
+      [
+        "Create partial `shared/_missing.html.erb`",
+        "/app/views/shared/_missing.html.erb",
+        "create",
+      ],
+    ],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

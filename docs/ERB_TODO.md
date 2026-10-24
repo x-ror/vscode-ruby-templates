@@ -96,7 +96,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
 - [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
 - [ ] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`)
-- [ ] Create a missing partial from an unresolved `render "x"` (code action)
+- [x] Create a missing partial from an unresolved `render "x"` (code action) (`server/src/main.rs` `code_action`, `partials::new_template_path`)
 
 ## 7. Formatting
 

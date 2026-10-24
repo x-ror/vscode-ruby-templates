@@ -176,6 +176,19 @@ pub fn template_format(path: &Path) -> Option<&str> {
     template_suffix(fname, template_stem(fname))?
 }
 
+/// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>.<ext>` in the view's format
+/// (variant dropped) and template language, so the view finds it.
+pub fn new_template_path(current: &Path, r: &RenderRef) -> Option<PathBuf> {
+    let (dir, base) = r.name.rsplit_once('/')?;
+    let ext = current.extension()?.to_str()?;
+    let prefix = if r.kind == RenderKind::Partial { "_" } else { "" };
+    let file = match template_format(current) {
+        Some(format) => format!("{prefix}{base}.{format}.{ext}"),
+        None => format!("{prefix}{base}.{ext}"),
+    };
+    Some(views_root(current)?.join(dir).join(file))
+}
+
 /// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
 /// format-less files match any.
 // ponytail: turbo_stream gets the JS fallback too, so its HTML partials aren't flagged unresolved.
@@ -522,6 +535,17 @@ const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_template_paths() {
+        let views = Path::new("/r/app/views");
+        let path = |current: &str, line: &str| new_template_path(&views.join(current), &render_refs(line)[0]);
+        assert_eq!(path("users/show.html+phone.slim", r#"= render "shared/card""#), Some(views.join("shared/_card.html.slim")));
+        assert_eq!(path("users/index.json.jbuilder", r#"json.partial! "users/user""#), Some(views.join("users/_user.json.jbuilder")));
+        assert_eq!(path("users/show.de.erb", r#"render template: "a/b""#), Some(views.join("a/b.erb")));
+        assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
+        assert_eq!(new_template_path(Path::new("/tmp/x.html.erb"), &render_refs(r#"render "a/b""#)[0]), None);
+    }
+
     #[test]
     fn jbuilder_refs() {
         let names = |line: &str| render_refs(line).into_iter().map(|r| r.name).collect::<Vec<_>>();
