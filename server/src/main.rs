@@ -5,6 +5,7 @@ mod haml;
 mod haml_indent;
 mod helpers;
 mod html;
+mod html_lint;
 mod i18n;
 mod outline;
 mod partial_rename;
@@ -174,6 +175,7 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
         out.extend(tags::diagnostics(&doc.text, partial));
+        out.extend(html_lint::diagnostics(&doc.text));
     }
     if let Ok(path) = uri.to_file_path() {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
@@ -1237,7 +1239,7 @@ mod tests {
             let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
             sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
         };
-        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs")]));
+        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs"), include_str!("html_lint.rs")]));
         assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
         assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
         assert_eq!(setting("jbuilder"), declared(&[]));
@@ -1247,6 +1249,8 @@ mod tests {
             include_str!("main.rs"),
             include_str!("erb.rs"),
             include_str!("tags.rs"),
+            include_str!("html_lint.rs"),
+            include_str!("ruby_syntax.rs"),
             include_str!("haml_indent.rs"),
             include_str!("slim_indent.rs"),
         ] {

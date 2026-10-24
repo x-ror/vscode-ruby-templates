@@ -722,6 +722,10 @@
               "unexpected-close-tag",
               "mismatched-close-tag",
               "unclosed-element",
+              "img-missing-alt",
+              "duplicate-id",
+              "prefer-image-tag",
+              "unsafe-output",
               "unresolved-render",
               "strict-locals"
             ]

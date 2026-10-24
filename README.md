@@ -20,6 +20,7 @@ One extension for the three most common Ruby HTML template languages.
 A small language server written in Rust (`server/`, built on tower-lsp and tree-sitter) adds what a TextMate grammar can't:
 
 - Diagnostics as you type:
+  - ERB views with an HTML host: `<img>` / `image_tag` without `alt`, duplicate static ids, `<img src="<%= … %>">` (use `image_tag`, info), unescaped output `<%==` / `raw` / `.html_safe` (info).
   - ERB: Ruby syntax errors inside tags (`<%= foo( %>`, `<% x = 1 y = 2 %>`), unclosed `<%` tags (also one left open before the next `<%`), `%>` inside a Ruby string (ERB ends the tag there), blocks without `<% end %>`, stray `end`, `if`/`end` inside `<%= %>`.
   - Haml / Slim: mixed tabs and spaces, inconsistent indentation, dedent to a level that doesn't exist, explicit `- end`, unclosed attribute brackets, unknown filters / embedded engines, nesting under a doctype, Haml illegal nesting (inline content + children).
   - Each check has a code (shown in the Problems panel); turn one off with `rubyTemplates.erb.disabledDiagnostics`, `rubyTemplates.haml.disabledDiagnostics`, `rubyTemplates.slim.disabledDiagnostics` or (Jbuilder/Builder) `rubyTemplates.jbuilder.disabledDiagnostics`, e.g. `"rubyTemplates.erb.disabledDiagnostics": ["unclosed-element"]`.

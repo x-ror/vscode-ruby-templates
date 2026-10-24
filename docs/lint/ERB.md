@@ -18,6 +18,10 @@ What the three sources check in ERB (`.erb`, `.html.erb`, `.erubi`, …). Refere
 | `unexpected-close-tag` | `</div>` with no open element (HTML-host views) |
 | `mismatched-close-tag` | `</span>` closing a `<div>` (HTML-host views) |
 | `unclosed-element` | `<div>` never closed (HTML-host views, not partials) |
+| `img-missing-alt` | `<img>` with no `alt` (unless ERB adds attributes), `image_tag` with no `alt:` (HTML-host views) |
+| `duplicate-id` | The same static `id` twice with no ERB branch between them (HTML-host views) |
+| `prefer-image-tag` | `<img>` whose `src` holds ERB output; info (HTML-host views) |
+| `unsafe-output` | `<%==`, `raw(…)`, `.html_safe`: output that skips escaping; info (HTML-host views) |
 | `unresolved-render` | `render "dir/name"` with no matching partial/template (also Haml, Slim, Jbuilder) |
 | `strict-locals` | `render` passes locals a partial's `locals: (…)` doesn't accept, or misses required ones (also Haml, Slim, Jbuilder) |
 
