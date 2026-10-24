@@ -91,6 +91,26 @@ pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
     let Some(views) = views_root(current) else { return vec![] };
     let singular = singularize(name);
     matching_templates(&views.join(pluralize(&singular)), &format!("_{singular}"))
+        .into_iter()
+        .filter(|p| renders_format(current, p))
+        .collect()
+}
+
+/// `html` of `show.html+phone.erb` (the segment before the handler, variant dropped); `None` for `show.erb`.
+fn template_format(path: &Path) -> Option<&str> {
+    let (rest, _handler) = path.file_name()?.to_str()?.rsplit_once('.')?;
+    let (_, format) = rest.rsplit_once('.')?;
+    format.split('+').next()
+}
+
+/// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
+/// format-less files match any.
+// ponytail: turbo_stream gets the JS fallback too, so its HTML partials aren't flagged unresolved.
+fn renders_format(current: &Path, candidate: &Path) -> bool {
+    match (template_format(current), template_format(candidate)) {
+        (Some(view), Some(partial)) => view == partial || (partial == "html" && matches!(view, "js" | "turbo_stream")),
+        _ => true,
+    }
 }
 
 // Suffix-matched like ActiveSupport's irregulars, so `sales_person` → `sales_people`.
@@ -221,7 +241,7 @@ pub fn resolve(current: &Path, r: &RenderRef) -> Vec<PathBuf> {
     }
     let mut out = Vec::new();
     for d in dirs {
-        out.extend(matching_templates(&d, &basename));
+        out.extend(matching_templates(&d, &basename).into_iter().filter(|p| renders_format(current, p)));
     }
     out
 }
@@ -517,6 +537,27 @@ mod tests {
         ] {
             assert!(model_renders(query).is_empty(), "{query}");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_by_view_format() {
+        let root = std::env::temp_dir().join(format!("rt-formats-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        for f in ["_user.html.erb", "_user.html+phone.erb", "_user.json.jbuilder", "_user.erb"] {
+            std::fs::write(users.join(f), "").unwrap();
+        }
+        let user = render_refs(r#"render "users/user""#).remove(0);
+        let found = |view: &str| -> Vec<String> {
+            resolve(&users.join(view), &user).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+        };
+        assert_eq!(found("index.html.erb"), ["_user.erb", "_user.html+phone.erb", "_user.html.erb"]);
+        assert_eq!(found("show.html+phone.erb"), found("index.html.erb"));
+        assert_eq!(found("index.json.jbuilder"), ["_user.erb", "_user.json.jbuilder"]);
+        assert_eq!(found("create.js.erb"), found("index.html.erb"));
+        assert_eq!(found("index.erb").len(), 4);
+        assert_eq!(resolve_model(&users.join("index.json.jbuilder"), "users").len(), 2);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
