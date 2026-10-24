@@ -16,23 +16,23 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Wrapped attributes spanning several lines (`syntaxes/slim.tmLanguage.json` `wrapped-attributes`, `test/sample.html.slim` `a(href="/"`)
 - [x] Splat attributes `*{...}` and `*attrs` (`syntaxes/slim.tmLanguage.json` `splat`, `test/sample.html.slim`)
 - [x] Inline tags `li: a href="/" Home` (`syntaxes/slim.tmLanguage.json` `inline-tag`, `test/sample.html.slim`)
-- [x] Whitespace modifiers on bare tags `a>`, `a<`, `a<>`, also before wrapped attributes `a>(...)` (`syntaxes/slim.tmLanguage.json` `tag`, `test/sample.html.slim`)
+- [x] Whitespace modifiers on bare tags `a>`, `a<`, `a<>` and legacy `a'`, also before wrapped attributes `a>(...)` and output `a>= x` (`syntaxes/slim.tmLanguage.json` `tag`, `tag-line-with-text`, `test/sample.html.slim`)
 - [x] Self-closing tag `img/` (`syntaxes/slim.tmLanguage.json` `tag`, `test/sample.html.slim`)
 - [x] Control code `- ruby` (`syntaxes/slim.tmLanguage.json` `control-line`, `test/sample.html.slim`)
 - [x] Output `= ruby` and unescaped `== ruby` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
 - [x] Output with whitespace modifiers `=<`, `=>`, `==<>` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
 - [x] Legacy trailing-whitespace output `='` after a tag (`p ='x'`; Slim 5 parses `'` as a modifier only there, a line-start `='x'` is Ruby `'x'`) (`syntaxes/slim.tmLanguage.json` `inline-output`, `test/sample.html.slim`)
-- [x] Output after a tag `p = expr` (`syntaxes/slim.tmLanguage.json` `inline-output`, `test/sample.html.slim`)
+- [x] Output after a tag `p = expr`, also attached `p= x`, `p=x`, `p==x`, `a(href="/")= x` (`syntaxes/slim.tmLanguage.json` `inline-output`, `test/sample.html.slim`)
 - [x] Inline text after a tag (`syntaxes/slim.tmLanguage.json` `inline-text`, `test/sample.html.slim`)
-- [x] Text blocks `|` and `'` with nested continuation lines (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`)
+- [x] Text blocks `|` and `'` with nested continuation lines, modifiers `|<`, `|>`, `'>` and `|text` without a space (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`)
 - [x] Text continuation lines indented under `p Some text` / `li: a Home` highlighted as text, not as tags (Slim 5 `parse_text_block` makes every deeper line text) (`syntaxes/slim.tmLanguage.json` `tag-line-with-text`, `test/sample.html.slim`). Falls back to the old tag scoping when the tag head can't be matched on one line (unclosed wrapped attributes, nested brackets two levels deep)
 - [x] Code comment `/` and its indented block (`syntaxes/slim.tmLanguage.json` `code-comment`, `test/sample.html.slim`)
 - [x] HTML comment `/!` (`syntaxes/slim.tmLanguage.json` `html-comment`, `test/sample.html.slim`)
 - [x] IE conditional comment `/[if IE]`: own rule, children use the top-level patterns (`syntaxes/slim.tmLanguage.json` `conditional-comment`, `test/sample.html.slim`)
 - [x] Interpolation `#{}` and escaped `\#{` in text, double-quoted attributes and comments (`syntaxes/slim.tmLanguage.json` `interpolation`, `test/sample.html.slim`)
-- [x] Unescaped interpolation `#{{ expr }}` (`syntaxes/slim.tmLanguage.json` `interpolation-unescaped`, `test/sample.html.slim`)
+- [x] Unescaped interpolation `#{{ expr }}`, only when the whole body is `{...}` on the line, as Slim's `Interpolation` checks; `#{{a: 1}.to_json}` stays escaped (`syntaxes/slim.tmLanguage.json` `interpolation-unescaped`, `test/sample.html.slim`)
 - [x] Multi-line Ruby after `,` or `\` stays Ruby on the next line: the end lookbehind also rejects the `\n` vscode-textmate appends (`syntaxes/slim.tmLanguage.json` `control-line`, `output-line`, `inline-output`; `test/__snapshots__/sample.html.slim.tokens.txt` `class: "form" do |f|`). A `,` followed by trailing spaces still ends the line
-- [x] Inline HTML lines starting with `<` highlighted as tags, attributes, strings and `#{}` (`syntaxes/slim.tmLanguage.json` `inline-html`, `test/sample.html.slim`)
+- [x] Inline HTML lines starting with `<` highlighted as tags, attributes, strings and `#{}`; quotes count only inside `<...>` and never carry past the line (`<p>Don't</p>`) (`syntaxes/slim.tmLanguage.json` `inline-html`, `test/sample.html.slim`)
 - [x] Single-quoted attribute values interpolate `#{}` (`syntaxes/slim.tmLanguage.json` `string-single`, `test/sample.html.slim`)
 - [x] Attribute names with `@`/`:`/`.` (`@click`, `:class`, `x-on:click.prevent`) (`syntaxes/slim.tmLanguage.json` `attribute`, `test/sample.html.slim`)
 - [x] Custom shortcuts (`:shortcut`): per-app runtime config, documented as unsupported (`README.md` Tips)
@@ -41,7 +41,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Smart text (`slim/smart`): explicit `>` lines are text blocks (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`; without the plugin Slim rejects them, so this is safe). Implicit text depends on `implicit_text` and is documented as unsupported (`README.md` Tips)
 - [x] Logic-less mode (`slim/logic_less`): enabled per app, documented as unsupported (`README.md` Tips)
 - [x] Translator plugin (`slim/translator`) translates static text at compile time and adds no syntax; noted in `README.md` Tips
-- [x] `.skim` files: own `skim` language and `text.skim` grammar, the Slim grammar with `source.coffee` outside engine blocks (`syntaxes/skim.tmLanguage.json`, generated and kept in sync by `test/tokenize.js`; `package.json`; `test/sample.skim`)
+- [x] `.skim` files: own `skim` language and `text.skim` grammar, the Slim grammar with `source.coffee` outside engine blocks (`syntaxes/skim.tmLanguage.json`, generated and kept in sync by `test/tokenize.js`; `package.json`; `test/sample.skim`). Slim snippets are not registered for `skim`: they insert Ruby helpers
 
 ## 2. Embedded engines
 
@@ -57,7 +57,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 3. File types and language configuration
 
 - [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim`/`skim` id or the `.slim`/`.skim` extension (`server/src/main.rs` `TemplateLang::from_uri_or_id`)
+- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `unmatched-branch`, `silent-output-helper`) (`server/src/main.rs` `TemplateLang::from_uri_or_id`, `diagnostics`, test `skim_skips_ruby_checks`; `server/src/indented.rs` `code::RUBY`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/main.rs` `folding_range`)

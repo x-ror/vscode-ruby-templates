@@ -16,20 +16,22 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum TemplateLang { Erb, Haml, Slim }
+enum TemplateLang { Erb, Haml, Slim, Skim }
 
 impl TemplateLang {
     fn from_uri_or_id(uri: &Url, language_id: Option<&str>) -> Option<Self> {
         match language_id {
             Some(id) if id == "erb" || id.starts_with("erb-") => return Some(Self::Erb),
             Some("haml") => return Some(Self::Haml),
-            Some("slim" | "skim") => return Some(Self::Slim),
+            Some("slim") => return Some(Self::Slim),
+            Some("skim") => return Some(Self::Skim),
             _ => {}
         }
         let path = uri.path();
         if path.ends_with(".erb") || path.ends_with(".rhtml") { Some(Self::Erb) }
         else if path.ends_with(".haml") { Some(Self::Haml) }
-        else if path.ends_with(".slim") || path.ends_with(".skim") { Some(Self::Slim) }
+        else if path.ends_with(".slim") { Some(Self::Slim) }
+        else if path.ends_with(".skim") { Some(Self::Skim) }
         else { None }
     }
 }
@@ -62,6 +64,11 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
         TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml, &[]),
         TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim, &slim.extra_engines),
+        // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
+        TemplateLang::Skim => indented::diagnostics(&doc.text, indented::Lang::Slim, &slim.extra_engines)
+            .into_iter()
+            .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if indented::code::RUBY.contains(&c.as_str())))
+            .collect(),
     };
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
@@ -70,7 +77,7 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
     if let Ok(path) = uri.to_file_path() {
         out.extend(unresolved_renders(doc.lang, &path, &doc.text));
     }
-    if doc.lang == TemplateLang::Slim {
+    if matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
         out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c)));
     }
     out
@@ -383,7 +390,7 @@ fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
                 && !before[open.unwrap()..].starts_with("<%#")
                 && !ruby_comment_before(&before[open.unwrap() + 2..])
         }
-        TemplateLang::Haml | TemplateLang::Slim => {
+        TemplateLang::Haml | TemplateLang::Slim | TemplateLang::Skim => {
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
@@ -433,6 +440,22 @@ mod tests {
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
+    }
+
+    #[test]
+    fn skim_skips_ruby_checks() {
+        let uri = Url::parse("untitled:Untitled-1").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
+        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n  p\n    a\n   span\n";
+        let codes = |lang| -> Vec<String> {
+            diagnostics(&uri, &Doc { lang, text: text.into() }, &SlimOptions::default())
+                .into_iter()
+                .filter_map(|d| match d.code { Some(NumberOrString::String(c)) => Some(c), _ => None })
+                .collect()
+        };
+        let slim = codes(TemplateLang::Slim);
+        assert!(indented::code::RUBY.iter().all(|c| slim.iter().any(|s| s == c)), "{slim:?}");
+        assert_eq!(codes(TemplateLang::Skim), [indented::code::BAD_DEDENT]);
     }
 
     #[test]

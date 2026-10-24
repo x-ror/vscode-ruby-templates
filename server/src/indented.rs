@@ -28,6 +28,8 @@ pub mod code {
     pub const EXPLICIT_END: &str = "explicit-end";
     pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
     pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
+    /// Checks that parse the `-`/`=` code as Ruby.
+    pub const RUBY: &[&str] = &[UNCLOSED_RUBY, UNMATCHED_BRANCH, SILENT_OUTPUT_HELPER];
 }
 
 // Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
