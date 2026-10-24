@@ -12,6 +12,7 @@ mod i18n;
 mod outline;
 mod partial_rename;
 mod partials;
+mod routes;
 mod ruby;
 mod ruby_syntax;
 mod schema;
@@ -143,6 +144,8 @@ struct Backend {
     templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
     /// Parsed locale files per config/locales directory.
     locales: DashMap<PathBuf, LocaleFiles>,
+    /// Routes per Rails root, as the client last sent them.
+    routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     options: Arc<OnceLock<Options>>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
@@ -539,6 +542,19 @@ impl Backend {
 
     /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
     /// and drive colons where `Url::from_file_path` doesn't.
+    /// `rubyTemplates/routes`: `{ root, routes }` from the client's `bin/rails runner`.
+    async fn set_routes(&self, params: serde_json::Value) {
+        let Some(root) = params.get("root").and_then(serde_json::Value::as_str).map(PathBuf::from) else { return };
+        let parsed = routes::parse(&root, params.get("routes").unwrap_or(&serde_json::Value::Null));
+        self.routes.insert(root, Arc::new(parsed));
+    }
+
+    /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
+    fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
+        let root = partials::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
+        root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
+    }
+
     fn open_texts(&self) -> HashMap<PathBuf, String> {
         let templates = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone())));
         // Partial and i18n references also scan controllers; their unsaved text is the current one.
@@ -703,7 +719,11 @@ impl LanguageServer for Backend {
                 let start = Position::new(line as u32, 0);
                 Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
             };
-            locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line));
+            let route = helper.and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
+            match route {
+                Some(source) => locs.extend(at_line(source)),
+                None => locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line)),
+            }
         }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
@@ -774,7 +794,8 @@ impl LanguageServer for Backend {
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
         }
-        Ok(None)
+        let routes = uri.to_file_path().map(|p| self.routes_for(&p)).unwrap_or_default();
+        Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
@@ -1043,6 +1064,12 @@ impl LanguageServer for Backend {
         }
         let mut found = local_completions(&doc.text, typed);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        let routes = path.as_deref().map(|p| self.routes_for(p)).unwrap_or_default();
+        found.extend(
+            routes::completions(&routes, typed)
+                .into_iter()
+                .map(|(helper, detail)| util::completion_item(helper, CompletionItemKind::FUNCTION, detail)),
+        );
         items(found)
     }
 }
@@ -1223,16 +1250,19 @@ async fn main() {
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
+    let (service, socket) = LspService::build(|client| Backend {
         client,
         docs: Arc::default(),
         controllers: DashMap::new(),
         templates: DashMap::new(),
         locales: DashMap::new(),
+        routes: DashMap::new(),
         options: Arc::default(),
         roots: OnceLock::new(),
         dynamic_formatting: OnceLock::new(),
-    });
+    })
+    .custom_method("rubyTemplates/routes", Backend::set_routes)
+    .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 

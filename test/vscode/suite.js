@@ -2,6 +2,7 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 import * as vscode from "vscode";
 
 const app = process.env.RT_APP;
@@ -173,6 +174,34 @@ const checks = {
       return e?.document.fileName.endsWith("orders_controller.rb") && e;
     });
     await until("cursor on def show", () => editor.selection.active.line === 4);
+  },
+
+  async "route helpers from bin/rails"() {
+    if (spawnSync("ruby", ["-v"]).status !== 0) return "skipped: no ruby";
+    const editor = await open("app/views/users/routes.html.erb");
+    const at = new vscode.Position(0, 22);
+    const hover = await until("route hover", async () => {
+      const hovers = await vscode.commands.executeCommand(
+        "vscode.executeHoverProvider",
+        editor.document.uri,
+        at,
+      );
+      return hovers
+        ?.flatMap((h) => h.contents.map((c) => c.value ?? c))
+        .find((v) => v.includes("users#index"));
+    });
+    assert.ok(hover.includes("`/users`"), hover);
+    const [def] = await vscode.commands.executeCommand(
+      "vscode.executeDefinitionProvider",
+      editor.document.uri,
+      at,
+    );
+    const target = def.targetUri ?? def.uri;
+    const line = (def.targetRange ?? def.range).start.line;
+    assert.deepStrictEqual(
+      [path.relative(app, target.fsPath), line],
+      [path.join("config", "routes.rb"), 1],
+    );
   },
 
   async "ERB formatter: htmlbeautifier"() {

@@ -36,6 +36,7 @@
 - Controllers: go to definition from `def show` to its templates, and links from `layout "admin"` and `render :edit` / `render "x"` to their views.
 - Go to definition on a helper call in a view opens its `def` in `app/helpers` or a controller's `helper_method`.
 - *Switch to Related File* from a view also offers its controller or mailer, at the action's `def`.
+- Route helpers: `*_path` / `*_url` completion, hover (verbs, path, `controller#action`) and go to definition, from the app's routes through `bin/rails runner` (`rubyTemplates.routes.enabled`).
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

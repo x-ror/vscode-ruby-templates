@@ -765,6 +765,49 @@ const check = (label, actual, expected) => {
     ],
     [["/app/helpers/users_helper.rb:1"], null],
   );
+  await send(
+    "rubyTemplates/routes",
+    {
+      root,
+      routes: [
+        {
+          name: "users",
+          verb: "GET",
+          path: "/users(.:format)",
+          action: "users#index",
+          source: "config/routes.rb:2",
+        },
+        {
+          name: "",
+          verb: "POST",
+          path: "/users(.:format)",
+          action: "users#create",
+        },
+      ],
+    },
+    true,
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: helperUri, version: 2 },
+      contentChanges: [
+        { text: '<%= link_to "x", users_p %>\n<%= users_path %>\n' },
+      ],
+    },
+    true,
+  );
+  check(
+    "route helpers: completion, hover, definition",
+    [
+      labels(await req("textDocument/completion", helperUri, 0, 24)),
+      firstLine(await req("textDocument/hover", helperUri, 1, 6)),
+      (await req("textDocument/definition", helperUri, 1, 6)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+    ],
+    [["users_path"], "`users_path` → `/users`", ["/config/routes.rb:1"]],
+  );
   const streamUri =
     "file://" + path.join(views, "users", "create.turbo_stream.erb");
   await send(

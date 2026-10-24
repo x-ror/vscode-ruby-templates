@@ -99,6 +99,7 @@ async function doStart(context, output) {
   client = started;
   try {
     await started.start();
+    for (const listener of startListeners) listener();
   } catch (e) {
     client = undefined;
     await disposeQuietly(started, output);
@@ -155,4 +156,21 @@ const restartClient = (context, output) =>
     await doStart(context, output);
   }, output);
 
-export { startClient, stopClient, restartClient };
+// A restarted server has lost what was sent to the previous one.
+const startListeners = new Set();
+const onServerStarted = (listener) => {
+  startListeners.add(listener);
+  return { dispose: () => startListeners.delete(listener) };
+};
+
+/** Send a notification to the running server; dropped while it is stopped (start listeners resend state). */
+const notifyServer = (method, params) =>
+  client?.isRunning() ? client.sendNotification(method, params) : undefined;
+
+export {
+  startClient,
+  stopClient,
+  restartClient,
+  onServerStarted,
+  notifyServer,
+};

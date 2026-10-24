@@ -3,7 +3,14 @@ import cp from "child_process";
 import path from "path";
 import fs from "fs";
 
-import { startClient, stopClient, restartClient } from "./client.js";
+import {
+  startClient,
+  stopClient,
+  restartClient,
+  onServerStarted,
+  notifyServer,
+} from "./client.js";
+import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
 import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
@@ -94,6 +101,7 @@ function activate(context) {
   registerSlimLint(context, output);
   registerErbLint(context, output);
   registerHerbLint(context, output);
+  registerRoutes(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -870,6 +878,104 @@ function registerErbLint(context, output) {
     }),
   );
   vscode.workspace.textDocuments.forEach(lint);
+}
+
+// ---------------------------------------------------------------- routes
+
+/**
+ * Read each Rails app's routes with `bin/rails runner` once one of its views is open, again when its routes
+ * files change, and hand them to the server for `*_path` / `*_url` completion, hover and definition.
+ */
+function registerRoutes(context, output) {
+  const cache = new Map(); // Rails root → routes
+  const busy = new Set();
+  const again = new Set();
+  const enabled = () => cfg().get("routes.enabled", true);
+  const send = async (root, routes) => {
+    try {
+      await notifyServer("rubyTemplates/routes", { root, routes });
+    } catch (e) {
+      output.appendLine(
+        `[routes] sending routes for ${root}: ${e?.message ?? e}`,
+      );
+    }
+  };
+
+  const load = async (root) => {
+    const r = await run(
+      cfg().get("commands.ruby", "ruby"),
+      [path.join("bin", "rails"), "runner", ROUTES_SCRIPT],
+      { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS, useBundler: false },
+    );
+    if (!enabled()) return;
+    let routes;
+    try {
+      routes = r.code === 0 ? routesFromOutput(r.stdout) : undefined;
+    } catch {
+      routes = undefined;
+    }
+    if (!routes) {
+      output.appendLine(
+        `[routes] bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
+      );
+      return;
+    }
+    cache.set(root, routes);
+    await send(root, routes);
+  };
+
+  // A change while a load runs reloads once it finishes, so the last edit to routes.rb always counts.
+  const refresh = async (root) => {
+    if (busy.has(root)) {
+      again.add(root);
+      return;
+    }
+    busy.add(root);
+    try {
+      do {
+        again.delete(root);
+        await load(root);
+      } while (again.has(root));
+    } finally {
+      busy.delete(root);
+    }
+  };
+
+  const railsRoot = (file) =>
+    findUp(path.dirname(file), path.join("bin", "rails"));
+  const opened = (doc) => {
+    if (!enabled() || doc.uri.scheme !== "file") return;
+    if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
+    const root = railsRoot(doc.uri.fsPath);
+    if (root && !cache.has(root) && !busy.has(root)) void refresh(root);
+  };
+  const routesChanged = (uri) => {
+    const root = railsRoot(uri.fsPath);
+    if (enabled() && root && cache.has(root)) void refresh(root);
+  };
+
+  const watcher = vscode.workspace.createFileSystemWatcher(
+    "**/config/{routes.rb,routes/**/*.rb}",
+  );
+  context.subscriptions.push(
+    watcher,
+    watcher.onDidChange(routesChanged),
+    watcher.onDidCreate(routesChanged),
+    watcher.onDidDelete(routesChanged),
+    vscode.workspace.onDidOpenTextDocument(opened),
+    onServerStarted(() => {
+      for (const [root, routes] of cache) void send(root, routes);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration("rubyTemplates.routes")) return;
+      if (enabled()) vscode.workspace.textDocuments.forEach(opened);
+      else {
+        for (const root of cache.keys()) void send(root, []);
+        cache.clear();
+      }
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(opened);
 }
 
 // ---------------------------------------------------------------- herb-lint

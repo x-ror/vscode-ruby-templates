@@ -12,6 +12,7 @@ import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
 import { herbLintReport } from "../src/herbLint.js";
+import { routesFromOutput } from "../src/routes.js";
 import { spawnSync } from "node:child_process";
 
 // convertedFileName
@@ -327,3 +328,13 @@ const ordersController =
   "class X\n  def index; end\n  def show_all\n  def show(id = nil)\nend";
 assert.strictEqual(actionLine(ordersController, "show"), 3);
 assert.strictEqual(actionLine(ordersController, "edit"), -1);
+
+// routesFromOutput
+assert.deepStrictEqual(
+  routesFromOutput(
+    'Booting\r\n\r\n__RUBY_TEMPLATES_ROUTES__\r\n[{"name":"users"}]\r\n',
+  ),
+  [{ name: "users" }],
+);
+assert.strictEqual(routesFromOutput("Puma starting\n"), undefined);
+assert.throws(() => routesFromOutput("__RUBY_TEMPLATES_ROUTES__\n{oops"));
