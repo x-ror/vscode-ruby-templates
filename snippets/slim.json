@@ -68,7 +68,6 @@
   "sass block": { "prefix": "sass", "body": ["sass:", "\t$0"] },
   "coffee block": { "prefix": "coffee", "body": ["coffee:", "\t$0"] },
   "ruby block": { "prefix": "ruby", "body": ["ruby:", "\t$0"] },
-  "erb block": { "prefix": "erb", "body": ["erb:", "\t$0"] },
   "markdown block": { "prefix": "md", "body": ["markdown:", "\t$0"] },
   "text block": { "prefix": "|", "body": ["|", "\t$0"] },
   "text block with trailing space": { "prefix": "'", "body": ["'", "\t$0"] },
