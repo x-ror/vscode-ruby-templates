@@ -674,7 +674,9 @@ impl LanguageServer for Backend {
             return Ok(markdown_hover(md));
         }
         let word = util::word_at(line, col);
-        if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
+        // `<p>Clear the cache</p>` names no helper.
+        let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
         }
         Ok(None)
@@ -864,7 +866,11 @@ impl LanguageServer for Backend {
             let range = util::span_range(pos.line as usize, line, start, col);
             return items(stimulus_completions(path, typed, range));
         }
-        if let Some(typed) = schema::attribute_prefix(before) {
+        // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
+        let roles = line_roles(doc.lang, &doc.text);
+        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };
             let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
@@ -872,13 +878,11 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
-        if let Some(found) = receiver_completions(before) {
+        if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
         }
 
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
-        let roles = line_roles(doc.lang, &doc.text);
-        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
         if doc.lang == TemplateLang::Haml {
             if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
                 return items(haml::completions(context));

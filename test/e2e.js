@@ -736,6 +736,26 @@ const check = (label, actual, expected) => {
     labels(await req("textDocument/completion", streamUri, 1, 21)),
     ["name", "nickname"],
   );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 5 },
+      contentChanges: [
+        { text: "<p>Please fill in the form.</p>\n<p>Clear the cache</p>\n" },
+      ],
+    },
+    true,
+  );
+  check(
+    "no form builder in prose",
+    labels(await req("textDocument/completion", streamUri, 0, 26)),
+    [],
+  );
+  check(
+    "no helper hover in prose",
+    (await req("textDocument/hover", streamUri, 1, 16)).result ?? null,
+    null,
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(
