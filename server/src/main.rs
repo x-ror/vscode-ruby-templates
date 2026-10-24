@@ -434,7 +434,9 @@ fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
                 && !before[open.unwrap()..].starts_with("<%#")
                 && !ruby_comment_before(&before[open.unwrap() + 2..])
         }
-        TemplateLang::Haml | TemplateLang::Slim | TemplateLang::Skim => {
+        // Skim code is CoffeeScript: no Rails helpers, renders or form builders.
+        TemplateLang::Skim => false,
+        TemplateLang::Haml | TemplateLang::Slim => {
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
@@ -531,7 +533,7 @@ mod tests {
     fn skim_skips_ruby_checks() {
         let uri = Url::parse("untitled:Untitled-1").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
-        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n  p\n    a\n   span\n";
+        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n- end = start + 10\n  p\n    a\n   span\n";
         let codes = |lang| -> Vec<String> {
             diagnostics(&uri, &Doc { lang, text: text.into() }, &SlimOptions::default())
                 .into_iter()
@@ -582,6 +584,9 @@ mod tests {
         let haml = users.join("show.html.haml");
         assert!(unresolved_renders(TemplateLang::Haml, &haml, "%p (we render \"users/x\")").is_empty());
         assert_eq!(unresolved_renders(TemplateLang::Haml, &haml, "= render \"users/x\"").len(), 1);
+        assert!(unresolved_renders(TemplateLang::Skim, &users.join("show.skim"), "= render \"users/x\"").is_empty());
+        assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", 10));
+        assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", 10));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
