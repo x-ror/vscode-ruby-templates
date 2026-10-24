@@ -1,7 +1,12 @@
 import assert from "node:assert";
 import { convertedFileName } from "../src/convert.js";
 import { windowsShellCommand } from "../src/shell.js";
-import { relatedFiles, relatedDirs } from "../src/related.js";
+import {
+  relatedFiles,
+  relatedDirs,
+  actionSource,
+  actionLine,
+} from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
@@ -297,3 +302,28 @@ assert.deepStrictEqual(
   ),
   { offenses: [], error: "✗ No files found matching pattern: x.erb" },
 );
+
+// actionSource / actionLine
+assert.deepStrictEqual(actionSource("/r/app/views/admin/users/show.html.erb"), {
+  file: "/r/app/controllers/admin/users_controller.rb",
+  action: "show",
+});
+assert.deepStrictEqual(
+  actionSource("/r/app/views/user_mailer/welcome.text.erb"),
+  {
+    file: "/r/app/mailers/user_mailer.rb",
+    action: "welcome",
+  },
+);
+for (const view of [
+  "/r/app/views/users/_form.html.erb",
+  "/r/app/views/layouts/application.html.erb",
+  "/r/app/views/show.html.erb",
+  "/r/lib/views/users/show.html.erb",
+]) {
+  assert.strictEqual(actionSource(view), undefined, view);
+}
+const ordersController =
+  "class X\n  def index; end\n  def show_all\n  def show(id = nil)\nend";
+assert.strictEqual(actionLine(ordersController, "show"), 3);
+assert.strictEqual(actionLine(ordersController, "edit"), -1);

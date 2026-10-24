@@ -25,4 +25,30 @@ function relatedDirs(dir, name, sep = "/") {
   return name.endsWith(".rb") ? [`${dir}${sep}${stem}`] : [];
 }
 
-export { relatedFiles, relatedDirs };
+/**
+ * The controller (or mailer) file and action that render the view at `file`: `app/views/admin/users/show.html.erb`
+ * → `app/controllers/admin/users_controller.rb` `show`, `app/views/user_mailer/welcome.text.erb` →
+ * `app/mailers/user_mailer.rb` `welcome`. Undefined for partials, layouts and files outside app/views.
+ */
+function actionSource(file, sep = "/") {
+  const parts = file.split(sep);
+  const views = parts.lastIndexOf("views");
+  if (views < 1 || parts[views - 1] !== "app") return undefined;
+  const dirs = parts.slice(views + 1, -1);
+  const action = stemOf(parts.at(-1));
+  if (!dirs.length || dirs[0] === "layouts" || !/^[a-z]\w*$/.test(action))
+    return undefined;
+  const app = parts.slice(0, views);
+  const source = dirs.at(-1).endsWith("_mailer")
+    ? [...app, "mailers", ...dirs].join(sep) + ".rb"
+    : [...app, "controllers", ...dirs].join(sep) + "_controller.rb";
+  return { file: source, action };
+}
+
+/** 0-based line of `def action` in Ruby `source`, or -1. */
+function actionLine(source, action) {
+  const def = new RegExp(`^\\s*def\\s+${action}\\s*(?:$|[(;#])`);
+  return source.split("\n").findIndex((line) => def.test(line));
+}
+
+export { relatedFiles, relatedDirs, actionSource, actionLine };

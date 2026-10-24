@@ -20,6 +20,11 @@ write(
 write("app/views/users/_card.html.erb", "<p>card</p>\n");
 write("app/views/user_mailer/welcome.html.erb", "<p>Hi</p>\n");
 write("app/views/user_mailer/welcome.text.erb", "Hi\n");
+write("app/views/orders/show.html.erb", "<p>Order</p>\n");
+write(
+  "app/controllers/orders_controller.rb",
+  "class OrdersController < ApplicationController\n  def index\n  end\n\n  def show\n  end\nend\n",
+);
 write("app/components/badge_component.rb", "class BadgeComponent; end\n");
 write(
   "app/components/badge_component.html.erb",

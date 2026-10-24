@@ -165,6 +165,16 @@ const checks = {
     assert.ok(name);
   },
 
+  async "switch to related: controller action"() {
+    await open("app/views/orders/show.html.erb");
+    await vscode.commands.executeCommand("rubyTemplates.switchRelated");
+    const editor = await until("controller editor", () => {
+      const e = vscode.window.activeTextEditor;
+      return e?.document.fileName.endsWith("orders_controller.rb") && e;
+    });
+    await until("cursor on def show", () => editor.selection.active.line === 4);
+  },
+
   async "ERB formatter: htmlbeautifier"() {
     const bin = gemTool("htmlbeautifier");
     if (!bin) return "skipped: htmlbeautifier not installed";

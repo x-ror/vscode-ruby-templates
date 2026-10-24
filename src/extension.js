@@ -8,7 +8,12 @@ import { toggleErbTagAt } from "./erbTags.js";
 import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
-import { relatedFiles, relatedDirs } from "./related.js";
+import {
+  relatedFiles,
+  relatedDirs,
+  actionSource,
+  actionLine,
+} from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
@@ -228,7 +233,10 @@ const RENDER_CALL = {
 };
 
 /** Move the selection into `_name.<ext>` next to the template and render it in its place. */
-/** Open the view's other formats (`.html.erb` ↔ `.text.erb`) or a component's class ↔ template. */
+/**
+ * Open the view's other formats (`.html.erb` ↔ `.text.erb`), its controller action, or a component's class ↔
+ * template.
+ */
 async function switchRelated() {
   const doc = vscode.window.activeTextEditor?.document;
   if (doc?.uri.scheme !== "file") return;
@@ -251,6 +259,8 @@ async function switchRelated() {
       ...relatedFiles(name, files).map((n) => path.join(folder, n)),
     );
   }
+  const action = await controllerAction(doc.uri.fsPath);
+  if (action) candidates.push(action);
   if (!candidates.length) {
     vscode.window.showInformationMessage(`No related file for ${name}.`);
     return;
@@ -261,14 +271,44 @@ async function switchRelated() {
       : (
           await vscode.window.showQuickPick(
             candidates.map((file) => ({
-              label: path.basename(file),
+              label:
+                file === action
+                  ? `${path.basename(file)} #${actionName(doc.uri.fsPath)}`
+                  : path.basename(file),
               description: vscode.workspace.asRelativePath(path.dirname(file)),
               file,
             })),
             { placeHolder: "Related file" },
           )
         )?.file;
-  if (picked) await vscode.window.showTextDocument(vscode.Uri.file(picked));
+  if (!picked) return;
+  const editor = await vscode.window.showTextDocument(vscode.Uri.file(picked));
+  if (picked !== action) return;
+  const line = actionLine(
+    editor.document.getText(),
+    actionName(doc.uri.fsPath),
+  );
+  if (line < 0) return;
+  const at = new vscode.Position(line, 0);
+  editor.selection = new vscode.Selection(at, at);
+  editor.revealRange(
+    new vscode.Range(at, at),
+    vscode.TextEditorRevealType.InCenter,
+  );
+}
+
+const actionName = (view) => actionSource(view, path.sep)?.action;
+
+/** The controller or mailer that renders `view`, when it exists. */
+async function controllerAction(view) {
+  const source = actionSource(view, path.sep);
+  if (!source) return undefined;
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(source.file));
+    return source.file;
+  } catch {
+    return undefined;
+  }
 }
 
 async function extractPartial() {
