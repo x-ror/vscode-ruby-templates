@@ -222,7 +222,11 @@ fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &p
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             let range = util::line_range(text, i, r.start, r.end);
-            if !in_app_views_dir(&views, &r.name) || !in_code(i, line_start, &r) || !partials::resolve(path, &r).is_empty() {
+            if !in_app_views_dir(&views, &r.name)
+                || !in_code(i, line_start, &r)
+                || !partials::resolve(path, &r).is_empty()
+                || partials::gem_view(&views, &r.name)
+            {
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
@@ -1444,6 +1448,17 @@ mod tests {
             "=' render \"users/a\"\n==' render \"users/b\"\n=> render \"users/c\"\np = render \"users/d\"\n| render \"users/e\"\n";
         let lines: Vec<u32> = unresolved(TemplateLang::Slim, &slim, slim_text).iter().map(|d| d.range.start.line).collect();
         assert_eq!(lines, vec![0, 1, 2]);
+        for dir in ["devise/shared", "spree/admin", "admin"] {
+            std::fs::create_dir_all(root.join("app/views").join(dir)).unwrap();
+        }
+        std::fs::write(
+            root.join("Gemfile.lock"),
+            "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n",
+        )
+        .unwrap();
+        let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"admin/x\" %>";
+        let lines: Vec<String> = unresolved(TemplateLang::Erb, &file, gem_text).into_iter().map(|d| d.message).collect();
+        assert_eq!(lines, ["Partial `admin/x` not found"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
         std::fs::remove_dir_all(&root).unwrap();

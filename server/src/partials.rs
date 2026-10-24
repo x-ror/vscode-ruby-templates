@@ -106,7 +106,8 @@ pub fn resolve_model(current: &Path, name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-const KNOWN_FORMATS: [&str; 28] = [
+// `Mime::SET` of a fresh Rails app; formats an app registers itself (`Mime::Type.register "text/html", :mobile`) are unknown.
+const KNOWN_FORMATS: [&str; 35] = [
     "html",
     "text",
     "js",
@@ -133,7 +134,14 @@ const KNOWN_FORMATS: [&str; 28] = [
     "gzip",
     "json",
     "xml",
+    "rss",
+    "atom",
     "yaml",
+    "m4a",
+    "otf",
+    "ttf",
+    "woff",
+    "woff2",
     "turbo_stream",
 ];
 
@@ -290,6 +298,20 @@ pub fn views_root(file: &Path) -> Option<PathBuf> {
 
 pub fn app_root(file: &Path) -> Option<PathBuf> {
     views_root(file).and_then(|v| v.parent().map(|p| p.to_path_buf()))
+}
+
+/// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
+/// name (`devise/`, `spree/` from `spree_core`), and the app overrides only some of them, so the rest aren't on disk.
+pub fn gem_view(views: &Path, name: &str) -> bool {
+    let Some((top, _)) = name.split_once('/') else { return false };
+    let Some(lock) = views.parent().and_then(Path::parent).and_then(|root| std::fs::read_to_string(root.join("Gemfile.lock")).ok()) else {
+        return false;
+    };
+    // Gemfile.lock lists each resolved gem as `    name (version)` under `specs:`.
+    lock.lines()
+        .filter_map(|l| l.strip_prefix("    ")?.split_once(" ("))
+        .map(|(gem, _)| gem)
+        .any(|gem| gem == top || gem.strip_prefix(top).is_some_and(|rest| rest.starts_with(['_', '-'])))
 }
 
 /// All template files matching `dir/<prefix>name.*`.
@@ -546,6 +568,13 @@ const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn feed_formats() {
+        assert_eq!(template_format(Path::new("index.rss.builder")), Some("rss"));
+        assert_eq!(template_format(Path::new("feed.atom.builder")), Some("atom"));
+        assert_eq!(template_stem("_entry.atom.builder"), "_entry");
+    }
+
     #[test]
     fn new_template_paths() {
         let views = Path::new("/r/app/views");
