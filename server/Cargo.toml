@@ -6,6 +6,10 @@ rust-version = "1.82"
 description = "Language server for ERB, Haml and Slim templates"
 license = "MIT"
 
+[lib]
+name = "ruby_templates"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ruby-templates-ls"
 path = "src/main.rs"
