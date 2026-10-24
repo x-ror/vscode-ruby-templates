@@ -57,7 +57,7 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ## Blockers
 
-None. Every tool the stages needed was available: network for the corpora and gems, Ruby 3.3 with htmlbeautifier, slim and haml, Chromium-free VS Code under `xvfb-run`, npm for packing.
+None. Every tool the stages needed was available: network for the corpora and gems, Ruby 3.3 with htmlbeautifier, slim and haml, VS Code under `xvfb-run`, npm for packing.
 
 ## Notes
 
@@ -85,4 +85,7 @@ None. Every tool the stages needed was available: network for the corpora and ge
 - Editor (stage 5): ERB with `erb.formatter: builtin`, Haml (`reindent`) and the _Re-indent Haml_ command go through client providers that forward to the server's `textDocument/formatting` / `rangeFormatting`; Slim stays dynamically registered by the server. All three use `format::format`. Range formatting leaves out the steps that add or remove lines.
 - Kept on purpose (stage 3 review): in the editor, our defaults (trim trailing whitespace, add a final newline) apply when neither the editor nor a project file says otherwise, which is decision 4's order; VS Code only sends those options when they are on. Haml and Slim _Format Document_ therefore now also add a missing final newline.
 - npm (stage 6): `npm/ruby-templates` (main package, name set only there), `npm/assemble.js` (platform packages from `cli-<platform>` artifacts), `test/npm.js` (pack, offline install, run). CI: `npm` job uploads the packages; `publish-npm` on `v*` tags uses trusted publishing. Not run. **The first publish probably needs a manual token**: npm lets you configure a trusted publisher only for a package that exists, so the first version of each of the six packages has to be published once with an `NPM_TOKEN` (or by hand) before the OIDC job can take over. `@x-ror` is a placeholder scope.
+- Stage 3 review: fixed CRLF range edits, range formatting on files without a final newline, silent no-ops of _Re-indent Haml_, ASCII word characters in the Haml regexps, and the compile check skipping Haml without the slim gem.
+- Stage 4/5 review: fixed an editorconfig brace range that ran out of memory, YAML booleans and flow mappings, `tab_width` with spaces, erb_lint `FinalNewline` and extra trailing lines, unreported ignored options, and the client not sending the editor's file options for ERB/Haml.
+- Stage 6 review: fixed non-resumable publishing, a missing-artifact check, `libc`/`preferUnplugged` in platform manifests, the wrapper's message, Windows quoting in `test/npm.js`. Not done: static musl builds for npm (glibc 2.39 from ubuntu-24.04 runners is required; `libc: glibc` keeps musl systems from installing a binary that can't run); worth it if Alpine users ask. Rejected: splitting the CLAUDE.md line out of `b8dd298` (it would mean rewriting pushed history).
 - Corpora (outside the repo, shallow sparse clones of `app/views` and `app/components`): Forem, Mastodon, rubygems.org, Whitehall, freeats. The network allowed it.
