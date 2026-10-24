@@ -13,10 +13,10 @@ Invariants, each enforced by tests: (a) idempotent, (b) non-whitespace preserved
 
 ### 1. CLI
 
-- [ ] Library target plus a second `[[bin]]` `ruby-templates`; `ruby-templates-ls --check/--format` keep working
-- [ ] `check <files|dirs>`
-- [ ] `format [--check] [--write] <files|dirs|->`, `--stdin-filepath`, exit codes 0/1/2
-- [ ] Unit tests, a CLI test, CI packages the same `.vsix` contents
+- [x] Library target plus a second `[[bin]]` `ruby-templates`; `ruby-templates-ls --check/--format` keep working
+- [x] `check <files|dirs>`
+- [x] `format [--check] [--write] <files|dirs|->`, `--stdin-filepath`, exit codes 0/1/2
+- [x] Unit tests, a CLI test, CI packages the same `.vsix` contents
 
 ### 2. ERB formatter
 
@@ -62,4 +62,8 @@ None yet.
 ## Notes
 
 - Branch `feat/formatter` from `origin/main` (the clone's local `main` was stale).
+- Layout (stage 1): one package with a `[lib]` (`src/lib.rs`) and two `[[bin]]`s. The server moved from `main.rs` to `lsp.rs` unchanged, language detection to `lang.rs`; `main.rs` and `bin/ruby-templates.rs` only dispatch into `cli.rs` / `lsp::serve`. A Cargo workspace would have moved every path in CI, `install-bin.js` and the tests for no gain. CI uploads the CLI as `cli-<platform>` artifacts; the `server-*` pattern that feeds the `.vsix` doesn't match them.
+- `git push` to `feat/formatter` works. `gh` is installed but its token is rejected (`gh auth status`), so the draft PR goes through the GitHub connector instead.
+- Stage 1 review: fixed exit codes for invariant failures and unreadable files, folder-walk noise, multi-file stdout, symlinked folders, the non-whitespace guard (ASCII whitespace only). Deferred, not rejected: `trim_trailing_whitespace` and the blank-line steps had no reader yet; stage 2 (ERB) and stage 4 (config) use them.
+- Found on the way: `index.js.erb` under `app/views` was taken for a localized HTML view (`js` looks like a locale), so tag checks ran on it; fixed in `lang.rs` with a test.
 - Corpora (outside the repo, shallow sparse clones of `app/views` and `app/components`): Forem, Mastodon, rubygems.org, Whitehall, freeats. The network allowed it.
