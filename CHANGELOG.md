@@ -37,7 +37,7 @@ First release. Requires VS Code 1.100 or newer.
 - Switch to Related File: a view's other formats, its controller or mailer action, and a ViewComponent's class, template and preview.
 - Preview rendered HTML and show compiled Ruby, through Erubi like Rails (`rubyTemplates.commands.ruby`), or inside the Rails app (`rubyTemplates.preview.useRails`).
 - Converters: ERB → Haml / Slim, Haml → ERB / Slim, Slim → ERB, HTML → Haml.
-- Formatting: ERB through `htmlbeautifier` or `erb-format` (`rubyTemplates.erb.formatter`), Haml re-indent or `haml-lint`, Slim formatter.
+- Formatting: a built-in whitespace-only formatter in the language server for HTML ERB (`rubyTemplates.erb.formatter: builtin`), Haml (re-indent, the default of `rubyTemplates.haml.formatter`) and Slim, with document and selection formatting for ERB and Haml; settings from the editor, `.editorconfig` and the whitespace linters of erb_lint, haml-lint and slim-lint. ERB can also go through `htmlbeautifier` or `erb-format`, Haml through `haml-lint`.
 - Linters on open and save: `erb_lint`, `herb-lint`, `haml-lint` and `slim-lint`.
 
 ### Packaging
