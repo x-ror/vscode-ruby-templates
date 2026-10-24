@@ -6,7 +6,7 @@
   "publisher": "x-ror",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.91.0"
   },
   "categories": [
     "Programming Languages",
@@ -380,11 +380,11 @@
       },
       {
         "command": "rubyTemplates.convertToHaml",
-        "title": "Ruby Templates: Convert ERB/HTML \u2192 Haml"
+        "title": "Ruby Templates: Convert ERB/HTML → Haml"
       },
       {
         "command": "rubyTemplates.convertToErb",
-        "title": "Ruby Templates: Convert Haml/Slim \u2192 ERB"
+        "title": "Ruby Templates: Convert Haml/Slim → ERB"
       },
       {
         "command": "rubyTemplates.extractPartial",
@@ -400,7 +400,7 @@
       },
       {
         "command": "rubyTemplates.convertToSlim",
-        "title": "Ruby Templates: Convert ERB/Haml \u2192 Slim"
+        "title": "Ruby Templates: Convert ERB/Haml → Slim"
       },
       {
         "command": "rubyTemplates.showRenderedSource",
@@ -580,22 +580,22 @@
         "rubyTemplates.commands.html2haml": {
           "type": "string",
           "default": "html2haml",
-          "description": "Executable for ERB \u2192 Haml (gem install html2haml)."
+          "description": "Executable for ERB → Haml (gem install html2haml)."
         },
         "rubyTemplates.commands.haml2slim": {
           "type": "string",
           "default": "haml2slim",
-          "description": "Executable for Haml \u2192 Slim (gem install haml2slim)."
+          "description": "Executable for Haml → Slim (gem install haml2slim)."
         },
         "rubyTemplates.commands.erb2slim": {
           "type": "string",
           "default": "erb2slim",
-          "description": "Executable for ERB \u2192 Slim (gem install html2slim)."
+          "description": "Executable for ERB → Slim (gem install html2slim)."
         },
         "rubyTemplates.commands.ruby": {
           "type": "string",
           "default": "ruby",
-          "description": "Ruby used for Haml \u2192 ERB through the haml_to_erb library (gem install haml_to_erb)."
+          "description": "Ruby used for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
         },
         "rubyTemplates.commands.hamlLint": {
           "type": "string",
@@ -642,13 +642,31 @@
         },
         "rubyTemplates.slim.extraEngines": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Embedded engine names registered by your app (e.g. `mjml`) that the unknown-engine check should accept."
         },
         "rubyTemplates.slim.disabledDiagnostics": {
           "type": "array",
-          "items": { "type": "string", "enum": ["inconsistent-indent", "bad-dedent", "top-level-indent", "doctype-children", "void-children", "unknown-engine", "unclosed-attribute", "unclosed-ruby", "explicit-end", "unmatched-branch", "silent-output-helper", "unresolved-render"] },
+          "items": {
+            "type": "string",
+            "enum": [
+              "inconsistent-indent",
+              "bad-dedent",
+              "top-level-indent",
+              "doctype-children",
+              "void-children",
+              "unknown-engine",
+              "unclosed-attribute",
+              "unclosed-ruby",
+              "explicit-end",
+              "unmatched-branch",
+              "silent-output-helper",
+              "unresolved-render"
+            ]
+          },
           "default": [],
           "uniqueItems": true,
           "description": "Built-in Slim diagnostics to turn off, by code."
@@ -720,6 +738,6 @@
     "url": "https://github.com/x-ror/vscode-ruby-templates"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^11.0.0"
   }
 }
