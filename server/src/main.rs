@@ -1,9 +1,11 @@
 mod assets;
 mod erb;
+mod erb_complete;
 mod haml;
 mod haml_indent;
 mod helpers;
 mod html;
+mod html_lint;
 mod i18n;
 mod outline;
 mod partial_rename;
@@ -173,6 +175,7 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
         out.extend(tags::diagnostics(&doc.text, partial));
+        out.extend(html_lint::diagnostics(&doc.text));
     }
     if let Ok(path) = uri.to_file_path() {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
@@ -186,14 +189,25 @@ fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
 
 const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
-/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`.
+/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
+/// format (`app/views/pages/about.de.erb`), which is HTML in practice.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     if file.ends_with(".rhtml") {
         return true;
     }
-    ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format))
+    if ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format)) {
+        return true;
+    }
+    // The URI's own path, not `to_file_path`, which a drive-less test URI fails on Windows.
+    let in_views = partials::views_root(Path::new(&util::percent_decode(uri.path()))).is_some();
+    let original = file_name(uri);
+    let parts: Vec<&str> = original.split('.').collect();
+    in_views
+        && parts.len() == 3
+        && partials::is_locale(parts[1])
+        && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
@@ -495,7 +509,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "("].map(String::from).to_vec()),
+                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "(", "<"].map(String::from).to_vec()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -674,7 +688,9 @@ impl LanguageServer for Backend {
             return Ok(markdown_hover(md));
         }
         let word = util::word_at(line, col);
-        if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
+        // `<p>Clear the cache</p>` names no helper.
+        let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
         }
         Ok(None)
@@ -864,7 +880,16 @@ impl LanguageServer for Backend {
             let range = util::span_range(pos.line as usize, line, start, col);
             return items(stimulus_completions(path, typed, range));
         }
-        if let Some(typed) = schema::attribute_prefix(before) {
+        // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
+        let roles = line_roles(doc.lang, &doc.text);
+        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
+            if let Some(context) = erb_complete::context(&doc.text, line_start + col) {
+                return items(erb_complete::items(context, &doc.text, line_start + col));
+            }
+        }
+        if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };
             let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
@@ -872,13 +897,11 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
-        if let Some(found) = receiver_completions(before) {
+        if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
         }
 
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
-        let roles = line_roles(doc.lang, &doc.text);
-        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
         if doc.lang == TemplateLang::Haml {
             if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
                 return items(haml::completions(context));
@@ -1112,6 +1135,10 @@ mod tests {
             ("/v.html/config.yml.erb", false),
             ("/v.html/nginx.erb", false),
             ("/v/users/show.de.erb", false),
+            ("/r/app/views/pages/about.de.erb", true),
+            ("/r/app/views/pages/about.pt-BR.erb", true),
+            ("/r/app/views/pages/about.erb", false),
+            ("/r/app/views/pages/about.yml.erb", false),
             ("/v/users/show.de.html.erb", true),
             ("/v/show.html.erubi", true),
             ("/v/show.html.erubis", true),
@@ -1212,7 +1239,7 @@ mod tests {
             let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
             sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
         };
-        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs")]));
+        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs"), include_str!("html_lint.rs")]));
         assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
         assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
         assert_eq!(setting("jbuilder"), declared(&[]));
@@ -1222,6 +1249,8 @@ mod tests {
             include_str!("main.rs"),
             include_str!("erb.rs"),
             include_str!("tags.rs"),
+            include_str!("html_lint.rs"),
+            include_str!("ruby_syntax.rs"),
             include_str!("haml_indent.rs"),
             include_str!("slim_indent.rs"),
         ] {

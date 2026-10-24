@@ -155,7 +155,7 @@ const KNOWN_FORMATS: [&str; 35] = [
 ];
 
 /// Rails locale shape: `en`, `pt-BR`, `de_AT`.
-fn is_locale(segment: &str) -> bool {
+pub fn is_locale(segment: &str) -> bool {
     let b = segment.as_bytes();
     let region = |r: &[u8]| matches!(r, [b'-' | b'_', x, y] if x.is_ascii_uppercase() && y.is_ascii_uppercase());
     b.len() >= 2 && b[..2].iter().all(u8::is_ascii_lowercase) && (b.len() == 2 || region(&b[2..]))

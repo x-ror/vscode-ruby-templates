@@ -62,7 +62,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered) (`language-configuration/erb.json`, `test/langconfig.js`)
 - [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
 - [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
-- [ ] Auto-close HTML tags (`</div>`) in `erb` files (VS Code's HTML auto-close only runs for `html`)
+- [x] Auto-close HTML tags (`</div>`) in `erb` files on typing `>` (`rubyTemplates.erb.autoCloseTags`, `src/autoClose.js`)
 - [x] Linked editing of HTML tag pairs, across ERB tags between them (`server/src/tags.rs` `linked_names`; needs `editor.linkedEditing`)
 - [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)
 - [ ] Line comment toggle for a single line inside a code tag (`# `) vs whole-tag toggle
@@ -119,10 +119,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
 - [x] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): tree-sitter-ruby over the tags joined like Erubi, offsets kept (`server/src/ruby_syntax.rs`); runs once tag and block structure is sound, first 3 errors. No false positives on the Forem / rubygems.org / Mastodon / diaspora corpus (1082 ERB views). A tag left open before the next `<%` is reported at its own opener (`unclosed-tag`)
 - [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
-- [ ] Duplicate HTML `id` attributes and other HTML validity checks
+- [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt`, `image_tag` for computed `src` (`server/src/html_lint.rs`); more HTML checks are catalogued in `docs/lint/ERB.md`
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/main.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
-- [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
+- [x] `raw` / `html_safe` / `<%==` security hints (`unsafe-output`, info, `server/src/html_lint.rs`)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
 - [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
@@ -169,7 +169,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
 - [ ] Stimulus action method and target names
 - [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
-- [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
+- [x] HTML tag/attribute completion in ERB: elements after `<`, the open element after `</`, attributes (with `data-*`/`aria-*`) in a start tag, outside ERB tags of HTML-host views (`server/src/erb_complete.rs`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
 ## 11. Hover
