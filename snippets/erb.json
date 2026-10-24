@@ -18,7 +18,7 @@
   "render component": { "prefix": "rendercomp", "body": ["<%= render ${1:Name}Component.new(${2:attr}: ${3:value}) %>"] },
   "render component with slots": { "prefix": "rendercompb", "body": ["<%= render ${1:Name}Component.new(${2:attr}: ${3:value}) do |${4:component}| %>", "\t<% ${4:component}.with_${5:header} do %>", "\t\t$0", "\t<% end %>", "<% end %>"] },
   "component slot": { "prefix": "slot", "body": ["<% ${1:component}.with_${2:item} do %>", "\t$0", "<% end %>"] },
-  "component content": { "prefix": "content", "body": ["<%= content %>"] },
+  "component content": { "prefix": "pcontent", "body": ["<%= content %>"] },
   "component slot predicate": { "prefix": "slot?", "body": ["<% if ${1:header}? %>", "\t<%= ${1:header} %>", "<% end %>"] },
   "render model collection": { "prefix": "renderall", "body": ["<%= render ${1:@items} %>"] },
   "render partial with locals": { "prefix": "renderl", "body": ["<%= render partial: \"${1:partial}\", locals: { ${2:name}: ${3:value} } %>"] },
