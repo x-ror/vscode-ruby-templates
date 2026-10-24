@@ -64,9 +64,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Indent after tags, `- if/unless/...`, `do |x|`, engines (except `asciidoc:`, `org:`), `/`, `|` lines; dedent on `- else/elsif/when/rescue/ensure/end` (`language-configuration/slim.json` `indentationRules`)
 - [x] Word pattern includes `@ivar`, `$global`, `predicate?`, `kebab-case` (`language-configuration/slim.json` `wordPattern`)
 - [x] Default `tabSize: 2`, spaces, no indent detection (`package.json` `configurationDefaults["[slim]"]`)
-- [ ] `onEnterRules`: keep indent after a `,`/`\` continuation line and indent after a `|` text line
-- [ ] (?) Emmet in Slim: VS Code enables Emmet for the `slim` id by default; not tested or documented here
-- [ ] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) recognized and not checked as HTML
+- [x] `onEnterRules`: indent after a `|`/`'` text line, keep indent after a `-`/`=`/`tag =` line ending in `,`/`\` (`language-configuration/slim.json`, shared by `skim`; regexes checked in `test/slim.js`). The line after the last continuation line still keeps the continued indent
+- [x] (?) Emmet in Slim: VS Code's Emmet lists `slim` among its native modes (Slim-syntax output); `skim` mapped to it (`package.json` `emmet.includeLanguages`), documented (`README.md` Tips). Not exercised in an editor here
+- [x] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) open as `slim` (`.slim` extension), and `void-children` only runs for HTML hosts, bare `.slim` and untitled (`server/src/main.rs` `slim_html_host`, test `void_children_only_for_html_slim`). Slim itself renders `img` children (`<img>x</img>`), so that is the only HTML-only Slim check; `doctype-children` is a Slim parse error in every host
 
 ## 4. Snippets
 
@@ -90,12 +90,12 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `bundle exec` when `rubyTemplates.preview.useBundler` and a Gemfile exist (`src/extension.js` `run`)
 - [x] `rubyTemplates.commands.slimrb` setting (`package.json`)
 - [x] Convert ERB → Slim (`erb2slim`) and Haml → Slim (`haml2slim`) (`src/extension.js` `convert`, `package.json` commands/menus)
-- [ ] Convert Slim → ERB (`slimrb --erb`)
-- [ ] Preview/compile with `slimrb --rails` so Rails-specific output (`form_with` capture, safe buffers) matches the app
-- [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
-- [ ] Slim equivalent of Toggle ERB Tag: cycle a line between `-`, `=`, `==` and `/` (`toggleErbTag` is ERB-only in `package.json`)
-- [ ] Wrap selection in `= ...` / `#{...}` for Slim
-- [ ] Extract selection to partial (`_name.html.slim` + `= render "name"`)
+- [x] Convert Slim → ERB with `slimrb --erb` (Slim 5.2.2 `Slim::ERBConverter`) (`src/extension.js` `convert`, `package.json` `rubyTemplates.convertToErb`). Output keeps `::Temple::Utils.escape_html`, documented as double-escaping under Rails (`README.md`)
+- [x] Compile with `slimrb --rails` behind `rubyTemplates.slim.compileForRails` (`src/extension.js` `compileToRuby`). `--rails` implies `--compile` in Slim 5.2.2, so it can't drive the HTML preview; the Rails preview below covers that
+- [x] Preview inside a Rails app: `rubyTemplates.preview.useRails` runs `ruby bin/rails runner` with `ApplicationController.render(inline: $stdin, type:)` from the nearest `bin/rails`, 60 s timeout, errors in the preview panel (`src/extension.js` `renderInRails`; checked against a stub `bin/rails`, not a real app)
+- [x] Toggle Slim Line: cycles `-` → `=` → `==` → `/` on every selected line, keeps `<`/`>` between `=` and `==`, skips `/!` and `/[` (`src/slim.js` `toggleSlimMarker`, `src/extension.js` `toggleSlimTag`, `Ctrl+Alt+E` for `slim`; `test/slim.js`). Inline `p = x` markers are not toggled
+- [x] Wrap selection for Slim: a whole line's content becomes `= x`, part of a line `#{x}`, empty selection inserts `#{}` (`src/slim.js` `wrapSlim`, `src/extension.js` `wrapInSlim`, `Ctrl+Alt+W` for `slim`). Multi-line selections are left alone
+- [x] Extract selection to partial: whole selected lines, dedented, to `_name.html.slim` next to the file (or `app/views/dir/_name.html.slim` for `dir/name`), replaced by `= render "name"`; refuses to overwrite (`src/slim.js` `dedent`, `partialPath`, `src/extension.js` `extractSlimPartial`; `test/slim.js`). ERB has no extract command to mirror
 
 ## 6. Diagnostics (server)
 

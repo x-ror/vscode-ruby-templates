@@ -9,3 +9,5 @@
 - Language configuration: brackets, auto-closing pairs, comment toggling, indentation rules, folding.
 - Rails-oriented snippets for all three languages.
 - Commands: toggle ERB tag, wrap selection in ERB, HTML preview, show compiled Ruby, ERB→Haml, ERB/Haml→Slim converters.
+- Slim commands: toggle line marker (`-` / `=` / `==` / `/`), wrap selection in `=` / `#{}`, extract selection to partial, Slim→ERB (`slimrb --erb`); `rubyTemplates.preview.useRails` renders the preview through `bin/rails runner`, `rubyTemplates.slim.compileForRails` compiles with `slimrb --rails`.
+- Slim `onEnterRules`: indent after `|` / `'` text lines, keep indent after `,` / `\` continuations.

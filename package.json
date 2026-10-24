@@ -357,6 +357,18 @@
         "title": "Ruby Templates: Wrap Selection in ERB Output Tag"
       },
       {
+        "command": "rubyTemplates.toggleSlimTag",
+        "title": "Ruby Templates: Toggle Slim Line (- / = / == / /)"
+      },
+      {
+        "command": "rubyTemplates.wrapInSlim",
+        "title": "Ruby Templates: Wrap Selection in Slim Output (= / #{})"
+      },
+      {
+        "command": "rubyTemplates.extractSlimPartial",
+        "title": "Ruby Templates: Extract Selection to Slim Partial"
+      },
+      {
         "command": "rubyTemplates.preview",
         "title": "Ruby Templates: Preview Rendered HTML"
       },
@@ -367,6 +379,10 @@
       {
         "command": "rubyTemplates.convertToSlim",
         "title": "Ruby Templates: Convert ERB/Haml \u2192 Slim"
+      },
+      {
+        "command": "rubyTemplates.convertToErb",
+        "title": "Ruby Templates: Convert Slim \u2192 ERB"
       },
       {
         "command": "rubyTemplates.showRenderedSource",
@@ -385,10 +401,22 @@
         "when": "editorTextFocus && editorLangId =~ /^erb/"
       },
       {
+        "command": "rubyTemplates.toggleSlimTag",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorTextFocus && editorLangId == slim"
+      },
+      {
         "command": "rubyTemplates.wrapInErb",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
         "when": "editorTextFocus && editorLangId =~ /^erb/"
+      },
+      {
+        "command": "rubyTemplates.wrapInSlim",
+        "key": "ctrl+alt+w",
+        "mac": "cmd+alt+w",
+        "when": "editorTextFocus && editorLangId == slim"
       },
       {
         "command": "rubyTemplates.preview",
@@ -410,6 +438,21 @@
           "group": "rubyTemplates@2"
         },
         {
+          "command": "rubyTemplates.toggleSlimTag",
+          "when": "editorLangId == slim",
+          "group": "rubyTemplates@1"
+        },
+        {
+          "command": "rubyTemplates.wrapInSlim",
+          "when": "editorLangId == slim && editorHasSelection",
+          "group": "rubyTemplates@2"
+        },
+        {
+          "command": "rubyTemplates.extractSlimPartial",
+          "when": "editorLangId == slim && editorHasSelection && resourceScheme == file",
+          "group": "rubyTemplates@2"
+        },
+        {
           "command": "rubyTemplates.preview",
           "when": "editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim",
           "group": "rubyTemplates@3"
@@ -423,6 +466,11 @@
           "command": "rubyTemplates.convertToSlim",
           "when": "editorLangId == erb || editorLangId == haml",
           "group": "rubyTemplates@5"
+        },
+        {
+          "command": "rubyTemplates.convertToErb",
+          "when": "editorLangId == slim",
+          "group": "rubyTemplates@5"
         }
       ],
       "commandPalette": [
@@ -435,12 +483,28 @@
           "when": "editorLangId =~ /^erb/"
         },
         {
+          "command": "rubyTemplates.toggleSlimTag",
+          "when": "editorLangId == slim"
+        },
+        {
+          "command": "rubyTemplates.wrapInSlim",
+          "when": "editorLangId == slim"
+        },
+        {
+          "command": "rubyTemplates.extractSlimPartial",
+          "when": "editorLangId == slim && editorHasSelection && resourceScheme == file"
+        },
+        {
           "command": "rubyTemplates.convertToHaml",
           "when": "editorLangId == erb"
         },
         {
           "command": "rubyTemplates.convertToSlim",
           "when": "editorLangId == erb || editorLangId == haml"
+        },
+        {
+          "command": "rubyTemplates.convertToErb",
+          "when": "editorLangId == slim"
         }
       ]
     },
@@ -451,6 +515,11 @@
           "type": "string",
           "default": "slimrb",
           "description": "Executable used to render Slim (gem install slim)."
+        },
+        "rubyTemplates.slim.compileForRails": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Compiled Ruby Source for Slim runs `slimrb --rails`: ActionView output buffer and no capture, as Rails compiles it."
         },
         "rubyTemplates.commands.haml": {
           "type": "string",
@@ -486,6 +555,11 @@
           "type": "boolean",
           "default": false,
           "description": "Prefix render commands with `bundle exec` when a Gemfile exists in the workspace."
+        },
+        "rubyTemplates.preview.useRails": {
+          "type": "boolean",
+          "default": false,
+          "description": "Render the preview through the app's `bin/rails runner` (`ApplicationController.render(inline:, type:)`) when the file is inside a Rails app, so helpers, routes and partials work. Boots the app on every refresh and gives up after 60 seconds."
         },
         "rubyTemplates.slim.extraEngines": {
           "type": "array",
@@ -524,7 +598,8 @@
     },
     "configurationDefaults": {
       "emmet.includeLanguages": {
-        "erb": "html"
+        "erb": "html",
+        "skim": "slim"
       },
       "[haml]": {
         "editor.tabSize": 2,
@@ -551,6 +626,7 @@
     "package": "npx @vscode/vsce package",
     "test:tokens": "node test/tokenize.js",
     "test:snippets": "node test/snippets.js",
+    "test:slim": "node test/slim.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
     "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*"
   },

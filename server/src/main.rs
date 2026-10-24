@@ -70,6 +70,10 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
             .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if indented::code::RUBY.contains(&c.as_str())))
             .collect(),
     };
+    // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
+    if doc.lang == TemplateLang::Slim && !slim_html_host(uri) {
+        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if c == indented::code::VOID_CHILDREN));
+    }
     if doc.lang == TemplateLang::Erb && html_host(uri) {
         let partial = uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'));
         out.extend(tags::diagnostics(&doc.text, partial));
@@ -90,9 +94,22 @@ fn html_host(uri: &Url) -> bool {
     if path.ends_with(".rhtml") {
         return true;
     }
-    let Some(stem) = path.strip_suffix(".erb") else { return false };
-    let host = stem.rsplit('/').next().and_then(|file| file.rsplit_once('.')).map_or("", |(_, ext)| ext);
-    host == "html" || host.starts_with("html+") || host == "turbo_stream"
+    host_format(path, ".erb").is_some_and(is_html_format)
+}
+
+/// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
+fn slim_html_host(uri: &Url) -> bool {
+    host_format(uri.path(), ".slim").is_none_or(is_html_format)
+}
+
+/// The `format` of `name.format.ext`; `None` when the path doesn't end in `ext` or has no format part.
+fn host_format<'a>(path: &'a str, ext: &str) -> Option<&'a str> {
+    let file = path.strip_suffix(ext)?.rsplit('/').next()?;
+    file.rsplit_once('.').map(|(_, format)| format)
+}
+
+fn is_html_format(format: &str) -> bool {
+    format == "html" || format.starts_with("html+") || format == "turbo_stream"
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
@@ -439,6 +456,28 @@ mod tests {
             ("/v.html/nginx.erb", false),
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
+        }
+    }
+
+    #[test]
+    fn void_children_only_for_html_slim() {
+        let text = "img\n  | x\n";
+        let has_void = |path: &str| {
+            let uri = Url::parse(path).unwrap();
+            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into() }, &SlimOptions::default())
+                .iter()
+                .any(|d| d.code == Some(NumberOrString::String(indented::code::VOID_CHILDREN.into())))
+        };
+        for (path, html) in [
+            ("file:///v/show.html.slim", true),
+            ("file:///v/show.html+phone.slim", true),
+            ("file:///v/show.slim", true),
+            ("untitled:Untitled-1", true),
+            ("file:///v/feed.xml.slim", false),
+            ("file:///v/welcome.text.slim", false),
+            ("file:///v/index.js.slim", false),
+        ] {
+            assert_eq!(has_void(path), html, "{path}");
         }
     }
 
