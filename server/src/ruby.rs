@@ -77,10 +77,8 @@ pub enum BlockEffect {
 
 const OPENERS: &[&str] = &["if", "unless", "while", "until", "case", "begin", "def", "class", "module", "for", "do"];
 const CONTINUERS: &[&str] = &["else", "elsif", "when", "rescue", "ensure", "in"];
-const PREFIX_OK: &[&str] = &[
-    "=", "(", ",", ";", "&&", "||", "and", "or", "not", "!", "return", "then", "else", "[", "{", "?", ":", "=>", "|", "<<", "+=", "-=",
-    "||=",
-];
+const PREFIX_OK: &[&str] =
+    &["=", "(", ",", ";", "&&", "||", "and", "or", "not", "!", "then", "else", "[", "{", "?", ":", "=>", "|", "<<", "+=", "-=", "||="];
 
 /// Net block effect of a Ruby snippet. `end` count and opener count are also returned.
 pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
