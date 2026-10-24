@@ -87,3 +87,51 @@ fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
 fn is_html_format(format: &str) -> bool {
     format == "html" || format.starts_with("html+") || format == "turbo_stream"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn html_host_by_file_name() {
+        for (path, html) in [
+            ("/v/users/show.html.erb", true),
+            ("/v/users/show.html+phone.erb", true),
+            ("/v/users/show.html%2Bphone.erb", true),
+            ("/v/users/create.turbo_stream.erb", true),
+            ("/v/old.rhtml", true),
+            ("/v/users/SHOW.HTML.ERB", true),
+            ("/v/users/index.js.erb", false),
+            ("/v/mailer/welcome.text.erb", false),
+            ("/v.html/config.yml.erb", false),
+            ("/v.html/nginx.erb", false),
+            ("/v/users/show.de.erb", false),
+            ("/r/app/views/pages/about.de.erb", true),
+            ("/r/app/views/pages/about.pt-BR.erb", true),
+            ("/r/app/views/pages/about.erb", false),
+            ("/r/app/views/pages/about.yml.erb", false),
+            ("/r/app/views/pages/index.js.erb", false),
+            ("/r/app/views/pages/feed.rss.erb", false),
+            ("/v/users/show.de.html.erb", true),
+            ("/v/show.html.erubi", true),
+            ("/v/show.html.erubis", true),
+            ("/v/feed.xml.erubi", false),
+        ] {
+            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
+        }
+    }
+
+    #[test]
+    fn host_specific_erb_ids() {
+        let untitled = Url::parse("untitled:Untitled-1").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-js")), Some(TemplateLang::Erb));
+        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
+        let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
+        let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
+        assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
+        for path in ["file:///views/x.erubi", "file:///views/x.html.ERUBIS"] {
+            assert_eq!(TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), None), Some(TemplateLang::Erb), "{path}");
+        }
+    }
+}

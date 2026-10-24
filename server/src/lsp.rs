@@ -926,7 +926,7 @@ impl LanguageServer for Backend {
     }
 
     /// Only the lines in the range change, with nesting read from the whole document; not advertised, the client's
-    /// Haml provider asks for it.
+    /// ERB and Haml providers ask for it.
     async fn range_formatting(&self, p: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options, true).await else { return Ok(None) };
         Ok(line_edits(&text, &formatted, p.range.start.line as usize..=p.range.end.line as usize))
@@ -1243,6 +1243,32 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn void_children_only_for_html_slim() {
+        let text = "img\n  | x\n";
+        let has_void = |path: &str| {
+            let uri = Url::parse(path).unwrap();
+            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &Options::default())
+                .iter()
+                .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
+        };
+        for (path, html) in [
+            ("file:///v/show.html.slim", true),
+            ("file:///v/show.html+phone.slim", true),
+            ("file:///v/show.html%2Bphone.slim", true),
+            ("file:///v/show.xml%2Bfeed.slim", false),
+            ("file:///v/show.slim", true),
+            ("file:///v/show.de.slim", true),
+            ("file:///v/show.de.xml.slim", false),
+            ("untitled:Untitled-1", true),
+            ("file:///v/feed.xml.slim", false),
+            ("file:///v/welcome.text.slim", false),
+            ("file:///v/index.js.slim", false),
+        ] {
+            assert_eq!(has_void(path), html, "{path}");
+        }
+    }
+
+    #[test]
     fn slot_setters_leave_other_receivers_alone() {
         let before = "<%= render CardComponent.new do |f| %><% end %>\n<%= form_with model: @user do |f| %>\n  <%= f.te";
         assert!(slot_setter_completions(Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
@@ -1268,61 +1294,6 @@ mod tests {
         let edits = line_edits("%div\r\n    %p\r\n  %i\r\n", "%div\r\n    %p\r\n    %i\r\n", 0..=2).unwrap();
         assert_eq!(edits, [TextEdit::new(Range::new(Position::new(2, 0), Position::new(2, 4)), "    %i".into())]);
         assert!(line_edits("a\nb", "a\nb\nc", 0..=1).is_none());
-    }
-
-    #[test]
-    fn html_host_by_file_name() {
-        for (path, html) in [
-            ("/v/users/show.html.erb", true),
-            ("/v/users/show.html+phone.erb", true),
-            ("/v/users/show.html%2Bphone.erb", true),
-            ("/v/users/create.turbo_stream.erb", true),
-            ("/v/old.rhtml", true),
-            ("/v/users/SHOW.HTML.ERB", true),
-            ("/v/users/index.js.erb", false),
-            ("/v/mailer/welcome.text.erb", false),
-            ("/v.html/config.yml.erb", false),
-            ("/v.html/nginx.erb", false),
-            ("/v/users/show.de.erb", false),
-            ("/r/app/views/pages/about.de.erb", true),
-            ("/r/app/views/pages/about.pt-BR.erb", true),
-            ("/r/app/views/pages/about.erb", false),
-            ("/r/app/views/pages/about.yml.erb", false),
-            ("/r/app/views/pages/index.js.erb", false),
-            ("/r/app/views/pages/feed.rss.erb", false),
-            ("/v/users/show.de.html.erb", true),
-            ("/v/show.html.erubi", true),
-            ("/v/show.html.erubis", true),
-            ("/v/feed.xml.erubi", false),
-        ] {
-            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
-        }
-    }
-
-    #[test]
-    fn void_children_only_for_html_slim() {
-        let text = "img\n  | x\n";
-        let has_void = |path: &str| {
-            let uri = Url::parse(path).unwrap();
-            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &Options::default())
-                .iter()
-                .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
-        };
-        for (path, html) in [
-            ("file:///v/show.html.slim", true),
-            ("file:///v/show.html+phone.slim", true),
-            ("file:///v/show.html%2Bphone.slim", true),
-            ("file:///v/show.xml%2Bfeed.slim", false),
-            ("file:///v/show.slim", true),
-            ("file:///v/show.de.slim", true),
-            ("file:///v/show.de.xml.slim", false),
-            ("untitled:Untitled-1", true),
-            ("file:///v/feed.xml.slim", false),
-            ("file:///v/welcome.text.slim", false),
-            ("file:///v/index.js.slim", false),
-        ] {
-            assert_eq!(has_void(path), html, "{path}");
-        }
     }
 
     #[test]
@@ -1433,20 +1404,6 @@ mod tests {
         let slim = codes(TemplateLang::Slim);
         assert!(slim_indent::code::RUBY.iter().all(|c| slim.iter().any(|s| s == c)), "{slim:?}");
         assert_eq!(codes(TemplateLang::Skim), [slim_indent::code::BAD_DEDENT]);
-    }
-
-    #[test]
-    fn host_specific_erb_ids() {
-        let untitled = Url::parse("untitled:Untitled-1").unwrap();
-        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-js")), Some(TemplateLang::Erb));
-        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
-        let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
-        assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
-        let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
-        assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
-        for path in ["file:///views/x.erubi", "file:///views/x.html.ERUBIS"] {
-            assert_eq!(TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), None), Some(TemplateLang::Erb), "{path}");
-        }
     }
 
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {

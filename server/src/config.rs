@@ -51,8 +51,6 @@ pub fn settings_for(path: &Path, lang: TemplateLang) -> Resolved {
     Resolved { settings: editorconfig.apply(settings), notes }
 }
 
-// ---------------------------------------------------------------- linter configs
-
 /// The nearest linter config of `lang`'s linter, from the file's folder up.
 fn linter_config(path: &Path, lang: TemplateLang) -> Option<(PathBuf, String)> {
     let names: &[&str] = match lang {
@@ -255,8 +253,6 @@ fn unquote(s: &str) -> &str {
     }
     s
 }
-
-// ---------------------------------------------------------------- .editorconfig
 
 /// The `.editorconfig` properties that apply to `path`: files from the root (or the topmost `root = true`) down,
 /// later sections and nearer files winning, as the EditorConfig spec has it.

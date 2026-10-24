@@ -160,7 +160,7 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
         out.push_str(line.cr);
     }
     let fixed_lines = roles.iter().zip(&keeps_end).map(|(role, keeps)| *role != Role::Markup || *keeps).collect();
-    Ok(Indented { text: out, fixed: fixed_lines, fixed_end: false, notes })
+    Ok(Indented { text: out, fixed: fixed_lines, notes })
 }
 
 fn split(text: &str) -> Vec<Line<'_>> {

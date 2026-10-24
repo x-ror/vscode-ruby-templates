@@ -23,8 +23,8 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         and line endings. Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
         on stderr. Without --check or --write the result goes to stdout.
 
-Exit codes: 0 ok, 1 diagnostics (errors or warnings) or files that would change, 2 usage or I/O error, a file
-that isn't a template, or a formatter bug.
+Exit codes: 0 ok, 1 diagnostics (errors or warnings) or files that would change, 2 usage or I/O error, a formatter
+bug, or (for check) a named file that isn't a template.
 ";
 
 /// `ruby-templates-ls --check <file>...` and `--format <file.slim>`: the exit code, or `None` to start the server.

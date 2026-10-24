@@ -100,11 +100,10 @@ pub(crate) fn skip<T>(kind: SkipKind, reason: impl Into<String>) -> Result<T, Sk
 }
 
 /// A language's re-indented text, plus which lines hold content whitespace (a `<pre>` body, Ruby code, a filter)
-/// that the blank-line steps must keep, and whether the file's last line ending is content too.
+/// that the blank-line steps must keep.
 pub(crate) struct Indented {
     pub text: String,
     pub fixed: Vec<bool>,
-    pub fixed_end: bool,
     /// What was left alone inside an otherwise formatted file, for `--verbose`.
     pub notes: Vec<String>,
 }
@@ -167,7 +166,7 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
     if settings.trim_trailing_blank_lines {
         trim_trailing_blank_lines(&mut lines);
     }
-    let final_newline = settings.final_newline.filter(|_| !indented.fixed_end);
+    let final_newline = settings.final_newline;
     // Without a final line ending, an empty last line would only be the previous line's ending.
     if final_newline == Some(false) {
         while lines.last().is_some_and(|l| l.text.is_empty() && !l.fixed) {
@@ -198,7 +197,7 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Res
     };
     // Slim compiles every line, blank ones included, so line counts stay as they are.
     let fixed = vec![true; text.split('\n').count()];
-    Ok(Indented { text, fixed, fixed_end: false, notes: vec![] })
+    Ok(Indented { text, fixed, notes: vec![] })
 }
 
 struct Line<'a> {

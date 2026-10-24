@@ -45,7 +45,7 @@ pub(crate) fn indent(text: &str, tab_width: usize, trim: bool) -> Result<Indente
         out.push_str(cr);
         fixed.push(!structural);
     }
-    Ok(Indented { text: out, fixed, fixed_end: false, notes: vec![] })
+    Ok(Indented { text: out, fixed, notes: vec![] })
 }
 
 /// A line whose nested or continued lines move with it.
