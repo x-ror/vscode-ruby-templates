@@ -66,6 +66,7 @@ gem install html2haml          # ERB/HTML → Haml
 gem install haml_to_erb        # Haml → ERB
 gem install html2slim haml2slim  # ERB → Slim, Haml → Slim
 gem install haml_lint          # Haml lint diagnostics, haml-lint formatter
+gem install htmlbeautifier     # or erb-formatter: ERB formatting
 ```
 
 **ERB formatting**: set `rubyTemplates.erb.formatter` to `htmlbeautifier` (`gem install htmlbeautifier`; re-indents to the editor's tab size) or `erb-format` (`gem install erb-formatter`; re-flows to a line width) and *Format Document* / format on save run it (`"[erb]": { "editor.formatOnSave": true }`). The default `none` leaves ERB formatting to other extensions.

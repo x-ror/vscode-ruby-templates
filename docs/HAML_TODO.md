@@ -124,7 +124,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [ ] Indentation of `,` continuation lines (Haml checks them: `"\t    " used for indentation` in a tab file); continuation lines are skipped today
 - [ ] Indentation inside filter bodies relative to the filter (Haml requires the body to start with the filter's indent plus one unit); bodies are skipped today
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
-- [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output)
+- [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output). ERB has it now (`server/src/ruby_syntax.rs`); Haml and Slim need the implicit `end`s of indented blocks synthesized, with an offset map back to the template
 - [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
 - [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/main.rs` `Options`)
 
