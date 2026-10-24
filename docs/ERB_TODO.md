@@ -61,7 +61,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Default `tabSize: 2`, spaces (`package.json` `configurationDefaults["[erb]"]`)
 - [x] `onEnterRules` for `do |x| %>` and `else`/`elsif`/`when` lines (only `if/unless/...` are covered) (`language-configuration/erb.json`, `test/langconfig.js`)
 - [x] `onEnterRules` that keep the cursor between `<% %>` on Enter (`language-configuration/erb.json`: Enter in an empty tag splits it onto 3 lines)
-- [ ] Auto-close of `<%=` / `<%#` that doesn't double the ` %>` when the user types `=` right after `<%`
+- [x] Typing a whole tag (`<%= x %>`) after auto-closing inserted ` %>` no longer ends in `%> %>` (`src/autoClose.js` `doubledErbClose`; checked in `test/vscode/suite.js`)
 - [x] Auto-close HTML tags (`</div>`) in `erb` files on typing `>` (`rubyTemplates.erb.autoCloseTags`, `src/autoClose.js`)
 - [x] Linked editing of HTML tag pairs, across ERB tags between them (`server/src/tags.rs` `linked_names`; needs `editor.linkedEditing`)
 - [x] Folding for `<% if %>…<% end %>` and HTML elements independent of indentation (server `foldingRange`) (`server/src/outline.rs` `folding_ranges`, merged with indentation folds)
@@ -90,10 +90,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Toggle tag `<% %>` → `<%= %>` → `<%# %>`, multi-cursor (`src/extension.js` `toggleErbTag`, `package.json` keybinding)
 - [x] Wrap selection in `<%= %>` (`src/extension.js` `wrapInErb`)
 - [x] Preview rendered HTML via `erb -T -` (`src/extension.js` `renderToHtml`)
-- [x] Show compiled Ruby via `erb -x` (`src/extension.js` `compileToRuby`)
+- [x] Show compiled Ruby (`src/extension.js` `compileToRuby`)
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
 - [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
-- [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
+- [x] Preview/compile with Erubi (Rails' engine, `escape: true`) instead of stdlib `erb`, so `<%==` and Rails trim behave the same; stdlib ERB when the gem is missing (`src/erbEngine.js`)
 - [x] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work (`rubyTemplates.preview.useRails`, `src/extension.js`)
 - [x] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`) (`rubyTemplates.extractPartial`, `src/extension.js`, `src/partial.js`)
 - [x] Create a missing partial from an unresolved `render "x"` (code action) (`server/src/main.rs` `code_action`, `partials::new_template_path`)
@@ -103,7 +103,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Document formatting provider for ERB: `rubyTemplates.erb.formatter` = `htmlbeautifier` or `erb-format`, registered only when chosen (`src/extension.js` `registerErbFormatting`, `src/erbFormat.js`)
 - [ ] Range formatting
 - [x] Configurable formatter executable plus `bundle exec` (`rubyTemplates.commands.htmlbeautifier` / `.erbFormat`, `rubyTemplates.preview.useBundler`)
-- [ ] Normalize spaces inside tags (`<%=foo%>` → `<%= foo %>`) as a code action or format option
+- [x] Normalize spaces inside tags (`<%=foo%>` → `<%= foo %>`): code action for the tag, and source action `source.erbSpacing` for the file (`server/src/erb.rs` `spacing_edits`)
 - [x] Format on save works (`editor.formatOnSave` via the provider)
 
 ## 8. Diagnostics and linting
@@ -124,7 +124,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/main.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
 - [x] `raw` / `html_safe` / `<%==` security hints (`unsafe-output`, info, `server/src/html_lint.rs`)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
-- [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
+- [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)
 - [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
 - [ ] Settings to pick external linters
 - [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
@@ -165,9 +165,9 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
 - [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
-- [ ] ViewComponent class names after `render `
+- [x] ViewComponent class names after `render ` (from `app/components/**/*_component.rb`, inserted as `Name.new(…)`)
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
-- [ ] Stimulus action method and target names
+- [x] Stimulus action method and target names: methods after `id#` in `data-action`, `static targets` in `data-id-target` / `id_target:` (`stimulus.rs` `methods`, `targets`)
 - [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
 - [x] HTML tag/attribute completion in ERB: elements after `<`, the open element after `</`, attributes (with `data-*`/`aria-*`) in a start tag, outside ERB tags of HTML-host views (`server/src/erb_complete.rs`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
@@ -188,7 +188,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Rename a local across a partial and its callers
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
 - [x] Breadcrumbs follow the symbol tree (VS Code builds them from `textDocument/documentSymbol`)
-- [ ] Find all references to an i18n key
+- [x] Find all references to an i18n key: `t("…")` calls with the same full key (lazy `.x` keys resolved per view) plus its locale entries (`partial_rename::i18n_references`)
 
 ## 13. Embedded HTML/CSS/JS language features
 

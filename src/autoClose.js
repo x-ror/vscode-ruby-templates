@@ -50,4 +50,15 @@ const isHtmlView = (fileName) =>
     fileName,
   );
 
-export { tagToClose, isHtmlView };
+/**
+ * After typing the `>` of a `%>`, the length of the ` %>` that auto-closing put after the cursor when `<%` was
+ * typed, or 0. VS Code only overtypes one-character closers, so a tag typed in full otherwise ends in `%> %>`.
+ */
+function doubledErbClose(lineBefore, lineAfter) {
+  if (!lineBefore.endsWith("%>") || lineBefore.endsWith("%%>")) return 0;
+  const opened = lineBefore.lastIndexOf("<%");
+  if (opened === -1 || opened > lineBefore.length - 4) return 0;
+  return lineAfter.match(/^ ?%>/)?.[0].length ?? 0;
+}
+
+export { tagToClose, isHtmlView, doubledErbClose };

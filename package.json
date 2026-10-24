@@ -599,11 +599,6 @@
           "default": "haml",
           "description": "Executable used to render Haml (gem install haml)."
         },
-        "rubyTemplates.commands.erb": {
-          "type": "string",
-          "default": "erb",
-          "description": "Executable used to render ERB (ships with Ruby)."
-        },
         "rubyTemplates.commands.html2haml": {
           "type": "string",
           "default": "html2haml",
@@ -622,7 +617,7 @@
         "rubyTemplates.commands.ruby": {
           "type": "string",
           "default": "ruby",
-          "description": "Ruby used for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
+          "description": "Ruby used to preview and compile ERB through Erubi (gem install erubi; stdlib ERB without it) and for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
         },
         "rubyTemplates.commands.hamlLint": {
           "type": "string",
@@ -803,6 +798,16 @@
           "type": "string",
           "default": "erb_lint",
           "description": "Executable for erb_lint diagnostics (gem install erb_lint)."
+        },
+        "rubyTemplates.herbLint.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run herb-lint (`--json`) on ERB files when they are opened and saved and show its offenses, configured by the project's `.herb.yml`. herb-lint reads the file from disk, so unsaved edits are not linted."
+        },
+        "rubyTemplates.commands.herbLint": {
+          "type": "string",
+          "default": "herb-lint",
+          "description": "Executable for herb-lint diagnostics (npm install --save-dev @herb-tools/linter). With the default, the project's node_modules/.bin/herb-lint wins over one on PATH."
         },
         "rubyTemplates.slimLint.enabled": {
           "type": "boolean",

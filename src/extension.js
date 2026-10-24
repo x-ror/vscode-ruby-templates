@@ -11,7 +11,9 @@ import { convertedFileName } from "./convert.js";
 import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
-import { tagToClose, isHtmlView } from "./autoClose.js";
+import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
+import { erbRubyArgs } from "./erbEngine.js";
+import { herbLintReport } from "./herbLint.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -86,6 +88,7 @@ function activate(context) {
   void startClient(context, output);
   registerSlimLint(context, output);
   registerErbLint(context, output);
+  registerHerbLint(context, output);
 
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -552,10 +555,13 @@ async function renderToHtml(doc) {
   if (lang === "haml") {
     return runHaml(cfg().get("commands.haml", "haml"), "render", [], cwd, src);
   }
-  if (lang === "erb") {
-    const bin = cfg().get("commands.erb", "erb");
-    return run(bin, ["-T", "-"], { cwd }, src);
-  }
+  if (lang === "erb")
+    return run(
+      cfg().get("commands.ruby", "ruby"),
+      erbRubyArgs("render"),
+      { cwd },
+      src,
+    );
   return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
 }
 
@@ -618,8 +624,8 @@ async function compileToRuby(doc) {
   }
   if (lang === "erb")
     return run(
-      cfg().get("commands.erb", "erb"),
-      ["-x", "-T", "-"],
+      cfg().get("commands.ruby", "ruby"),
+      erbRubyArgs("compile"),
       { cwd },
       src,
     );
@@ -627,9 +633,9 @@ async function compileToRuby(doc) {
 }
 
 function missingToolMessage(bin, lang) {
-  const gem =
-    { slim: "slim", haml: "haml", erb: "(ships with Ruby)" }[engineOf(lang)] ||
-    bin;
+  if (engineOf(lang) === "erb")
+    return `"${bin}" was not found. Install Ruby (and gem install erubi) — or point rubyTemplates.commands.ruby at it.`;
+  const gem = { slim: "slim", haml: "haml" }[engineOf(lang)] || bin;
   return `"${bin}" was not found. Install it with: gem install ${gem} — or point rubyTemplates.commands.* at the executable.`;
 }
 
@@ -686,7 +692,7 @@ async function renderPreview(doc) {
       "Render failed",
       r.stderr || r.stdout,
       engineOf(doc.languageId) === "erb"
-        ? "Plain `erb` has no Rails helpers (link_to, render, …). The preview works best for templates that only use Ruby core."
+        ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
         : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
     );
     return;
@@ -826,7 +832,114 @@ function registerErbLint(context, output) {
   vscode.workspace.textDocuments.forEach(lint);
 }
 
-/** erb_lint counts columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
+// ---------------------------------------------------------------- herb-lint
+
+const HERB_SEVERITY = {
+  error: vscode.DiagnosticSeverity.Error,
+  warning: vscode.DiagnosticSeverity.Warning,
+  info: vscode.DiagnosticSeverity.Information,
+  hint: vscode.DiagnosticSeverity.Hint,
+};
+
+/** The project's own `node_modules/.bin/herb-lint` while the setting is left at its default. */
+function herbLintBin(doc) {
+  const bin = cfg().get("commands.herbLint", "herb-lint");
+  if (bin !== "herb-lint") return bin;
+  const rel = path.join("node_modules", ".bin", "herb-lint");
+  const project = findUp(path.dirname(doc.uri.fsPath), rel);
+  return project ? path.join(project, rel) : bin;
+}
+
+/** Lint saved ERB files with `herb-lint --json`; it has no stdin mode, so unsaved text isn't linted. */
+function registerHerbLint(context, output) {
+  const lints = vscode.languages.createDiagnosticCollection("herb-lint");
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+  let reportedMissing = false;
+
+  const lint = async (doc) => {
+    if (!/^erb/.test(doc.languageId) || doc.uri.scheme !== "file") return;
+    if (doc.uri.path.toLowerCase().endsWith(".tt") || doc.isDirty) return;
+    if (!cfg().get("herbLint.enabled", false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
+    const bin = herbLintBin(doc);
+    const cwd =
+      findUp(path.dirname(doc.uri.fsPath), ".herb.yml") ??
+      workspaceFolderFor(doc);
+    const r = await run(
+      bin,
+      ["--json", "--no-timing", "--no-color", doc.uri.fsPath],
+      { cwd, useBundler: false },
+    );
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
+    if (!cfg().get("herbLint.enabled", false)) return;
+    if (toolMissing(r)) {
+      if (!reportedMissing)
+        vscode.window.showWarningMessage(
+          `"${bin}" was not found. Install it with: npm install --save-dev @herb-tools/linter — or set rubyTemplates.commands.herbLint.`,
+        );
+      reportedMissing = true;
+      return;
+    }
+    let report;
+    try {
+      report = herbLintReport(r.stdout);
+    } catch {
+      output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
+      return;
+    }
+    if (report.error) {
+      output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${report.error}`);
+      return;
+    }
+    lints.set(
+      doc.uri,
+      report.offenses.map(
+        ({ line, column, endLine, endColumn, code, message, severity }) => {
+          const d = new vscode.Diagnostic(
+            new vscode.Range(
+              line,
+              utf16Column(doc, line, column),
+              endLine,
+              utf16Column(doc, endLine, endColumn),
+            ),
+            message,
+            HERB_SEVERITY[severity] ?? vscode.DiagnosticSeverity.Warning,
+          );
+          d.source = "herb-lint";
+          d.code = code;
+          return d;
+        },
+      ),
+    );
+  };
+
+  context.subscriptions.push(
+    lints,
+    vscode.workspace.onDidOpenTextDocument(lint),
+    vscode.workspace.onDidSaveTextDocument(lint),
+    vscode.workspace.onDidCloseTextDocument((doc) => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        !e.affectsConfiguration("rubyTemplates.herbLint") &&
+        !e.affectsConfiguration("rubyTemplates.commands.herbLint")
+      )
+        return;
+      reportedMissing = false;
+      if (cfg().get("herbLint.enabled", false))
+        vscode.workspace.textDocuments.forEach(lint);
+      else lints.clear();
+    }),
+  );
+  vscode.workspace.textDocuments.forEach(lint);
+}
+
+/** erb_lint and herb-lint count columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
 function utf16Column(doc, line, column) {
   if (line >= doc.lineCount) return column;
   return [...doc.lineAt(line).text].slice(0, column).join("").length;
@@ -1057,20 +1170,37 @@ function runHamlLint(doc, args, signal) {
 const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
 
-/** Typing the `>` of a start tag in ERB adds its end tag, as VS Code does for plain HTML. */
+/**
+ * Typing `>` in ERB: drops the ` %>` auto-closing added when the user types the tag's own `%>`, and in HTML views
+ * adds a start tag's end tag, as VS Code does for plain HTML.
+ */
 function registerErbAutoClose(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument(async (e) => {
-      if (e.document.languageId !== "erb" || e.reason !== undefined) return;
-      if (!isHtmlView(e.document.fileName)) return;
+      if (!/^erb/.test(e.document.languageId) || e.reason !== undefined) return;
       if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">")
         return;
-      if (!cfg().get("erb.autoCloseTags", true)) return;
       const editor = vscode.window.activeTextEditor;
       if (editor?.document !== e.document || editor.selections.length !== 1)
         return;
       const at = e.contentChanges[0].range.start.translate(0, 1);
       const { text } = e.document.lineAt(at.line);
+      const doubled = doubledErbClose(
+        text.slice(0, at.character),
+        text.slice(at.character),
+      );
+      if (doubled) {
+        await editor.edit(
+          (b) => b.delete(new vscode.Range(at, at.translate(0, doubled))),
+          {
+            undoStopBefore: false,
+            undoStopAfter: false,
+          },
+        );
+        return;
+      }
+      if (!isHtmlView(e.document.fileName)) return;
+      if (!cfg().get("erb.autoCloseTags", true)) return;
       const before = e.document.getText(
         new vscode.Range(0, 0, at.line, at.character),
       );

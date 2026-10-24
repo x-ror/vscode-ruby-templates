@@ -42,7 +42,12 @@ fs.mkdirSync(path.join(root, "app", "javascript", "controllers"), {
 });
 fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
-  "",
+  'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
+);
+fs.mkdirSync(path.join(root, "app", "mailers"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "app", "mailers", "user_mailer.rb"),
+  'class UserMailer\n  def subject = t("users.index.title")\nend\n',
 );
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
@@ -669,6 +674,21 @@ const check = (label, actual, expected) => {
     refs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
     ["/app/views/users/index.html.erb 1", "/app/views/users/show.html.haml 3"],
   );
+  const keyRefs = await send("textDocument/references", {
+    textDocument: { uri },
+    position: { line: 18, character: 8 },
+    context: { includeDeclaration: true },
+  });
+  check(
+    "references i18n key",
+    keyRefs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
+    [
+      "/app/mailers/user_mailer.rb 1",
+      "/app/views/users/index.html.erb 18",
+      "/config/locales/en.yml 3",
+      "/config/locales/uk.yml 3",
+    ],
+  );
   const streamUri =
     "file://" + path.join(views, "users", "create.turbo_stream.erb");
   await send(
@@ -774,6 +794,73 @@ const check = (label, actual, expected) => {
     'hreflang="$1"',
   ]);
   check("html close completion", await html(3, 4), ["section>"]);
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 7 },
+      contentChanges: [{ text: "<p><%=foo%></p>\n<%= ok %>\n" }],
+    },
+    true,
+  );
+  const spacing = (only) =>
+    send("textDocument/codeAction", {
+      textDocument: { uri: streamUri },
+      range: {
+        start: { line: 0, character: 5 },
+        end: { line: 0, character: 5 },
+      },
+      context: { diagnostics: [], only },
+    });
+  const spacingActions = (r) =>
+    r.result?.map((a) => [
+      a.title,
+      a.kind,
+      a.edit.changes[streamUri].map((e) => e.newText),
+    ]);
+  check(
+    "codeAction ERB tag spacing",
+    spacingActions(await spacing(undefined)),
+    [["Add spaces inside this ERB tag", "refactor.rewrite", ["<%= foo %>"]]],
+  );
+  check(
+    "source action ERB spacing",
+    spacingActions(await spacing(["source"]))?.filter(([, kind]) =>
+      kind.startsWith("source"),
+    ),
+    [["Add spaces inside every ERB tag", "source.erbSpacing", ["<%= foo %>"]]],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 8 },
+      contentChanges: [{ text: "<%= render Bad\n" }],
+    },
+    true,
+  );
+  const components = await req("textDocument/completion", streamUri, 0, 14);
+  check(
+    "component completion",
+    components.result?.map((i) => [i.label, i.textEdit.newText]),
+    [["BadgeComponent", "BadgeComponent.new($1)"]],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 9 },
+      contentChanges: [
+        { text: '<b data-action="hello#">\n<i data-hello-target="">\n' },
+      ],
+    },
+    true,
+  );
+  check(
+    "stimulus action and target completion",
+    [
+      labels(await req("textDocument/completion", streamUri, 0, 22)),
+      labels(await req("textDocument/completion", streamUri, 1, 22)),
+    ],
+    [["greet"], ["name"]],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

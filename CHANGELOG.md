@@ -26,6 +26,13 @@
 - ERB: HTML completion in template text: element names, the closing tag, attribute names.
 - ERB: typing `>` closes the HTML start tag (`rubyTemplates.erb.autoCloseTags`).
 - ERB: `img-missing-alt`, `duplicate-id`, `prefer-image-tag` and `unsafe-output` checks for HTML views.
+- ERB: typing a whole `<%= x %>` no longer leaves the auto-inserted ` %>` behind (`<%= x %> %>`).
+- ERB: code actions to add spaces inside `<%=foo%>` tags, per tag or for the file (`source.erbSpacing`).
+- Completion of ViewComponent classes after `render ` (`Admin::UserCardComponent.new(…)`) from `app/components`.
+- Completion of Stimulus action methods after `hello#` in `data-action` and of `static targets` names in `data-hello-target` / `hello_target:`, read from the controller file.
+- Find All References on a `t("…")` key: the calls with the same full key anywhere in `app/` and `lib/`, and its locale entries.
+- ERB preview and *Show Compiled Ruby Source* use Erubi like Rails (`<%=` escapes, `<%==` is raw), through `rubyTemplates.commands.ruby`; stdlib ERB when the `erubi` gem is missing. **Breaking:** the `rubyTemplates.commands.erb` setting is gone.
+- herb-lint diagnostics on open and save on HTML views (`rubyTemplates.herbLint.enabled`), from the project's `node_modules/.bin` or `PATH`.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

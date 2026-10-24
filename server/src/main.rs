@@ -27,7 +27,7 @@ use dashmap::DashMap;
 use haml_indent::LineRole;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -332,6 +332,14 @@ fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize
     i18n::full_key(path, &line[start..end])
 }
 
+/// The line of `key` in each locale file that defines it.
+fn translation_locations(files: &[(PathBuf, Vec<i18n::Translation>)], key: &str) -> Vec<Location> {
+    let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
+    i18n::lookup(files, key)
+        .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start(t), start(t)))))
+        .collect()
+}
+
 /// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
 fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> bool {
     match lang {
@@ -425,6 +433,42 @@ fn render_filter<'a>(
         render_in_code(lang, roles[i], text, &spans, line_start, r)
             && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + r.start))
     }
+}
+
+/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
+/// `source.fixAll`, which many users run on save for other languages' linters.
+const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.erbSpacing");
+
+/// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file when `only` asks
+/// for source actions: VS Code requests code actions on every cursor move, without `only`.
+fn spacing_actions(uri: &Url, text: &str, range: Range, only: Option<&[CodeActionKind]>) -> Vec<CodeActionOrCommand> {
+    let (Some(from), Some(to)) = (util::position_to_offset(text, range.start), util::position_to_offset(text, range.end)) else {
+        return vec![];
+    };
+    let edits = erb::spacing_edits(text);
+    let to_edit = |(s, e, tag): &(usize, usize, String)| {
+        TextEdit::new(Range::new(util::offset_to_position(text, *s), util::offset_to_position(text, *e)), tag.clone())
+    };
+    let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
+        CodeActionOrCommand::CodeAction(CodeAction {
+            title: title.into(),
+            kind: Some(kind),
+            edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), edits)])), ..Default::default() }),
+            ..Default::default()
+        })
+    };
+    let touching: Vec<TextEdit> = edits.iter().filter(|(s, e, _)| *s <= to && from <= *e).map(to_edit).collect();
+    let mut out = Vec::new();
+    if !touching.is_empty() {
+        out.push(action("Add spaces inside this ERB tag", CodeActionKind::REFACTOR_REWRITE, touching));
+    }
+    let file_wide = only.is_some_and(|kinds| {
+        kinds.iter().any(|k| ERB_SPACING.as_str() == k.as_str() || ERB_SPACING.as_str().starts_with(&format!("{}.", k.as_str())))
+    });
+    if file_wide && !edits.is_empty() {
+        out.push(action("Add spaces inside every ERB tag", ERB_SPACING, edits.iter().map(to_edit).collect()));
+    }
+    out
 }
 
 fn file_location(file: impl AsRef<Path>) -> Option<Location> {
@@ -524,7 +568,7 @@ impl LanguageServer for Backend {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
-                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                    code_action_kinds: Some(vec![CodeActionKind::QUICKFIX, CodeActionKind::REFACTOR_REWRITE, ERB_SPACING]),
                     ..Default::default()
                 })),
                 workspace: Some(WorkspaceServerCapabilities {
@@ -605,15 +649,7 @@ impl LanguageServer for Backend {
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
         if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
-            let files = self.locale_files(&path);
-            let locs: Vec<Location> = i18n::lookup(&files, &key)
-                .filter_map(|(file, t)| {
-                    Some(Location::new(
-                        Url::from_file_path(file).ok()?,
-                        Range::new(Position::new(t.line as u32, 0), Position::new(t.line as u32, 0)),
-                    ))
-                })
-                .collect();
+            let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
@@ -724,31 +760,34 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let mut actions: Vec<CodeActionOrCommand> = Vec::new();
+        if doc.lang == TemplateLang::Erb {
+            actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
+        }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
-        let actions = unresolved
-            .filter_map(|d| {
-                let (_, line, start) = util::line_at(&doc.text, d.range.start);
-                let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
-                let target = partials::new_template_path(&path, &r)?;
-                let create = CreateFile {
-                    uri: Url::from_file_path(&target).ok()?,
-                    options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
-                    annotation_id: None,
-                };
-                let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
-                Some(CodeActionOrCommand::CodeAction(CodeAction {
-                    title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
-                    kind: Some(CodeActionKind::QUICKFIX),
-                    diagnostics: Some(vec![d]),
-                    edit: Some(WorkspaceEdit {
-                        document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
-                        ..Default::default()
-                    }),
-                    is_preferred: Some(true),
+        let quick_fixes = unresolved.filter_map(|d| {
+            let (_, line, start) = util::line_at(&doc.text, d.range.start);
+            let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
+            let target = partials::new_template_path(&path, &r)?;
+            let create = CreateFile {
+                uri: Url::from_file_path(&target).ok()?,
+                options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
+                annotation_id: None,
+            };
+            let shown = target.strip_prefix(partials::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d]),
+                edit: Some(WorkspaceEdit {
+                    document_changes: Some(DocumentChanges::Operations(vec![DocumentChangeOperation::Op(ResourceOp::Create(create))])),
                     ..Default::default()
-                }))
-            })
-            .collect();
+                }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }))
+        });
+        actions.extend(quick_fixes);
         Ok(Some(actions))
     }
 
@@ -757,6 +796,20 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let extra_engines = self.options().extra_engines.clone();
+        let i18n_key = {
+            let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+            let (line_start, line, col) = util::line_at(&doc.text, pos);
+            i18n_key_at(&doc, &path, line_start, line, col, &extra_engines)
+        };
+        if let Some((key, app)) = i18n_key.zip(partials::app_root(&path)) {
+            let sources = partial_rename::i18n_sources(&app, &self.open_texts());
+            let mut locations = partial_rename::i18n_references(&key, &sources, &extra_engines);
+            if p.context.include_declaration {
+                locations.extend(translation_locations(&self.locale_files(&path), &key));
+            }
+            return Ok(Some(locations));
+        }
         let Some(views) = partials::views_root(&path) else { return Ok(None) };
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
@@ -772,7 +825,7 @@ impl LanguageServer for Backend {
             }
         };
         let sources = partial_rename::sources(&views, &self.open_texts());
-        let mut locations = partial_rename::references(&files, &sources, &self.options().extra_engines);
+        let mut locations = partial_rename::references(&files, &sources, &extra_engines);
         if p.context.include_declaration {
             locations.extend(files.iter().filter_map(file_location));
         }
@@ -875,10 +928,10 @@ impl LanguageServer for Backend {
             let range = util::span_range(pos.line as usize, line, start, end);
             return items(i18n_completions(&self.locale_files(path), path, prefix, range));
         }
-        if let Some((start, typed)) = stimulus::completion_prefix(line, col) {
+        if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, col);
-            return items(stimulus_completions(path, typed, range));
+            return items(stimulus_completions(path, typed, slot, range));
         }
         // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
         let roles = line_roles(doc.lang, &doc.text);
@@ -899,6 +952,11 @@ impl LanguageServer for Backend {
         }
         if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
             return items(found);
+        }
+        if let Some(typed) = component_prefix(before).filter(|_| code_here()) {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let range = util::span_range(pos.line as usize, line, col - typed.len(), col);
+            return items(component_completions(path, typed, range));
         }
 
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
@@ -967,14 +1025,44 @@ fn i18n_completions(locales: &[(PathBuf, Vec<i18n::Translation>)], path: &Path, 
         .collect()
 }
 
-/// Stimulus controller identifiers for a `data-controller` / `data-action` value; each replaces `range`.
-fn stimulus_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
-    stimulus::controllers(path)
+/// Stimulus controllers, or a controller's action methods or targets, for a `data-*` value; each replaces `range`.
+fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: Range) -> Vec<CompletionItem> {
+    let source = |id: &str| stimulus::resolve(path, id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+    let (names, kind, detail) = match slot {
+        stimulus::Slot::Controller => (stimulus::controllers(path), CompletionItemKind::CLASS, "Stimulus controller".to_string()),
+        stimulus::Slot::Method(id) => (stimulus::methods(&source(&id)), CompletionItemKind::METHOD, format!("{id} action")),
+        stimulus::Slot::Target(id) => (stimulus::targets(&source(&id)), CompletionItemKind::FIELD, format!("{id} target")),
+    };
+    names
         .into_iter()
-        .filter(|id| id.starts_with(typed))
-        .map(|id| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
-            ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
+        .filter(|name| name.starts_with(typed))
+        .map(|name| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, name.clone()))),
+            ..util::completion_item(name, kind, detail.clone())
+        })
+        .collect()
+}
+
+/// The component constant being typed after `render ` / `render(`: `Us`, `Admin::Us`.
+fn component_prefix(before: &str) -> Option<&str> {
+    static OPEN: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\brender\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*)$").unwrap());
+    Some(OPEN.captures(before)?.get(1)?.as_str())
+}
+
+/// ViewComponent classes matching `typed`, inserted as `Name.new(…)`.
+fn component_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+    partials::component_classes(path)
+        .into_iter()
+        .filter(|(name, _)| name.starts_with(typed) || name.rsplit("::").next().is_some_and(|last| last.starts_with(typed)))
+        .map(|(name, file)| CompletionItem {
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, format!("{name}.new($1)")))),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            filter_text: Some(name.clone()),
+            ..util::completion_item(
+                name,
+                CompletionItemKind::CLASS,
+                file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+            )
         })
         .collect()
 }

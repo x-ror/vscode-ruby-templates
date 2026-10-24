@@ -1,11 +1,12 @@
 //! `workspace/willRenameFiles`: rewrite literal `render` references to partials that are renamed or moved,
-//! one at a time or with their folder. `textDocument/references`: the same references to given files.
+//! one at a time or with their folder. `textDocument/references`: the same references to given files, and the
+//! `t("…")` calls of an i18n key.
 
 use crate::partials::{
-    first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
+    app_root, first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
 };
 use crate::util::{lines_with_offsets, offset_to_position};
-use crate::{render_filter, ruby, slim_outline, TemplateLang};
+use crate::{i18n, render_filter, ruby, slim_outline, TemplateLang};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -48,10 +49,6 @@ fn new_ref_name(written: &str, source: &Path, target: &Path, renames: &[(PathBuf
     qualified.rsplit('/').next().map(str::to_string)
 }
 
-fn app_views(path: &Path) -> Option<PathBuf> {
-    path.ancestors().find(|a| a.file_name().is_some_and(|n| n == "app")).map(|app| app.join("views"))
-}
-
 /// The references `find` sees on each line that are inside code, as (byte start, byte end, reference).
 fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<RenderRef>) -> Vec<(usize, usize, RenderRef)> {
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
@@ -84,7 +81,7 @@ fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBu
     }
     let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
-    match app_views(&source.path) {
+    match app_root(&source.path).map(|app| app.join("views")) {
         Some(views) if partial && r.name.contains('/') => resolve(&views.join("_"), &as_partial),
         _ => vec![],
     }
@@ -142,6 +139,37 @@ pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String
     out
 }
 
+/// The `t("…")` calls in code whose full key is `key`; lazy `.x` keys count only in views, where they have a scope.
+pub fn i18n_references(key: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    let mut out = Vec::new();
+    for source in sources {
+        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        for (start, end, _) in code_refs(source, extra_engines, i18n_refs)
+            .into_iter()
+            .filter(|(_, _, r)| i18n::full_key(&source.path, &r.name).is_some_and(|full| full == key))
+        {
+            let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+            out.push(Location::new(uri.clone(), range));
+        }
+    }
+    out
+}
+
+/// i18n calls as references, so `code_refs` keeps those in code.
+fn i18n_refs(line: &str) -> Vec<RenderRef> {
+    i18n::key_calls(line)
+        .into_iter()
+        .map(|(call, start, end)| RenderRef {
+            kind: RenderKind::Partial,
+            name: line[start..end].to_string(),
+            start,
+            end,
+            call,
+            from_layout: false,
+        })
+        .collect()
+}
+
 /// Folders outside app/views whose code renders partials.
 const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 
@@ -149,8 +177,17 @@ const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 /// `open` documents wins over the disk copy, which may lack unsaved edits.
 pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
     let code_dirs = views.parent().into_iter().flat_map(|app| CODE_DIRS.iter().map(move |d| app.join(d)));
-    std::iter::once(views.to_path_buf())
-        .chain(code_dirs)
+    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open)
+}
+
+/// Templates and Ruby files anywhere in `app` and the app's `lib`: translations are looked up from models,
+/// mailers and jobs too.
+pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open)
+}
+
+fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+    roots
         .flat_map(|root| WalkDir::new(root).into_iter().flatten())
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
@@ -343,6 +380,34 @@ mod tests {
             [
                 ("app/controllers/users_controller.rb".into(), 0, 17, "users/tile".into()),
                 ("app/helpers/cards_helper.rb".into(), 0, 8, "users/tile".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn i18n_references_by_full_key() {
+        let t = Tree::new("i18n", &[]);
+        let sources = [
+            t.source(
+                "app/views/users/index.html.erb",
+                ERB,
+                "<%= t(\".title\") %>\n<p>t(\"users.index.title\")</p>\n<%= t \"users.index.title\" %>\n",
+            ),
+            t.source("app/views/users/show.html.slim", SLIM, "h1 = t(\".title\")\n= t(\"users.index.title\")\n"),
+            t.source("app/helpers/users_helper.rb", None, "def x = I18n.t(\"users.index.title\") + t(\".title\")\n"),
+        ];
+        let mut got: Vec<(String, u32, u32)> = i18n_references("users.index.title", &sources, &[])
+            .into_iter()
+            .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("app/helpers/users_helper.rb".into(), 0, 16),
+                ("app/views/users/index.html.erb".into(), 0, 7),
+                ("app/views/users/index.html.erb".into(), 2, 7),
+                ("app/views/users/show.html.slim".into(), 1, 5),
             ]
         );
     }

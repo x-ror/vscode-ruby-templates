@@ -21,7 +21,7 @@ Legend as in `ERB_TODO.md`.
 
 - Erubis-only syntax (`<%=== %>` debug-print, custom `pattern:` like `[% %]`) is not supported by `syntaxes/erb.tmLanguage.json` or tree-sitter-embedded-template. Default: don't support it (Erubis is unmaintained since 2011; Erubi replaced it in Rails 5.1).
 - Erubi's `CaptureBlockEngine`/`CaptureEndEngine` add `<%|` tags; opt-in engines, same default: skip.
-- Preview renders with stdlib `erb` (`src/extension.js` `renderToHtml`), which rejects `<%==`; already tracked as "Preview/compile with Erubi" in `ERB_TODO.md` section 6.
+- Preview and compile run Erubi as Rails does (`src/erbEngine.js`), so `<%==` works; stdlib ERB only when the gem is missing.
 - Rails' ActionView only registers the `:erb` handler, so `.erubi` files are mostly Roda/Tilt/Sinatra views outside `app/views`; Rails partial navigation won't apply there (`partials::views_root` returns `None`). Roda's `render("x")` → `views/x.erubi` lookup: out of scope until someone asks.
 
 ## Size

@@ -305,8 +305,13 @@ pub fn views_root(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The Rails `app` folder of a file in app/views, app/components or any other app/ folder. Views come first:
+/// `app/views/app/x.html.erb` is in a views subfolder named `app`.
 pub fn app_root(file: &Path) -> Option<PathBuf> {
-    views_root(file).and_then(|v| v.parent().map(|p| p.to_path_buf()))
+    match views_root(file) {
+        Some(views) => views.parent().map(Path::to_path_buf),
+        None => file.ancestors().skip(1).find(|dir| dir.file_name().is_some_and(|n| n == "app")).map(Path::to_path_buf),
+    }
 }
 
 // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
@@ -395,6 +400,36 @@ pub fn resolve_component(current: &Path, name: &str) -> Vec<PathBuf> {
         out.extend(matching_templates(dir, stem).into_iter().filter(|p| p.extension().map(|e| e != "rb").unwrap_or(true)));
     }
     out
+}
+
+/// ViewComponent classes under app/components, by the constant `render` takes (`admin/user_card_component.rb` →
+/// `Admin::UserCardComponent`), with their file.
+pub fn component_classes(current: &Path) -> Vec<(String, PathBuf)> {
+    let Some(app) = app_root(current) else { return vec![] };
+    let dir = app.join("components");
+    let mut out: Vec<(String, PathBuf)> = WalkDir::new(&dir)
+        .into_iter()
+        .flatten()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let name = rel.strip_suffix("_component.rb")?;
+            let constant: Vec<String> = format!("{name}_component").split('/').map(camel_case).collect();
+            Some((constant.join("::"), e.into_path()))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// `user_card` → `UserCard`.
+fn camel_case(s: &str) -> String {
+    s.split('_')
+        .flat_map(|w| {
+            let mut chars = w.chars();
+            chars.next().map(|first| first.to_uppercase().chain(chars).collect::<String>())
+        })
+        .collect()
 }
 
 pub fn snake_case(s: &str) -> String {
@@ -866,6 +901,29 @@ mod tests {
         ] {
             assert_eq!(passed(skip), None, "{skip}");
         }
+    }
+
+    #[test]
+    fn component_classes_by_constant() {
+        let root = std::env::temp_dir().join(format!("rt-components-{}", std::process::id()));
+        for f in [
+            "app/components/admin/user_card_component.rb",
+            "app/components/button_component.rb",
+            "app/components/button_component.html.erb",
+            "app/components/helpers.rb",
+            "app/components/über_component.rb",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        std::fs::create_dir_all(root.join("app/views/home")).unwrap();
+        let names: Vec<String> = component_classes(&root.join("app/views/home/index.html.erb")).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["Admin::UserCardComponent", "ButtonComponent", "ÜberComponent"]);
+        let from_component: Vec<String> =
+            component_classes(&root.join("app/components/button_component.html.erb")).into_iter().map(|(n, _)| n).collect();
+        assert_eq!(from_component, names);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

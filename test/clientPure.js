@@ -4,7 +4,10 @@ import { windowsShellCommand } from "../src/shell.js";
 import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
-import { tagToClose, isHtmlView } from "../src/autoClose.js";
+import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
+import { erbRubyArgs } from "../src/erbEngine.js";
+import { herbLintReport } from "../src/herbLint.js";
+import { spawnSync } from "node:child_process";
 
 // convertedFileName
 const cases = [
@@ -193,3 +196,104 @@ for (const [file, html] of [
 ]) {
   assert.strictEqual(isHtmlView(file), html, file);
 }
+
+// doubledErbClose: what auto-closing left after a tag typed in full
+for (const [before, after, length] of [
+  ["<%= x %>", " %>", 3],
+  ["<%=x%>", " %>", 3],
+  ["<p><% if a %>", " %></p>", 3],
+  ["<%= x %>", "%>", 2],
+  ["<%= x %>", "</p>", 0],
+  ["50%>", " %>", 0],
+  ["<%%>", " %>", 0],
+  ["<%= a %%>", " %>", 0],
+]) {
+  assert.strictEqual(
+    doubledErbClose(before, after),
+    length,
+    `${before}|${after}`,
+  );
+}
+
+// erbRubyArgs: Rails semantics through Erubi; skipped without `ruby -rerubi`.
+if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
+  const erb = (mode, input) =>
+    spawnSync("ruby", erbRubyArgs(mode), { input, encoding: "utf8" });
+  const rendered = erb(
+    "render",
+    '<p><%= "<b>" %></p>\n<%== "<i>" %>\n<%- if true -%>\nyes\n<%- end -%>\n',
+  );
+  assert.strictEqual(rendered.stdout, "<p>&lt;b&gt;</p>\n<i>\nyes\n");
+  assert.match(erb("compile", "<%= x %>").stdout, /__erubi\.h\(\( x \)\)/);
+  assert.notStrictEqual(erb("render", "<% if %>").status, 0);
+  const ascii = spawnSync("ruby", erbRubyArgs("render"), {
+    input: 'é <%= "ü" %><%= defined?(src).inspect %>',
+    encoding: "utf8",
+    env: { ...process.env, LANG: "C", LC_ALL: "C" },
+  });
+  assert.strictEqual(ascii.stdout, "é ünil");
+}
+
+// herbLintReport
+const herbOffense = (start, end, extra = {}) => ({
+  filename: "app/views/a.html.erb",
+  message: "m",
+  code: "html-img-require-alt",
+  severity: "warning",
+  location: { start, end },
+  ...extra,
+});
+assert.deepStrictEqual(
+  herbLintReport(
+    JSON.stringify({
+      offenses: [
+        herbOffense({ line: 1, column: 1 }, { line: 1, column: 4 }),
+        herbOffense({ line: 3, column: 5 }, { line: 3, column: 5 }),
+        herbOffense({ line: 2, column: 7 }, { line: 4, column: 0 }),
+      ],
+      completed: true,
+    }),
+  ),
+  {
+    offenses: [
+      {
+        line: 0,
+        column: 1,
+        endLine: 0,
+        endColumn: 4,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+      {
+        line: 2,
+        column: 5,
+        endLine: 2,
+        endColumn: 6,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+      {
+        line: 1,
+        column: 7,
+        endLine: 3,
+        endColumn: 0,
+        code: "html-img-require-alt",
+        message: "m",
+        severity: "warning",
+      },
+    ],
+    error: null,
+  },
+);
+assert.deepStrictEqual(
+  herbLintReport(
+    JSON.stringify({
+      offenses: [],
+      completed: false,
+      message: "✗ No files found matching pattern: x.erb",
+    }),
+  ),
+  { offenses: [], error: "✗ No files found matching pattern: x.erb" },
+);
