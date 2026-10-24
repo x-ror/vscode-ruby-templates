@@ -62,6 +62,7 @@ Run the ones that cover what you changed; all of them before a release.
 - LSP behaviour through the real server: a case in `test/e2e.js`.
 - Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).
 - JS helpers: the matching `test/*.js` run by `test:unit`/`test:slim`/`test:snippets`, with `assert`.
+- Client behaviour that needs VS Code (commands, providers, settings): a check in `test/vscode/suite.js`.
 - Broken-input diagnostics: `test/broken/*`, asserted from Rust via `include_str!` (`broken_fixture`); a fixture nothing reads isn't a test.
 
 ## Commits
