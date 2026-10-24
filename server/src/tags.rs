@@ -2,10 +2,17 @@
 
 use crate::erb;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{offset_to_position, warning};
+use crate::util::{coded, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
+
+/// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
+pub mod code {
+    pub const UNEXPECTED_CLOSE_TAG: &str = "unexpected-close-tag";
+    pub const MISMATCHED_CLOSE_TAG: &str = "mismatched-close-tag";
+    pub const UNCLOSED_ELEMENT: &str = "unclosed-element";
+}
 
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
@@ -210,14 +217,17 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         if closing {
             match stack.last() {
                 None if partial => {}
-                None => out.push(warning(range(start, end), format!("Unexpected closing tag `</{name}>`"))),
+                None => {
+                    out.push(coded(warning(range(start, end), format!("Unexpected closing tag `</{name}>`")), code::UNEXPECTED_CLOSE_TAG))
+                }
                 Some(top) if top.name == name => {
                     elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
                     stack.pop();
                 }
                 Some(top) => {
                     let line = offset_to_position(text, top.start).line + 1;
-                    out.push(warning(range(start, end), format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name)));
+                    let message = format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name);
+                    out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
                     // ponytail: first mismatch only; recovery guesses would cascade into noise.
                     return;
                 }
@@ -243,7 +253,8 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         }
     }
     if blocks.is_empty() && !partial {
-        out.extend(stack.iter().map(|t| warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name))));
+        let unclosed = |t: &Tag| coded(warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name)), code::UNCLOSED_ELEMENT);
+        out.extend(stack.iter().map(unclosed));
     }
 }
 

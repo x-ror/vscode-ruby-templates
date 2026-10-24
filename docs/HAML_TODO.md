@@ -126,7 +126,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
 - [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output)
 - [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
-- [ ] Settings to enable/disable each built-in check: blocked on plumbing. The server ignores `initializationOptions` and has no `workspace/didChangeConfiguration` handler (`server/src/main.rs` `initialize`), and the client passes no options (`src/client.js`); that plumbing comes first
+- [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/main.rs` `Options`)
 
 ## 10. Completion
 

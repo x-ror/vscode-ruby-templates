@@ -125,7 +125,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] `raw` / `html_safe` / `<%==` security hints (better-html / erb_lint `SafeErbTester` rules)
 - [ ] erb_lint integration (run `erb_lint --format json` on save, map results to diagnostics)
 - [ ] Herb (`herb` / `@herb-tools/linter`) integration as an alternative linter
-- [ ] Settings to enable/disable each built-in check and pick external linters
+- [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
+- [ ] Settings to pick external linters
 - [x] Incremental text sync instead of `TextDocumentSyncKind::FULL` for large files (`server/src/util.rs` `apply_change`)
 - [x] Debounce diagnostics on change (`server/src/main.rs` `publish_later`, 200 ms)
 

@@ -74,24 +74,25 @@ struct Doc {
 
 type LocaleFiles = Arc<Vec<(PathBuf, Vec<i18n::Translation>)>>;
 
-/// `initializationOptions.slim`, from the `rubyTemplates.slim.*` settings.
+/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml}.*` settings.
 #[derive(Default, Debug, PartialEq)]
-struct SlimOptions {
+struct Options {
     extra_engines: Vec<String>,
-    disabled_diagnostics: Vec<String>,
+    disabled_slim: Vec<String>,
+    disabled_erb: Vec<String>,
+    disabled_haml: Vec<String>,
 }
 
-impl SlimOptions {
+impl Options {
     /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
     fn from_init(init: Option<&serde_json::Value>) -> (Self, Vec<String>) {
-        let slim = init.and_then(|v| v.get("slim"));
         let mut ignored = Vec::new();
-        let mut strings = |name: &str| -> Vec<String> {
-            let Some(value) = slim.and_then(|s| s.get(name)) else {
+        let mut strings = |section: &str, name: &str| -> Vec<String> {
+            let Some(value) = init.and_then(|v| v.get(section)?.get(name)) else {
                 return vec![];
             };
             let Some(items) = value.as_array() else {
-                ignored.push(format!("slim.{name}: expected an array, got {value}"));
+                ignored.push(format!("{section}.{name}: expected an array, got {value}"));
                 return vec![];
             };
             items
@@ -99,14 +100,29 @@ impl SlimOptions {
                 .filter_map(|item| {
                     let s = item.as_str().map(String::from);
                     if s.is_none() {
-                        ignored.push(format!("slim.{name}: expected a string, got {item}"));
+                        ignored.push(format!("{section}.{name}: expected a string, got {item}"));
                     }
                     s
                 })
                 .collect()
         };
-        let options = Self { extra_engines: strings("extraEngines"), disabled_diagnostics: strings("disabledDiagnostics") };
+        let options = Self {
+            extra_engines: strings("slim", "extraEngines"),
+            disabled_slim: strings("slim", "disabledDiagnostics"),
+            disabled_erb: strings("erb", "disabledDiagnostics"),
+            disabled_haml: strings("haml", "disabledDiagnostics"),
+        };
         (options, ignored)
+    }
+
+    /// Diagnostic codes turned off for `lang`; Skim shares Slim's setting.
+    fn disabled(&self, lang: TemplateLang) -> &[String] {
+        match lang {
+            TemplateLang::Slim | TemplateLang::Skim => &self.disabled_slim,
+            TemplateLang::Erb => &self.disabled_erb,
+            TemplateLang::Haml => &self.disabled_haml,
+            TemplateLang::Ruby => &[],
+        }
     }
 }
 
@@ -118,7 +134,7 @@ struct Backend {
     /// Parsed locale files per config/locales directory.
     locales: DashMap<PathBuf, LocaleFiles>,
     // Set once in `initialize`; the client restarts the server when these settings change.
-    slim: Arc<OnceLock<SlimOptions>>,
+    options: Arc<OnceLock<Options>>,
     /// Formatting is registered for Slim/Skim only, and only when the client supports dynamic registration:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
@@ -126,15 +142,15 @@ struct Backend {
 
 const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
 
-fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
+fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
         // Thor templates (`*.haml.tt`) interleave column-0 ERB with the Haml, so its structure can't be checked.
         TemplateLang::Haml if uri.path().to_ascii_lowercase().ends_with(".tt") => vec![],
         TemplateLang::Haml => haml_indent::diagnostics(&doc.text),
-        TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &slim.extra_engines),
+        TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &options.extra_engines),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
-        TemplateLang::Skim => slim_indent::diagnostics(&doc.text, &slim.extra_engines)
+        TemplateLang::Skim => slim_indent::diagnostics(&doc.text, &options.extra_engines)
             .into_iter()
             .filter(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim_indent::code::RUBY.contains(&c.as_str())))
             .collect(),
@@ -150,13 +166,12 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
         out.extend(tags::diagnostics(&doc.text, partial));
     }
     if let Ok(path) = uri.to_file_path() {
-        let in_code = render_filter(doc.lang, &doc.text, &slim.extra_engines);
+        let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
         out.extend(unresolved_renders(&path, &doc.text, &in_code));
         out.extend(strict_locals_mismatches(&path, &doc.text, &in_code));
     }
-    if matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
-        out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if slim.disabled_diagnostics.contains(c)));
-    }
+    let disabled = options.disabled(doc.lang);
+    out.retain(|d| !matches!(&d.code, Some(NumberOrString::String(c)) if disabled.contains(c)));
     out
 }
 
@@ -194,6 +209,10 @@ fn is_html_format(format: &str) -> bool {
     format == "html" || format.starts_with("html+") || format == "turbo_stream"
 }
 
+/// Diagnostic codes every language shares.
+const UNRESOLVED_RENDER: &str = "unresolved-render";
+const STRICT_LOCALS: &str = "strict-locals";
+
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
 fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
@@ -205,7 +224,7 @@ fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &p
                 continue;
             }
             let message = format!("{} `{}` not found", kind_name(r.kind), r.name);
-            out.push(util::coded(util::warning(range, message), "unresolved-render"));
+            out.push(util::coded(util::warning(range, message), UNRESOLVED_RENDER));
         }
     }
     out
@@ -231,10 +250,12 @@ fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usi
             let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
             let range = util::line_range(text, i, r.start, r.end);
             if !missing.is_empty() {
-                out.push(util::warning(range, format!("Partial `{}` requires locals: {}", r.name, code_list(&missing))));
+                let message = format!("Partial `{}` requires locals: {}", r.name, code_list(&missing));
+                out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
             }
             if !unknown.is_empty() {
-                out.push(util::warning(range, format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown))));
+                let message = format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown));
+                out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
             }
         }
     }
@@ -385,12 +406,12 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
 }
 
 impl Backend {
-    fn slim_options(&self) -> &SlimOptions {
-        self.slim.get_or_init(SlimOptions::default)
+    fn options(&self) -> &Options {
+        self.options.get_or_init(Options::default)
     }
 
     async fn publish(&self, uri: Url) {
-        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc, self.slim_options()), doc.version)) else {
+        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc, self.options()), doc.version)) else {
             return;
         };
         self.client.publish_diagnostics(uri, diags, Some(version)).await;
@@ -398,11 +419,13 @@ impl Backend {
 
     /// Publish after `DIAGNOSTICS_DEBOUNCE`, unless a newer change to the document supersedes this one.
     fn publish_later(&self, uri: Url, version: i32) {
-        let (client, docs, slim) = (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.slim));
+        let (client, docs, options) = (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.options));
         tokio::spawn(async move {
             tokio::time::sleep(DIAGNOSTICS_DEBOUNCE).await;
-            let slim = slim.get_or_init(SlimOptions::default);
-            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc, slim)) else { return };
+            let options = options.get_or_init(Options::default);
+            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc, options)) else {
+                return;
+            };
             client.publish_diagnostics(uri, diags, Some(version)).await;
         });
     }
@@ -428,12 +451,12 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let (slim, ignored) = SlimOptions::from_init(params.initialization_options.as_ref());
+        let (options, ignored) = Options::from_init(params.initialization_options.as_ref());
         for message in ignored {
             let message = format!("ignoring initializationOptions.{message}");
             self.client.log_message(MessageType::WARNING, message).await;
         }
-        let _ = self.slim.set(slim);
+        let _ = self.options.set(options);
         let dynamic_formatting =
             params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
         let _ = self.dynamic_formatting.set(dynamic_formatting);
@@ -582,7 +605,7 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position_params.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         if doc.lang == TemplateLang::Slim {
-            let parsed = slim_parser::parse(&doc.text, &self.slim_options().extra_engines);
+            let parsed = slim_parser::parse(&doc.text, &self.options().extra_engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
             if let Some(value) = marker {
                 return Ok(Some(Hover {
@@ -629,9 +652,7 @@ impl LanguageServer for Backend {
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         match doc.lang {
             TemplateLang::Haml => Ok(Some(outline::haml_folding_ranges(&doc.text))),
-            TemplateLang::Slim | TemplateLang::Skim => {
-                Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines)))
-            }
+            TemplateLang::Slim | TemplateLang::Skim => Ok(Some(slim_outline::folding_ranges(&doc.text, &self.options().extra_engines))),
             TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
             TemplateLang::Erb | TemplateLang::Ruby => Ok(None),
         }
@@ -643,7 +664,7 @@ impl LanguageServer for Backend {
         let symbols = match doc.lang {
             TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
             TemplateLang::Haml => outline::haml_document_symbols(&doc.text),
-            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.slim_options().extra_engines),
+            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.options().extra_engines),
             TemplateLang::Ruby => return Ok(None),
         };
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
@@ -661,7 +682,7 @@ impl LanguageServer for Backend {
         let mut changes = HashMap::new();
         for views in roots {
             let sources = partial_rename::sources(&views, &open);
-            changes.extend(partial_rename::render_edits(&renames, &sources, &self.slim_options().extra_engines));
+            changes.extend(partial_rename::render_edits(&renames, &sources, &self.options().extra_engines));
         }
         Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
@@ -675,7 +696,7 @@ impl LanguageServer for Backend {
         if !p.options.insert_spaces {
             return Ok(None);
         }
-        let engines = &self.slim_options().extra_engines;
+        let engines = &self.options().extra_engines;
         let Some(formatted) = slim_format::format(&doc.text, p.options.tab_size as usize, engines) else { return Ok(None) };
         if formatted == doc.text {
             return Ok(Some(vec![]));
@@ -756,7 +777,7 @@ impl LanguageServer for Backend {
         // 5. Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
-                let engines = &self.slim_options().extra_engines;
+                let engines = &self.options().extra_engines;
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
                 if let Some(items) = slim_complete::items(&doc.text, offset, &parsed, engines) {
@@ -923,7 +944,7 @@ async fn main() {
                 failed = true;
                 continue;
             };
-            let diags = diagnostics(&uri, &Doc { lang, text, version: 0 }, &SlimOptions::default());
+            let diags = diagnostics(&uri, &Doc { lang, text, version: 0 }, &Options::default());
             for d in &diags {
                 let sev = match d.severity {
                     Some(DiagnosticSeverity::ERROR) => "error",
@@ -945,7 +966,7 @@ async fn main() {
         docs: Arc::default(),
         templates: DashMap::new(),
         locales: DashMap::new(),
-        slim: Arc::default(),
+        options: Arc::default(),
         dynamic_formatting: OnceLock::new(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
@@ -954,6 +975,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     #[test]
     fn watched_file_events_invalidate_caches() {
         let views = Path::new("/r/app/views");
@@ -1016,7 +1038,7 @@ mod tests {
         let text = "img\n  | x\n";
         let has_void = |path: &str| {
             let uri = Url::parse(path).unwrap();
-            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &SlimOptions::default())
+            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), version: 0 }, &Options::default())
                 .iter()
                 .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
         };
@@ -1038,15 +1060,73 @@ mod tests {
     }
 
     #[test]
-    fn slim_options_keep_valid_fields() {
+    fn options_keep_valid_fields() {
         let init = serde_json::json!({
-            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] }
+            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] },
+            "erb": { "disabledDiagnostics": ["unclosed-element"] },
+            "haml": { "disabledDiagnostics": "illegal-nesting" }
         });
-        let (options, ignored) = SlimOptions::from_init(Some(&init));
-        let expected = SlimOptions { extra_engines: vec![], disabled_diagnostics: vec!["bad-dedent".into()] };
+        let (options, ignored) = Options::from_init(Some(&init));
+        let expected =
+            Options { disabled_slim: vec!["bad-dedent".into()], disabled_erb: vec!["unclosed-element".into()], ..Options::default() };
         assert_eq!(options, expected);
-        assert_eq!(ignored.len(), 2, "{ignored:?}");
-        assert_eq!(SlimOptions::from_init(None), (SlimOptions::default(), vec![]));
+        assert_eq!(ignored.len(), 3, "{ignored:?}");
+        assert_eq!(Options::from_init(None), (Options::default(), vec![]));
+    }
+
+    #[test]
+    fn disabled_diagnostics_per_language() {
+        let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
+            let uri = Url::parse(path).unwrap();
+            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, options)
+                .into_iter()
+                .map(|d| match d.code {
+                    Some(NumberOrString::String(c)) => c,
+                    _ => panic!("uncoded diagnostic: {}", d.message),
+                })
+                .collect()
+        };
+
+        let haml = "%p hi\n  %b x\n- end\n:nope\n%br/ x\n";
+        let all = Options::default();
+        let erb_path = "file:///v/show.html.erb";
+        // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.
+        let erb_cases = [("<% end %>\n", erb::code::STRAY_END), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
+        for (text, code) in erb_cases {
+            assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
+        }
+        let options = Options {
+            disabled_erb: vec![erb::code::STRAY_END.into(), tags::code::UNCLOSED_ELEMENT.into()],
+            disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
+            ..Options::default()
+        };
+        assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
+        let haml_path = "file:///v/show.html.haml";
+        assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
+        let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);
+        assert!(!haml_codes.contains(&haml_indent::code::ILLEGAL_NESTING.to_string()), "{haml_codes:?}");
+        assert!(!haml_codes.is_empty());
+        // Every check carries a code, or the setting can't turn it off.
+        assert!(!codes(erb_path, TemplateLang::Erb, include_str!("../../test/broken/bad.html.erb"), &all).is_empty());
+        assert!(!codes(haml_path, TemplateLang::Haml, include_str!("../../test/broken/bad.html.haml"), &all).is_empty());
+    }
+
+    #[test]
+    fn settings_list_every_diagnostic_code() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
+        let setting = |lang: &str| -> BTreeSet<String> {
+            let key = format!("rubyTemplates.{lang}.disabledDiagnostics");
+            let items = &manifest["contributes"]["configuration"]["properties"][&key]["items"]["enum"];
+            items.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+        };
+        let declared = |sources: &[&str]| -> BTreeSet<String> {
+            let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z-]+)""#).unwrap();
+            let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
+            sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
+        };
+        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs")]));
+        assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
+        assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
     }
 
     #[test]
@@ -1055,7 +1135,7 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
         let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n- end = start + 10\n  p\n    a\n   span\n";
         let codes = |lang| -> Vec<String> {
-            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &SlimOptions::default())
+            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &Options::default())
                 .into_iter()
                 .filter_map(|d| match d.code {
                     Some(NumberOrString::String(c)) => Some(c),
@@ -1170,8 +1250,8 @@ mod tests {
         let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
         let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), version: 0 };
         let uri = |name: &str| Url::parse(&format!("file:///app/lib/templates/haml/scaffold/{name}")).unwrap();
-        assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &SlimOptions::default()).is_empty());
-        assert!(!diagnostics(&uri("index.html.haml"), &doc(), &SlimOptions::default()).is_empty());
+        assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &Options::default()).is_empty());
+        assert!(!diagnostics(&uri("index.html.haml"), &doc(), &Options::default()).is_empty());
     }
 
     #[test]

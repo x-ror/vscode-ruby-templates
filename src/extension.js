@@ -32,6 +32,8 @@ const SERVER_SETTINGS = [
   "rubyTemplates.server",
   "rubyTemplates.slim.extraEngines",
   "rubyTemplates.slim.disabledDiagnostics",
+  "rubyTemplates.erb.disabledDiagnostics",
+  "rubyTemplates.haml.disabledDiagnostics",
 ];
 
 /** @type {vscode.WebviewPanel | undefined} */

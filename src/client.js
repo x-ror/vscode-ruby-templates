@@ -79,6 +79,10 @@ async function doStart(context, output) {
           extraEngines: config.get("slim.extraEngines", []),
           disabledDiagnostics: config.get("slim.disabledDiagnostics", []),
         },
+        erb: { disabledDiagnostics: config.get("erb.disabledDiagnostics", []) },
+        haml: {
+          disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
+        },
       },
       synchronize: { fileEvents: watchers },
     },

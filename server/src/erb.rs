@@ -1,7 +1,7 @@
 //! ERB diagnostics via tree-sitter-embedded-template + Ruby block balancing.
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
-use crate::util::{error, offset_to_position, warning};
+use crate::util::{coded, error, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
@@ -12,6 +12,17 @@ use tree_sitter::{Node, Parser, Tree};
 static OUTPUT_BLOCK_HELPER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(form_with|form_for|form_tag|fields_for|fields|link_to|button_to|button_tag|label_tag|content_tag|turbo_frame_tag|tag\.\w+)(?:\(|\s+[^=\s])").unwrap()
 });
+
+/// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
+pub mod code {
+    pub const UNCLOSED_TAG: &str = "unclosed-tag";
+    pub const MALFORMED_TAG: &str = "malformed-tag";
+    pub const STRAY_END: &str = "stray-end";
+    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
+    pub const UNCLOSED_BLOCK: &str = "unclosed-block";
+    pub const OUTPUT_CONTROL_FLOW: &str = "output-control-flow";
+    pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
+}
 
 fn node_range(text: &str, node: Node) -> Range {
     Range::new(offset_to_position(text, node.start_byte()), offset_to_position(text, node.end_byte()))
@@ -33,15 +44,15 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
         if node.is_error() || node.is_missing() {
-            let (msg, target) = if node.is_missing() {
-                (format!("Unclosed ERB tag: missing `{}`", node.kind()), node.parent().unwrap_or(node))
+            let (msg, target, code) = if node.is_missing() {
+                (format!("Unclosed ERB tag: missing `{}`", node.kind()), node.parent().unwrap_or(node), code::UNCLOSED_TAG)
             } else {
-                ("Malformed ERB tag".to_string(), node)
+                ("Malformed ERB tag".to_string(), node, code::MALFORMED_TAG)
             };
             let r = node_range(text, target);
             // Point at the opening line only, not the whole rest of the file.
             let r = Range::new(r.start, Position::new(r.start.line, u32::MAX));
-            out.push(error(r, msg));
+            out.push(coded(error(r, msg), code));
         }
         for child in node.children(&mut cursor) {
             stack.push(child);
@@ -74,13 +85,13 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
             BlockEffect::Close(n) => {
                 for _ in 0..n {
                     if openers.pop().is_none() {
-                        out.push(error(range, "Unexpected `end`: no open block"));
+                        out.push(coded(error(range, "Unexpected `end`: no open block"), code::STRAY_END));
                     }
                 }
             }
             BlockEffect::Continue => {
                 if openers.is_empty() {
-                    out.push(error(range, format!("`{}` without an open block", snippet.trim())));
+                    out.push(coded(error(range, format!("`{}` without an open block", snippet.trim())), code::UNMATCHED_BRANCH));
                 }
             }
             BlockEffect::Neutral => {}
@@ -89,17 +100,17 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         let t = snippet.trim();
         if is_output {
             if t.starts_with("if ") || t.starts_with("unless ") || t == "end" || t.starts_with("end ") {
-                out.push(warning(range, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?"));
+                let message = "Control flow in an output tag `<%= %>`; did you mean `<% %>`?";
+                out.push(coded(warning(range, message), code::OUTPUT_CONTROL_FLOW));
             }
         } else if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
-            out.push(warning(
-                range,
-                format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1]),
-            ));
+            let message = format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1]);
+            out.push(coded(warning(range, message), code::SILENT_OUTPUT_HELPER));
         }
     }
     for o in openers {
-        out.push(error(o.range, format!("Block `{}` is never closed: missing `<% end %>`", truncate(&o.snippet, 40))));
+        let message = format!("Block `{}` is never closed: missing `<% end %>`", truncate(&o.snippet, 40));
+        out.push(coded(error(o.range, message), code::UNCLOSED_BLOCK));
     }
     out
 }

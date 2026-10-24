@@ -659,6 +659,53 @@
           "default": [],
           "description": "Embedded engine names registered by your app (e.g. `mjml`) that the unknown-engine check should accept."
         },
+        "rubyTemplates.erb.disabledDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "unclosed-tag",
+              "malformed-tag",
+              "stray-end",
+              "unmatched-branch",
+              "unclosed-block",
+              "output-control-flow",
+              "silent-output-helper",
+              "unexpected-close-tag",
+              "mismatched-close-tag",
+              "unclosed-element",
+              "unresolved-render",
+              "strict-locals"
+            ]
+          },
+          "default": [],
+          "uniqueItems": true,
+          "description": "Built-in ERB diagnostics to turn off, by code."
+        },
+        "rubyTemplates.haml.disabledDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "inconsistent-indent",
+              "bad-dedent",
+              "top-level-indent",
+              "illegal-nesting",
+              "doctype-children",
+              "unmatched-branch",
+              "explicit-end",
+              "illegal-element",
+              "unknown-filter",
+              "self-closing-content",
+              "unclosed-attribute",
+              "unresolved-render",
+              "strict-locals"
+            ]
+          },
+          "default": [],
+          "uniqueItems": true,
+          "description": "Built-in Haml diagnostics to turn off, by code."
+        },
         "rubyTemplates.slim.disabledDiagnostics": {
           "type": "array",
           "items": {
@@ -674,7 +721,8 @@
               "explicit-end",
               "unmatched-branch",
               "silent-output-helper",
-              "unresolved-render"
+              "unresolved-render",
+              "strict-locals"
             ]
           },
           "default": [],
