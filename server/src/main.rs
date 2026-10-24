@@ -796,20 +796,21 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let Some(views) = partials::views_root(&path) else { return Ok(None) };
         let extra_engines = self.options().extra_engines.clone();
         let i18n_key = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             let (line_start, line, col) = util::line_at(&doc.text, pos);
             i18n_key_at(&doc, &path, line_start, line, col, &extra_engines)
         };
-        if let Some(key) = i18n_key {
-            let mut locations = partial_rename::i18n_references(&key, &partial_rename::sources(&views, &self.open_texts()), &extra_engines);
+        if let Some((key, app)) = i18n_key.zip(partials::app_root(&path)) {
+            let sources = partial_rename::i18n_sources(&app, &self.open_texts());
+            let mut locations = partial_rename::i18n_references(&key, &sources, &extra_engines);
             if p.context.include_declaration {
                 locations.extend(translation_locations(&self.locale_files(&path), &key));
             }
             return Ok(Some(locations));
         }
+        let Some(views) = partials::views_root(&path) else { return Ok(None) };
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             let (_, line, col) = util::line_at(&doc.text, pos);

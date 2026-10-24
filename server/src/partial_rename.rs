@@ -177,8 +177,17 @@ const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 /// `open` documents wins over the disk copy, which may lack unsaved edits.
 pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
     let code_dirs = views.parent().into_iter().flat_map(|app| CODE_DIRS.iter().map(move |d| app.join(d)));
-    std::iter::once(views.to_path_buf())
-        .chain(code_dirs)
+    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open)
+}
+
+/// Templates and Ruby files anywhere in `app` and the app's `lib`: translations are looked up from models,
+/// mailers and jobs too.
+pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open)
+}
+
+fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+    roots
         .flat_map(|root| WalkDir::new(root).into_iter().flatten())
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {

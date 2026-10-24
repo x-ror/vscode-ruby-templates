@@ -44,6 +44,11 @@ fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
   'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
 );
+fs.mkdirSync(path.join(root, "app", "mailers"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "app", "mailers", "user_mailer.rb"),
+  'class UserMailer\n  def subject = t("users.index.title")\nend\n',
+);
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
 fs.mkdirSync(path.join(root, "db"), { recursive: true });
@@ -678,6 +683,7 @@ const check = (label, actual, expected) => {
     "references i18n key",
     keyRefs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
     [
+      "/app/mailers/user_mailer.rb 1",
       "/app/views/users/index.html.erb 18",
       "/config/locales/en.yml 3",
       "/config/locales/uk.yml 3",
