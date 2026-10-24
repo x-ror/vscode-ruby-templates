@@ -1,7 +1,9 @@
 //! `workspace/willRenameFiles`: rewrite literal `render` references to partials that are renamed or moved,
 //! one at a time or with their folder. `textDocument/references`: the same references to given files.
 
-use crate::partials::{render_refs, resolve, template_stem, views_root, RenderKind, RenderRef};
+use crate::partials::{
+    first_folder_only, model_renders, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind, RenderRef,
+};
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{render_filter, slim_outline, TemplateLang};
 use regex::Regex;
@@ -50,12 +52,12 @@ fn app_views(path: &Path) -> Option<PathBuf> {
     path.ancestors().find(|a| a.file_name().is_some_and(|n| n == "app")).map(|app| app.join("views"))
 }
 
-/// Literal `render` references inside code, as (byte start, byte end, reference).
-fn code_refs(source: &Source, extra_engines: &[String]) -> Vec<(usize, usize, RenderRef)> {
+/// The references `find` sees on each line that are inside code, as (byte start, byte end, reference).
+fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<RenderRef>) -> Vec<(usize, usize, RenderRef)> {
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
-        return spans.into_iter().flat_map(|(s, e)| render_refs(&source.text[s..e]).into_iter().map(shift(s))).collect();
+        return spans.into_iter().flat_map(|(s, e)| find(&source.text[s..e]).into_iter().map(shift(s))).collect();
     }
     let template_code = source.lang.map(|lang| render_filter(lang, &source.text, extra_engines));
     let mut out = Vec::new();
@@ -64,7 +66,7 @@ fn code_refs(source: &Source, extra_engines: &[String]) -> Vec<(usize, usize, Re
             Some(in_code) => in_code(i, offset, r),
             None => !line.trim_start().starts_with('#'),
         };
-        out.extend(render_refs(line).into_iter().filter(in_code).map(shift(offset)));
+        out.extend(find(line).into_iter().filter(in_code).map(shift(offset)));
     }
     out
 }
@@ -89,21 +91,44 @@ fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBu
 }
 
 /// `targets` of the reference whose string starts at byte `start` of `source`.
+/// Only the first folder's matches: the files Rails would pick.
 fn ref_targets(source: &Source, start: usize, r: &RenderRef) -> Vec<PathBuf> {
     let explicit_partial = source.lang.is_none() && PARTIAL_KEY.is_match(source.text[..start].rsplit('\n').next().unwrap_or(""));
-    targets(source, r, explicit_partial)
+    first_folder_only(targets(source, r, explicit_partial))
 }
 
-/// Every reference in `sources` that resolves to one of `files`.
+/// `render @users` as a reference named after the model (`users`).
+fn model_refs(line: &str) -> Vec<RenderRef> {
+    model_renders(line)
+        .into_iter()
+        .map(|(start, end, name)| RenderRef {
+            kind: RenderKind::Partial,
+            name: name.to_string(),
+            start,
+            end,
+            call: line[..start].rfind("render").unwrap_or(start),
+            from_layout: false,
+        })
+        .collect()
+}
+
+/// Every reference in `sources` that resolves to one of `files`, `render @users` included.
 pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    // Skip `resolve` (a directory listing) for references that can't name one of `files`.
+    let stems: Vec<&str> = files.iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(template_stem)).collect();
+    let may_match = |name: &str| stems.contains(&name.rsplit('/').next().unwrap_or(name));
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
-        for (start, end, r) in code_refs(source, extra_engines) {
-            if ref_targets(source, start, &r).iter().any(|t| files.contains(t)) {
-                let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
-                out.push(Location::new(uri.clone(), range));
-            }
+        let named = code_refs(source, extra_engines, render_refs)
+            .into_iter()
+            .filter(|(start, _, r)| may_match(&r.name) && ref_targets(source, *start, r).iter().any(|t| files.contains(t)));
+        let models = code_refs(source, extra_engines, model_refs)
+            .into_iter()
+            .filter(|(_, _, r)| resolve_model(&source.path, &r.name).iter().any(|t| files.contains(t)));
+        for (start, end, _) in named.chain(models) {
+            let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+            out.push(Location::new(uri.clone(), range));
         }
     }
     out
@@ -146,18 +171,12 @@ pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_en
     let mut out = HashMap::new();
     for source in sources {
         let mut edits = Vec::new();
-        for (start, end, r) in code_refs(source, extra_engines) {
+        for (start, end, r) in code_refs(source, extra_engines, render_refs) {
             if !may_match(&r.name) {
                 continue;
             }
-            let found = ref_targets(source, start, &r);
-            // Rails picks from the first folder that has a match; later ones (`application/`) are shadowed.
-            let first_dir = found.first().and_then(|t| t.parent());
-            let names: Option<Vec<String>> = found
-                .iter()
-                .filter(|t| t.parent() == first_dir)
-                .map(|t| new_ref_name(&r.name, &source.path, &moved(t, renames)?, renames))
-                .collect();
+            let names: Option<Vec<String>> =
+                ref_targets(source, start, &r).iter().map(|t| new_ref_name(&r.name, &source.path, &moved(t, renames)?, renames)).collect();
             let Some(names) = names else { continue };
             let Some(name) = names.first().filter(|n| **n != r.name && names.iter().all(|m| m == *n)) else {
                 continue;
@@ -344,6 +363,29 @@ mod tests {
                 ("app/views/users/index.html.erb".into(), 0, 12),
             ]
         );
+    }
+
+    #[test]
+    fn references_skip_shadowed_partials_and_count_model_renders() {
+        let t = Tree::new(
+            "shadow",
+            &["app/views/users/_card.html.erb", "app/views/application/_card.html.erb", "app/views/users/_user.html.erb"],
+        );
+        let sources = [
+            t.source("app/views/users/index.html.erb", ERB, "<%= render \"card\" %>\n<%= render @users %>\n"),
+            t.source("app/views/posts/index.html.erb", ERB, "<%= render \"card\" %>\n<%# render @users %>\n"),
+        ];
+        let found = |rel: &str| -> Vec<(String, u32)> {
+            let mut got: Vec<_> = references(&[t.path(rel)], &sources, &[])
+                .into_iter()
+                .map(|l| (l.uri.to_file_path().unwrap().strip_prefix(&t.0).unwrap().to_string_lossy().into_owned(), l.range.start.line))
+                .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(found("app/views/users/_card.html.erb"), [("app/views/users/index.html.erb".into(), 0)]);
+        assert_eq!(found("app/views/application/_card.html.erb"), [("app/views/posts/index.html.erb".into(), 0)]);
+        assert_eq!(found("app/views/users/_user.html.erb"), [("app/views/users/index.html.erb".into(), 1)]);
     }
 
     #[test]

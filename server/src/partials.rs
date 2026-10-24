@@ -180,6 +180,9 @@ pub fn template_format(path: &Path) -> Option<&str> {
 /// (variant dropped) and template language, so the view finds it.
 pub fn new_template_path(current: &Path, r: &RenderRef) -> Option<PathBuf> {
     let (dir, base) = r.name.rsplit_once('/')?;
+    if base.is_empty() || dir.split('/').any(|part| part == "..") {
+        return None;
+    }
     let ext = current.extension()?.to_str()?;
     let prefix = if r.kind == RenderKind::Partial { "_" } else { "" };
     let file = match template_format(current) {
@@ -187,6 +190,14 @@ pub fn new_template_path(current: &Path, r: &RenderRef) -> Option<PathBuf> {
         None => format!("{prefix}{base}.{ext}"),
     };
     Some(views_root(current)?.join(dir).join(file))
+}
+
+/// The `resolve` results Rails would actually pick from: it stops at the first folder with a match, so later
+/// ones (`application/`) are shadowed.
+pub fn first_folder_only(mut found: Vec<PathBuf>) -> Vec<PathBuf> {
+    let first = found.first().and_then(|f| f.parent()).map(Path::to_path_buf);
+    found.retain(|f| f.parent() == first.as_deref());
+    found
 }
 
 /// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
@@ -543,6 +554,8 @@ mod tests {
         assert_eq!(path("users/index.json.jbuilder", r#"json.partial! "users/user""#), Some(views.join("users/_user.json.jbuilder")));
         assert_eq!(path("users/show.de.erb", r#"render template: "a/b""#), Some(views.join("a/b.erb")));
         assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
+        assert_eq!(path("users/show.html.erb", r#"render "../../config/x""#), None);
+        assert_eq!(path("users/show.html.erb", r#"render "shared/""#), None);
         assert_eq!(new_template_path(Path::new("/tmp/x.html.erb"), &render_refs(r#"render "a/b""#)[0]), None);
     }
 

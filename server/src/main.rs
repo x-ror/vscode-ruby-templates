@@ -691,7 +691,8 @@ impl LanguageServer for Backend {
         let actions = unresolved
             .filter_map(|d| {
                 let (_, line) = Self::line_at(&doc.text, d.range.start.line);
-                let r = partials::render_ref_at(line, util::byte_col(line, d.range.start.character))?;
+                let start = util::byte_col(line, d.range.start.character);
+                let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
                 let target = partials::new_template_path(&path, &r)?;
                 let create = CreateFile {
                     uri: Url::from_file_path(&target).ok()?,
@@ -724,14 +725,23 @@ impl LanguageServer for Backend {
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             let (_, line) = Self::line_at(&doc.text, pos.line);
-            match partials::render_ref_at(line, util::byte_col(line, pos.character)) {
-                Some(r) => partials::resolve(&path, &r),
-                None if file_name(&uri).starts_with('_') => vec![path],
-                None => return Ok(None),
+            let col = util::byte_col(line, pos.character);
+            let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
+            match (partials::render_ref_at(line, col), model) {
+                (Some(r), _) => partials::first_folder_only(partials::resolve(&path, &r)),
+                (None, Some((_, _, name))) => partials::resolve_model(&path, name),
+                // On a component render the question isn't about this partial.
+                (None, None) if partials::component_ref_at(line, col).is_some() => return Ok(None),
+                (None, None) if file_name(&uri).starts_with('_') => vec![path],
+                (None, None) => return Ok(None),
             }
         };
         let sources = partial_rename::sources(&views, &self.open_texts());
-        Ok(Some(partial_rename::references(&files, &sources, &self.options().extra_engines)))
+        let mut locations = partial_rename::references(&files, &sources, &self.options().extra_engines);
+        if p.context.include_declaration {
+            locations.extend(files.iter().filter_map(|f| Some(Location::new(Url::from_file_path(f).ok()?, Range::default()))));
+        }
+        Ok(Some(locations))
     }
 
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
