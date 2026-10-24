@@ -145,10 +145,13 @@ struct Backend {
 const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
 
 fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
+    // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
+    // lines, and their partials live outside app/views, so no check applies.
+    if uri.path().to_ascii_lowercase().ends_with(".tt") {
+        return vec![];
+    }
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
-        // Thor templates (`*.haml.tt`) interleave column-0 ERB with the Haml, so its structure can't be checked.
-        TemplateLang::Haml if uri.path().to_ascii_lowercase().ends_with(".tt") => vec![],
         TemplateLang::Haml => haml_indent::diagnostics(&doc.text),
         TemplateLang::Slim => slim_indent::diagnostics(&doc.text, &options.extra_engines),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
@@ -761,7 +764,8 @@ impl LanguageServer for Backend {
 
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
-        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) {
+        // Generator templates' ERB lines aren't Slim the formatter could move safely.
+        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) || p.text_document.uri.path().ends_with(".tt") {
             return Ok(None);
         }
         // Indentation is always spaces; a tab-indented file is left as it is.
@@ -1275,12 +1279,14 @@ mod tests {
     }
 
     #[test]
-    fn thor_templates_skip_haml_structure() {
+    fn thor_templates_skip_structure_checks() {
         let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
         let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), version: 0 };
         let uri = |name: &str| Url::parse(&format!("file:///app/lib/templates/haml/scaffold/{name}")).unwrap();
         assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &Options::default()).is_empty());
         assert!(!diagnostics(&uri("index.html.haml"), &doc(), &Options::default()).is_empty());
+        let erb = Doc { lang: TemplateLang::Erb, text: "<%% if x %>\n<% attributes.each do |a| -%>\n<div>\n".into(), version: 0 };
+        assert!(diagnostics(&uri("_form.html.erb.tt"), &erb, &Options::default()).is_empty());
     }
 
     #[test]

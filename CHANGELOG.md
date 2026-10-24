@@ -14,6 +14,7 @@
 - Completion of Stimulus controller names in `data-controller="…"`, `data-action="…->…"` and `data: { controller: "…" }`.
 - ERB: warn when `%>` inside a Ruby string ends the tag early (`<%= "50%>" %>`).
 - Fewer false warnings, found on real apps: `=begin`/`=end` comments in ERB tags, `.rss`/`.atom` (and font) formats, and `render "devise/…"` views shipped by a gem in `Gemfile.lock`.
+- ERB and Slim generator templates (`*.erb.tt`, `*.slim.tt` under `lib/templates` or `lib/generators`) open as ERB / Slim, without diagnostics or formatting.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

@@ -703,6 +703,8 @@ function registerSlimLint(context, output) {
 
   const lint = async (doc) => {
     if (doc.languageId !== "slim" || doc.uri.scheme !== "file") return;
+    // Generator templates (`*.slim.tt`) hold ERB tags that slim-lint would misreport.
+    if (doc.uri.path.endsWith(".tt")) return;
     if (!cfg().get("slimLint.enabled", false)) return;
     const key = doc.uri.toString();
     const runId = (latestRun.get(key) ?? 0) + 1;

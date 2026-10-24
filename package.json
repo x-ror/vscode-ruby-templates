@@ -45,6 +45,10 @@
           ".erubi",
           ".erubis"
         ],
+        "filenamePatterns": [
+          "**/lib/templates/erb/**/*.erb.tt",
+          "**/lib/generators/**/templates/**/*.erb.tt"
+        ],
         "configuration": "./language-configuration/erb.json"
       },
       {
@@ -167,6 +171,10 @@
         "extensions": [
           ".slim",
           ".html.slim"
+        ],
+        "filenamePatterns": [
+          "**/lib/templates/slim/**/*.slim.tt",
+          "**/lib/generators/**/templates/**/*.slim.tt"
         ],
         "configuration": "./language-configuration/slim.json"
       },

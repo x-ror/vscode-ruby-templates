@@ -31,7 +31,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `.rb.erb` / `.yml.erb` (generators, `database.yml`) get Ruby/YAML host grammars (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 - [x] `.turbo_stream.erb` gets the `erb` id and HTML host via the `.erb` suffix (`package.json`); Turbo snippets tracked separately
 - [x] `.html+variant.erb` (e.g. `show.html+phone.erb`) recognized via the `.erb` suffix (`package.json`, `server/src/main.rs`); variant-aware lookup tracked under navigation
-- [ ] `filenamePatterns: ["*.tt"]` for Rails generator templates (e.g. `Gemfile.tt`)
+- [x] Rails generator templates open as their language: `lib/templates/{erb,slim}/**/*.{erb,slim}.tt` and `lib/generators/**/templates/**` (`package.json` `filenamePatterns`, like Haml's); no diagnostics, formatting or slim-lint there, since the generator's ERB is mixed in (`server/src/main.rs` `diagnostics`). Non-template `.tt` files (`Gemfile.tt`) are left alone
 - [ ] Host-specific language ids (e.g. `erb-js`) or a host-detection grammar so `editor.*` settings and comment toggling follow the host
 - [x] Server handles the same host variants (diagnostics shouldn't assume HTML) (`package.json` `erb-*` ids, `syntaxes/erb-*.tmLanguage.json`)
 
