@@ -1366,6 +1366,19 @@ function registerErbFormatting(context, output) {
     registration?.dispose();
     registration = undefined;
     const tool = cfg().get("erb.formatter", "none");
+    if (tool === "builtin") {
+      registration = vscode.Disposable.from(
+        vscode.languages.registerDocumentFormattingEditProvider("erb", {
+          provideDocumentFormattingEdits: (doc, options) =>
+            serverFormatEdits(doc, options),
+        }),
+        vscode.languages.registerDocumentRangeFormattingEditProvider("erb", {
+          provideDocumentRangeFormattingEdits: (doc, range, options) =>
+            serverFormatEdits(doc, options, range),
+        }),
+      );
+      return;
+    }
     if (!ERB_FORMATTERS[tool]) return;
     registration = vscode.languages.registerDocumentFormattingEditProvider(
       "erb",

@@ -642,11 +642,13 @@
           "type": "string",
           "enum": [
             "none",
+            "builtin",
             "htmlbeautifier",
             "erb-format"
           ],
           "enumDescriptions": [
             "No ERB formatter from this extension (another extension's stays in charge).",
+            "Built-in, through the language server: re-indents HTML views by HTML and ERB nesting and fixes trailing whitespace and the final newline; never touches Ruby, <pre>, <script> bodies or line breaks. Also Format Selection.",
             "htmlbeautifier (gem install htmlbeautifier): re-indents HTML and ERB blocks to the editor's tab size, keeps line breaks.",
             "erb-format (gem install erb-formatter): re-flows tags and attributes to a line width."
           ],
