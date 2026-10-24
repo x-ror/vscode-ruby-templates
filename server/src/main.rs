@@ -47,7 +47,7 @@ impl TemplateLang {
             _ => {}
         }
         let path = uri.path().to_ascii_lowercase();
-        if path.ends_with(".erb") || path.ends_with(".rhtml") {
+        if ERB_EXTENSIONS.iter().any(|ext| path.ends_with(ext)) || path.ends_with(".rhtml") {
             Some(Self::Erb)
         } else if path.ends_with(".haml") {
             Some(Self::Haml)
@@ -153,14 +153,16 @@ fn diagnostics(uri: &Url, doc: &Doc, slim: &SlimOptions) -> Vec<Diagnostic> {
     out
 }
 
-/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.rhtml`.
+const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
+
+/// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`.
 // ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
 fn html_host(uri: &Url) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     if file.ends_with(".rhtml") {
         return true;
     }
-    host_format(&file, ".erb").is_some_and(is_html_format)
+    ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format))
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
@@ -979,6 +981,9 @@ mod tests {
             ("/v.html/nginx.erb", false),
             ("/v/users/show.de.erb", false),
             ("/v/users/show.de.html.erb", true),
+            ("/v/show.html.erubi", true),
+            ("/v/show.html.erubis", true),
+            ("/v/feed.xml.erubi", false),
         ] {
             assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
         }
@@ -1050,6 +1055,9 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
         let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
+        for path in ["file:///views/x.erubi", "file:///views/x.html.ERUBIS"] {
+            assert_eq!(TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), None), Some(TemplateLang::Erb), "{path}");
+        }
     }
 
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {

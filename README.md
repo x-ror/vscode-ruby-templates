@@ -5,7 +5,7 @@ One extension for the three most common Ruby HTML template languages.
 ## Features
 
 **Syntax highlighting**
-- ERB: `<% %>`, `<%= %>`, `<%== %>`, `<%# %>`, `<%- -%>`, `<%%` literals, on top of the built-in HTML grammar.
+- ERB (also `.erubi` / `.erubis`): `<% %>`, `<%= %>`, `<%== %>`, `<%# %>`, `<%- -%>`, `<%%` literals, on top of the built-in HTML grammar.
 - Haml: `!!!`, `%tag.class#id`, `{ruby: hash}` / `(html attrs)` / `[object ref]` attributes, `- = != &= ~` lines, `-#` and `/` comments, `#{}` interpolation, filters (`:javascript`, `:css`, `:ruby`, `:scss`, `:sass`, `:coffee`, `:markdown`, `:erb`, …).
 - Slim: `doctype`, `tag.class#id`, inline `attr="x"` / `attr=ruby`, wrapped `()` `[]` `{}` attributes (also across lines) with boolean attrs, `*splat`, `li: a` inline tags, `a>` / `a<>` / `img/`, `|` / `'` text blocks and text continued under `p Some text`, `- = == =< =>` lines with `,` / `\` continuations, `/`, `/!` and `/[if IE]` comments, `#{}` and `#{{}}` interpolation, inline HTML `<div>` lines, `include` (`slim/include`), `>` text (`slim/smart`).
 - Slim embedded engines (attributes such as `javascript nonce=...:` allowed): `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:` and `erb:` use the target grammar, with `#{}` highlighted as Ruby in `javascript:`, `css:` and `markdown:`; `textile:`, `rdoc:`, `asciidoc:` and older engines (`less:`, `styl:`, `builder:`, …) are plain text with `#{}`. Slim 5 registers only `asciidoc`, `markdown`, `textile`, `rdoc`, `coffee`, `sass`, `scss`, `javascript`, `css` and `ruby`, so `typescript:`, `babel:`, `livescript:` and `haml:` get no engine rule.

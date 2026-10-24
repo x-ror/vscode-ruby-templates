@@ -14,6 +14,8 @@ const cases = [
   ["a.html.erb", "html", "haml", "a.html.erb.haml"],
   ["notes.txt", "erb", "haml", "notes.txt.haml"],
   ["SHOW.HTML.ERB", "erb", "haml", "SHOW.HTML.haml"],
+  ["show.html.erubi", "erb", "slim", "show.html.slim"],
+  ["show.html.erubis", "erb", "haml", "show.html.haml"],
 ];
 for (const [name, from, target, expected] of cases) {
   const actual = convertedFileName(name, from, target);

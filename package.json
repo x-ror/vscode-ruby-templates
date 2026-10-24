@@ -40,7 +40,9 @@
         "extensions": [
           ".erb",
           ".rhtml",
-          ".html.erb"
+          ".html.erb",
+          ".erubi",
+          ".erubis"
         ],
         "configuration": "./language-configuration/erb.json"
       },
