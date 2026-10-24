@@ -818,7 +818,8 @@ impl LanguageServer for Backend {
     async fn formatting(&self, p: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
         // Generator templates' ERB lines aren't Slim the formatter could move safely.
-        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) || p.text_document.uri.path().ends_with(".tt") {
+        if !matches!(doc.lang, TemplateLang::Slim | TemplateLang::Skim) || p.text_document.uri.path().to_ascii_lowercase().ends_with(".tt")
+        {
             return Ok(None);
         }
         // Indentation is always spaces; a tab-indented file is left as it is.

@@ -43,14 +43,31 @@ pub enum CodeEnd {
 
 pub fn code_end(code: &str) -> CodeEnd {
     let mut quote = None;
+    // `"…#{` re-enters code: the enclosing strings and the brace depth inside each interpolation.
+    let mut interpolations: Vec<(char, usize)> = Vec::new();
     let mut chars = code.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
             (Some(_), '\\') => {
                 chars.next();
             }
+            (Some('"'), '#') if chars.peek() == Some(&'{') => {
+                chars.next();
+                interpolations.push(('"', 0));
+                quote = None;
+            }
             (Some(q), c) if c == q => quote = None,
             (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => {
+                if let Some((_, depth)) = interpolations.last_mut() {
+                    *depth += 1;
+                }
+            }
+            (None, '}') => match interpolations.last_mut() {
+                Some((_, 0)) => quote = interpolations.pop().map(|(q, _)| q),
+                Some((_, depth)) => *depth -= 1,
+                None => {}
+            },
             (None, '#') if chars.peek() != Some(&'{') => return CodeEnd::Comment,
             _ => {}
         }
@@ -163,6 +180,15 @@ pub fn ends_with_block(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interpolation_is_code() {
+        assert_eq!(code_end("html = \"#{"), CodeEnd::Code);
+        assert_eq!(code_end("x = \"#{a} b"), CodeEnd::String);
+        assert_eq!(code_end("x = \"#{ {a: 1}[:a] }"), CodeEnd::String);
+        assert_eq!(code_end("x = '#{"), CodeEnd::String);
+        assert_eq!(code_end("x = \"#{y # note"), CodeEnd::Comment);
+    }
+
     #[test]
     fn line_breaks_start_statements() {
         assert_eq!(analyze("\nroles = []\nif admin\n  roles = [1]\nend\n").0, BlockEffect::Neutral);

@@ -35,13 +35,13 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
 }
 
-/// Attach a stable `code` so users can filter or disable the diagnostic.
 /// Do `query`'s characters appear in `name` in order (`uscard` in `users/card`)?
 pub fn fuzzy_match(name: &str, query: &str) -> bool {
     let mut chars = name.chars();
     query.chars().all(|q| chars.any(|c| c == q))
 }
 
+/// Attach a stable `code` so users can filter or disable the diagnostic.
 pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
     d.code = Some(NumberOrString::String(code.into()));
     d
