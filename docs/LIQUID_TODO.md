@@ -44,7 +44,7 @@ Legend as in `ERB_TODO.md`.
 ## Open questions
 
 - **Jekyll files are mostly `.html`/`.md`, not `.liquid`.** Claiming `.html` would take HTML language features away. Default: don't claim them. Document `files.associations` (`"**/_includes/**/*.html": "liquid"`) in `README.md`. Without this the Jekyll value is small.
-- Language id clash: Shopify's extension (and `sissel.shopify-liquid`) also contribute `liquid`. Two grammars for one id conflict. Not checked locally, since neither is installed here. Options: reuse `liquid` (interop with Prettier, settings) or use our own id. Default: `liquid`, and document "disable one of them".
+- Language id clash: Shopify's extension (and `sissel.shopify-liquid`) also contribute `liquid`. Two grammars for one id conflict. Not checked locally, since neither is installed here. Options: reuse `liquid` (interop with other formatters, settings) or use our own id. Default: `liquid`, and document "disable one of them".
 - Rails + `liquid` gem: templates are often stored in the DB, and the file-system root is app-defined (`Liquid::Template.file_system`). Default: same-dir `_name.liquid` only, with no setting until asked.
 - Shopify `{{ 'key' | t }}` → `locales/*.json`, filter/tag completion, object hover: out of scope (official extension).
 - Caching: `liquid::candidates` walks the tree per request. Add a cache + `src/client.js` watchers (`**/_includes/**`) only if it's slow.

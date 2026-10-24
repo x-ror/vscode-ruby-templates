@@ -1,5 +1,5 @@
 #!/bin/sh
-# Formats staged JS (Prettier) and Rust (rustfmt) files and re-stages them.
+# Formats staged JS (bun fmt) and Rust (rustfmt) files and re-stages them.
 set -e
 
 js=$(git diff --cached --name-only --diff-filter=ACMR -- 'src/*.js' 'test/*.js')
@@ -14,6 +14,6 @@ if [ -n "$partial" ]; then
   exit 1
 fi
 
-[ -n "$js" ] && bunx prettier --write $js >/dev/null
+[ -n "$js" ] && bun fmt $js >/dev/null
 [ -n "$rs" ] && rustfmt --edition 2021 $rs
 git add $js $rs

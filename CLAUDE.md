@@ -28,7 +28,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 
 - Whitespace basics for every file: `.editorconfig` (UTF-8, LF, final newline, 2 spaces; 4 for Rust).
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
-- JS: Prettier with its default rules (no config file): `bun run format` before committing, `bun run format:check` to verify.
+- JS: `bun fmt` with its default rules (no config file): `bun run format` before committing, `bun run format:check` to verify.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
 - `.githooks/pre-commit` (enabled by `bun install` via `prepare`) formats staged JS and Rust files and re-stages them; it refuses files that also have unstaged changes.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.

@@ -872,12 +872,11 @@
     "test:vscode": "bun run build && bun test/vscode/run.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && bun server/install-bin.js",
     "test:server": "cargo test --manifest-path server/Cargo.toml && bun server/check-samples.js",
-    "format": "bunx prettier --write \"src/**/*.js\" \"test/**/*.js\"",
-    "format:check": "bunx prettier --check \"src/**/*.js\" \"test/**/*.js\""
+    "format": "bun fmt src test",
+    "format:check": "bun fmt --check src test"
   },
   "devDependencies": {
     "@vscode/test-electron": "3.1.0",
-    "prettier": "3.9.10",
     "tm-grammars": "1.32.22",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
