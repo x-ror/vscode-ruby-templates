@@ -12,7 +12,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-audit }
       - name: Known vulnerabilities in Rust dependencies
@@ -22,14 +22,14 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: server }
       - run: cargo fmt --manifest-path server/Cargo.toml --check
       - run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run format:check
@@ -46,7 +46,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc,    dir: win32-x64,    ext: '.exe', test: true }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.target }}" }
       - uses: Swatinem/rust-cache@v2
@@ -65,7 +65,7 @@ jobs:
         if: matrix.test
         shell: bash
         run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.test
         with: { node-version: 22 }
       - name: LSP end to end
@@ -73,7 +73,7 @@ jobs:
         run: node test/e2e.js
         env:
           RUBY_TEMPLATES_LS: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: server-${{ matrix.dir }}
           path: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
@@ -82,11 +82,11 @@ jobs:
     needs: [lint, server]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       # One .pkg/server-<platform>/ per build; artifacts lose the executable bit.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: server-*, path: .pkg }
       - run: chmod +x .pkg/*/* && mkdir -p bin && cp -r .pkg/server-linux-x64 bin/linux-x64
       - run: npm ci
@@ -104,8 +104,8 @@ jobs:
             rm -rf bin && mkdir -p bin && cp -r $d bin/$plat
             npx @vscode/vsce package --target $plat --out ruby-templates-$plat.vsix
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: vsix, path: '*.vsix' }
       - if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with: { files: '*.vsix' }
