@@ -518,6 +518,8 @@ const checks = {
 };
 
 export async function run() {
+  // Opening the first ERB file only starts activation; its typing check would race the listeners.
+  await vscode.extensions.getExtension("x-ror.ruby-templates").activate();
   const failures = [];
   for (const [name, check] of Object.entries(checks)) {
     try {
