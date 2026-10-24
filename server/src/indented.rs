@@ -12,7 +12,7 @@ pub enum Lang { Slim, Haml }
 
 const SLIM_ENGINES: &[&str] = &["ruby", "javascript", "css", "sass", "scss", "less", "coffee", "markdown", "textile", "rdoc", "erb", "builder", "nokogiri", "wiki", "creole", "mediawiki", "asciidoc", "org", "styl", "stylus", "livescript", "babel", "typescript", "haml"];
 /// The filters Haml 6 and 7 register (`Haml::Filters`).
-const HAML_FILTERS: &[&str] = &["plain", "escaped", "preserve", "cdata", "javascript", "css", "ruby", "erb", "markdown", "sass", "scss", "less", "coffee", "coffeescript"];
+pub const HAML_FILTERS: &[&str] = &["plain", "escaped", "preserve", "cdata", "javascript", "css", "ruby", "erb", "markdown", "sass", "scss", "less", "coffee", "coffeescript"];
 /// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
 const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
 /// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
@@ -40,7 +40,7 @@ enum LineKind {
 }
 
 /// A line the structure checks look at: not blank, not inside a verbatim block, not a continuation line.
-struct Visit { line: usize, indent: usize, kind: LineKind }
+struct Visit { line: usize, indent: usize, kind: LineKind, span: usize }
 
 struct Frame { indent: usize, kind: LineKind, line: usize, has_children: bool }
 
@@ -72,10 +72,52 @@ fn visit_lines(lang: Lang, lines: &[&str], text: &str, out: &mut Vec<Diagnostic>
             continue;
         }
         let (kind, consumed) = classify(lang, lines, i, text, out);
-        visits.push(Visit { line: i, indent, kind });
-        i += consumed.max(1);
+        let span = consumed.max(1);
+        visits.push(Visit { line: i, indent, kind, span });
+        i += span;
     }
     visits
+}
+
+/// Haml lines outside filter and comment bodies, each with the physical lines it spans (`|`, `,`, multi-line `{}`).
+pub fn haml_structure(text: &str) -> Vec<(usize, usize)> {
+    let lines: Vec<&str> = text.lines().collect();
+    visit_lines(Lang::Haml, &lines, text, &mut Vec::new()).into_iter().map(|v| (v.line, v.span)).collect()
+}
+
+/// What a Haml line is, for features that only make sense at a line's start or in Ruby.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineRole {
+    /// A structural line: `%tag`, `- code`, `:filter`, plain text, … (blank lines too).
+    Start,
+    /// Ruby that doesn't start the line: a continuation of `-`/`=` code or a multi-line `{}` hash, or a `:ruby` body.
+    Ruby,
+    /// A filter or `-#` body, or a `|` plain-text continuation.
+    Text,
+}
+
+/// The `LineRole` of each line of a Haml document.
+pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut roles = vec![LineRole::Start; lines.len()];
+    let visits = visit_lines(Lang::Haml, &lines, text, &mut Vec::new());
+    for (n, v) in visits.iter().enumerate() {
+        let content = lines[v.line].trim_start_matches([' ', '\t']);
+        let continuation = match v.kind {
+            LineKind::Ruby { .. } => LineRole::Ruby,
+            LineKind::Tag { .. } if tag_head_len(content).is_none() || haml_code_start(lines[v.line]).is_some() => LineRole::Ruby,
+            _ => LineRole::Text,
+        };
+        roles[v.line + 1..v.line + v.span].fill(continuation);
+        if v.kind == LineKind::Verbatim {
+            let body = if content.trim_end() == ":ruby" { LineRole::Ruby } else { LineRole::Text };
+            let next = visits.get(n + 1).map_or(lines.len(), |next| next.line);
+            // Blank lines after the body belong to whatever comes next.
+            let last = (v.line + 1..next).rev().find(|&i| !lines[i].trim().is_empty()).map_or(v.line, |i| i);
+            roles[v.line + 1..=last].fill(body);
+        }
+    }
+    roles
 }
 
 /// Tabs count as two columns.
@@ -92,7 +134,7 @@ fn check_structure(lang: Lang, lines: &[&str], visits: &[Visit], text: &str, out
         .filter(|ws| lang == Lang::Haml && !(ws.contains('\t') && ws.contains(' ')));
     let unit = detect_unit(lines, visits, doc_indentation);
 
-    for &Visit { line: line_no, indent, kind } in visits {
+    for &Visit { line: line_no, indent, kind, .. } in visits {
         let raw = lines[line_no];
         let ws = leading_ws(raw);
         let mut tab_space_mismatch = false;
@@ -299,7 +341,7 @@ fn classify(lang: Lang, lines: &[&str], i: usize, text: &str, out: &mut Vec<Diag
     }
     // Tags
     let is_tag = match lang {
-        Lang::Haml => c.starts_with(['%', '.']) || (c.starts_with('#') && !c.starts_with("#{")),
+        Lang::Haml => is_haml_tag(c),
         Lang::Slim => c.starts_with('.') || c.starts_with('#') || c.chars().next().map(|ch| ch.is_ascii_alphabetic()).unwrap_or(false),
     };
     if is_tag {
@@ -368,24 +410,41 @@ pub fn haml_code_start(line: &str) -> Option<usize> {
     if let Some(code) = content.strip_prefix('-') {
         return Some(line.len() - code.len());
     }
-    let is_tag = content.starts_with(['%', '.']) || (content.starts_with('#') && !content.starts_with("#{"));
-    let code_line = if is_tag { content[tag_head_len(content)?..].trim_start_matches(['<', '>']) } else { content };
+    let code_line = if is_haml_tag(content) { content[tag_head_len(content)?..].trim_start_matches(['<', '>']) } else { content };
     strip_output_prefix(Lang::Haml, code_line).map(|code| line.len() - code.len())
 }
 
-/// Length of `%tag.class#id{...}(...)[...]` on one line; `None` when a bracket isn't closed on it.
-fn tag_head_len(s: &str) -> Option<usize> {
-    let mut pos = s.find(|ch: char| !is_tag_name_char(ch)).unwrap_or(s.len());
-    loop {
-        let open = s[pos..].chars().next();
-        let close = match open {
-            Some('{') => '}',
-            Some('(') => ')',
-            Some('[') => ']',
-            _ => return Some(pos),
-        };
-        pos += find_balanced(&s[pos..], open?, close)?;
+/// `%tag`, `.class` or `#id` (not `#{interpolation}`) at the start of a line's content.
+pub fn is_haml_tag(content: &str) -> bool {
+    content.starts_with(['%', '.']) || (content.starts_with('#') && !content.starts_with("#{"))
+}
+
+/// `%tag.class#id` without its attribute groups.
+pub fn tag_name_len(s: &str) -> usize {
+    s.find(|ch: char| !is_tag_name_char(ch)).unwrap_or(s.len())
+}
+
+/// A `{…}`, `(…)` or `[…]` group of a tag head: byte offset of the opening bracket, and just past the
+/// closing one (`None` when the line ends first).
+pub struct AttrGroup { pub open: char, pub start: usize, pub end: Option<usize> }
+
+/// The attribute groups following `%tag.class#id` on one line; an unclosed group is the last one.
+pub fn tag_attr_groups(s: &str) -> Vec<AttrGroup> {
+    let mut pos = tag_name_len(s);
+    let mut groups = Vec::new();
+    while let Some(open @ ('{' | '(' | '[')) = s[pos..].chars().next() {
+        let close = match open { '{' => '}', '(' => ')', _ => ']' };
+        let end = find_balanced(&s[pos..], open, close).map(|len| pos + len);
+        groups.push(AttrGroup { open, start: pos, end });
+        let Some(end) = end else { break };
+        pos = end;
     }
+    groups
+}
+
+/// Length of `%tag.class#id{...}(...)[...]` on one line; `None` when a bracket isn't closed on it.
+pub fn tag_head_len(s: &str) -> Option<usize> {
+    tag_attr_groups(s).last().map_or(Some(tag_name_len(s)), |g| g.end)
 }
 
 fn is_tag_name_char(ch: char) -> bool {
@@ -613,7 +672,8 @@ mod tests {
 
     #[test]
     fn messages_and_ranges() {
-        let cases: &[(&str, (u32, u32, u32, &str))] = &[
+        type Expected<'a> = (u32, u32, u32, &'a str);
+        let cases: &[(&str, Expected)] = &[
             ("%div\n  %p\n    %b\n   %i", (3, 0, 3, "Indentation does not match any outer level")),
             (" %p", (0, 0, 1, "Unexpected indentation at top level")),
             ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
@@ -698,6 +758,30 @@ mod tests {
         ] {
             assert_eq!(haml(src), vec![], "{src:?}");
         }
+    }
+
+    #[test]
+    fn line_roles() {
+        use LineRole::*;
+        let text = concat!(
+            "%a{href: x,\n",     // 0
+            "   title: y}\n",    // 1
+            "= link_to \"a\",\n", // 2
+            "  b\n",             // 3
+            ":css\n",            // 4
+            "  .btn{\n",         // 5
+            "\n",                // 6
+            ":ruby\n",           // 7
+            "  x = link_\n",     // 8
+            "-# note\n",         // 9
+            "  = hidden\n",      // 10
+            "%p a |\n",          // 11
+            "  b |\n",           // 12
+            "%hr\n",             // 13
+            "%p= \"a\" + |\n",    // 14
+            "  \"b\" |\n",        // 15
+        );
+        assert_eq!(haml_line_roles(text), [Start, Ruby, Start, Ruby, Start, Text, Start, Start, Ruby, Start, Text, Start, Text, Start, Start, Ruby]);
     }
 
     #[test]

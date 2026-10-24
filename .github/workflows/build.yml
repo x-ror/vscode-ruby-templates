@@ -56,6 +56,7 @@ jobs:
       - run: npm ci
       - run: npm run test:tokens
       - run: npm run test:snippets
+      - run: npm run test:unit
       - name: Package one .vsix per platform
         run: |
           for plat in linux-x64 linux-arm64 darwin-arm64 darwin-x64 win32-x64; do

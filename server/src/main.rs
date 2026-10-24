@@ -1,4 +1,5 @@
 mod erb;
+mod haml;
 mod helpers;
 mod indented;
 mod outline;
@@ -8,6 +9,8 @@ mod tags;
 mod util;
 
 use dashmap::DashMap;
+use indented::LineRole;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -42,6 +45,8 @@ struct Backend {
 fn diagnostics(uri: &Url, doc: &Doc) -> Vec<Diagnostic> {
     let mut out = match doc.lang {
         TemplateLang::Erb => erb::diagnostics(&doc.text),
+        // Thor templates (`*.haml.tt`) interleave column-0 ERB with the Haml, so its structure can't be checked.
+        TemplateLang::Haml if uri.path().ends_with(".tt") => vec![],
         TemplateLang::Haml => indented::diagnostics(&doc.text, indented::Lang::Haml),
         TemplateLang::Slim => indented::diagnostics(&doc.text, indented::Lang::Slim),
     };
@@ -71,6 +76,7 @@ fn html_host(uri: &Url) -> bool {
 fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
+    let roles = line_roles(lang, text);
     for (i, line) in text.lines().enumerate() {
         for r in partials::render_refs(line) {
             // `render layout: "x"` inside a view looks up a partial; skip rather than guess.
@@ -82,22 +88,85 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
                 Some((dir, _)) if views.join(dir).is_dir() => {}
                 _ => continue,
             }
-            let in_code = match lang {
-                TemplateLang::Erb => in_ruby_context(lang, line, r.start),
-                TemplateLang::Haml => indented::haml_code_start(line)
-                    .is_some_and(|start| start <= r.start && !ruby_comment_before(&line[start..r.start])),
-                TemplateLang::Slim => {
-                    let t = line.trim_start();
-                    ["=", "-", "!=", "&="].iter().any(|p| t.starts_with(p)) && in_ruby_context(lang, line, r.start)
-                }
-            };
-            if !in_code || !partials::resolve(path, &r).is_empty() {
+            if !render_in_code(lang, roles[i], line, r.start) || !partials::resolve(path, &r).is_empty() {
                 continue;
             }
             out.push(util::warning(util::line_range(text, i, r.start, r.end), format!("{} `{}` not found", kind_name(r.kind), r.name)));
         }
     }
     out
+}
+
+/// Haml line roles; every other language's lines all start their own construct.
+fn line_roles(lang: TemplateLang, text: &str) -> Vec<LineRole> {
+    match lang {
+        TemplateLang::Haml => indented::haml_line_roles(text),
+        _ => vec![LineRole::Start; text.lines().count()],
+    }
+}
+
+/// Is the `render` whose string starts at byte `start` a call in Ruby code, not template text, a Ruby comment or
+/// a Ruby string (`link_to "render 'x'"`)?
+fn render_in_code(lang: TemplateLang, role: LineRole, line: &str, start: usize) -> bool {
+    let Some(call) = line[..start].rfind("render") else { return false };
+    let code_start = match (lang, role) {
+        (TemplateLang::Erb, _) => in_ruby_context(lang, line, start).then(|| line[..call].rfind("<%").map_or(0, |open| open + 2)),
+        (TemplateLang::Haml, LineRole::Start) => indented::haml_code_start(line).filter(|&code| code <= call),
+        (TemplateLang::Haml, LineRole::Ruby) => Some(0),
+        (TemplateLang::Haml, LineRole::Text) => None,
+        (TemplateLang::Slim, _) => {
+            let ws = util::leading_ws(line).len();
+            let prefix = ["!=", "&=", "=", "-"].into_iter().find(|p| line[ws..].starts_with(p));
+            prefix.filter(|_| in_ruby_context(lang, line, start)).map(|p| ws + p.len())
+        }
+    };
+    code_start.is_some_and(|code| code <= call && ruby::code_end(&line[code..call]) == ruby::CodeEnd::Code)
+}
+
+/// Edits to every `render "x"` under app/views whose partial moves in `renames` (old path, new path).
+/// Rails renders the first match from the closest directory, so a render changes only when every file it could
+/// pick there moves, all to one name. `read` supplies a file's current text (open buffers win over disk).
+fn partial_rename_edits(renames: &[(PathBuf, PathBuf)], read: impl Fn(&Path) -> Option<String>) -> HashMap<Url, Vec<TextEdit>> {
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| partials::views_root(old)).collect();
+    roots.sort();
+    roots.dedup();
+    for views in &roots {
+        for entry in walkdir::WalkDir::new(views).max_depth(partials::VIEWS_MAX_DEPTH).into_iter().flatten() {
+            let file = entry.path();
+            let (Ok(uri), true) = (Url::from_file_path(file), file.is_file()) else { continue };
+            let Some(lang) = TemplateLang::from_uri_or_id(&uri, None) else { continue };
+            let Some(text) = read(file) else { continue };
+            let roles = line_roles(lang, &text);
+            for (i, line) in text.lines().enumerate() {
+                for r in partials::render_refs(line) {
+                    if r.kind != partials::RenderKind::Partial || !render_in_code(lang, roles[i], line, r.start) {
+                        continue;
+                    }
+                    let Some(name) = moved_reference(views, renames, &partials::resolve(file, &r), &r.name) else { continue };
+                    if name != r.name {
+                        changes.entry(uri.clone()).or_default().push(TextEdit::new(util::line_range(&text, i, r.start, r.end), name));
+                    }
+                }
+            }
+        }
+    }
+    changes
+}
+
+/// The new name for a render whose candidates are `hits`, if all of Rails' picks (the first hit's directory) move to one partial.
+fn moved_reference(views: &Path, renames: &[(PathBuf, PathBuf)], hits: &[PathBuf], name: &str) -> Option<String> {
+    let first_dir = hits.first()?.parent();
+    let mut names = hits.iter().filter(|hit| hit.parent() == first_dir).map(|hit| {
+        let (old, new) = renames.iter().find(|(old, _)| old == hit)?;
+        // A partial directly in app/views has no `render` name that reaches it.
+        let dir = new.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
+        let new_name = partials::partial_name(new).filter(|_| !dir.is_empty())?;
+        let bare = !name.contains('/') && new.parent() == old.parent();
+        Some(if bare { new_name } else { format!("{dir}/{new_name}") })
+    });
+    let first = names.next()??;
+    names.all(|n| n.as_ref() == Some(&first)).then_some(first)
 }
 
 impl Backend {
@@ -132,7 +201,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
                 definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
-                    trigger_characters: Some(vec!["\"".into(), "'".into(), ".".into(), "/".into()]),
+                    trigger_characters: Some(["\"", "'", ".", "/", "%", ":", "{", "("].map(String::from).to_vec()),
                     resolve_provider: Some(false),
                     ..Default::default()
                 }),
@@ -140,6 +209,18 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: None,
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".into()),
+                                pattern: FileOperationPattern { glob: "**/app/views/**/_*".into(), matches: Some(FileOperationPatternKind::File), options: None },
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                }),
                 ..Default::default()
             },
         })
@@ -169,6 +250,17 @@ impl LanguageServer for Backend {
     async fn did_close(&self, p: DidCloseTextDocumentParams) {
         self.docs.remove(&p.text_document.uri);
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
+    }
+
+    async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        let read = |path: &Path| {
+            let open = Url::from_file_path(path).ok().and_then(|uri| self.docs.get(&uri).map(|d| d.text.clone()));
+            open.or_else(|| std::fs::read_to_string(path).ok())
+        };
+        let path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
+        let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((path(&f.old_uri)?, path(&f.new_uri)?))).collect();
+        let changes = partial_rename_edits(&renames, read);
+        Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
@@ -234,9 +326,16 @@ impl LanguageServer for Backend {
                 return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: md }), range: None }));
             }
         }
+        let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        if role == LineRole::Text {
+            return Ok(None);
+        }
+        if let Some(md) = haml::hover(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
+            return Ok(Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: md }), range: None }));
+        }
         // Helper signature hover.
         let word = word_at(line, col);
-        if let Some(h) = helpers::HELPERS.iter().find(|h| h.name == word) {
+        if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: format!("```ruby\n{}\n```", h.detail) }),
                 range: None,
@@ -248,20 +347,23 @@ impl LanguageServer for Backend {
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
-        // what folds Haml/Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
-        if doc.lang != TemplateLang::Erb || !html_host(&p.text_document.uri) {
-            return Ok(None);
+        // what folds Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
+        match doc.lang {
+            TemplateLang::Haml => Ok(Some(outline::haml_folding_ranges(&doc.text))),
+            TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
+            _ => Ok(None),
         }
-        Ok(Some(outline::folding_ranges(&doc.text)))
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        if doc.lang != TemplateLang::Erb {
-            return Ok(None);
-        }
-        Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
+        let symbols = match doc.lang {
+            TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
+            TemplateLang::Haml => outline::haml_document_symbols(&doc.text),
+            TemplateLang::Slim => return Ok(None),
+        };
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -304,11 +406,21 @@ impl LanguageServer for Backend {
             }
         }
 
+        let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        if let Some(context) = haml::completion_context(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
+            return Ok(Some(CompletionResponse::Array(haml_completions(context))));
+        }
+
         // 3. Rails helpers, only when we're in a Ruby context.
-        if !in_ruby_context(doc.lang, line, col) { return Ok(None); }
+        let ruby = match role {
+            LineRole::Start => in_ruby_context(doc.lang, line, col),
+            LineRole::Ruby => !ruby::comment_before(before),
+            LineRole::Text => false,
+        };
+        if !ruby { return Ok(None); }
         let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
         if typed.is_empty() { return Ok(None); }
-        let items: Vec<CompletionItem> = helpers::HELPERS.iter().filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
+        let items: Vec<CompletionItem> = helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
             label: h.name.to_string(),
             kind: Some(CompletionItemKind::FUNCTION),
             detail: Some(h.detail.to_string()),
@@ -317,6 +429,51 @@ impl LanguageServer for Backend {
             ..Default::default()
         }).collect();
         Ok(Some(CompletionResponse::Array(items)))
+    }
+}
+
+fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Helper> {
+    let haml_only = if lang == TemplateLang::Haml { helpers::HAML_HELPERS } else { &[] };
+    helpers::HELPERS.iter().chain(haml_only)
+}
+
+fn haml_completions(context: haml::Completion) -> Vec<CompletionItem> {
+    use haml::{AttrPlace, Completion};
+    let item = |label: String, kind, detail: &str, snippet: Option<String>| CompletionItem {
+        label,
+        kind: Some(kind),
+        detail: Some(detail.to_string()),
+        insert_text_format: snippet.is_some().then_some(InsertTextFormat::SNIPPET),
+        insert_text: snippet,
+        ..Default::default()
+    };
+    match context {
+        Completion::Filter(typed) => indented::HAML_FILTERS.iter().filter(|name| name.starts_with(typed))
+            .map(|f| item(f.to_string(), CompletionItemKind::MODULE, "Haml filter", None)).collect(),
+        Completion::Tag(typed) => helpers::HTML_TAGS.iter().filter(|name| name.starts_with(typed))
+            .map(|t| item(t.to_string(), CompletionItemKind::PROPERTY, "HTML element", None)).collect(),
+        Completion::Attribute { typed, place, rocket } => {
+            let names: Vec<String> = match place {
+                AttrPlace::Hash => helpers::HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
+                AttrPlace::DataHash => helpers::DATA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::AriaHash => helpers::ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::Html => helpers::HTML_ATTRIBUTES.iter().map(|a| a.to_string())
+                    .chain(helpers::ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
+                    .chain(helpers::DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
+                    .collect(),
+            };
+            names.into_iter().filter(|n| n.starts_with(typed)).map(|name| {
+                // The typed `:` of an old-style key stays; the snippet replaces only the name after it.
+                let key = if name.contains('-') { format!("\"{name}\"") } else { name.clone() };
+                let separator = if rocket { " =>" } else { ":" };
+                let snippet = match place {
+                    AttrPlace::Html => format!("{name}=\"$1\""),
+                    AttrPlace::Hash if name == "data" || name == "aria" => format!("{key}{separator} {{$1}}"),
+                    _ => format!("{key}{separator} $1"),
+                };
+                item(name, CompletionItemKind::PROPERTY, "HTML attribute", Some(snippet))
+            }).collect()
+        }
     }
 }
 
@@ -331,22 +488,6 @@ fn word_at(line: &str, col: usize) -> &str {
     &line[start..end]
 }
 
-/// A `#` (not `#{`) outside a string means the rest of the tag is a Ruby comment.
-fn ruby_comment_before(code: &str) -> bool {
-    let mut quote = None;
-    let mut chars = code.chars().peekable();
-    while let Some(c) = chars.next() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), '\\') => { chars.next(); }
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '#') if chars.peek() != Some(&'{') => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
 fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
     let before = &line[..col.min(line.len())];
     match lang {
@@ -355,9 +496,10 @@ fn in_ruby_context(lang: TemplateLang, line: &str, col: usize) -> bool {
             let close = before.rfind("%>");
             matches!((open, close), (Some(o), None) | (Some(o), Some(_)) if close.map(|c| c < o).unwrap_or(true))
                 && !before[open.unwrap()..].starts_with("<%#")
-                && !ruby_comment_before(&before[open.unwrap() + 2..])
+                && !ruby::comment_before(&before[open.unwrap() + 2..])
         }
-        TemplateLang::Haml | TemplateLang::Slim => {
+        TemplateLang::Haml => haml::in_ruby(line, col),
+        TemplateLang::Slim => {
             let t = before.trim_start();
             t.starts_with('-') || t.starts_with('=') || t.starts_with("!=") || t.starts_with("&=")
                 || before.contains("#{") || before.contains("= ") || before.contains('{') || before.contains('(')
@@ -416,6 +558,88 @@ mod tests {
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
         let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
+    }
+
+    /// `file line:col new_text` for each edit, sorted.
+    fn rename(renames: &[(PathBuf, PathBuf)]) -> Vec<String> {
+        let read = |p: &Path| std::fs::read_to_string(p).ok();
+        let mut got: Vec<String> = partial_rename_edits(renames, read)
+            .into_iter()
+            .flat_map(|(uri, edits)| {
+                let file = uri.path().rsplit('/').next().unwrap_or("").to_string();
+                edits.into_iter().map(move |e| format!("{file} {}:{} {}", e.range.start.line, e.range.start.character, e.new_text))
+            })
+            .collect();
+        got.sort();
+        got
+    }
+
+    fn views_tree(name: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("rt-rename-{name}-{}", std::process::id()));
+        let views = root.join("app/views");
+        for (file, text) in files {
+            let path = views.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        (root, views)
+    }
+
+    #[test]
+    fn partial_rename_updates_renders() {
+        let (root, views) = views_tree("basic", &[
+            ("users/_card.html.erb", ""),
+            ("users/index.html.erb", "<%= render \"card\" %> <%= render \"users/card\" %> <p>render \"card\"</p>\n<%= link_to \"render 'card'\", x %>\n"),
+            ("shared/box.html.haml", "%p render \"users/card\"\n.a= render \"users/card\", x: 1\n%p= \"render 'users/card'\"\n:javascript\n  = render \"users/card\"\n"),
+            ("users/show.html.slim", "= render 'card'\n"),
+        ]);
+        let card = views.join("users/_card.html.erb");
+        assert_eq!(rename(&[(card.clone(), views.join("users/_tile.html.erb"))]), [
+            "box.html.haml 1:12 users/tile",
+            "index.html.erb 0:12 tile",
+            "index.html.erb 0:33 users/tile",
+            "show.html.slim 0:10 tile",
+        ]);
+        assert_eq!(rename(&[(card.clone(), views.join("shared/_card.html.erb"))]), [
+            "box.html.haml 1:12 shared/card",
+            "index.html.erb 0:12 shared/card",
+            "index.html.erb 0:33 shared/card",
+            "show.html.slim 0:10 shared/card",
+        ]);
+        assert!(rename(&[(card.clone(), views.join("users/card.html.erb"))]).is_empty());
+        // Nothing names a partial directly in app/views.
+        assert!(rename(&[(card, views.join("_card.html.erb"))]).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn partial_rename_needs_every_candidate_to_move() {
+        let (root, views) = views_tree("variants", &[
+            ("users/_card.html.erb", ""),
+            ("users/_card.html+phone.erb", ""),
+            ("users/index.html.erb", "<%= render \"card\" %>\n<%= render partial: \"users/card\" %>\n"),
+            ("application/_badge.html.erb", ""),
+            ("users/_badge.html.erb", ""),
+            ("users/show.html.erb", "<%= render \"badge\" %>\n"),
+        ]);
+        let (html, phone) = (views.join("users/_card.html.erb"), views.join("users/_card.html+phone.erb"));
+        assert!(rename(&[(phone.clone(), views.join("users/_tile.html+phone.erb"))]).is_empty());
+        let both = [(html.clone(), views.join("shared/_card.html.erb")), (phone.clone(), views.join("shared/_card.html+phone.erb"))];
+        assert_eq!(rename(&both), ["index.html.erb 0:12 shared/card", "index.html.erb 1:21 shared/card"]);
+        // Moving both, but to different names, leaves the render alone.
+        assert!(rename(&[both[0].clone(), (phone, views.join("shared/_other.html+phone.erb"))]).is_empty());
+        // `users/_badge` shadows `application/_badge` for users/show.
+        assert!(rename(&[(views.join("application/_badge.html.erb"), views.join("application/_pill.html.erb"))]).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn thor_templates_skip_haml_structure() {
+        let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
+        let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string() };
+        let uri = |name: &str| Url::parse(&format!("file:///app/lib/templates/haml/scaffold/{name}")).unwrap();
+        assert!(diagnostics(&uri("index.html.haml.tt"), &doc()).is_empty());
+        assert!(!diagnostics(&uri("index.html.haml"), &doc()).is_empty());
     }
 
     #[test]

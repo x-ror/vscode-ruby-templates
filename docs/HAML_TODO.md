@@ -86,16 +86,16 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Show compiled Ruby on Haml 6/7 via `haml compile -`, Haml < 6 via `haml --debug` (`src/extension.js` `runHaml`, `compileToRuby`)
 - [x] Convert ERB → Haml via `html2haml --erb` (`src/extension.js` `convert`)
 - [x] Convert Haml → Slim via `haml2slim` (`src/extension.js` `convert`)
-- [ ] Convert Haml → ERB (no converter wired up; e.g. `haml2erb`)
-- [ ] Convert plain `.html` → Haml (`html2haml` without `--erb`)
-- [ ] Extract selection to a `_partial.html.haml`, re-indenting the extracted block to column 0
-- [ ] Toggle `=` ↔ `-` ↔ `-#` on the current line (the Haml counterpart of the ERB tag toggle)
+- [x] Convert Haml → ERB via the `haml_to_erb` gem's library through `ruby` (its CLI only converts in place) (`src/extension.js` `CONVERTERS['haml>erb']`)
+- [x] Convert plain `.html` → Haml via `html2haml --no-erb` (`src/extension.js` `CONVERTERS['html>haml']`)
+- [x] Extract selection to a partial (ERB/Haml/Slim), re-indenting the extracted block to column 0 (`src/extension.js` `extractPartial`)
+- [x] Toggle `=` ↔ `-` ↔ `-#` on the current line, Ctrl/Cmd+Alt+E (`src/haml.js` `toggleHamlPrefix`)
 
 ## 8. Formatting
 
-- [ ] Document formatting provider (`haml-lint --auto-correct`, or a built-in re-indenter)
-- [ ] Re-indent a file or selection to the detected indent unit
-- [ ] Configurable formatter executable plus `bundle exec`
+- [x] Document formatting provider: built-in re-indenter or `haml-lint`, chosen by `rubyTemplates.haml.formatter` (`src/extension.js`, `src/haml.js` `reindentHaml`)
+- [x] Re-indent a file or selection to the detected indent unit (`src/haml.js` `reindentHaml`)
+- [x] Configurable formatter executable plus `bundle exec` (`package.json` `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`)
 
 ## 9. Diagnostics and linting
 
@@ -125,36 +125,40 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [ ] Indentation inside filter bodies relative to the filter (Haml requires the body to start with the filter's indent plus one unit); bodies are skipped today
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/main.rs` `unresolved_renders`, `server/src/indented.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
 - [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output)
-- [ ] haml-lint integration (`haml-lint --reporter json` on save, mapped to diagnostics)
-- [ ] Settings to enable/disable each built-in check
+- [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `npm run test:unit`)
+- [ ] Settings to enable/disable each built-in check: blocked on plumbing. The server ignores `initializationOptions` and has no `workspace/didChangeConfiguration` handler (`server/src/main.rs` `initialize`), and the client passes no options (`src/client.js`); that plumbing comes first
 
 ## 10. Completion
 
 - [x] Partial names inside `render "…"` (`server/src/main.rs` `completion` is language-agnostic)
 - [x] Form builder methods after `f.` (`server/src/main.rs` `completion`)
 - [x] Rails helpers on Ruby lines (`server/src/main.rs` `in_ruby_context`)
-- [ ] `in_ruby_context` false positives: any `(` or `{` earlier on the line counts as Ruby, so plain text like `%p see (link_` offers helpers
-- [ ] Filter names after `:` at line start (from `HAML_FILTERS`)
-- [ ] `succeed` / `precede` / `surround` / `preserve` in the helper list (`server/src/helpers.rs`)
-- [ ] Attribute-name completion inside `{}` / `()` (HTML attributes, `data:`/`aria:` keys)
-- [ ] Tag-name completion after `%`
+- [x] Ruby context only in the code part: after `-`/`=`/`~`/`!=`/`&=` (line start or after a tag head), inside a tag's `{}` hash or `[]` object ref, or an open `#{`; not in `()` attributes, plain text, or after a Ruby `#` comment (`server/src/haml.rs` `in_ruby`, unit test `ruby_only_in_code`)
+- [x] Completion and hover use each line's role: Haml completion and hover only on structural lines (never in filter or `-#` bodies or `|` text), Rails helpers also on continuation lines of `-`/`=` code and multi-line `{}` hashes and in `:ruby` bodies (`server/src/indented.rs` `haml_line_roles`, unit test `line_roles`; `server/src/main.rs` `completion`, `hover`; `test/e2e.js`)
+- [ ] Attribute-name completion on continuation lines of a multi-line `{}` hash (those lines get Ruby helpers instead)
+- [x] Filter names after `:` at line start (`server/src/haml.rs` `completion_context`, `server/src/indented.rs` `HAML_FILTERS`)
+- [x] `succeed` / `precede` / `surround` / `preserve` / `find_and_preserve` completion and hover, Haml files only (`server/src/helpers.rs` `HAML_HELPERS`, `server/src/main.rs` `helpers_for`)
+- [x] Attribute-name completion inside `{}` (`name: `, quoted `"http-equiv": `, `data: {}` / `aria: {}`, and old-style `:name => `), inside nested `data: {…}` (Rails/Turbo/Stimulus keys) and `aria: {…}`, and inside `()` (`name=""`, `aria-*`, `data-*`) (`server/src/haml.rs` `completion_context`, `server/src/helpers.rs` `HTML_ATTRIBUTES`/`DATA_KEYS`/`ARIA_KEYS`; unit test `completion_contexts`)
+- [x] Tag-name completion after `%` (`server/src/haml.rs` `completion_context`, `server/src/helpers.rs` `HTML_TAGS`); `%`, `:`, `{`, `(` added as trigger characters (`server/src/main.rs` `initialize`)
 
 ## 11. Hover
 
 - [x] Hover on `render "x"` lists the resolved file(s) (`server/src/main.rs` `hover` is language-agnostic)
 - [x] Hover on a known Rails helper shows its signature (`server/src/main.rs`, `server/src/helpers.rs`)
-- [ ] Hover on a filter name explains it (escaping, interpolation, required gem)
-- [ ] Hover on line prefixes (`&=`, `!=`, `~`, `<`, `>`) explains escaping / whitespace behaviour
+- [x] Hover on a filter name explains it (escaping, interpolation, required gem), checked against the Haml 6.4.0 filter sources (`server/src/haml.rs` `FILTER_DOCS`)
+- [x] Hover on line prefixes (`-`, `-#`, `=`, `&=`, `!=`, `~`, `&~`, `!~`, `==`, `&==`, `!==`, `&`, `!`) and on `<` / `>` after a tag head; `&`/`!` only before a space or `#{`, as Haml reads them (`server/src/haml.rs` `hover`, unit test `hover_docs`)
 
 ## 12. Navigation, symbols, folding
 
 - [x] Go to definition on `render "x"`, `render partial:`, `render FooComponent.new` (`server/src/main.rs` `goto_definition` is language-agnostic)
 - [x] `.haml` partials found by resolution and completion (`server/src/partials.rs` `matching_templates` matches any extension)
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
-- [x] Folding by indentation (server returns `None` for Haml so VS Code's `offSide` folding applies) (`server/src/main.rs` `folding_range`)
-- [ ] Document symbols / outline for Haml: `content_for` blocks, forms, `turbo_frame_tag`, `#id` tags (`server/src/main.rs` `document_symbol` returns `None` for non-ERB)
-- [ ] Folding for multiline `{}` attribute hashes and `|` blocks, which indentation folding misses
-- [ ] Rename a partial and update every `render` in `.haml` files
+- [x] Folding by indentation: the server returns VS Code's off-side indentation ranges itself, since any provider answer replaces them (`server/src/outline.rs` `haml_folding_ranges`, `indentation_folds`)
+- [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, `render`, `#id` and landmark tags, with ERB's symbol kinds, nested by indentation; filter and comment bodies skipped (`server/src/outline.rs` `haml_document_symbols`, unit test `haml_symbols_nest_by_indentation`)
+- [ ] Outline: ids given as attributes (`%div{id: "x"}`, `%div(id="x")`); only the `#id` shorthand is used
+- [x] Folding for multiline `{}` attribute hashes, `|` blocks and `,` continuations whose lines aren't indented deeper, plus `-# region` markers (`server/src/outline.rs` `haml_folding_ranges`, `server/src/indented.rs` `haml_structure`; unit test `haml_folds_indentation_regions_and_continuations`)
+- [x] Rename a partial and update every `render` in ERB, Haml and Slim files under `app/views` (`workspace/willRenameFiles`). A render changes only when every file Rails could pick for it (the first resolved directory, all variants/formats) moves, all to one name; one edit per render however many files move; `render` inside Ruby strings, comments, template text and filter bodies is left alone (`server/src/main.rs` `partial_rename_edits`, `moved_reference`, `render_in_code`; unit tests `partial_rename_updates_renders`, `partial_rename_needs_every_candidate_to_move`; `test/e2e.js`; limits in `README.md`)
+- [ ] Rename a directory of partials, moves directly into `app/views`, and `render partial:` strings in controllers/helpers (`.rb`)
 
 ## 13. Embedded languages
 
@@ -164,9 +168,9 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 ## 14. Rails-specific
 
 - [x] Strict locals `-# locals: (…)` highlighted as a signature (`syntaxes/haml.tmLanguage.json` `strict-locals`)
-- [ ] Strict locals: completion and diagnostics as in ERB
-- [ ] ViewComponent sidecar `.html.haml` templates (resolution already matches any extension; not tested)
-- [ ] `haml-rails` generator templates (`lib/templates/haml/**/*.haml`) recognized as Haml
+- [ ] Strict locals: completion and diagnostics. ERB has none to share yet (`docs/ERB_TODO.md` "Strict locals: completion, hover, and diagnostics"); build both together
+- [x] ViewComponent sidecar `.html.haml` templates (`server/src/partials.rs` `resolve_component`, unit test `component_haml_sidecar`; `test/e2e.js`)
+- [x] `haml-rails` generator templates recognized as Haml: `lib/templates/haml/**/*.haml` by extension, `*.haml.tt` under `lib/templates/haml/` and `lib/generators/**/templates/` by `filenamePatterns` (`package.json` `contributes.languages[haml]`); structure diagnostics are skipped for `.tt`, whose column-0 ERB breaks Haml indentation (`server/src/main.rs` `diagnostics`, unit test `thor_templates_skip_haml_structure`)
 
 ## 15. Tests and CI
 
@@ -177,7 +181,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Sample covers `<`/`>`, self-closing `/`, `[]`, `/[if IE]`, `&`/`!` lines, `|` multiline, multiline `{}`, `()` boolean attributes, every filter (`test/sample.html.haml`)
 - [x] Rust unit tests for `server/src/indented.rs`: each Haml message and its range, plus no-false-positive cases (`server/src/indented.rs` `tests`)
 - [x] `test/broken/bad.html.haml` asserted (expected diagnostics) via `include_str!` in `cargo test`, which CI and `npm run test:server` run (`server/src/indented.rs` `broken_fixture`)
-- [ ] Haml file in `test/e2e.js` (definition, hover, completion, diagnostics)
+- [x] Haml file in `test/e2e.js`: definition, hover, completion (including filter bodies), diagnostics, symbols, folding, rename; every result is asserted and a mismatch exits non-zero (`test/e2e.js` `check`)
 - [ ] Fixture corpus of real-world Haml views (no false-positive diagnostics)
 
 ## 16. Docs

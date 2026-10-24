@@ -148,6 +148,10 @@
           ".haml",
           ".html.haml"
         ],
+        "filenamePatterns": [
+          "**/lib/templates/haml/**/*.haml.tt",
+          "**/lib/generators/**/templates/**/*.haml.tt"
+        ],
         "configuration": "./language-configuration/haml.json"
       },
       {
@@ -340,7 +344,23 @@
       },
       {
         "command": "rubyTemplates.convertToHaml",
-        "title": "Ruby Templates: Convert ERB \u2192 Haml"
+        "title": "Ruby Templates: Convert ERB/HTML \u2192 Haml"
+      },
+      {
+        "command": "rubyTemplates.convertToErb",
+        "title": "Ruby Templates: Convert Haml \u2192 ERB"
+      },
+      {
+        "command": "rubyTemplates.extractPartial",
+        "title": "Ruby Templates: Extract Selection to Partial"
+      },
+      {
+        "command": "rubyTemplates.toggleHamlPrefix",
+        "title": "Ruby Templates: Toggle Haml Line Prefix (- / = / -#)"
+      },
+      {
+        "command": "rubyTemplates.reindentHaml",
+        "title": "Ruby Templates: Re-indent Haml (Document or Selection)"
       },
       {
         "command": "rubyTemplates.convertToSlim",
@@ -361,6 +381,12 @@
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
         "when": "editorTextFocus && editorLangId =~ /^erb/"
+      },
+      {
+        "command": "rubyTemplates.toggleHamlPrefix",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorTextFocus && editorLangId == haml"
       },
       {
         "command": "rubyTemplates.wrapInErb",
@@ -393,13 +419,28 @@
           "group": "rubyTemplates@3"
         },
         {
+          "command": "rubyTemplates.toggleHamlPrefix",
+          "when": "editorLangId == haml",
+          "group": "rubyTemplates@1"
+        },
+        {
+          "command": "rubyTemplates.extractPartial",
+          "when": "(editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim) && editorHasSelection",
+          "group": "rubyTemplates@2"
+        },
+        {
           "command": "rubyTemplates.convertToHaml",
-          "when": "editorLangId == erb",
+          "when": "editorLangId == erb || editorLangId == html",
           "group": "rubyTemplates@4"
         },
         {
           "command": "rubyTemplates.convertToSlim",
           "when": "editorLangId == erb || editorLangId == haml",
+          "group": "rubyTemplates@5"
+        },
+        {
+          "command": "rubyTemplates.convertToErb",
+          "when": "editorLangId == haml",
           "group": "rubyTemplates@5"
         }
       ],
@@ -414,11 +455,27 @@
         },
         {
           "command": "rubyTemplates.convertToHaml",
-          "when": "editorLangId == erb"
+          "when": "editorLangId == erb || editorLangId == html"
         },
         {
           "command": "rubyTemplates.convertToSlim",
           "when": "editorLangId == erb || editorLangId == haml"
+        },
+        {
+          "command": "rubyTemplates.convertToErb",
+          "when": "editorLangId == haml"
+        },
+        {
+          "command": "rubyTemplates.extractPartial",
+          "when": "editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim"
+        },
+        {
+          "command": "rubyTemplates.toggleHamlPrefix",
+          "when": "editorLangId == haml"
+        },
+        {
+          "command": "rubyTemplates.reindentHaml",
+          "when": "editorLangId == haml"
         }
       ]
     },
@@ -454,6 +511,39 @@
           "type": "string",
           "default": "erb2slim",
           "description": "Executable for ERB \u2192 Slim (gem install html2slim)."
+        },
+        "rubyTemplates.commands.ruby": {
+          "type": "string",
+          "default": "ruby",
+          "description": "Ruby used for Haml \u2192 ERB through the haml_to_erb library (gem install haml_to_erb)."
+        },
+        "rubyTemplates.commands.hamlLint": {
+          "type": "string",
+          "default": "haml-lint",
+          "description": "Executable for Haml lint diagnostics and the haml-lint formatter (gem install haml_lint)."
+        },
+        "rubyTemplates.hamlLint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run haml-lint on open and save and show its offenses as diagnostics. Does nothing if haml-lint isn't installed."
+        },
+        "rubyTemplates.hamlLint.useBundler": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run haml-lint through `bundle exec` when a Gemfile exists in the workspace."
+        },
+        "rubyTemplates.haml.formatter": {
+          "type": "string",
+          "enum": [
+            "reindent",
+            "haml-lint"
+          ],
+          "enumDescriptions": [
+            "Built-in: re-indent every nesting level to the file's indent unit.",
+            "haml-lint --auto-correct-only: applies the safe corrections of your haml-lint/RuboCop config, which can rewrite Ruby code."
+          ],
+          "default": "reindent",
+          "description": "What Format Document does in Haml files. Format Selection always re-indents."
         },
         "rubyTemplates.preview.refreshOnSave": {
           "type": "boolean",
@@ -501,6 +591,7 @@
     "package": "npx @vscode/vsce package",
     "test:tokens": "node test/tokenize.js",
     "test:snippets": "node test/snippets.js",
+    "test:unit": "node test/haml.js",
     "build:server": "cargo build --release --manifest-path server/Cargo.toml && mkdir -p bin/$(node -p \"process.platform+'-'+process.arch\") && cp server/target/release/ruby-templates-ls bin/$(node -p \"process.platform+'-'+process.arch\")/",
     "test:server": "cargo test --manifest-path server/Cargo.toml && server/target/release/ruby-templates-ls --check test/sample.*"
   },

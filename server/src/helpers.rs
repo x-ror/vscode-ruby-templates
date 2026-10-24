@@ -95,3 +95,54 @@ pub const FORM_BUILDER: &[&str] = &[
     "time_zone_select", "date_select", "time_select", "datetime_select", "rich_text_area", "submit", "button",
     "fields_for", "fields", "object", "object_name", "id", "field_id", "field_name",
 ];
+
+/// `Haml::RailsHelpers` (Haml 6/7); offered only in Haml files.
+pub const HAML_HELPERS: &[Helper] = &[
+    h!("succeed", "succeed(str, &block) — block output, then str with no space between", "succeed \"${1:.}\" do"),
+    h!("precede", "precede(str, &block) — str, then the block output with no space between", "precede \"${1:*}\" do"),
+    h!("surround", "surround(front, back = front, &block) — wraps the block output with no spaces", "surround \"${1:(}\", \"${2:)}\" do"),
+    h!("preserve", "preserve(input = nil, &block) — newlines become &#x000A; so indentation can't change them", "preserve ${1:text}"),
+    h!("find_and_preserve", "find_and_preserve(input = nil, tags = %w[textarea pre code], &block)", "find_and_preserve ${1:html}"),
+];
+
+/// HTML elements, for Haml `%tag` completion.
+pub const HTML_TAGS: &[&str] = &[
+    "a", "abbr", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo", "blockquote", "body", "br",
+    "button", "canvas", "caption", "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details", "dfn",
+    "dialog", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+    "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd", "label",
+    "legend", "li", "link", "main", "map", "mark", "menu", "meta", "meter", "nav", "noscript", "object", "ol",
+    "optgroup", "option", "output", "p", "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "script",
+    "search", "section", "select", "slot", "small", "source", "span", "strong", "style", "sub", "summary", "sup",
+    "svg", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title", "tr", "track", "u",
+    "ul", "var", "video", "wbr",
+];
+
+/// Global and common element attributes, for Haml `{}` / `()` completion.
+pub const HTML_ATTRIBUTES: &[&str] = &[
+    "accept", "accept-charset", "accesskey", "action", "alt", "async", "autocapitalize", "autocomplete", "autofocus",
+    "autoplay", "charset", "checked", "cite", "class", "cols", "colspan", "content", "contenteditable", "controls",
+    "crossorigin", "datetime", "decoding", "defer", "dir", "disabled", "download", "draggable", "enctype", "enterkeyhint",
+    "for", "form", "formaction", "headers", "height", "hidden", "high", "href", "hreflang", "http-equiv", "id", "inert",
+    "inputmode", "integrity", "is", "itemprop", "itemscope", "itemtype", "label", "lang", "list", "loading", "loop",
+    "low", "max", "maxlength", "media", "method", "min", "minlength", "multiple", "muted", "name", "nonce", "novalidate",
+    "open", "optimum", "pattern", "placeholder", "popover", "popovertarget", "poster", "preload", "readonly", "referrerpolicy",
+    "rel", "required", "reversed", "role", "rows", "rowspan", "sandbox", "scope", "selected", "size", "sizes", "slot",
+    "span", "spellcheck", "src", "srcdoc", "srcset", "start", "step", "style", "tabindex", "target", "title",
+    "translate", "type", "value", "width", "wrap",
+];
+
+/// Keys of a Haml `aria: {…}` hash (each renders as `aria-<key>`).
+pub const ARIA_KEYS: &[&str] = &[
+    "activedescendant", "atomic", "autocomplete", "busy", "checked", "controls", "current", "describedby", "details",
+    "disabled", "errormessage", "expanded", "haspopup", "hidden", "invalid", "label", "labelledby", "level", "live",
+    "modal", "multiline", "multiselectable", "orientation", "owns", "placeholder", "pressed", "readonly", "required",
+    "selected", "sort", "valuemax", "valuemin", "valuenow", "valuetext",
+];
+
+/// Keys of a Haml `data: {…}` hash used by Rails, Turbo and Stimulus; Haml turns `_` into `-`.
+pub const DATA_KEYS: &[&str] = &[
+    "controller", "action", "turbo", "turbo_frame", "turbo_method", "turbo_confirm", "turbo_stream", "turbo_action",
+    "turbo_track", "turbo_permanent", "turbo_prefetch", "turbo_preload", "turbo_submits_with", "disable_with",
+    "confirm", "method", "remote",
+];
