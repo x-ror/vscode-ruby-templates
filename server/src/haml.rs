@@ -3,7 +3,7 @@
 use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, HAML_FILTERS};
 use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
 use crate::ruby;
-use crate::util::leading_ws;
+use crate::util::{completion_item, leading_ws};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// What the cursor is completing, besides Ruby.
@@ -76,24 +76,16 @@ pub fn completion_context(line: &str, col: usize) -> Option<Completion<'_>> {
 
 /// Items for a `completion_context`.
 pub fn completions(context: Completion) -> Vec<CompletionItem> {
-    let item = |label: String, kind, detail: &str, snippet: Option<String>| CompletionItem {
-        label,
-        kind: Some(kind),
-        detail: Some(detail.to_string()),
-        insert_text_format: snippet.is_some().then_some(InsertTextFormat::SNIPPET),
-        insert_text: snippet,
-        ..Default::default()
-    };
     match context {
         Completion::Filter(typed) => HAML_FILTERS
             .iter()
             .filter(|name| name.starts_with(typed))
-            .map(|f| item(f.to_string(), CompletionItemKind::MODULE, "Haml filter", None))
+            .map(|f| completion_item(*f, CompletionItemKind::MODULE, "Haml filter"))
             .collect(),
         Completion::Tag(typed) => HTML_TAGS
             .iter()
             .filter(|name| name.starts_with(typed))
-            .map(|t| item(t.to_string(), CompletionItemKind::PROPERTY, "HTML element", None))
+            .map(|t| completion_item(*t, CompletionItemKind::PROPERTY, "HTML element"))
             .collect(),
         Completion::Attribute { typed, place, rocket } => {
             let names: Vec<String> = match place {
@@ -119,7 +111,11 @@ pub fn completions(context: Completion) -> Vec<CompletionItem> {
                         AttrPlace::Hash if name == "data" || name == "aria" => format!("{key}{separator} {{$1}}"),
                         _ => format!("{key}{separator} $1"),
                     };
-                    item(name, CompletionItemKind::PROPERTY, "HTML attribute", Some(snippet))
+                    CompletionItem {
+                        insert_text: Some(snippet),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        ..completion_item(name, CompletionItemKind::PROPERTY, "HTML attribute")
+                    }
                 })
                 .collect()
         }

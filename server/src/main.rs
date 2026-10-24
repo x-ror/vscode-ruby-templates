@@ -337,11 +337,9 @@ fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
     sig.locals
         .into_iter()
         .filter(|(name, _)| name.starts_with(typed))
-        .map(|(name, default)| CompletionItem {
-            label: name,
-            kind: Some(CompletionItemKind::VARIABLE),
-            detail: Some(default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"))),
-            ..Default::default()
+        .map(|(name, default)| {
+            let detail = default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"));
+            util::completion_item(name, CompletionItemKind::VARIABLE, detail)
         })
         .collect()
 }
@@ -786,12 +784,9 @@ impl LanguageServer for Backend {
             let items: Vec<CompletionItem> = partials::render_candidates(&path, kind, &self.template_files(&path))
                 .into_iter()
                 .filter(|(name, _)| name.starts_with(&prefix) || prefix.is_empty())
-                .map(|(name, file)| CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::FILE),
-                    detail: Some(file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
-                    insert_text: Some(name),
-                    ..Default::default()
+                .map(|(name, file)| {
+                    let detail = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                    CompletionItem { insert_text: Some(name.clone()), ..util::completion_item(name, CompletionItemKind::FILE, detail) }
                 })
                 .collect();
             return Ok(Some(CompletionResponse::Array(items)));
@@ -805,11 +800,8 @@ impl LanguageServer for Backend {
                 let items = i18n::completions(&self.locale_files(&path), &path, prefix)
                     .into_iter()
                     .map(|(key, value)| CompletionItem {
-                        label: key.clone(),
-                        kind: Some(CompletionItemKind::CONSTANT),
-                        detail: Some(value),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key))),
-                        ..Default::default()
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
+                        ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
                     })
                     .collect();
                 return Ok(Some(CompletionResponse::Array(items)));
@@ -824,11 +816,8 @@ impl LanguageServer for Backend {
                 .into_iter()
                 .filter(|id| id.starts_with(typed))
                 .map(|id| CompletionItem {
-                    label: id.clone(),
-                    kind: Some(CompletionItemKind::CLASS),
-                    detail: Some("Stimulus controller".into()),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id))),
-                    ..Default::default()
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, id.clone()))),
+                    ..util::completion_item(id, CompletionItemKind::CLASS, "Stimulus controller")
                 })
                 .collect();
             return Ok(Some(CompletionResponse::Array(items)));
@@ -842,12 +831,7 @@ impl LanguageServer for Backend {
                 let items = helpers::FORM_BUILDER
                     .iter()
                     .filter(|m| m.starts_with(typed))
-                    .map(|m| CompletionItem {
-                        label: m.to_string(),
-                        kind: Some(CompletionItemKind::METHOD),
-                        detail: Some("ActionView::Helpers::FormBuilder".into()),
-                        ..Default::default()
-                    })
+                    .map(|m| util::completion_item(*m, CompletionItemKind::METHOD, "ActionView::Helpers::FormBuilder"))
                     .collect();
                 return Ok(Some(CompletionResponse::Array(items)));
             }
@@ -896,12 +880,9 @@ impl LanguageServer for Backend {
 
 fn helper_item(h: &helpers::Helper) -> CompletionItem {
     CompletionItem {
-        label: h.name.to_string(),
-        kind: Some(CompletionItemKind::FUNCTION),
-        detail: Some(h.detail.to_string()),
         insert_text: Some(h.snippet.to_string()),
         insert_text_format: Some(InsertTextFormat::SNIPPET),
-        ..Default::default()
+        ..util::completion_item(h.name, CompletionItemKind::FUNCTION, h.detail)
     }
 }
 

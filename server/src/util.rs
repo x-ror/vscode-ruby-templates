@@ -1,4 +1,6 @@
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp::lsp_types::{
+    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
+};
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
@@ -45,6 +47,10 @@ pub fn code(d: &Diagnostic) -> Option<&str> {
         Some(NumberOrString::String(code)) => Some(code),
         _ => None,
     }
+}
+
+pub fn completion_item(label: impl Into<String>, kind: CompletionItemKind, detail: impl Into<String>) -> CompletionItem {
+    CompletionItem { label: label.into(), kind: Some(kind), detail: Some(detail.into()), ..Default::default() }
 }
 
 /// Template indentation: spaces and tabs only (Haml and Slim don't indent with other Unicode whitespace).
