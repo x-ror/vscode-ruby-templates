@@ -41,6 +41,9 @@
 - Go to definition on a partial's local lists the `render` calls that pass it.
 - ViewComponent slots: `with_*` completion in a `render X.new do |c|` block and slot readers in the component's template; *Switch to Related File* also goes between a component and its preview.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
+- Haml: a line indented several levels at once gets Haml's own message, "The line was indented N levels deeper than the previous line."
+- Windows: *Extract Selection to Slim Partial* keeps the template's line endings instead of writing CRLF.
+- CI packages a `.vsix` for all five platforms, Intel macOS included, each with only its own server binary.
 
 ## 0.1.0
 
