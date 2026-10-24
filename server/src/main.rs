@@ -860,7 +860,7 @@ impl LanguageServer for Backend {
         // 4. Haml tag, filter and attribute names; Slim tag, engine and attribute names.
         let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
         if let Some(context) = haml::completion_context(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
-            return Ok(Some(CompletionResponse::Array(haml_completions(context))));
+            return Ok(Some(CompletionResponse::Array(haml::completions(context))));
         }
 
         // 5. Rails helpers, only when we're in a Ruby context.
@@ -908,58 +908,6 @@ fn helper_item(h: &helpers::Helper) -> CompletionItem {
 fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Helper> {
     let haml_only = if lang == TemplateLang::Haml { helpers::HAML_HELPERS } else { &[] };
     helpers::HELPERS.iter().chain(haml_only)
-}
-
-fn haml_completions(context: haml::Completion) -> Vec<CompletionItem> {
-    use haml::{AttrPlace, Completion};
-    let item = |label: String, kind, detail: &str, snippet: Option<String>| CompletionItem {
-        label,
-        kind: Some(kind),
-        detail: Some(detail.to_string()),
-        insert_text_format: snippet.is_some().then_some(InsertTextFormat::SNIPPET),
-        insert_text: snippet,
-        ..Default::default()
-    };
-    match context {
-        Completion::Filter(typed) => haml_indent::HAML_FILTERS
-            .iter()
-            .filter(|name| name.starts_with(typed))
-            .map(|f| item(f.to_string(), CompletionItemKind::MODULE, "Haml filter", None))
-            .collect(),
-        Completion::Tag(typed) => helpers::HTML_TAGS
-            .iter()
-            .filter(|name| name.starts_with(typed))
-            .map(|t| item(t.to_string(), CompletionItemKind::PROPERTY, "HTML element", None))
-            .collect(),
-        Completion::Attribute { typed, place, rocket } => {
-            let names: Vec<String> = match place {
-                AttrPlace::Hash => helpers::HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
-                AttrPlace::DataHash => helpers::DATA_KEYS.iter().map(|k| k.to_string()).collect(),
-                AttrPlace::AriaHash => helpers::ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
-                AttrPlace::Html => helpers::HTML_ATTRIBUTES
-                    .iter()
-                    .map(|a| a.to_string())
-                    .chain(helpers::ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
-                    .chain(helpers::DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
-                    .collect(),
-            };
-            names
-                .into_iter()
-                .filter(|n| n.starts_with(typed))
-                .map(|name| {
-                    // The typed `:` of an old-style key stays; the snippet replaces only the name after it.
-                    let key = if name.contains('-') { format!("\"{name}\"") } else { name.clone() };
-                    let separator = if rocket { " =>" } else { ":" };
-                    let snippet = match place {
-                        AttrPlace::Html => format!("{name}=\"$1\""),
-                        AttrPlace::Hash if name == "data" || name == "aria" => format!("{key}{separator} {{$1}}"),
-                        _ => format!("{key}{separator} $1"),
-                    };
-                    item(name, CompletionItemKind::PROPERTY, "HTML attribute", Some(snippet))
-                })
-                .collect()
-        }
-    }
 }
 
 fn kind_name(k: partials::RenderKind) -> &'static str {
