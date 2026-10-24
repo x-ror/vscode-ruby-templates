@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 static RENDER_STR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
+    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
 // After a bare `render "y", layout: …` it's just a local.
-static RENDER_LAYOUT_KEY: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
+static RENDER_LAYOUT_KEY: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
+});
 // ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
 static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
 // `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
@@ -309,8 +310,8 @@ fn template_name(p: &Path, partial: bool) -> Option<String> {
 pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
     static OPEN: Lazy<Regex> = Lazy::new(|| {
         Regex::new(concat!(
-            r#"(?:render\s*\(?\s*(?:(partial|template|layout)\s*(?::|=>)\s*)?"#,
-            r#"|render\s*\(?\s*(partial|template)\s*(?::|=>)([^%]*?),\s*layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
+            r#"(?:render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
+            r#"|render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
         ))
         .unwrap()
     });
@@ -446,6 +447,12 @@ mod tests {
         assert_eq!(refs(r#"<%= render partial: "row", locals: { a: 1, layout: "gone" } %>"#), [p("row")]);
         assert_eq!(refs(r#"<%= render partial: "row", locals: [{ a: 1 }], layout: "box" %>"#), [p("row"), p("box")]);
         assert!(render_refs(r#"render partial: "row", layout: "box""#)[1].from_layout);
+        // Pre-Ruby-1.9 hash rockets, common in old views.
+        assert_eq!(refs(r#"<%= render :partial => "row", :locals => { :a => 1 } %>"#), [p("row")]);
+        assert_eq!(refs(r#"render(:template => "a/b")"#), [(RenderKind::Template, "a/b".to_string())]);
+        assert_eq!(refs(r#"render(:partial => "row", :layout => "box")"#), [p("row"), p("box")]);
+        assert_eq!(render_string_prefix(r#"render :partial => "ro"#, 22).unwrap(), (RenderKind::Partial, "ro".to_string()));
+        assert_eq!(render_string_prefix(r#"render :partial => "x", :layout => "a"#, 37).unwrap(), (RenderKind::Partial, "a".to_string()));
     }
 
     #[test]
