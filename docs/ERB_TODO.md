@@ -40,11 +40,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] HTML host via `text.html.basic` with ERB injected everywhere outside ERB tags (`syntaxes/erb.tmLanguage.json` `injections`)
 - [x] Embedded language mapping for ruby/js/css (`package.json` `grammars[erb].embeddedLanguages`)
 - [x] Token snapshot script for the sample (`test/tokenize.js`, `test/sample.html.erb`)
-- [ ] (?) ERB inside HTML attribute values (`class="<%= x %>"`): not in the sample
-- [ ] (?) ERB inside `<script>` and `<style>` blocks: not in the sample
-- [ ] (?) ERB inside HTML comments `<!-- <%= x %> -->`
-- [ ] ERB in attribute-name position, e.g. `<div <%= attrs %>>`
-- [ ] `test/tokenize.js` loads the real HTML/Ruby grammars instead of stubs so embedding is actually checked
+- [x] ERB inside HTML attribute values (`class="<%= x %>"`, single and double quotes) (`test/sample.html.erb`)
+- [x] ERB inside `<script>` and `<style>` blocks (`test/sample.html.erb`). A `<script>` whose JS holds `a < b` on the `</script>` line runs on as JS; that is VS Code's HTML/JS grammar, plain `.html` does the same
+- [x] ERB inside HTML comments `<!-- <%= x %> -->` (`test/sample.html.erb`)
+- [x] ERB in attribute-name position, e.g. `<div <%= attrs %>>` (`test/sample.html.erb`)
+- [x] `test/tokenize.js` loads the real HTML/Ruby grammars instead of stubs so embedding is actually checked (VS Code's grammars from the pinned `tm-grammars` dev dependency)
 - [x] Token snapshot assertions (diff against a committed baseline) instead of a dump (`test/tokenize.js`, `test/__snapshots__/`)
 - [ ] Semantic tokens from the server (instance vars, locals, helpers) to fix what TextMate gets wrong
 

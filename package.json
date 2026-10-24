@@ -806,6 +806,7 @@
   },
   "devDependencies": {
     "prettier": "3.9.10",
+    "tm-grammars": "1.32.22",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
   },

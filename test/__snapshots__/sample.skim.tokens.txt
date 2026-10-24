@@ -4,27 +4,35 @@
    "items"                     meta.tag > entity.other.attribute-name.class
 "  - for item in @items"
    "-"                         meta.line.control > punctuation.section.embedded.ruby
-   "for"                       meta.line.control > source.coffee > stub.source.coffee
-   "item"                      meta.line.control > source.coffee > stub.source.coffee
-   "in"                        meta.line.control > source.coffee > stub.source.coffee
-   "@items"                    meta.line.control > source.coffee > stub.source.coffee
+   "for"                       meta.line.control > source.coffee > keyword.control.coffee
+   " item "                    meta.line.control > source.coffee
+   "in"                        meta.line.control > source.coffee > keyword.control.coffee
+   "@items"                    meta.line.control > source.coffee > variable.other.readwrite.instance.coffee
 "    li class=item.kind = item.name"
    "li"                        meta.tag > entity.name.tag
    "class"                     meta.tag > meta.attribute.ruby > entity.other.attribute-name
    "="                         meta.tag > meta.attribute.ruby > keyword.operator.assignment
-   "item.kind"                 meta.tag > meta.attribute.ruby > source.coffee > stub.source.coffee
+   "item"                      meta.tag > meta.attribute.ruby > source.coffee > variable.other.object.coffee
+   "."                         meta.tag > meta.attribute.ruby > source.coffee > punctuation.separator.property.period.coffee
+   "kind"                      meta.tag > meta.attribute.ruby > source.coffee > variable.other.property.coffee
    "="                         meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
-   "item.name"                 meta.tag > meta.embedded.line.ruby > source.coffee > stub.source.coffee
+   "item"                      meta.tag > meta.embedded.line.ruby > source.coffee > variable.other.object.coffee
+   "."                         meta.tag > meta.embedded.line.ruby > source.coffee > punctuation.separator.property.period.coffee
+   "name"                      meta.tag > meta.embedded.line.ruby > source.coffee > variable.other.property.coffee
 "p Hello #{@user.name}"
    "p"                         meta.tag > entity.name.tag
    "Hello "                    meta.tag > string.unquoted.text
    "#{"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.begin
-   "@user.name"                meta.tag > string.unquoted.text > meta.embedded.interpolation > source.coffee > stub.source.coffee
+   "@user"                     meta.tag > string.unquoted.text > meta.embedded.interpolation > source.coffee > variable.other.readwrite.instance.coffee
+   "."                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.coffee > punctuation.separator.property.period.coffee
+   "name"                      meta.tag > string.unquoted.text > meta.embedded.interpolation > source.coffee > variable.other.property.coffee
    "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
 "coffee:"
    "coffee"                    meta.embedded.block > entity.name.function.embedded
    ":"                         meta.embedded.block > punctuation.definition.embedded
 "  alert \"hi\""
-   "alert"                     meta.embedded.block > source.coffee > stub.source.coffee
-   "\"hi\""                    meta.embedded.block > source.coffee > stub.source.coffee
+   "alert"                     meta.embedded.block > source.coffee > meta.function-call.coffee > entity.name.function.coffee
+   "\""                        meta.embedded.block > source.coffee > meta.function-call.coffee > meta.arguments.coffee > string.quoted.double.coffee > punctuation.definition.string.begin.coffee
+   "hi"                        meta.embedded.block > source.coffee > meta.function-call.coffee > meta.arguments.coffee > string.quoted.double.coffee
+   "\""                        meta.embedded.block > source.coffee > meta.function-call.coffee > meta.arguments.coffee > string.quoted.double.coffee > punctuation.definition.string.end.coffee
 ""

@@ -3,27 +3,37 @@
    " Comment here "            comment.block
    "%>"                        comment.block > punctuation.definition.comment.end
 "const users = <%= raw @users.to_json %>;"
-   "const"                     stub.source.js
-   "users"                     stub.source.js
-   "="                         stub.source.js
-   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
-   "raw"                       meta.embedded.line > source.ruby > stub.source.ruby
-   "@users.to_json"            meta.embedded.line > source.ruby > stub.source.ruby
-   "%>"                        meta.embedded.line > punctuation.section.embedded.end
-   ";"                         stub.source.js
+   "const"                     meta.var.expr.js > storage.type.js
+   "users"                     meta.var.expr.js > meta.var-single-variable.expr.js > meta.definition.variable.js > variable.other.constant.js
+   "="                         meta.var.expr.js > keyword.operator.assignment.js
+   "<%="                       meta.var.expr.js > meta.embedded.line > punctuation.section.embedded.begin
+   " raw "                     meta.var.expr.js > meta.embedded.line > source.ruby
+   "@"                         meta.var.expr.js > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "users"                     meta.var.expr.js > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "."                         meta.var.expr.js > meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "to_json"                   meta.var.expr.js > meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "%>"                        meta.var.expr.js > meta.embedded.line > punctuation.section.embedded.end
+   ";"                         punctuation.terminator.statement.js
 "<% if current_user %>"
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "if"                        meta.embedded.block > source.ruby > stub.source.ruby
-   "current_user"              meta.embedded.block > source.ruby > stub.source.ruby
+   "if"                        meta.embedded.block > source.ruby > keyword.control.ruby
+   " current_user "            meta.embedded.block > source.ruby
    "%>"                        meta.embedded.block > punctuation.section.embedded.end
 "alert(\"Hi <%= j current_user.name %>\");"
-   "alert"                     stub.source.js
-   "("                         
-   "\"Hi <%= j current_user.name %>\""stub.source.js
-   ")"                         
-   ";"                         stub.source.js
+   "alert"                     meta.function-call.js > entity.name.function.js
+   "("                         meta.brace.round.js
+   "\""                        string.quoted.double.js > punctuation.definition.string.begin.js
+   "Hi "                       string.quoted.double.js
+   "<%="                       string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.begin
+   " j current_user"           string.quoted.double.js > meta.embedded.line > source.ruby
+   "."                         string.quoted.double.js > meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "name"                      string.quoted.double.js > meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "%>"                        string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        string.quoted.double.js > punctuation.definition.string.end.js
+   ")"                         meta.brace.round.js
+   ";"                         punctuation.terminator.statement.js
 "<% end %>"
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
-   "end"                       meta.embedded.block > source.ruby > stub.source.ruby
+   "end"                       meta.embedded.block > source.ruby > keyword.control.ruby
    "%>"                        meta.embedded.block > punctuation.section.embedded.end
 ""

@@ -52,7 +52,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `typescript:`, `livescript:`, `babel:`, `haml:`: not Slim 5 engines, not supported and no grammar rule (`README.md`). The server still accepts them (`server/src/slim_indent.rs` `SLIM_ENGINES`), see section 6
 - [x] Embedded engines with attributes (`scss class="x":`, `javascript nonce=content_security_policy_nonce:`) (`syntaxes/slim.tmLanguage.json` `embedded`, `test/sample.html.slim`)
 - [x] `#{}` inside `javascript:` / `css:` / `markdown:` blocks highlighted as Ruby, also inside the embedded grammar's strings (`syntaxes/slim.tmLanguage.json` `injections`, `test/sample.html.slim`; strings checked with a begin/end stub grammar, the snapshot stubs are single-token)
-- [ ] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js` shows `stub.source.*`). No VS Code or grammar packages exist on this machine, and loading them from a local install would make the snapshots machine-dependent; it needs the grammars vendored or added as a dev dependency
+- [x] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js`, from the pinned `tm-grammars` dev dependency, so snapshots are the same on every machine)
 
 ## 3. File types and language configuration
 

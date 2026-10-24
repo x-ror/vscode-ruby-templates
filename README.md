@@ -85,7 +85,7 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 ```sh
 npm install           # also enables .githooks (pre-commit formats staged JS and Rust)
 npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
-npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__ (UPDATE=1 rewrites them)
+npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
 npm run test:server   # cargo test + diagnostics check on the samples
 npm run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
 npm run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
