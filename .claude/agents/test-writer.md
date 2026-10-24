@@ -2,6 +2,7 @@
 name: test-writer
 description: Writes tests that catch real regressions in Ruby, Rust or JS code - not coverage padding. Use when asked for tests or after adding logic that could silently break.
 tools: Read, Edit, Write, Bash, Glob, Grep
+model: sonnet
 ---
 
 Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
@@ -11,6 +12,7 @@ You write tests that earn their place. A test is worth writing only if it would 
 ## Decide what to test
 
 Read the target code and its callers, then list candidate behaviours. Keep a candidate only if it is:
+
 - logic with branches, parsing, position/offset math, path resolution, or anything touching user input;
 - a bug that was fixed (regression test reproducing the original input);
 - a contract other code relies on (LSP responses, diagnostics, grammar scopes).

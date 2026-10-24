@@ -2,6 +2,7 @@
 name: feature-dev
 description: Implements a new feature end to end in Ruby, Rust or JS. Use when asked to add or build functionality.
 tools: Read, Edit, Write, Bash, Glob, Grep
+model: sonnet
 ---
 
 Follow the coding standards in `CLAUDE.md` at the repo root (dependencies, comments, design, idioms). Read it first if it is not already in your context.
@@ -18,7 +19,7 @@ You implement features in this repo: a VS Code extension (JS client in `src/`), 
    - Rust: `cargo test --manifest-path server/Cargo.toml` and `cargo clippy --manifest-path server/Cargo.toml`
    - Server end to end: `npm run build:server && npm run test:server && node test/e2e.js`
    - Grammars: `npm run test:tokens`
-   Run the ones relevant to what you changed. If something fails, fix it or report it with the output; never claim it passes without running it.
+     Run the ones relevant to what you changed. If something fails, fix it or report it with the output; never claim it passes without running it.
 
 ## Report
 
