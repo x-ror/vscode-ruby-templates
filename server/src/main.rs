@@ -2,12 +2,15 @@ mod erb;
 mod helpers;
 mod indented;
 mod outline;
+mod partial_rename;
 mod partials;
 mod ruby;
+mod slim_outline;
 mod tags;
 mod util;
 
 use dashmap::DashMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tower_lsp::jsonrpc::Result;
@@ -178,10 +181,21 @@ fn unresolved_renders(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagno
     out
 }
 
+fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
+    FileOperationFilter {
+        scheme: Some("file".into()),
+        pattern: FileOperationPattern { glob: glob.into(), matches: Some(matches), options: None },
+    }
+}
+
 impl Backend {
+    fn slim_options(&self) -> &SlimOptions {
+        self.slim.get_or_init(SlimOptions::default)
+    }
+
     async fn publish(&self, uri: Url) {
         let diags = match self.docs.get(&uri) {
-            Some(doc) => diagnostics(&uri, &doc, self.slim.get_or_init(SlimOptions::default)),
+            Some(doc) => diagnostics(&uri, &doc, self.slim_options()),
             None => vec![],
         };
         self.client.publish_diagnostics(uri, diags, None).await;
@@ -224,6 +238,18 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: None,
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![
+                                rename_filter("**/_*.{erb,haml,slim,skim}", FileOperationPatternKind::File),
+                                rename_filter("**/app/views/**", FileOperationPatternKind::Folder),
+                            ],
+                        }),
+                        ..Default::default()
+                    }),
+                }),
                 ..Default::default()
             },
         })
@@ -332,20 +358,39 @@ impl LanguageServer for Backend {
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
-        // what folds Haml/Slim, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
-        if doc.lang != TemplateLang::Erb || !html_host(&p.text_document.uri) {
-            return Ok(None);
+        // what folds Haml, and the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
+        match doc.lang {
+            TemplateLang::Slim | TemplateLang::Skim => Ok(Some(slim_outline::folding_ranges(&doc.text, &self.slim_options().extra_engines))),
+            TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
+            _ => Ok(None),
         }
-        Ok(Some(outline::folding_ranges(&doc.text)))
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        if doc.lang != TemplateLang::Erb {
-            return Ok(None);
+        let symbols = match doc.lang {
+            TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
+            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.slim_options().extra_engines),
+            TemplateLang::Haml => return Ok(None),
+        };
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
+        let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
+        let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| partials::views_root(old)).collect();
+        roots.sort();
+        roots.dedup();
+        // Keyed by path: VS Code's URIs percent-encode `+`, `@` and drive colons where `Url::from_file_path` doesn't.
+        let open: HashMap<PathBuf, String> = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone()))).collect();
+        let mut changes = HashMap::new();
+        for views in roots {
+            let sources = partial_rename::sources(&views, &open);
+            changes.extend(partial_rename::render_edits(&renames, &sources, &self.slim_options().extra_engines));
         }
-        Ok(Some(DocumentSymbolResponse::Nested(outline::document_symbols(&doc.text, html_host(&uri)))))
+        Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {

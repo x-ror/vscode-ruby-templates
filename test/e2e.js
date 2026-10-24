@@ -1,4 +1,5 @@
 // Minimal LSP smoke test against a fake Rails tree: definition, hover, completion, diagnostics.
+const assert = require('assert');
 const cp = require('child_process'), fs = require('fs'), path = require('path'), os = require('os');
 const bin = path.join(__dirname, '..', 'server', 'target', 'release', 'ruby-templates-ls');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rt-e2e-'));
@@ -17,6 +18,15 @@ const slimFile = path.join(views, 'users', 'show.html.slim');
 const slimText = 'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
 fs.writeFileSync(slimFile, slimText);
 const slimUri = 'file://' + slimFile;
+const outlineFile = path.join(views, 'users', 'outline.html.slim');
+const outlineText = 'main#page\n  = content_for :aside do\n    nav = render "card"\n  a(href="/"\n    class="x")\n    | Home\n\njavascript:\n  go();\n';
+fs.writeFileSync(outlineFile, outlineText);
+const outlineUri = 'file://' + outlineFile;
+// Unsaved text differs from disk; VS Code sends `+` percent-encoded.
+const phoneFile = path.join(views, 'users', 'edit.html+phone.slim');
+fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
+const phoneText = '= render "card"\n';
+const phoneUri = 'file://' + phoneFile.replace('+', '%2B');
 
 const proc = cp.spawn(bin);
 let id = 0, buf = Buffer.alloc(0); const pending = new Map(); const notes = [];
@@ -64,6 +74,19 @@ const rel = p => p.replace(root, '');
   const syms = await send('textDocument/documentSymbol', { textDocument: { uri } });
   const tree = s => s.children ? `${s.name} [${s.children.map(tree).join(', ')}]` : s.name;
   console.log('documentSymbols        →', (syms.result || []).map(tree));
+  await send('textDocument/didOpen', { textDocument: { uri: outlineUri, languageId: 'slim', version: 1, text: outlineText } }, true);
+  const slimSyms = await send('textDocument/documentSymbol', { textDocument: { uri: outlineUri } });
+  console.log('slim documentSymbols   →', slimSyms.result.map(tree));
+  assert.deepStrictEqual(slimSyms.result.map(tree), ['main#page [content_for :aside [nav [render "card"]]]', 'javascript:']);
+  const slimFolds = await send('textDocument/foldingRange', { textDocument: { uri: outlineUri } });
+  const slimRanges = slimFolds.result.map(f => `${f.startLine}-${f.endLine}`);
+  console.log('slim foldingRanges     →', slimRanges);
+  assert.deepStrictEqual(slimRanges, ['0-5', '1-2', '3-5', '7-8']);
+  await send('textDocument/didOpen', { textDocument: { uri: phoneUri, languageId: 'slim', version: 1, text: phoneText } }, true);
+  const renamed = await send('workspace/willRenameFiles', { files: [{ oldUri: 'file://' + path.join(views, 'users', '_card.html.slim'), newUri: 'file://' + path.join(views, 'users', '_tile.html.slim') }] });
+  const renameEdits = Object.entries(renamed.result.changes).map(([u, es]) => `${rel(decodeURIComponent(new URL(u).pathname))}: ${es.map(e => `${e.range.start.line}:${e.range.start.character} ${e.newText}`).join(', ')}`).sort();
+  console.log('willRenameFiles _card  →', renameEdits);
+  assert.deepStrictEqual(renameEdits, ['/app/views/users/edit.html+phone.slim: 0:10 tile', '/app/views/users/index.html.erb: 0:12 tile, 9:12 tile', '/app/views/users/outline.html.slim: 2:18 tile']);
   await new Promise(r => setTimeout(r, 200));
   const diag = notes.find(n => n.method === 'textDocument/publishDiagnostics' && n.params.uri === uri);
   console.log('diagnostics            →', diag ? diag.params.diagnostics.map(d => `${d.range.start.line + 1}: ${d.message}`) : 'none');

@@ -33,7 +33,7 @@ pub mod code {
 }
 
 // Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
-const SLIM_ENGINES: &[&str] = &[
+pub(crate) const SLIM_ENGINES: &[&str] = &[
     "ruby",
     "javascript",
     "css",

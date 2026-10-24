@@ -17,9 +17,9 @@ static CONTENT_FOR: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*content_for\s*\(
 static FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
 static TURBO_FRAME: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^\s*turbo_frame_tag\s*\(?\s*("[^"]*"|'[^']*'|[^\s,]+)"#).unwrap());
 static BLOCK_TAIL: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+do\s*(\|[^|]*\|)?\s*$").unwrap());
-static ID_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
+pub(crate) static ID_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
 
-const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
+pub(crate) const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
 
 /// A `<% %>`, `<%= %>` or `<%# %>` tag as byte offsets; `code` is empty for comments.
 struct ErbTag<'a> { start: usize, end: usize, comment: bool, code_start: usize, code: &'a str }
@@ -122,7 +122,7 @@ fn indentation_folds(text: &str) -> Vec<(u32, u32)> {
 }
 
 /// Columns of leading whitespace with tabs to the next `TAB_SIZE` stop; `None` for blank lines.
-fn indent_level(line: &str) -> Option<i64> {
+pub(crate) fn indent_level(line: &str) -> Option<i64> {
     let mut indent = 0;
     for c in line.chars() {
         match c {
@@ -185,7 +185,7 @@ pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
     nest(items)
 }
 
-fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
+pub(crate) fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
     if let Some(c) = CONTENT_FOR.captures(code) {
         return Some((format!("content_for :{}", &c[1]), SymbolKind::NAMESPACE));
     }
@@ -195,14 +195,14 @@ fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
     FORM.is_match(code).then(|| (BLOCK_TAIL.replace(code, "").split_whitespace().collect::<Vec<_>>().join(" "), SymbolKind::OBJECT))
 }
 
-fn symbol(text: &str, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) -> DocumentSymbol {
+pub(crate) fn symbol(text: &str, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) -> DocumentSymbol {
     let to_range = |(start, end)| Range::new(offset_to_position(text, start), offset_to_position(text, end));
     #[allow(deprecated)]
     DocumentSymbol { name, detail: None, kind, tags: None, deprecated: None, range: to_range(range), selection_range: to_range(selection), children: None }
 }
 
 /// Nest symbols by byte-range containment; partially overlapping ones become siblings.
-fn nest(mut items: Vec<(usize, usize, DocumentSymbol)>) -> Vec<DocumentSymbol> {
+pub(crate) fn nest(mut items: Vec<(usize, usize, DocumentSymbol)>) -> Vec<DocumentSymbol> {
     items.sort_by_key(|&(start, end, _)| (start, std::cmp::Reverse(end)));
     let mut roots = Vec::new();
     let mut stack: Vec<(usize, DocumentSymbol)> = Vec::new();
