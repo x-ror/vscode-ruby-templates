@@ -42,7 +42,7 @@ pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)>
 /// `users/_form.html.erb` → `users.form`, like ActionView's `@virtual_path.gsub(%r{/_?}, ".")`.
 pub fn lazy_scope(current: &Path) -> Option<String> {
     let rel = current.strip_prefix(views_root(current)?).ok()?;
-    let stem = rel.file_name()?.to_str()?.split('.').next()?;
+    let stem = crate::partials::template_stem(rel.file_name()?.to_str()?);
     let virtual_path = rel.with_file_name(stem).to_str()?.replace('\\', "/");
     Some(format!("/{virtual_path}").replace("/_", "/").replace('/', ".")[1..].to_string())
 }
@@ -259,6 +259,7 @@ mod tests {
         let views = Path::new("/r/app/views");
         assert_eq!(lazy_scope(&views.join("users/index.html.erb")).as_deref(), Some("users.index"));
         assert_eq!(lazy_scope(&views.join("users/_form.html+phone.erb")).as_deref(), Some("users.form"));
+        assert_eq!(lazy_scope(&views.join("users/_user.v2.html.erb")).as_deref(), Some("users.user.v2"));
         assert_eq!(lazy_scope(&views.join("admin/_x/_card.html.haml")).as_deref(), Some("admin.x.card"));
         assert_eq!(full_key(&views.join("users/index.html.erb"), "a.b").as_deref(), Some("a.b"));
         assert_eq!(full_key(Path::new("/tmp/x.html.erb"), ".title"), None);
