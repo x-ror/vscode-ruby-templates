@@ -235,7 +235,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
 - [ ] Extension-host tests (`@vscode/test-electron`) for commands: toggle, wrap, convert
-- [ ] Fixture corpus of real-world Rails views (no false-positive diagnostics)
+- [x] Fixture corpus of real-world Rails views (no false-positive diagnostics): checked by hand on Forem and rubygems.org `app/views` (see `docs/HAML_TODO.md` §16 for the fixes it led to); the remaining HTML tag warnings on Forem are real mismatches (`<h3>…</h2>`).
 
 ## 17. Docs
 
