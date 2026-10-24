@@ -2,6 +2,7 @@
 
 mod assets;
 pub mod cli;
+mod config;
 mod controllers;
 mod erb;
 mod erb_complete;

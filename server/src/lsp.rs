@@ -1,6 +1,6 @@
 use crate::lang::{file_name, html_host, slim_html_host, TemplateLang};
 use crate::{
-    assets, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, html_lint, i18n, ivars, outline,
+    assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, html_lint, i18n, ivars, outline,
     partial_rename, partials, routes, ruby, schema, slim_complete, slim_hover, slim_indent, slim_outline, slim_parser, slots, stimulus,
     tags, util,
 };
@@ -413,7 +413,8 @@ impl Backend {
     /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is.
     async fn formatted(&self, uri: &Url, options: &FormattingOptions) -> Option<(String, String)> {
         let (lang, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.text.clone()))?;
-        let settings = format::Settings::default().with_editor(options);
+        let path = uri.to_file_path().ok();
+        let settings = path.map_or_else(format::Settings::default, |path| config::settings_for(&path, lang).settings).with_editor(options);
         match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
             Ok(formatted) => Some((text, formatted.text)),
             Err(skipped) => {

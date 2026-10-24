@@ -1,6 +1,7 @@
 //! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
 
-use crate::format::{self, Settings, SkipKind};
+use crate::config;
+use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
 use crate::lsp::{diagnostics, Doc, Options};
 use std::io::{Read, Write};
@@ -40,7 +41,7 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 
 /// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
 fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[]));
+    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[], true));
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;
@@ -220,9 +221,15 @@ fn format_command(args: &FormatArgs) -> i32 {
 
 fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
     let shown = path.display();
-    let settings = Settings::default();
     let result = match (file_uri(path), language(path)) {
-        (Some(uri), Some(lang)) => format::format(&uri, lang, text, &settings, &[]),
+        (Some(uri), Some(lang)) => {
+            let resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()), lang);
+            if args.verbose {
+                eprintln!("{shown}: {:?}", resolved.settings);
+                resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
+            }
+            format::format(&uri, lang, text, &resolved.settings, &[])
+        }
         _ => format::skip(SkipKind::NotHandled, "not an ERB, Haml or Slim template"),
     };
     let mut code = OK;

@@ -193,7 +193,7 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Res
     if settings.indent_style == IndentStyle::Tab {
         return skip(SkipKind::NotHandled, "Slim is only indented with spaces");
     }
-    let Some(text) = slim_format::format(text, settings.indent_size, extra_engines) else {
+    let Some(text) = slim_format::format(text, settings.indent_size, extra_engines, settings.trim_trailing_whitespace) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
     // Slim compiles every line, blank ones included, so line counts stay as they are.
@@ -345,6 +345,16 @@ mod tests {
         assert_eq!(fmt("a.slim", "p\r\nq\r\n", &lf).as_deref(), Ok("p\nq\n"));
         let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
         assert_eq!(fmt("a.slim", "p\nq", &crlf).as_deref(), Ok("p\r\nq\r\n"));
+    }
+
+    #[test]
+    fn editor_options_come_first() {
+        let project = Settings { indent_size: 4, trim_trailing_whitespace: false, final_newline: Some(false), ..Settings::default() };
+        let editor = FormattingOptions { tab_size: 3, insert_spaces: false, trim_trailing_whitespace: Some(true), ..Default::default() };
+        let s = project.clone().with_editor(&editor);
+        assert_eq!((s.indent_style, s.indent_size, s.trim_trailing_whitespace, s.final_newline), (IndentStyle::Tab, 3, true, Some(false)));
+        let quiet = FormattingOptions { tab_size: 2, insert_spaces: true, trim_trailing_whitespace: Some(false), ..Default::default() };
+        assert!(!project.with_editor(&quiet).trim_trailing_whitespace, "an editor option that is off leaves the project's");
     }
 
     #[test]
