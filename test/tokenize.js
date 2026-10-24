@@ -17,6 +17,7 @@ const samples = {
   'sample.html.erb': 'text.html.erb',
   'sample.html.haml': 'text.haml',
   'sample.html.slim': 'text.slim',
+  'sample.skim': 'text.skim',
   'sample.js.erb': 'source.js.erb',
   'sample.json.erb': 'source.json.erb',
   'sample.text.erb': 'text.plain.erb',
@@ -54,9 +55,33 @@ function firstDiff(expected, actual) {
   ].join('\n') + `\n  (first difference at line ${at + 1})`;
 }
 
+// Skim is Slim syntax with CoffeeScript instead of Ruby; engine blocks keep their own languages.
+function skimGrammar() {
+  const toCoffee = value => typeof value === 'string'
+    ? value.replace(/^source\.ruby$/, 'source.coffee')
+    : Array.isArray(value) ? value.map(toCoffee)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, toCoffee(v)]))
+    : value;
+  const { repository: { embedded, ...rules }, ...slim } = JSON.parse(fs.readFileSync(path.join(root, grammars['text.slim']), 'utf8'));
+  return JSON.stringify({ ...toCoffee(slim), name: 'Skim', scopeName: 'text.skim', fileTypes: ['skim'], repository: { embedded, ...toCoffee(rules) } }, null, 2);
+}
+
+function checkSkimGrammar() {
+  const file = path.join(root, grammars['text.skim']);
+  const expected = skimGrammar();
+  if (process.env.UPDATE) {
+    fs.writeFileSync(file, expected);
+    console.log(`wrote ${grammars['text.skim']}`);
+    return 0;
+  }
+  if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === expected) return 0;
+  console.error(`FAIL ${grammars['text.skim']} is out of sync with the Slim grammar`);
+  return 1;
+}
+
 async function check() {
   if (process.env.UPDATE) fs.mkdirSync(snapshots, { recursive: true });
-  let failed = 0;
+  let failed = checkSkimGrammar();
   for (const f of fs.readdirSync(__dirname).filter(f => f.startsWith('sample.') && !samples[f])) {
     failed++;
     console.error(`FAIL ${f}: add it to the samples map in test/tokenize.js`);

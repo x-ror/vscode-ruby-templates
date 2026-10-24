@@ -12,52 +12,52 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Inline attributes `attr="string"` and `attr=ruby_expr` (`syntaxes/slim.tmLanguage.json` `attribute`, `test/sample.html.slim`)
 - [x] Unescaped attributes `attr=="..."` (`syntaxes/slim.tmLanguage.json` `attribute` `(==?)`)
 - [x] Wrapped attributes `()` and `[]` with boolean attributes (`syntaxes/slim.tmLanguage.json` `wrapped-attributes`, `test/sample.html.slim`)
-- [ ] (?) Wrapped attributes `{}`: in the grammar (`wrapped-attributes`), not in the sample
-- [ ] (?) Wrapped attributes spanning several lines (`a(href="/"` newline `class="x")`): not in the sample
+- [x] Wrapped attributes `{}` (`syntaxes/slim.tmLanguage.json` `wrapped-attributes`, `test/sample.html.slim` `span{...}`)
+- [x] Wrapped attributes spanning several lines (`syntaxes/slim.tmLanguage.json` `wrapped-attributes`, `test/sample.html.slim` `a(href="/"`)
 - [x] Splat attributes `*{...}` and `*attrs` (`syntaxes/slim.tmLanguage.json` `splat`, `test/sample.html.slim`)
 - [x] Inline tags `li: a href="/" Home` (`syntaxes/slim.tmLanguage.json` `inline-tag`, `test/sample.html.slim`)
-- [ ] Whitespace modifiers on bare tags `a>`, `a<`, `a<>`: tag name loses `entity.name.tag` (tag-name lookahead in `syntaxes/slim.tmLanguage.json` `tag` lacks `<`, `>`)
-- [ ] Self-closing tag `img/`: tag name loses `entity.name.tag` (same lookahead lacks `/`)
+- [x] Whitespace modifiers on bare tags `a>`, `a<`, `a<>`, also before wrapped attributes `a>(...)` (`syntaxes/slim.tmLanguage.json` `tag`, `test/sample.html.slim`)
+- [x] Self-closing tag `img/` (`syntaxes/slim.tmLanguage.json` `tag`, `test/sample.html.slim`)
 - [x] Control code `- ruby` (`syntaxes/slim.tmLanguage.json` `control-line`, `test/sample.html.slim`)
 - [x] Output `= ruby` and unescaped `== ruby` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
-- [ ] (?) Output with whitespace modifiers `=<`, `=>`, `==<>`: in the grammar, not in the sample
-- [ ] Legacy trailing-whitespace output `='` (deprecated but still parsed by Slim)
+- [x] Output with whitespace modifiers `=<`, `=>`, `==<>` (`syntaxes/slim.tmLanguage.json` `output-line`, `test/sample.html.slim`)
+- [x] Legacy trailing-whitespace output `='` after a tag (`p ='x'`; Slim 5 parses `'` as a modifier only there, a line-start `='x'` is Ruby `'x'`) (`syntaxes/slim.tmLanguage.json` `inline-output`, `test/sample.html.slim`)
 - [x] Output after a tag `p = expr` (`syntaxes/slim.tmLanguage.json` `inline-output`, `test/sample.html.slim`)
 - [x] Inline text after a tag (`syntaxes/slim.tmLanguage.json` `inline-text`, `test/sample.html.slim`)
 - [x] Text blocks `|` and `'` with nested continuation lines (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`)
-- [ ] Text continuation lines indented under `p Some text` highlighted as text, not as tags
+- [x] Text continuation lines indented under `p Some text` / `li: a Home` highlighted as text, not as tags (Slim 5 `parse_text_block` makes every deeper line text) (`syntaxes/slim.tmLanguage.json` `tag-line-with-text`, `test/sample.html.slim`). Falls back to the old tag scoping when the tag head can't be matched on one line (unclosed wrapped attributes, nested brackets two levels deep)
 - [x] Code comment `/` and its indented block (`syntaxes/slim.tmLanguage.json` `code-comment`, `test/sample.html.slim`)
 - [x] HTML comment `/!` (`syntaxes/slim.tmLanguage.json` `html-comment`, `test/sample.html.slim`)
-- [ ] IE conditional comment `/[if IE]`: children are scoped as comment, but Slim renders them as markup (split out of `html-comment`)
+- [x] IE conditional comment `/[if IE]`: own rule, children use the top-level patterns (`syntaxes/slim.tmLanguage.json` `conditional-comment`, `test/sample.html.slim`)
 - [x] Interpolation `#{}` and escaped `\#{` in text, double-quoted attributes and comments (`syntaxes/slim.tmLanguage.json` `interpolation`, `test/sample.html.slim`)
-- [ ] Unescaped interpolation `#{{ expr }}` (grammar ends the interpolation at the first `}`)
-- [ ] Multi-line Ruby after `,` or `\` stays Ruby on the next line (snapshot shows `class: "form" do |f|` scoped as a tag: `test/__snapshots__/sample.html.slim.tokens.txt`)
-- [ ] Inline HTML lines starting with `<` (`<div class="x">`) highlighted as HTML, not plain text
-- [ ] Single-quoted attribute values interpolate `#{}` (`string-single` has no `interpolation`)
-- [ ] (?) Attribute names with `@`/`:`/`.` (Alpine/Vue: `@click`, `:class`, `x-on:click.prevent`): in the grammar (`attribute`), not in the sample
-- [ ] Custom shortcuts (`Slim::Parser` `:shortcut`, e.g. `&text` → `input type="text"`, `@` → `role`)
-- [ ] Custom `attr_list_delims` / `code_attr_delims` parser options
-- [ ] `include` directive (`slim/include`) highlighted as a keyword with its path
-- [ ] Smart text (`slim/smart`) lines starting with `>` and the implicit text it allows
-- [ ] Logic-less mode (`slim/logic_less`): `- section` / `= var` highlighted as dictionary access, not Ruby
-- [ ] Translator plugin (`slim/translator`) needs nothing extra: confirm and note in docs
-- [ ] `.skim` files: code lines are CoffeeScript, not Ruby (today `.skim` uses the Ruby grammar)
+- [x] Unescaped interpolation `#{{ expr }}` (`syntaxes/slim.tmLanguage.json` `interpolation-unescaped`, `test/sample.html.slim`)
+- [x] Multi-line Ruby after `,` or `\` stays Ruby on the next line: the end lookbehind also rejects the `\n` vscode-textmate appends (`syntaxes/slim.tmLanguage.json` `control-line`, `output-line`, `inline-output`; `test/__snapshots__/sample.html.slim.tokens.txt` `class: "form" do |f|`). A `,` followed by trailing spaces still ends the line
+- [x] Inline HTML lines starting with `<` highlighted as tags, attributes, strings and `#{}` (`syntaxes/slim.tmLanguage.json` `inline-html`, `test/sample.html.slim`)
+- [x] Single-quoted attribute values interpolate `#{}` (`syntaxes/slim.tmLanguage.json` `string-single`, `test/sample.html.slim`)
+- [x] Attribute names with `@`/`:`/`.` (`@click`, `:class`, `x-on:click.prevent`) (`syntaxes/slim.tmLanguage.json` `attribute`, `test/sample.html.slim`)
+- [x] Custom shortcuts (`:shortcut`): per-app runtime config, documented as unsupported (`README.md` Tips)
+- [x] Custom `attr_list_delims` / `code_attr_delims`: per-app runtime config, documented as unsupported (`README.md` Tips)
+- [x] `include` directive (`slim/include`) highlighted as a keyword with its path (`syntaxes/slim.tmLanguage.json` `include`, `test/sample.html.slim`)
+- [x] Smart text (`slim/smart`): explicit `>` lines are text blocks (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`; without the plugin Slim rejects them, so this is safe). Implicit text depends on `implicit_text` and is documented as unsupported (`README.md` Tips)
+- [x] Logic-less mode (`slim/logic_less`): enabled per app, documented as unsupported (`README.md` Tips)
+- [x] Translator plugin (`slim/translator`) translates static text at compile time and adds no syntax; noted in `README.md` Tips
+- [x] `.skim` files: own `skim` language and `text.skim` grammar, the Slim grammar with `source.coffee` outside engine blocks (`syntaxes/skim.tmLanguage.json`, generated and kept in sync by `test/tokenize.js`; `package.json`; `test/sample.skim`)
 
 ## 2. Embedded engines
 
-- [x] `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:`, `erb:` highlighted with the target grammar (`syntaxes/slim.tmLanguage.json` `embedded`; `package.json` `embeddedLanguages` for all but `erb:`)
-- [ ] `erb:` mapped in `package.json` `embeddedLanguages` so ERB language features apply inside the block
+- [x] `javascript:`, `css:`, `ruby:`, `scss:`, `sass:`, `coffee:`, `markdown:`, `erb:` highlighted with the target grammar (`syntaxes/slim.tmLanguage.json` `embedded`; `package.json` `embeddedLanguages` for all but `erb:`). Slim 5 itself registers only `asciidoc`, `markdown`, `textile`, `rdoc`, `coffee`, `sass`, `scss`, `javascript`, `css`, `ruby` (`slim/embedded.rb`); `erb:` and the plain-text engines below are kept for older Slim
+- [x] `erb:` in `embeddedLanguages`: not a Slim 5 engine (removed in Slim 4), so not mapped; the existing highlighting rule stays for older Slim
 - [x] `textile:`, `rdoc:`, `less:`, `styl:`, `stylus:`, `builder:`, `nokogiri:`, `wiki:`, `creole:`, `mediawiki:`, `asciidoc:`, `org:` as plain text with interpolation (`syntaxes/slim.tmLanguage.json` `embedded`)
-- [ ] `less:` and `stylus:` highlighted with their grammars when installed (they are plain text today)
-- [ ] `typescript:`, `livescript:`, `babel:`, `haml:` engines: accepted by the server (`server/src/indented.rs` `SLIM_ENGINES`) but no grammar rule
-- [ ] Embedded engines with attributes (`scss class="x":`, `javascript nonce=content_security_policy_nonce:`)
-- [ ] (?) `#{}` interpolation inside `javascript:` / `css:` blocks highlighted as Ruby
-- [ ] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js` shows `stub.source.*`), so embedding is actually checked
+- [x] `less:` / `stylus:` with their grammars: not Slim 5 engines, not supported; they stay plain text with `#{}` for older Slim (`README.md`)
+- [x] `typescript:`, `livescript:`, `babel:`, `haml:`: not Slim 5 engines, not supported and no grammar rule (`README.md`). The server still accepts them (`server/src/indented.rs` `SLIM_ENGINES`), see section 6
+- [x] Embedded engines with attributes (`scss class="x":`, `javascript nonce=content_security_policy_nonce:`) (`syntaxes/slim.tmLanguage.json` `embedded`, `test/sample.html.slim`)
+- [x] `#{}` inside `javascript:` / `css:` / `markdown:` blocks highlighted as Ruby, also inside the embedded grammar's strings (`syntaxes/slim.tmLanguage.json` `injections`, `test/sample.html.slim`; strings checked with a begin/end stub grammar, the snapshot stubs are single-token)
+- [ ] Token test loads real JS/CSS/Ruby grammars instead of stubs (`test/tokenize.js` shows `stub.source.*`). No VS Code or grammar packages exist on this machine, and loading them from a local install would make the snapshots machine-dependent; it needs the grammars vendored or added as a dev dependency
 
 ## 3. File types and language configuration
 
-- [x] `.slim`, `.html.slim`, `.skim` map to the `slim` language id (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim` id or the `.slim`/`.skim` extension (`server/src/main.rs` `TemplateLang::from_uri_or_id`)
+- [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
+- [x] Server picks Slim from the `slim`/`skim` id or the `.slim`/`.skim` extension (`server/src/main.rs` `TemplateLang::from_uri_or_id`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/main.rs` `folding_range`)
@@ -117,6 +117,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block
 - [ ] `=` with a block helper but missing `do`, and `-` on an output block helper (`- form_with do` renders nothing)
 - [ ] Unknown engine check accepts engines registered by the app (setting for extra engine names)
+- [ ] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/indented.rs`)
 - [ ] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics)
 - [ ] Strict locals: missing/unknown locals passed to a Slim partial
 - [ ] Settings to enable/disable each built-in Slim check
@@ -155,12 +156,12 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Unit tests in `server/src/indented.rs` (it has no `#[cfg(test)]` module), one per Slim diagnostic with positions
 - [ ] Assert the expected diagnostics for `test/broken/bad.html.slim` (today nothing checks its output)
 - [ ] `test/e2e.js` opens a `.slim` document (definition, hover, completion, diagnostics); today it only opens ERB
-- [ ] Sample lines for every `(?)` item in sections 1 and 2
+- [x] Sample lines for every `(?)` item in sections 1 and 2 (`test/sample.html.slim`, parsed with Slim 5.2.2 except the plugin-only `include` and `>` lines)
 - [ ] Fixture corpus of real-world Slim views with no false-positive diagnostics
 
 ## 11. Docs
 
 - [x] README lists Slim highlighting, diagnostics, commands, gems (`README.md`)
 - [x] CHANGELOG mentions Slim (`CHANGELOG.md`)
-- [ ] Document unsupported Slim options (custom shortcuts, logic-less, smart text, `.skim` CoffeeScript)
-- [ ] Document which engines get full highlighting vs plain text
+- [x] Document unsupported Slim options (custom shortcuts, attribute delimiters, logic-less, implicit smart text) (`README.md` Tips; `.skim` is now supported)
+- [x] Document which engines get full highlighting vs plain text (`README.md` Features)

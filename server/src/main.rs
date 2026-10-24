@@ -21,7 +21,7 @@ impl TemplateLang {
         match language_id {
             Some(id) if id == "erb" || id.starts_with("erb-") => return Some(Self::Erb),
             Some("haml") => return Some(Self::Haml),
-            Some("slim") => return Some(Self::Slim),
+            Some("slim" | "skim") => return Some(Self::Slim),
             _ => {}
         }
         let path = uri.path();

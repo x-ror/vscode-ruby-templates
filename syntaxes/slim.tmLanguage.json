@@ -4,8 +4,7 @@
   "scopeName": "text.slim",
   "fileTypes": [
     "slim",
-    "html.slim",
-    "skim"
+    "html.slim"
   ],
   "patterns": [
     {
@@ -18,16 +17,28 @@
       "include": "#html-comment"
     },
     {
+      "include": "#conditional-comment"
+    },
+    {
       "include": "#embedded"
     },
     {
       "include": "#text-block"
     },
     {
+      "include": "#inline-html"
+    },
+    {
       "include": "#control-line"
     },
     {
       "include": "#output-line"
+    },
+    {
+      "include": "#include"
+    },
+    {
+      "include": "#tag-line-with-text"
     },
     {
       "include": "#tag-line"
@@ -51,7 +62,7 @@
     },
     "code-comment": {
       "name": "comment.block.slim",
-      "begin": "^(\\s*)(/)(?![!\\[])(.*)$",
+      "begin": "^(\\s*)(/)(?!!|\\[[^\\]]*\\]\\s*$)(.*)$",
       "beginCaptures": {
         "2": {
           "name": "punctuation.definition.comment.slim"
@@ -65,13 +76,18 @@
     "html-comment": {
       "name": "comment.block.html.slim",
       "contentName": "comment.block.html",
-      "begin": "^(\\s*)(/!|/\\[[^\\]]*\\])(.*)$",
+      "begin": "^(\\s*)(/!)(.*)$",
       "beginCaptures": {
         "2": {
           "name": "punctuation.definition.comment.slim"
         },
         "3": {
-          "name": "comment.block.html"
+          "name": "comment.block.html",
+          "patterns": [
+            {
+              "include": "#interpolation"
+            }
+          ]
         }
       },
       "end": "^(?!\\1\\s)(?=\\s*\\S)",
@@ -84,14 +100,24 @@
     "embedded": {
       "patterns": [
         {
-          "name": "meta.embedded.block.slim",
+          "name": "meta.embedded.block.interpolated.slim",
           "contentName": "source.js",
-          "begin": "^(\\s*)(javascript)(:)\\s*$",
+          "begin": "^(\\s*)(javascript)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -103,14 +129,24 @@
           ]
         },
         {
-          "name": "meta.embedded.block.slim",
+          "name": "meta.embedded.block.interpolated.slim",
           "contentName": "source.css",
-          "begin": "^(\\s*)(css)(:)\\s*$",
+          "begin": "^(\\s*)(css)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -124,12 +160,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "source.ruby",
-          "begin": "^(\\s*)(ruby)(:)\\s*$",
+          "begin": "^(\\s*)(ruby)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -143,12 +189,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "source.css.scss",
-          "begin": "^(\\s*)(scss)(:)\\s*$",
+          "begin": "^(\\s*)(scss)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -162,12 +218,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "source.sass",
-          "begin": "^(\\s*)(sass)(:)\\s*$",
+          "begin": "^(\\s*)(sass)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -181,12 +247,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "source.coffee",
-          "begin": "^(\\s*)(coffee)(:)\\s*$",
+          "begin": "^(\\s*)(coffee)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -198,14 +274,24 @@
           ]
         },
         {
-          "name": "meta.embedded.block.slim",
+          "name": "meta.embedded.block.interpolated.slim",
           "contentName": "text.html.markdown",
-          "begin": "^(\\s*)(markdown)(:)\\s*$",
+          "begin": "^(\\s*)(markdown)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -219,12 +305,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "text.html.erb",
-          "begin": "^(\\s*)(erb)(:)\\s*$",
+          "begin": "^(\\s*)(erb)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -238,12 +334,22 @@
         {
           "name": "meta.embedded.block.slim",
           "contentName": "string.unquoted.slim",
-          "begin": "^(\\s*)(textile|rdoc|less|styl|stylus|builder|nokogiri|wiki|creole|mediawiki|asciidoc|org)(:)\\s*$",
+          "begin": "^(\\s*)(textile|rdoc|less|styl|stylus|builder|nokogiri|wiki|creole|mediawiki|asciidoc|org)(?:\\s+(.*?))?(:)\\s*$",
           "beginCaptures": {
             "2": {
               "name": "entity.name.function.embedded.slim"
             },
             "3": {
+              "patterns": [
+                {
+                  "include": "#wrapped-attributes"
+                },
+                {
+                  "include": "#attribute"
+                }
+              ]
+            },
+            "4": {
               "name": "punctuation.definition.embedded.slim"
             }
           },
@@ -259,7 +365,7 @@
     "text-block": {
       "name": "meta.text.block.slim",
       "contentName": "string.unquoted.text.slim",
-      "begin": "^(\\s*)([|'])(?:\\s(.*))?$",
+      "begin": "^(\\s*)([|'>])(?:\\s(.*))?$",
       "beginCaptures": {
         "2": {
           "name": "punctuation.definition.text.slim"
@@ -284,7 +390,7 @@
       "name": "meta.line.control.slim",
       "contentName": "source.ruby",
       "begin": "^\\s*(-)\\s*",
-      "end": "(?<![,\\\\])$",
+      "end": "(?<![,\\\\\\n])$",
       "beginCaptures": {
         "1": {
           "name": "punctuation.section.embedded.ruby.slim"
@@ -300,7 +406,7 @@
       "name": "meta.line.output.slim",
       "contentName": "source.ruby",
       "begin": "^\\s*(==?[<>]{0,2}|==?)\\s*",
-      "end": "(?<![,\\\\])$",
+      "end": "(?<![,\\\\\\n])$",
       "beginCaptures": {
         "1": {
           "name": "punctuation.section.embedded.ruby.slim"
@@ -326,7 +432,7 @@
       "patterns": [
         {
           "name": "entity.name.tag.slim",
-          "match": "(?<![\\w.#-])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=]|$)"
+          "match": "(?<![\\w.#-])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=<>/]|$)"
         },
         {
           "name": "entity.other.attribute-name.class.slim",
@@ -354,7 +460,7 @@
         },
         {
           "name": "keyword.operator.whitespace.slim",
-          "match": "(?<=\\S)[<>]+(?=\\s|$)"
+          "match": "(?<=\\S)[<>]+(?=[\\s(\\[{]|$)"
         },
         {
           "name": "punctuation.definition.tag.self-closing.slim",
@@ -573,8 +679,8 @@
     "inline-output": {
       "name": "meta.embedded.line.ruby.slim",
       "contentName": "source.ruby",
-      "begin": "\\s+(==?[<>]{0,2})\\s*",
-      "end": "(?<![,\\\\])$",
+      "begin": "\\s+(==?['<>]*)\\s*",
+      "end": "(?<![,\\\\\\n])$",
       "beginCaptures": {
         "1": {
           "name": "punctuation.section.embedded.ruby.slim"
@@ -607,23 +713,12 @@
       ]
     },
     "interpolation": {
-      "name": "meta.embedded.interpolation.slim",
-      "contentName": "source.ruby",
-      "begin": "(?<!\\\\)#\\{",
-      "end": "\\}",
-      "beginCaptures": {
-        "0": {
-          "name": "punctuation.section.embedded.begin.slim"
-        }
-      },
-      "endCaptures": {
-        "0": {
-          "name": "punctuation.section.embedded.end.slim"
-        }
-      },
       "patterns": [
         {
-          "include": "source.ruby"
+          "include": "#interpolation-unescaped"
+        },
+        {
+          "include": "#interpolation-escaped"
         }
       ]
     },
@@ -647,8 +742,150 @@
       "end": "'",
       "patterns": [
         {
+          "include": "#interpolation"
+        },
+        {
           "name": "constant.character.escape.slim",
           "match": "\\\\."
+        }
+      ]
+    },
+    "conditional-comment": {
+      "name": "meta.tag.conditional-comment.slim",
+      "match": "^\\s*(/\\[)\\s*(.*?)\\s*(\\])\\s*$",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.comment.slim"
+        },
+        "2": {
+          "name": "keyword.control.conditional.slim"
+        },
+        "3": {
+          "name": "punctuation.definition.comment.slim"
+        }
+      }
+    },
+    "inline-html": {
+      "name": "meta.tag.inline.html.slim",
+      "begin": "^\\s*(?=<)",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#interpolation"
+        },
+        {
+          "match": "(</?)([a-zA-Z][\\w:-]*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.tag.begin.html"
+            },
+            "2": {
+              "name": "entity.name.tag.html"
+            }
+          }
+        },
+        {
+          "match": "(?<=\\s)([\\w:@.-]+)(?=\\s*=)",
+          "name": "entity.other.attribute-name.html"
+        },
+        {
+          "include": "#string-double"
+        },
+        {
+          "include": "#string-single"
+        },
+        {
+          "match": "/?>",
+          "name": "punctuation.definition.tag.end.html"
+        }
+      ]
+    },
+    "include": {
+      "name": "meta.include.slim",
+      "match": "^\\s*(include)\\s+(\\S.*)$",
+      "captures": {
+        "1": {
+          "name": "keyword.control.import.include.slim"
+        },
+        "2": {
+          "name": "string.unquoted.include.slim"
+        }
+      }
+    },
+    "tag-line-with-text": {
+      "begin": "^(\\s*)(?=(?:(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>]*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))\\s*:\\s+)*(?:[a-zA-Z](?:[\\w:-]*\\w)?|(?=[.#][\\w-]))(?:[.#][\\w-]+)*[<>]*(?:(?:\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})|(?>(?:[ \\t]+(?:[\\w:@.-]+\\s*==?\\s*(?:(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*')|(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+)|\\*(?:[^\\s\"'()\\[\\]{}]|\\([^()]*\\)|\\[[^\\[\\]]*\\]|\\{[^{}]*\\})+))*))[ \\t]+(?![:=/]|[\\w:@.-]+\\s*==?|\\*\\S)\\S)",
+      "end": "^(?!\\G)(?!\\1\\s)(?=\\s*\\S)",
+      "patterns": [
+        {
+          "name": "meta.tag.slim",
+          "begin": "\\G",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#tag"
+            }
+          ]
+        },
+        {
+          "name": "string.unquoted.text.slim",
+          "begin": "^\\s*(?=\\S)",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#interpolation"
+            }
+          ]
+        }
+      ]
+    },
+    "interpolation-unescaped": {
+      "name": "meta.embedded.interpolation.unescaped.slim",
+      "contentName": "source.ruby",
+      "begin": "(?<!\\\\)#\\{\\{",
+      "end": "\\}\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.slim"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.slim"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    "interpolation-escaped": {
+      "name": "meta.embedded.interpolation.slim",
+      "contentName": "source.ruby",
+      "begin": "(?<!\\\\)#\\{",
+      "end": "\\}",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.begin.slim"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.section.embedded.end.slim"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    }
+  },
+  "injections": {
+    "L:meta.embedded.block.interpolated.slim": {
+      "patterns": [
+        {
+          "include": "#interpolation"
         }
       ]
     }

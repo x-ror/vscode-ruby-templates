@@ -158,7 +158,17 @@
         ],
         "extensions": [
           ".slim",
-          ".html.slim",
+          ".html.slim"
+        ],
+        "configuration": "./language-configuration/slim.json"
+      },
+      {
+        "id": "skim",
+        "aliases": [
+          "Skim",
+          "skim"
+        ],
+        "extensions": [
           ".skim"
         ],
         "configuration": "./language-configuration/slim.json"
@@ -262,6 +272,20 @@
         "language": "slim",
         "scopeName": "text.slim",
         "path": "./syntaxes/slim.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby",
+          "source.js": "javascript",
+          "source.css": "css",
+          "source.css.scss": "scss",
+          "source.sass": "sass",
+          "source.coffee": "coffeescript",
+          "text.html.markdown": "markdown"
+        }
+      },
+      {
+        "language": "skim",
+        "scopeName": "text.skim",
+        "path": "./syntaxes/skim.tmLanguage.json",
         "embeddedLanguages": {
           "source.ruby": "ruby",
           "source.js": "javascript",
@@ -485,6 +509,10 @@
         "editor.detectIndentation": false
       },
       "[slim]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      },      "[skim]": {
         "editor.tabSize": 2,
         "editor.insertSpaces": true,
         "editor.detectIndentation": false

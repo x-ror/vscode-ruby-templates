@@ -25,3 +25,33 @@ html lang="en"
     = form_with model: @user,
         class: "form" do |f|
       = f.text_field :name
+    span{title="x" data-id=1} Braces
+    a(href="/"
+      class="wrapped") Multi-line
+    =< link_to "Left", "/"
+    ==<> raw_html
+    p ='x'
+    a> Trailing
+    a<> Both
+    img/
+    p Inline text
+      continues here, not a tag
+    li: a href="/" Home
+      more text
+    /[if IE]
+      p IE only
+    | Raw #{{ html_safe_value }} and #{escaped}
+    <div class="inline" id='#{dom_id}'>
+    </div>
+    a title='Hi #{name}' Single
+    button @click="open = true" :class="cls" x-on:click.prevent="go" Open
+    - items = [1,
+        2]
+    include partials/header
+    > Smart text line
+    scss class="theme":
+      .a { color: red; }
+    javascript nonce=content_security_policy_nonce:
+      var data = #{raw data.to_json};
+    css:
+      .b { content: "#{label}"; }
