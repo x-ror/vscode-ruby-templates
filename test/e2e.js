@@ -256,6 +256,37 @@ const check = (label, actual, expected) => {
       .pop(),
     "[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)",
   );
+  // Hover right after a multibyte char once killed the server (byte slice inside `’`).
+  const quoteUri = "file://" + path.join(views, "users", "quote.html.erb");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: quoteUri,
+        languageId: "erb",
+        version: 1,
+        text: '<p>Don’t</p>\n<%= link_to "Don’t", x %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "hover after ’ in text",
+    (await req("textDocument/hover", quoteUri, 0, 7)).error ?? null,
+    null,
+  );
+  check(
+    "hover after ’ in code",
+    (await req("textDocument/hover", quoteUri, 1, 18)).error ?? null,
+    null,
+  );
+  check(
+    "hover link_to after ’",
+    (await req("textDocument/hover", quoteUri, 1, 6)).result?.contents.value
+      .split("\n")
+      .pop(),
+    "[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)",
+  );
   const links = await send("textDocument/documentLink", {
     textDocument: { uri },
   });
