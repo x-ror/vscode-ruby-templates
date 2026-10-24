@@ -145,6 +145,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
                 opens += 1;
                 loop_opened = true;
             }
+            "def" if endless_def(&tokens, &matches, i) => {}
             t if OPENERS.contains(&t) => opens += 1,
             t if CONTINUERS.contains(&t) && i == 0 => has_continue = true,
             _ => {}
@@ -161,6 +162,32 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
         BlockEffect::Neutral
     };
     (effect, opens, closes)
+}
+
+/// `def f = 1`, `def f(a) = a`: an endless method has no `end`. A setter's `=` touches its name (`def x=(v)`).
+fn endless_def(tokens: &[&str], matches: &[regex::Match], def: usize) -> bool {
+    let name = def + 1;
+    // `def self.f` / `def obj.f`
+    let name = if tokens.get(name + 1) == Some(&".") { name + 2 } else { name };
+    let Some(name_match) = matches.get(name) else { return false };
+    let mut next = name + 1;
+    let has_params = tokens.get(next) == Some(&"(");
+    if has_params {
+        let mut depth = 0usize;
+        while let Some(&t) = tokens.get(next) {
+            depth = match t {
+                "(" => depth + 1,
+                ")" => depth - 1,
+                _ => depth,
+            };
+            next += 1;
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    let Some(eq) = matches.get(next).filter(|m| m.as_str() == "=") else { return false };
+    has_params || eq.start() > name_match.end()
 }
 
 /// Does the snippet end with a block that expects nested template content (`do`, `do |x|`)?
@@ -180,6 +207,16 @@ pub fn ends_with_block(code: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endless_methods_open_nothing() {
+        for code in ["def f = 1", "def f(a) = a + 1", "def self.f = 1", "def f(*, **, &) = g(*, **, &)"] {
+            assert_eq!(analyze(code).0, BlockEffect::Neutral, "{code}");
+        }
+        for code in ["def x=(v)", "def f(a)", "def ==(o)", "def f"] {
+            assert_eq!(analyze(code).0, BlockEffect::Open(1), "{code}");
+        }
+    }
+
     #[test]
     fn interpolation_is_code() {
         assert_eq!(code_end("html = \"#{"), CodeEnd::Code);

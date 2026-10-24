@@ -52,8 +52,7 @@ pub fn diagnostics(text: &str, template: &Tree) -> Vec<Diagnostic> {
         .into_iter()
         .take(MAX_ERRORS)
         .map(|node| {
-            let range =
-                Range::new(offset_to_position(text, node.start_byte()), offset_to_position(text, node.end_byte().max(node.start_byte())));
+            let range = Range::new(offset_to_position(text, node.start_byte()), offset_to_position(text, node.end_byte()));
             let near = ruby[node.byte_range()].split_whitespace().next().unwrap_or("");
             let message = match (node.is_missing(), near) {
                 (true, _) => format!("Ruby syntax error: missing `{}`", node.kind()),

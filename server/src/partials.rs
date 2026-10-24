@@ -397,7 +397,7 @@ pub fn resolve_component(current: &Path, name: &str) -> Vec<PathBuf> {
     out
 }
 
-fn snake_case(s: &str) -> String {
+pub fn snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
         if ch.is_uppercase() {
