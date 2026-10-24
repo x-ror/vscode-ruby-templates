@@ -30,7 +30,7 @@ jobs:
       - run: cargo fmt --manifest-path server/Cargo.toml --check
       - run: cargo clippy --manifest-path server/Cargo.toml --all-targets -- -D warnings
       - uses: actions/setup-node@v7
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 26, cache: npm }
       - run: npm ci
       - run: npm run format:check
 
@@ -68,7 +68,7 @@ jobs:
         run: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }} --check test/sample.*
       - uses: actions/setup-node@v7
         if: matrix.test
-        with: { node-version: 22 }
+        with: { node-version: 26 }
       - name: LSP end to end
         if: matrix.test
         run: node test/e2e.js
@@ -85,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
-        with: { node-version: 22, cache: npm }
+        with: { node-version: 26, cache: npm }
       # One .pkg/server-<platform>/ per build; artifacts lose the executable bit.
       - uses: actions/download-artifact@v8
         with: { pattern: server-*, path: .pkg }
