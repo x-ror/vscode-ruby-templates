@@ -23,6 +23,7 @@ Default: the uncommitted diff plus the current branch against `main` (`git diff 
 7. **Tests**: missing test for logic that can silently break; tests that only check mocks or restate the implementation.
 
 Language specifics:
+
 - Rust: idiomatic error handling (`?`, `Option` combinators), no needless `clone`, `cargo clippy` clean.
 - JS: async errors not swallowed, disposables registered in `context.subscriptions`, Node built-ins used instead of hand-rolled code or packages, `var`/`==`/manual null checks replaced per `CLAUDE.md`.
 - Ruby (in templates/grammars/snippets): valid ERB/Haml/Slim syntax, Rails conventions.

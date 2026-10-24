@@ -2,9 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Skim",
   "scopeName": "text.skim",
-  "fileTypes": [
-    "skim"
-  ],
+  "fileTypes": ["skim"],
   "patterns": [
     {
       "include": "#doctype"

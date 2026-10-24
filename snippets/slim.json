@@ -1,70 +1,280 @@
 {
   "if": { "prefix": "if", "body": ["- if ${1:condition}", "\t$0"] },
-  "if else": { "prefix": "ife", "body": ["- if ${1:condition}", "\t$2", "- else", "\t$0"] },
+  "if else": {
+    "prefix": "ife",
+    "body": ["- if ${1:condition}", "\t$2", "- else", "\t$0"]
+  },
   "unless": { "prefix": "unless", "body": ["- unless ${1:condition}", "\t$0"] },
-  "each": { "prefix": "each", "body": ["- ${1:collection}.each do |${2:item}|", "\t$0"] },
-  "each with index": { "prefix": "eachi", "body": ["- ${1:collection}.each_with_index do |${2:item}, ${3:index}|", "\t$0"] },
-  "case": { "prefix": "case", "body": ["- case ${1:value}", "- when ${2:match}", "\t$3", "- else", "\t$0"] },
+  "each": {
+    "prefix": "each",
+    "body": ["- ${1:collection}.each do |${2:item}|", "\t$0"]
+  },
+  "each with index": {
+    "prefix": "eachi",
+    "body": [
+      "- ${1:collection}.each_with_index do |${2:item}, ${3:index}|",
+      "\t$0"
+    ]
+  },
+  "case": {
+    "prefix": "case",
+    "body": ["- case ${1:value}", "- when ${2:match}", "\t$3", "- else", "\t$0"]
+  },
   "elsif": { "prefix": "elsif", "body": ["- elsif ${1:condition}", "\t$0"] },
   "else": { "prefix": "else", "body": ["- else", "\t$0"] },
   "when": { "prefix": "when", "body": ["- when ${1:value}", "\t$0"] },
-  "strict locals": { "prefix": "locals", "body": ["/# locals: (${1:name}:${2:, ${3:option}: ${4:nil}})$0"], "description": "/# locals: (...)" },
+  "strict locals": {
+    "prefix": "locals",
+    "body": ["/# locals: (${1:name}:${2:, ${3:option}: ${4:nil}})$0"],
+    "description": "/# locals: (...)"
+  },
   "doctype": { "prefix": "doctype", "body": ["doctype html"] },
   "div class": { "prefix": "div", "body": [".${1:class}", "\t$0"] },
-  "tag with attrs": { "prefix": "tag", "body": ["${1:div} ${2:class}=\"${3}\" $0"] },
-  "tag with wrapped attrs": { "prefix": "tagw", "body": ["${1:div}(${2:class}=\"${3}\") $0"], "description": "tag(attr=\"\")" },
-  "attribute splat": { "prefix": "splat", "body": ["${1:div}*{ ${2:class}: \"${3}\" } $0"], "description": "tag*{ attr: value }" },
-  "render partial": { "prefix": "render", "body": ["= render \"${1:partial}\"${2:, ${3:local}: ${4:value}}"] },
-  "render collection": { "prefix": "renderc", "body": ["= render partial: \"${1:item}\", collection: ${2:@items}${3:, as: :${4:item}}"] },
-  "render component": { "prefix": "rendercomp", "body": ["= render ${1:Name}Component.new(${2:attr}: ${3:value})"] },
-  "render component with slots": { "prefix": "rendercompb", "body": ["= render ${1:Name}Component.new(${2:attr}: ${3:value}) do |${4:component}|", "\t- ${4:component}.with_${5:header} do", "\t\t$0"] },
-  "component slot": { "prefix": "slot", "body": ["- ${1:component}.with_${2:item} do", "\t$0"] },
+  "tag with attrs": {
+    "prefix": "tag",
+    "body": ["${1:div} ${2:class}=\"${3}\" $0"]
+  },
+  "tag with wrapped attrs": {
+    "prefix": "tagw",
+    "body": ["${1:div}(${2:class}=\"${3}\") $0"],
+    "description": "tag(attr=\"\")"
+  },
+  "attribute splat": {
+    "prefix": "splat",
+    "body": ["${1:div}*{ ${2:class}: \"${3}\" } $0"],
+    "description": "tag*{ attr: value }"
+  },
+  "render partial": {
+    "prefix": "render",
+    "body": ["= render \"${1:partial}\"${2:, ${3:local}: ${4:value}}"]
+  },
+  "render collection": {
+    "prefix": "renderc",
+    "body": [
+      "= render partial: \"${1:item}\", collection: ${2:@items}${3:, as: :${4:item}}"
+    ]
+  },
+  "render component": {
+    "prefix": "rendercomp",
+    "body": ["= render ${1:Name}Component.new(${2:attr}: ${3:value})"]
+  },
+  "render component with slots": {
+    "prefix": "rendercompb",
+    "body": [
+      "= render ${1:Name}Component.new(${2:attr}: ${3:value}) do |${4:component}|",
+      "\t- ${4:component}.with_${5:header} do",
+      "\t\t$0"
+    ]
+  },
+  "component slot": {
+    "prefix": "slot",
+    "body": ["- ${1:component}.with_${2:item} do", "\t$0"]
+  },
   "component content": { "prefix": "content", "body": ["= content"] },
-  "component slot predicate": { "prefix": "slot?", "body": ["- if ${1:header}?", "\t= ${1:header}"] },
-  "render model collection": { "prefix": "renderall", "body": ["= render ${1:@items}"] },
-  "render partial with locals": { "prefix": "renderl", "body": ["= render partial: \"${1:partial}\", locals: { ${2:name}: ${3:value} }"] },
-  "render layout block": { "prefix": "renderlayout", "body": ["= render layout: \"${1:layout}\" do", "\t$0"] },
-  "link_to": { "prefix": "link_to", "body": ["= link_to \"${1:text}\", ${2:path}${3:, class: \"${4}\"}"] },
-  "link_to block": { "prefix": "link_tob", "body": ["= link_to ${1:path}${2:, class: \"${3}\"} do", "\t$0"] },
-  "button_to": { "prefix": "button_to", "body": ["= button_to \"${1:text}\", ${2:path}, method: :${3:delete}"] },
-  "image_tag": { "prefix": "image_tag", "body": ["= image_tag \"${1:file.png}\", alt: \"${2}\""] },
-  "form_with": { "prefix": "form_with", "body": ["= form_with model: ${1:@record} do |f|", "\t$0"] },
-  "form_with url": { "prefix": "form_with_url", "body": ["= form_with url: ${1:path}, method: :${2:post} do |f|", "\t$0"] },
-  "form field": { "prefix": "ff", "body": ["= f.${1|text_field,email_field,password_field,number_field,text_area,check_box,select,hidden_field,file_field,date_field|} :${2:attribute}${3:, class: \"${4}\"}"] },
-  "form label + field": { "prefix": "flf", "body": ["= f.label :${1:attribute}", "= f.${2|text_field,email_field,password_field,text_area,check_box,select|} :${1:attribute}$0"] },
-  "form submit": { "prefix": "fsubmit", "body": ["= f.submit \"${1:Save}\"${2:, class: \"${3}\"}"] },
-  "form select": { "prefix": "fselect", "body": ["= f.select :${1:attribute}, ${2:options}, { include_blank: ${3:true} }${4:, class: \"${5}\"}"] },
-  "collection_select": { "prefix": "fcselect", "body": ["= f.collection_select :${1:attribute_id}, ${2:Model}.all, :id, :${3:name}, { include_blank: true }"] },
-  "fields_for": { "prefix": "fields_for", "body": ["= f.fields_for :${1:association} do |${2:ff}|", "\t$0"] },
-  "content_for": { "prefix": "content_for", "body": ["- content_for :${1:name} do", "\t$0"] },
+  "component slot predicate": {
+    "prefix": "slot?",
+    "body": ["- if ${1:header}?", "\t= ${1:header}"]
+  },
+  "render model collection": {
+    "prefix": "renderall",
+    "body": ["= render ${1:@items}"]
+  },
+  "render partial with locals": {
+    "prefix": "renderl",
+    "body": [
+      "= render partial: \"${1:partial}\", locals: { ${2:name}: ${3:value} }"
+    ]
+  },
+  "render layout block": {
+    "prefix": "renderlayout",
+    "body": ["= render layout: \"${1:layout}\" do", "\t$0"]
+  },
+  "link_to": {
+    "prefix": "link_to",
+    "body": ["= link_to \"${1:text}\", ${2:path}${3:, class: \"${4}\"}"]
+  },
+  "link_to block": {
+    "prefix": "link_tob",
+    "body": ["= link_to ${1:path}${2:, class: \"${3}\"} do", "\t$0"]
+  },
+  "button_to": {
+    "prefix": "button_to",
+    "body": ["= button_to \"${1:text}\", ${2:path}, method: :${3:delete}"]
+  },
+  "image_tag": {
+    "prefix": "image_tag",
+    "body": ["= image_tag \"${1:file.png}\", alt: \"${2}\""]
+  },
+  "form_with": {
+    "prefix": "form_with",
+    "body": ["= form_with model: ${1:@record} do |f|", "\t$0"]
+  },
+  "form_with url": {
+    "prefix": "form_with_url",
+    "body": ["= form_with url: ${1:path}, method: :${2:post} do |f|", "\t$0"]
+  },
+  "form field": {
+    "prefix": "ff",
+    "body": [
+      "= f.${1|text_field,email_field,password_field,number_field,text_area,check_box,select,hidden_field,file_field,date_field|} :${2:attribute}${3:, class: \"${4}\"}"
+    ]
+  },
+  "form label + field": {
+    "prefix": "flf",
+    "body": [
+      "= f.label :${1:attribute}",
+      "= f.${2|text_field,email_field,password_field,text_area,check_box,select|} :${1:attribute}$0"
+    ]
+  },
+  "form submit": {
+    "prefix": "fsubmit",
+    "body": ["= f.submit \"${1:Save}\"${2:, class: \"${3}\"}"]
+  },
+  "form select": {
+    "prefix": "fselect",
+    "body": [
+      "= f.select :${1:attribute}, ${2:options}, { include_blank: ${3:true} }${4:, class: \"${5}\"}"
+    ]
+  },
+  "collection_select": {
+    "prefix": "fcselect",
+    "body": [
+      "= f.collection_select :${1:attribute_id}, ${2:Model}.all, :id, :${3:name}, { include_blank: true }"
+    ]
+  },
+  "fields_for": {
+    "prefix": "fields_for",
+    "body": ["= f.fields_for :${1:association} do |${2:ff}|", "\t$0"]
+  },
+  "content_for": {
+    "prefix": "content_for",
+    "body": ["- content_for :${1:name} do", "\t$0"]
+  },
   "yield": { "prefix": "yield", "body": ["= yield${1: :${2:name}}"] },
-  "content_tag": { "prefix": "content_tag", "body": ["= content_tag :${1:div}, ${2:content}, class: \"${3}\""] },
-  "tag helper": { "prefix": "tag.", "body": ["= tag.${1:div}(${2:content}, class: \"${3}\")"] },
-  "turbo_frame_tag": { "prefix": "turbo_frame", "body": ["= turbo_frame_tag ${1:dom_id(@record)} do", "\t$0"] },
-  "turbo_stream_from": { "prefix": "turbo_stream", "body": ["= turbo_stream_from ${1:@record}"] },
-  "turbo_stream.append": { "prefix": "ts-append", "body": ["= turbo_stream.append ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.prepend": { "prefix": "ts-prepend", "body": ["= turbo_stream.prepend ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.replace": { "prefix": "ts-replace", "body": ["= turbo_stream.replace ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.update": { "prefix": "ts-update", "body": ["= turbo_stream.update ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.before": { "prefix": "ts-before", "body": ["= turbo_stream.before ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.after": { "prefix": "ts-after", "body": ["= turbo_stream.after ${1:dom_id(@record)} do", "\t$0"], "description": "For .turbo_stream.slim" },
-  "turbo_stream.remove": { "prefix": "ts-remove", "body": ["= turbo_stream.remove ${1:dom_id(@record)}"], "description": "For .turbo_stream.slim" },
-  "stimulus controller": { "prefix": "stimulus", "body": [".${1:wrapper} data-controller=\"${2:name}\"", "\t$0"] },
-  "stimulus action": { "prefix": "data-action", "body": ["data-action=\"${1:click}->${2:controller}#${3:method}\""] },
+  "content_tag": {
+    "prefix": "content_tag",
+    "body": ["= content_tag :${1:div}, ${2:content}, class: \"${3}\""]
+  },
+  "tag helper": {
+    "prefix": "tag.",
+    "body": ["= tag.${1:div}(${2:content}, class: \"${3}\")"]
+  },
+  "turbo_frame_tag": {
+    "prefix": "turbo_frame",
+    "body": ["= turbo_frame_tag ${1:dom_id(@record)} do", "\t$0"]
+  },
+  "turbo_stream_from": {
+    "prefix": "turbo_stream",
+    "body": ["= turbo_stream_from ${1:@record}"]
+  },
+  "turbo_stream.append": {
+    "prefix": "ts-append",
+    "body": ["= turbo_stream.append ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.prepend": {
+    "prefix": "ts-prepend",
+    "body": ["= turbo_stream.prepend ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.replace": {
+    "prefix": "ts-replace",
+    "body": ["= turbo_stream.replace ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.update": {
+    "prefix": "ts-update",
+    "body": ["= turbo_stream.update ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.before": {
+    "prefix": "ts-before",
+    "body": ["= turbo_stream.before ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.after": {
+    "prefix": "ts-after",
+    "body": ["= turbo_stream.after ${1:dom_id(@record)} do", "\t$0"],
+    "description": "For .turbo_stream.slim"
+  },
+  "turbo_stream.remove": {
+    "prefix": "ts-remove",
+    "body": ["= turbo_stream.remove ${1:dom_id(@record)}"],
+    "description": "For .turbo_stream.slim"
+  },
+  "stimulus controller": {
+    "prefix": "stimulus",
+    "body": [".${1:wrapper} data-controller=\"${2:name}\"", "\t$0"]
+  },
+  "stimulus action": {
+    "prefix": "data-action",
+    "body": ["data-action=\"${1:click}->${2:controller}#${3:method}\""]
+  },
   "t translation": { "prefix": "t", "body": ["= t(\".${1:key}\")"] },
-  "number_to_currency": { "prefix": "currency", "body": ["= number_to_currency(${1:amount})"] },
-  "l localize": { "prefix": "l", "body": ["= l(${1:date}, format: :${2:long})"] },
-  "pluralize": { "prefix": "pluralize", "body": ["= pluralize(${1:count}, \"${2:item}\")"] },
-  "time_ago": { "prefix": "time_ago", "body": ["= \"#{time_ago_in_words(${1:time})} ago\""] },
-  "flash": { "prefix": "flash", "body": ["- flash.each do |type, message|", "\tdiv class=\"flash flash-#{type}\" = message"] },
-  "errors": { "prefix": "errors", "body": ["- if ${1:@record}.errors.any?", "\t.errors", "\t\tul", "\t\t\t- ${1:@record}.errors.full_messages.each do |msg|", "\t\t\t\tli = msg"] },
+  "number_to_currency": {
+    "prefix": "currency",
+    "body": ["= number_to_currency(${1:amount})"]
+  },
+  "l localize": {
+    "prefix": "l",
+    "body": ["= l(${1:date}, format: :${2:long})"]
+  },
+  "pluralize": {
+    "prefix": "pluralize",
+    "body": ["= pluralize(${1:count}, \"${2:item}\")"]
+  },
+  "time_ago": {
+    "prefix": "time_ago",
+    "body": ["= \"#{time_ago_in_words(${1:time})} ago\""]
+  },
+  "flash": {
+    "prefix": "flash",
+    "body": [
+      "- flash.each do |type, message|",
+      "\tdiv class=\"flash flash-#{type}\" = message"
+    ]
+  },
+  "errors": {
+    "prefix": "errors",
+    "body": [
+      "- if ${1:@record}.errors.any?",
+      "\t.errors",
+      "\t\tul",
+      "\t\t\t- ${1:@record}.errors.full_messages.each do |msg|",
+      "\t\t\t\tli = msg"
+    ]
+  },
   "cache": { "prefix": "cache", "body": ["- cache ${1:@record} do", "\t$0"] },
-  "csrf + csp meta": { "prefix": "meta_tags", "body": ["= csrf_meta_tags", "= csp_meta_tag"] },
-  "stylesheet + javascript": { "prefix": "assets", "body": ["= stylesheet_link_tag \"${1:application}\", \"data-turbo-track\": \"reload\"", "= javascript_importmap_tags"] },
-  "javascript_include_tag": { "prefix": "javascript_include_tag", "body": ["= javascript_include_tag \"${1:application}\", \"data-turbo-track\": \"reload\"${2:, defer: true}"] },
-  "favicon_link_tag": { "prefix": "favicon_link_tag", "body": ["= favicon_link_tag \"${1:favicon.ico}\""] },
-  "turbo script": { "prefix": "turbo_script", "body": ["= javascript_include_tag \"turbo\", type: \"module\""], "description": "Replaces deprecated turbo_include_tags" },
-  "asset_path": { "prefix": "asset_path", "body": ["= asset_path(\"${1:file.png}\")"] },
+  "csrf + csp meta": {
+    "prefix": "meta_tags",
+    "body": ["= csrf_meta_tags", "= csp_meta_tag"]
+  },
+  "stylesheet + javascript": {
+    "prefix": "assets",
+    "body": [
+      "= stylesheet_link_tag \"${1:application}\", \"data-turbo-track\": \"reload\"",
+      "= javascript_importmap_tags"
+    ]
+  },
+  "javascript_include_tag": {
+    "prefix": "javascript_include_tag",
+    "body": [
+      "= javascript_include_tag \"${1:application}\", \"data-turbo-track\": \"reload\"${2:, defer: true}"
+    ]
+  },
+  "favicon_link_tag": {
+    "prefix": "favicon_link_tag",
+    "body": ["= favicon_link_tag \"${1:favicon.ico}\""]
+  },
+  "turbo script": {
+    "prefix": "turbo_script",
+    "body": ["= javascript_include_tag \"turbo\", type: \"module\""],
+    "description": "Replaces deprecated turbo_include_tags"
+  },
+  "asset_path": {
+    "prefix": "asset_path",
+    "body": ["= asset_path(\"${1:file.png}\")"]
+  },
   "debug": { "prefix": "debug", "body": ["= debug(${1:@record})"] },
   "javascript block": { "prefix": "js", "body": ["javascript:", "\t$0"] },
   "css block": { "prefix": "css", "body": ["css:", "\t$0"] },
@@ -76,5 +286,21 @@
   "text block": { "prefix": "|", "body": ["|", "\t$0"] },
   "text block with trailing space": { "prefix": "'", "body": ["'", "\t$0"] },
   "html comment": { "prefix": "/!", "body": ["/! $0"] },
-  "layout skeleton": { "prefix": "layout", "body": ["doctype html", "html lang=\"${1:en}\"", "\thead", "\t\tmeta charset=\"utf-8\"", "\t\tmeta name=\"viewport\" content=\"width=device-width,initial-scale=1\"", "\t\ttitle = content_for(:title) || \"${2:App}\"", "\t\t= csrf_meta_tags", "\t\t= csp_meta_tag", "\t\t= stylesheet_link_tag \"application\", \"data-turbo-track\": \"reload\"", "\t\t= javascript_importmap_tags", "\tbody", "\t\t= yield"] }
+  "layout skeleton": {
+    "prefix": "layout",
+    "body": [
+      "doctype html",
+      "html lang=\"${1:en}\"",
+      "\thead",
+      "\t\tmeta charset=\"utf-8\"",
+      "\t\tmeta name=\"viewport\" content=\"width=device-width,initial-scale=1\"",
+      "\t\ttitle = content_for(:title) || \"${2:App}\"",
+      "\t\t= csrf_meta_tags",
+      "\t\t= csp_meta_tag",
+      "\t\t= stylesheet_link_tag \"application\", \"data-turbo-track\": \"reload\"",
+      "\t\t= javascript_importmap_tags",
+      "\tbody",
+      "\t\t= yield"
+    ]
+  }
 }

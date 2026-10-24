@@ -11,11 +11,13 @@ Ruby LSP (`shopify.ruby-lsp`) already maps `.jbuilder` and `.builder` to `ruby`.
 ## Tasks
 
 ### Client / manifest
+
 - [x] Contribute `{ "id": "ruby", "extensions": [".jbuilder", ".builder"] }` so VS Code without Ruby LSP still opens them as Ruby; VS Code's built-in `ruby` doesn't claim them (`package.json` `contributes.languages`). No grammar entry.
-- [x] `documentSelector` maps *every* contributed language id (`src/client.js` `startClient`). With `ruby` contributed, every `.rb` file would be sent to our server. Exclude `ruby` from that map and add `{ language: 'ruby', pattern: '**/*.{jbuilder,builder}' }`.
+- [x] `documentSelector` maps _every_ contributed language id (`src/client.js` `startClient`). With `ruby` contributed, every `.rb` file would be sent to our server. Exclude `ruby` from that map and add `{ language: 'ruby', pattern: '**/*.{jbuilder,builder}' }`.
 - [x] Activation: VS Code only generates `onLanguage:<id>` for a contributed language with a `configuration`, and the `ruby` entry has none; the template languages get theirs generated. So opening just a `.jbuilder` never starts the extension. Add an explicit event to `package.json` `activationEvents` (see open question); it is now the only entry there.
 
 ### Server
+
 - [x] New `TemplateLang::Ruby` (shared with Builder, see `BUILDER_TODO.md`), picked by path in `TemplateLang::from_uri_or_id` when the id is `ruby` and the path ends in `.jbuilder`/`.builder` (`server/src/main.rs`). Plain `.rb` must still return `None`.
 - [x] Matches that need a `Ruby` arm (`server/src/main.rs`):
   - `diagnostics`: no template diagnostics (Ruby LSP reports syntax errors). `unresolved_renders`/`strict_locals_mismatches` already run for every language; only the arm is new.

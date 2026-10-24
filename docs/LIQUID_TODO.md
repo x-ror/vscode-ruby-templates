@@ -7,6 +7,7 @@ Legend as in `ERB_TODO.md`.
 ## Tasks
 
 ### Grammar and language
+
 - [ ] `syntaxes/liquid.tmLanguage.json`, scope `text.html.liquid`, modelled on `syntaxes/erb.tmLanguage.json`: `patterns: [#liquid, text.html.basic]` plus an `L:` injection so tags work inside attributes, `<script>` and `<style>`. Repository:
   - `output` `{{ … }}`, `{{- … -}}`
   - `tag` `{% … %}`, `{%- … -%}`
@@ -24,6 +25,7 @@ Legend as in `ERB_TODO.md`.
 - [ ] Commands stay ERB/Haml/Slim-only: `TEMPLATE_LANGS` (`src/extension.js`) and the `when` clauses don't match `liquid`, so preview/toggle stay hidden. No change.
 
 ### Server
+
 - [ ] `TemplateLang::Liquid` from id `liquid` or `.liquid` path (`server/src/main.rs` `TemplateLang::from_uri_or_id`). Arms for the exhaustive matches: `diagnostics` → `vec![]` at first, `render_in_code` → `None` (also keeps Liquid renders out of unresolved-render and strict-locals warnings), `in_ruby_context` → `false`.
 - [ ] Gate the Rails-only paths on `lang != Liquid` (`server/src/main.rs`). `goto_definition`, `hover`, `document_link` and `completion` call `partials::render_ref_at`/`render_refs`/`render_string_prefix` without checking `in_ruby_context`, and `RENDER_STR` matches `{% render "x" %}` (checked). Without the gate, Liquid renders would resolve as Rails partials by accident. The Rails `HELPERS` hover via `word_at` is ungated too, and so is the form-builder branch of `completion` (step 3, before any `in_ruby_context` check), so `{{ f.` would offer `FormBuilder` methods. One `lang == Liquid` early return at the top of each handler, not per call.
 - [ ] Phase 2: new `server/src/liquid.rs`:
@@ -52,6 +54,7 @@ Legend as in `ERB_TODO.md`.
 ## Size
 
 L:
+
 - grammar ~200 lines JSON + language config ~60
 - phase 1: grammar ~200 lines JSON + language config ~60, gate ~10 lines Rust, 1 sample + 1 unit test
 - phase 2: `liquid.rs` ~100 lines, `main.rs` wiring ~40, ~5 unit tests

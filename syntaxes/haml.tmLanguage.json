@@ -2,10 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Haml",
   "scopeName": "text.haml",
-  "fileTypes": [
-    "haml",
-    "html.haml"
-  ],
+  "fileTypes": ["haml", "html.haml"],
   "injections": {
     "L:meta.filter.haml - (source.ruby | text.html.erb)": {
       "patterns": [

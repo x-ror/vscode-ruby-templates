@@ -1,6 +1,10 @@
 {
   "comments": { "lineComment": "/" },
-  "brackets": [["{", "}"], ["[", "]"], ["(", ")"]],
+  "brackets": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"]
+  ],
   "autoClosingPairs": [
     { "open": "{", "close": "}" },
     { "open": "[", "close": "]" },
@@ -8,7 +12,13 @@
     { "open": "\"", "close": "\"", "notIn": ["string"] },
     { "open": "'", "close": "'", "notIn": ["string", "comment"] }
   ],
-  "surroundingPairs": [["{", "}"], ["[", "]"], ["(", ")"], ["\"", "\""], ["'", "'"]],
+  "surroundingPairs": [
+    ["{", "}"],
+    ["[", "]"],
+    ["(", ")"],
+    ["\"", "\""],
+    ["'", "'"]
+  ],
   "folding": { "offSide": true },
   "indentationRules": {
     "increaseIndentPattern": "^\\s*([a-zA-Z][\\w:-]*|[.#][\\w-]+)([.#][\\w-]+)*(\\s+[\\w:@-]+\\s*==?\\s*(\"[^\"]*\"|'[^']*'|[^\\s\"']+))*\\s*$|^\\s*-\\s*(if|unless|while|until|for|case|begin|def|class|module|else|elsif|when|rescue|ensure)\\b|^\\s*[-=].*\\bdo\\b(\\s*\\|[^|]*\\|)?\\s*$|^\\s*(javascript|css|ruby|markdown|coffee|sass|scss|erb|textile|rdoc|less|styl|stylus|builder|nokogiri|wiki|creole|mediawiki):\\s*$|^\\s*/!?\\s*$|^\\s*[|'](\\s|$)",
@@ -16,7 +26,10 @@
   },
   "onEnterRules": [
     { "beforeText": "^\\s*[|'][<>]*(\\s|$)", "action": { "indent": "indent" } },
-    { "beforeText": "^\\s*([-=]|\\S.*?\\s==?[<>]*\\s).*[,\\\\]$", "action": { "indent": "none" } }
+    {
+      "beforeText": "^\\s*([-=]|\\S.*?\\s==?[<>]*\\s).*[,\\\\]$",
+      "action": { "indent": "none" }
+    }
   ],
   "wordPattern": "(-?\\d*\\.\\d\\w*)|([A-Za-z_@$][\\w-]*[?!]?)"
 }

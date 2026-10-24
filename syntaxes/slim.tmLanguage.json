@@ -2,10 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Slim",
   "scopeName": "text.slim",
-  "fileTypes": [
-    "slim",
-    "html.slim"
-  ],
+  "fileTypes": ["slim", "html.slim"],
   "patterns": [
     {
       "include": "#doctype"

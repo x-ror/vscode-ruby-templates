@@ -2,11 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "HTML (ERB)",
   "scopeName": "text.html.erb",
-  "fileTypes": [
-    "erb",
-    "rhtml",
-    "html.erb"
-  ],
+  "fileTypes": ["erb", "rhtml", "html.erb"],
   "injections": {
     "L:text.html.erb - (meta.embedded.block.erb | meta.embedded.line.erb | comment.block.erb)": {
       "patterns": [
