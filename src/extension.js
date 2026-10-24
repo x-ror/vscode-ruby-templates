@@ -36,6 +36,8 @@ const SERVER_SETTINGS = [
 let previewPanel;
 /** @type {string | undefined} */
 let previewUri;
+/** @type {vscode.LogOutputChannel | undefined} */
+let output;
 
 function activate(context) {
   const sub = (cmd, fn) =>
@@ -56,7 +58,7 @@ function activate(context) {
   sub("rubyTemplates.extractSlimPartial", extractSlimPartial);
 
   // Language server (Rust): diagnostics, go-to-partial, completions, hover.
-  const output = vscode.window.createOutputChannel("Ruby Templates", {
+  output = vscode.window.createOutputChannel("Ruby Templates", {
     log: true,
   });
   context.subscriptions.push(output);
@@ -66,10 +68,10 @@ function activate(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (SERVER_SETTINGS.some((s) => e.affectsConfiguration(s)))
-        restartClient(context, output);
+        void restartClient(context, output);
     }),
   );
-  startClient(context, output);
+  void startClient(context, output);
   registerSlimLint(context, output);
 
   context.subscriptions.push(
@@ -1048,7 +1050,7 @@ function startHamlLint(context, output) {
 
 function deactivate() {
   previewPanel?.dispose();
-  return stopClient();
+  return stopClient(output);
 }
 
 export { activate, deactivate };

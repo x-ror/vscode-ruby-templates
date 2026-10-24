@@ -34,7 +34,7 @@ function findServer(context) {
   return serverBinaryName(); // hope it is on PATH
 }
 
-async function startClient(context, output) {
+async function doStart(context, output) {
   const config = vscode.workspace.getConfiguration("rubyTemplates");
   if (!config.get("server.enabled", true)) return;
   const command = findServer(context);
@@ -51,7 +51,7 @@ async function startClient(context, output) {
     ].map((glob) => vscode.workspace.createFileSystemWatcher(glob));
     context.subscriptions.push(...watchers);
   }
-  client = new LanguageClient(
+  const started = new LanguageClient(
     "rubyTemplates",
     "Ruby Templates Language Server",
     { command, transport: TransportKind.stdio },
@@ -60,6 +60,8 @@ async function startClient(context, output) {
         ({ id }) => ({ language: id }),
       ),
       outputChannel: output,
+      // Our catch below reports the failure; returning false stops the client from also showing its own.
+      initializationFailedHandler: () => false,
       initializationOptions: {
         slim: {
           extraEngines: config.get("slim.extraEngines", []),
@@ -69,41 +71,66 @@ async function startClient(context, output) {
       synchronize: { fileEvents: watchers },
     },
   );
+  client = started;
   try {
-    await client.start();
-    context.subscriptions.push(client);
+    await started.start();
+    context.subscriptions.push(started);
   } catch (e) {
     client = undefined;
+    await disposeQuietly(started, output);
     const msg =
       `Ruby Templates language server failed to start (${command}). ` +
       "Build it with `cargo build --release` in the extension's server/ folder, or set rubyTemplates.server.path.";
     output.appendLine(
       `[ruby-templates] ${msg}\n${e && e.message ? e.message : e}`,
     );
-    const pick = await vscode.window.showWarningMessage(
-      msg,
-      "Open settings",
-      "Show log",
+    void offerHelp(msg, output);
+  }
+}
+
+// Not awaited by callers: the restart queue must not wait for the notification to be dismissed.
+async function offerHelp(msg, output) {
+  const pick = await vscode.window.showWarningMessage(
+    msg,
+    "Open settings",
+    "Show log",
+  );
+  if (pick === "Open settings")
+    vscode.commands.executeCommand(
+      "workbench.action.openSettings",
+      "rubyTemplates.server",
     );
-    if (pick === "Open settings")
-      vscode.commands.executeCommand(
-        "workbench.action.openSettings",
-        "rubyTemplates.server",
-      );
-    if (pick === "Show log") output.show();
+  if (pick === "Show log") output.show();
+}
+
+async function disposeQuietly(c, output) {
+  try {
+    await c.dispose();
+  } catch (e) {
+    output.appendLine(`[ruby-templates] stopping language server: ${e}`);
   }
 }
 
-async function stopClient() {
-  if (client) {
-    await client.stop();
-    client = undefined;
-  }
+async function doStop(output) {
+  const old = client;
+  client = undefined;
+  if (old) await disposeQuietly(old, output);
 }
 
-async function restartClient(context, output) {
-  await stopClient();
-  await startClient(context, output);
-}
+// stop() hands concurrent callers one shared promise, so overlapping restarts would each start a server.
+let queue = Promise.resolve();
+const serialize = (task, output) =>
+  (queue = queue
+    .then(task)
+    .catch((e) => output.appendLine(`[ruby-templates] ${e?.message ?? e}`)));
+
+const startClient = (context, output) =>
+  serialize(() => doStart(context, output), output);
+const stopClient = (output) => serialize(() => doStop(output), output);
+const restartClient = (context, output) =>
+  serialize(async () => {
+    await doStop(output);
+    await doStart(context, output);
+  }, output);
 
 export { startClient, stopClient, restartClient };
