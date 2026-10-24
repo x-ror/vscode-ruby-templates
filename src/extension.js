@@ -12,6 +12,7 @@ import { relatedFiles, relatedDirs } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
+import { erbRubyArgs } from "./erbEngine.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -552,10 +553,13 @@ async function renderToHtml(doc) {
   if (lang === "haml") {
     return runHaml(cfg().get("commands.haml", "haml"), "render", [], cwd, src);
   }
-  if (lang === "erb") {
-    const bin = cfg().get("commands.erb", "erb");
-    return run(bin, ["-T", "-"], { cwd }, src);
-  }
+  if (lang === "erb")
+    return run(
+      cfg().get("commands.ruby", "ruby"),
+      erbRubyArgs("render"),
+      { cwd },
+      src,
+    );
   return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
 }
 
@@ -618,8 +622,8 @@ async function compileToRuby(doc) {
   }
   if (lang === "erb")
     return run(
-      cfg().get("commands.erb", "erb"),
-      ["-x", "-T", "-"],
+      cfg().get("commands.ruby", "ruby"),
+      erbRubyArgs("compile"),
       { cwd },
       src,
     );
@@ -627,9 +631,9 @@ async function compileToRuby(doc) {
 }
 
 function missingToolMessage(bin, lang) {
-  const gem =
-    { slim: "slim", haml: "haml", erb: "(ships with Ruby)" }[engineOf(lang)] ||
-    bin;
+  if (engineOf(lang) === "erb")
+    return `"${bin}" was not found. Install Ruby (and gem install erubi) — or point rubyTemplates.commands.ruby at it.`;
+  const gem = { slim: "slim", haml: "haml" }[engineOf(lang)] || bin;
   return `"${bin}" was not found. Install it with: gem install ${gem} — or point rubyTemplates.commands.* at the executable.`;
 }
 
@@ -686,7 +690,7 @@ async function renderPreview(doc) {
       "Render failed",
       r.stderr || r.stdout,
       engineOf(doc.languageId) === "erb"
-        ? "Plain `erb` has no Rails helpers (link_to, render, …). The preview works best for templates that only use Ruby core."
+        ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
         : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
     );
     return;

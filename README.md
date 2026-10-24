@@ -51,7 +51,7 @@ The binary for your platform is bundled in `bin/<platform>/`. To build it yourse
 | Wrap Selection in Slim Output | `Ctrl+Alt+W` | A whole plain line becomes `= foo`; part of a line, or a line starting with a marker, `#{foo}` |
 | Extract Selection to Slim Partial | | Moves the selected lines (dedented) to `_name.<format>.slim` (the file's format, else `html`) and leaves `= render "name"`; `dir/name` goes under `app/views/dir/` |
 | Switch to Related File | | Opens the view's other formats (`welcome.html.erb` ↔ `welcome.text.erb`, `show.json.jbuilder`) or a ViewComponent's class ↔ template (also in its sidecar folder); a list when there are several |
-| Preview Rendered HTML | `Ctrl+Alt+P` | Renders the current file with `slimrb` / `haml` / `erb` in a side panel, refreshes on save |
+| Preview Rendered HTML | `Ctrl+Alt+P` | Renders the current file with `slimrb` / `haml` / Erubi (through `ruby`, as Rails compiles ERB; stdlib ERB without the gem) in a side panel, refreshes on save |
 | Show Compiled Ruby Source | | Shows the Ruby code the engine generates (great for debugging Slim/Haml) |
 | Toggle Haml Line Prefix | `Ctrl+Alt+E` | Cycles the current line(s) in Haml: `- x` → `= x` → `-# x` |
 | Extract Selection to Partial | | Moves the selection into `_name.html.haml` (or `.erb`) next to the file, re-indented to column 0, and puts `render "dir/name"` in its place |
@@ -64,7 +64,7 @@ The binary for your platform is bundled in `bin/<platform>/`. To build it yourse
 The preview and converters shell out to Ruby gems, which you install once:
 
 ```sh
-gem install slim haml          # rendering
+gem install slim haml erubi    # rendering
 gem install html2haml          # ERB/HTML → Haml
 gem install haml_to_erb        # Haml → ERB
 gem install html2slim haml2slim  # ERB → Slim, Haml → Slim

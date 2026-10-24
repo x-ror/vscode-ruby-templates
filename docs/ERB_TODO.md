@@ -90,10 +90,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Toggle tag `<% %>` → `<%= %>` → `<%# %>`, multi-cursor (`src/extension.js` `toggleErbTag`, `package.json` keybinding)
 - [x] Wrap selection in `<%= %>` (`src/extension.js` `wrapInErb`)
 - [x] Preview rendered HTML via `erb -T -` (`src/extension.js` `renderToHtml`)
-- [x] Show compiled Ruby via `erb -x` (`src/extension.js` `compileToRuby`)
+- [x] Show compiled Ruby (`src/extension.js` `compileToRuby`)
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
 - [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
-- [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
+- [x] Preview/compile with Erubi (Rails' engine, `escape: true`) instead of stdlib `erb`, so `<%==` and Rails trim behave the same; stdlib ERB when the gem is missing (`src/erbEngine.js`)
 - [x] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work (`rubyTemplates.preview.useRails`, `src/extension.js`)
 - [x] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`) (`rubyTemplates.extractPartial`, `src/extension.js`, `src/partial.js`)
 - [x] Create a missing partial from an unresolved `render "x"` (code action) (`server/src/main.rs` `code_action`, `partials::new_template_path`)

@@ -5,6 +5,8 @@ import { relatedFiles, relatedDirs } from "../src/related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
+import { erbRubyArgs } from "../src/erbEngine.js";
+import { spawnSync } from "node:child_process";
 
 // convertedFileName
 const cases = [
@@ -210,4 +212,17 @@ for (const [before, after, length] of [
     length,
     `${before}|${after}`,
   );
+}
+
+// erbRubyArgs: Rails semantics through Erubi; skipped without `ruby -rerubi`.
+if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
+  const erb = (mode, input) =>
+    spawnSync("ruby", erbRubyArgs(mode), { input, encoding: "utf8" });
+  const rendered = erb(
+    "render",
+    '<p><%= "<b>" %></p>\n<%== "<i>" %>\n<%- if true -%>\nyes\n<%- end -%>\n',
+  );
+  assert.strictEqual(rendered.stdout, "<p>&lt;b&gt;</p>\n<i>\nyes\n");
+  assert.match(erb("compile", "<%= x %>").stdout, /__erubi\.h\(\( x \)\)/);
+  assert.notStrictEqual(erb("render", "<% if %>").status, 0);
 }

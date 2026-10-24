@@ -599,11 +599,6 @@
           "default": "haml",
           "description": "Executable used to render Haml (gem install haml)."
         },
-        "rubyTemplates.commands.erb": {
-          "type": "string",
-          "default": "erb",
-          "description": "Executable used to render ERB (ships with Ruby)."
-        },
         "rubyTemplates.commands.html2haml": {
           "type": "string",
           "default": "html2haml",
@@ -622,7 +617,7 @@
         "rubyTemplates.commands.ruby": {
           "type": "string",
           "default": "ruby",
-          "description": "Ruby used for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
+          "description": "Ruby used to preview and compile ERB through Erubi (gem install erubi; stdlib ERB without it) and for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
         },
         "rubyTemplates.commands.hamlLint": {
           "type": "string",
