@@ -446,7 +446,7 @@
       "patterns": [
         {
           "name": "entity.name.tag.slim",
-          "match": "(?<![\\w.#-])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=<>/']|$)"
+          "match": "(?<![\\w.#\\-<>'\"])[a-zA-Z][\\w-]*(?::(?=\\w)[\\w-]+)*(?=[.#\\s\\[({*:=<>/']|$)"
         },
         {
           "name": "entity.other.attribute-name.class.slim",
@@ -474,7 +474,7 @@
         },
         {
           "name": "keyword.operator.whitespace.slim",
-          "match": "(?<=\\S)[<>']+(?=[\\s(\\[{=]|$)"
+          "match": "(?<=[\\w\\-)\\]}])[<>']+"
         },
         {
           "name": "punctuation.definition.tag.self-closing.slim",
@@ -512,7 +512,7 @@
       "name": "meta.attributes.splat.slim",
       "contentName": "source.coffee",
       "begin": "\\s*(\\*)(?=\\{|[\\w@])",
-      "end": "(?<=\\})|(?=\\s|$)",
+      "end": "(?=\\s|$)",
       "beginCaptures": {
         "1": {
           "name": "keyword.operator.splat.slim"
@@ -533,6 +533,9 @@
             }
           },
           "patterns": [
+            {
+              "include": "#ruby-braces"
+            },
             {
               "include": "source.coffee"
             }
@@ -693,7 +696,7 @@
     "inline-output": {
       "name": "meta.embedded.line.ruby.slim",
       "contentName": "source.coffee",
-      "begin": "(?:(?<=[\\w<>'\")\\]}])\\s*|\\s+)(==?['<>]*)\\s*",
+      "begin": "(?:(?<=[\\w\\-<>)\\]}\"]|[\\w\\-<>)\\]}]')\\s*|\\s+)(==?['<>]*)\\s*",
       "end": "(?<![,\\\\\\n])$",
       "beginCaptures": {
         "1": {
@@ -708,7 +711,7 @@
     },
     "inline-text": {
       "name": "string.unquoted.text.slim",
-      "begin": "\\s+(?=\\S)",
+      "begin": "\\s+(?=\\S)|(?<=[<>'\"])(?=[^\\s=(\\[{/:*])",
       "end": "$",
       "patterns": [
         {
@@ -876,7 +879,7 @@
     "interpolation-unescaped": {
       "name": "meta.embedded.interpolation.unescaped.slim",
       "contentName": "source.coffee",
-      "begin": "(?<!\\\\)#\\{\\{(?=[^{}]*\\}\\})",
+      "begin": "(?<!\\\\)#\\{\\{(?=(?:[^{}]|\\{[^{}]*\\})*\\}\\})",
       "end": "\\}\\}",
       "beginCaptures": {
         "0": {
@@ -889,6 +892,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#ruby-braces"
+        },
         {
           "include": "source.coffee"
         }
@@ -910,6 +916,9 @@
         }
       },
       "patterns": [
+        {
+          "include": "#ruby-braces"
+        },
         {
           "include": "source.coffee"
         }
@@ -936,6 +945,18 @@
       "patterns": [
         {
           "include": "#interpolation"
+        }
+      ]
+    },
+    "ruby-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        {
+          "include": "#ruby-braces"
+        },
+        {
+          "include": "source.coffee"
         }
       ]
     }

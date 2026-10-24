@@ -67,3 +67,8 @@ html lang="en"
     |< leading space
     |no space
     '> trailing space
+    p #{{ {a: 1}.to_json }} raw
+    div *{data: {x: 1}}= splat code then text
+    p title='it''= text after a quote
+    a>text
+    p a="b"text

@@ -385,8 +385,10 @@
    "{"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby
    "a:"                        meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
    "1"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby
+   ".to_json"                  meta.tag > string.unquoted.text > meta.embedded.interpolation > source.ruby > stub.source.ruby
    "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation > punctuation.section.embedded.end
-   ".to_json} stays escaped"   meta.tag > string.unquoted.text
+   " stays escaped"            meta.tag > string.unquoted.text
 "    span after interpolation"
    "span"                      meta.tag > entity.name.tag
    "after interpolation"       meta.tag > string.unquoted.text
@@ -429,4 +431,46 @@
    "'"                         meta.text.block > punctuation.definition.text
    ">"                         meta.text.block > keyword.operator.whitespace
    "trailing space"            meta.text.block > string.unquoted.text
+"    p #{{ {a: 1}.to_json }} raw"
+   "p"                         meta.tag > entity.name.tag
+   "#{{"                       meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.begin
+   "{"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby
+   "a:"                        meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "1"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "}"                         meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby
+   ".to_json"                  meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > stub.source.ruby
+   "}}"                        meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.end
+   " raw"                      meta.tag > string.unquoted.text
+"    div *{data: {x: 1}}= splat code then text"
+   "div"                       meta.tag > entity.name.tag
+   "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
+   "{"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.begin
+   "data:"                     meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "{"                         meta.tag > meta.attributes.splat > source.ruby
+   "x:"                        meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "1"                         meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby
+   "}"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.end
+   "="                         meta.tag > meta.attributes.splat > source.ruby > stub.source.ruby
+   "splat code then text"      meta.tag > string.unquoted.text
+"    p title='it''= text after a quote"
+   "p"                         meta.tag > entity.name.tag
+   "title"                     meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "'"                         meta.tag > string.quoted.single
+   "it"                        meta.tag > string.quoted.single
+   "'"                         meta.tag > string.quoted.single
+   "'= text after a quote"     meta.tag > string.unquoted.text
+"    a>text"
+   "a"                         meta.tag > entity.name.tag
+   ">"                         meta.tag > keyword.operator.whitespace
+   "text"                      meta.tag > string.unquoted.text
+"    p a=\"b\"text"
+   "p"                         meta.tag > entity.name.tag
+   "a"                         meta.tag > entity.other.attribute-name
+   "="                         meta.tag > keyword.operator.assignment
+   "\""                        meta.tag > string.quoted.double
+   "b"                         meta.tag > string.quoted.double
+   "\""                        meta.tag > string.quoted.double
+   "text"                      meta.tag > string.unquoted.text
 ""
