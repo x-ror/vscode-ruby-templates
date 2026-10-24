@@ -1,23 +1,23 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
-static RENDER_STR: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
+static RENDER_STR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap());
 // `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
 // After a bare `render "y", layout: …` it's just a local.
-static RENDER_LAYOUT_KEY: Lazy<Regex> = Lazy::new(|| {
+static RENDER_LAYOUT_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
 });
 // ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
-static STRICT_LOCALS: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
+static STRICT_LOCALS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
 // `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
-static KEYWORD_ARG: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
-static RENDER_COMPONENT: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
-static RENDER_MODEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
+static KEYWORD_ARG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
+static RENDER_COMPONENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
+static RENDER_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderKind {
@@ -328,7 +328,7 @@ fn template_name(p: &Path, partial: bool) -> Option<String> {
 /// Is the cursor inside the string of a `render "..."` call?
 /// Returns what the string names (see `render_refs` for `layout:`) and the typed prefix.
 pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
-    static OPEN: Lazy<Regex> = Lazy::new(|| {
+    static OPEN: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(concat!(
             r#"(?:render\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
             r#"|render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,

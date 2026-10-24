@@ -7,22 +7,22 @@ use crate::ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::tags;
 use crate::util::{leading_ws, offset_to_position};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, Range, SymbolKind};
 
 // `folding.markers` from language-configuration/erb.json; VS Code stops applying them once a provider answers.
-static REGION_START: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*<!--\s*#region\b.*-->|^\s*<%#\s*region\b").unwrap());
-static REGION_END: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*<!--\s*#endregion\b.*-->|^\s*<%#\s*endregion\b").unwrap());
+static REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#region\b.*-->|^\s*<%#\s*region\b").unwrap());
+static REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#endregion\b.*-->|^\s*<%#\s*endregion\b").unwrap());
 // `folding.markers` from language-configuration/haml.json.
-static HAML_REGION_START: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*-#\s*region\b").unwrap());
-static HAML_REGION_END: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*-#\s*endregion\b").unwrap());
+static HAML_REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*region\b").unwrap());
+static HAML_REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*endregion\b").unwrap());
 
-static CONTENT_FOR: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*content_for\s*\(?\s*:(\w+)").unwrap());
-static FORM: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
-static TURBO_FRAME: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^\s*turbo_frame_tag\s*\(?\s*("[^"]*"|'[^']*'|[^\s,]+)"#).unwrap());
-static BLOCK_TAIL: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s+do\s*(\|[^|]*\|)?\s*$").unwrap());
-pub(crate) static ID_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
+static CONTENT_FOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*content_for\s*\(?\s*:(\w+)").unwrap());
+static FORM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
+static TURBO_FRAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*turbo_frame_tag\s*\(?\s*("[^"]*"|'[^']*'|[^\s,]+)"#).unwrap());
+static BLOCK_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+do\s*(\|[^|]*\|)?\s*$").unwrap());
+pub(crate) static ID_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
 
 pub(crate) const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
 

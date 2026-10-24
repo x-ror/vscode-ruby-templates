@@ -3,8 +3,8 @@
 use crate::erb;
 use crate::ruby::{analyze, BlockEffect};
 use crate::util::{offset_to_position, warning};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
 
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
@@ -16,8 +16,8 @@ const OPTIONAL_END: &[&str] = &[
 const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
 
 // Block helpers whose body is JS/CSS, not HTML; the source has no literal `<script>` to skip.
-static RAW_BLOCK: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
+static RAW_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
 
 #[derive(Clone)]
 struct Tag {

@@ -1,16 +1,16 @@
 //! Stimulus identifiers in `data-*` attributes → app/javascript/controllers files.
 
 use crate::partials::app_root;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
-static ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
-static TARGET_ATTR: Lazy<Regex> = Lazy::new(|| Regex::new(r"data-([\w-]+)-target\b").unwrap());
+static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
+static TARGET_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"data-([\w-]+)-target\b").unwrap());
 // `data: { controller: "x", action: "…", x_target: "…" }` in helpers and Haml.
-static DATA_HASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bdata:\s*\{([^}]*)\}").unwrap());
-static HASH_KEY: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\b(?:(controller|action):\s*["']([^"']*)["']|(\w+)_target:)"#).unwrap());
+static DATA_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdata:\s*\{([^}]*)\}").unwrap());
+static HASH_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\b(?:(controller|action):\s*["']([^"']*)["']|(\w+)_target:)"#).unwrap());
 
 /// Every controller identifier on `line`: its byte range and the identifier Stimulus would register.
 pub fn identifiers(line: &str) -> Vec<(usize, usize, String)> {

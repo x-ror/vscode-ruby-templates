@@ -2,14 +2,14 @@
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
 use crate::util::{error, offset_to_position, warning};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 use tree_sitter::{Node, Parser, Tree};
 
 // Helpers whose block content only reaches the page through their return value.
 // `cache`, `content_for`, `capture` are deliberately absent: `<% … do %>` is correct for them.
-static OUTPUT_BLOCK_HELPER: Lazy<Regex> = Lazy::new(|| {
+static OUTPUT_BLOCK_HELPER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(form_with|form_for|form_tag|fields_for|fields|link_to|button_to|button_tag|label_tag|content_tag|turbo_frame_tag|tag\.\w+)(?:\(|\s+[^=\s])").unwrap()
 });
 

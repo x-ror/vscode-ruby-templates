@@ -1,12 +1,12 @@
 //! Rough Ruby snippet analysis: which snippets open blocks, which close them.
 //! We never need a full parse; template engines only need `do`/`if`/`end` balance.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 
-static STRINGS: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
-static TOKEN: Lazy<Regex> = Lazy::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[A-Za-z_]\w*[?!]?|\d+|[^\w\s]").unwrap());
+static STRINGS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[A-Za-z_]\w*[?!]?|\d+|[^\w\s]").unwrap());
 
 /// Strip strings and comments so keywords inside them don't count.
 pub fn strip(code: &str) -> String {

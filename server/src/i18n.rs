@@ -2,16 +2,16 @@
 
 use crate::erb::truncate;
 use crate::partials::{app_root, views_root};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 // `t "a.b"`, `t(".x")`, `translate`, `I18n.t`; not `obj.t(…)`. `#` keeps interpolated keys out.
 const CALL: &str = r#"(?:^|[^\w.@$])(?:I18n\.)?(?:t|translate)\s*\(?\s*["']"#;
-static KEY_CALL: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]+)["']"#)).unwrap());
-static KEY_OPEN: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]*)$"#)).unwrap());
+static KEY_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]+)["']"#)).unwrap());
+static KEY_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]*)$"#)).unwrap());
 const VALUE_PREVIEW: usize = 80;
 
 /// One key of a locale file. `key` has no locale prefix; `value` is `None` for a nested mapping.

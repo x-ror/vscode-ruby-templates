@@ -513,7 +513,6 @@ name = "ruby-templates-ls"
 version = "0.1.0"
 dependencies = [
  "dashmap 6.2.1",
- "once_cell",
  "regex",
  "serde",
  "serde_json",

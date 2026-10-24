@@ -4,14 +4,14 @@
 use crate::partials::{render_refs, resolve, views_root, RenderKind, RenderRef};
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{render_filter, slim_outline, TemplateLang};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Range, TextEdit, Url};
 use walkdir::WalkDir;
 
-static PARTIAL_KEY: Lazy<Regex> = Lazy::new(|| Regex::new(r#"partial\s*(?::|=>)\s*["']$"#).unwrap());
+static PARTIAL_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"partial\s*(?::|=>)\s*["']$"#).unwrap());
 
 pub struct Source {
     pub path: PathBuf,

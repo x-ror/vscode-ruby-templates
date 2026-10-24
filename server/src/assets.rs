@@ -1,12 +1,12 @@
 //! Literal asset helper paths (`image_tag "logo.png"`, `stylesheet_link_tag "application"`) → files.
 
 use crate::partials::app_root;
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 // `#` keeps interpolated strings out.
-static ASSET_CALL: Lazy<Regex> = Lazy::new(|| {
+static ASSET_CALL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"\b(image_tag|image_path|asset_path|stylesheet_link_tag|javascript_include_tag|favicon_link_tag)\s*\(?\s*["']([^"'#]+)["']"#,
     )

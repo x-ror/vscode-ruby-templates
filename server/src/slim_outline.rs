@@ -3,11 +3,11 @@
 use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
 use crate::partials::render_refs;
 use crate::slim_indent::SLIM_ENGINES;
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
 
-static BRANCH: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(?:if|unless|elsif|else|case|when)\b").unwrap());
+static BRANCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:if|unless|elsif|else|case|when)\b").unwrap());
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Verbatim {

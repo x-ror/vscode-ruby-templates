@@ -2,8 +2,8 @@
 
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
 use crate::util::{error, find_balanced, leading_ws, line_range, warning};
-use once_cell::sync::Lazy;
 use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
 
 /// The filters Haml 6 and 7 register (`Haml::Filters`).
@@ -26,11 +26,11 @@ pub const HAML_FILTERS: &[&str] = &[
 /// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
 const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
 /// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
-static BLOCK_KEYWORD: Lazy<Regex> = Lazy::new(|| {
+static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless))\b").unwrap()
 });
 
-static BLOCK_WITH_SPACES: Lazy<Regex> = Lazy::new(|| Regex::new(r"do\s*\|\s*[^|]*\s+\|$").unwrap());
+static BLOCK_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"do\s*\|\s*[^|]*\s+\|$").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
