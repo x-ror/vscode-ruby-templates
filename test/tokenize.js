@@ -137,7 +137,12 @@ function checkSkimGrammar() {
     console.log(`wrote ${grammars["text.skim"]}`);
     return 0;
   }
-  if (fs.existsSync(file) && fs.readFileSync(file, "utf8") === expected)
+  // Compared as data: `bun fmt` reflows the file, so its text never matches the generator's.
+  if (
+    fs.existsSync(file) &&
+    JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8"))) ===
+      JSON.stringify(JSON.parse(expected))
+  )
     return 0;
   console.error(
     `FAIL ${grammars["text.skim"]} is out of sync with the Slim grammar`,
