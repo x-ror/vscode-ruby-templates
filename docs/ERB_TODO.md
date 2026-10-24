@@ -94,8 +94,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Convert ERB → Haml / Slim through gems (`src/extension.js` `convert`)
 - [x] Toggle tag keeps `-%>` / `_%>` trim markers correctly for every variant (`<%-` maps to `<%=` and drops the `-`) (`src/erbTags.js`, `test/erbTags.js`; `<%-` opener trim can't combine with `=`/`#`, closers kept)
 - [ ] Preview/compile with Erubi (Rails' engine) instead of stdlib `erb`, so `<%==` and Rails trim behave the same
-- [ ] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work
-- [ ] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`)
+- [x] Preview inside a Rails app (`bin/rails runner` / `ApplicationController.render`) so helpers work (`rubyTemplates.preview.useRails`, `src/extension.js`)
+- [x] Extract selection to partial (create `_name.html.erb`, replace with `render "name"`) (`rubyTemplates.extractPartial`, `src/extension.js`, `src/partial.js`)
 - [x] Create a missing partial from an unresolved `render "x"` (code action) (`server/src/main.rs` `code_action`, `partials::new_template_path`)
 
 ## 7. Formatting
@@ -183,10 +183,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 12. Rename, references, symbols
 
-- [ ] Rename a partial file and update every `render "…"` that points at it
+- [x] Rename a partial file and update every `render "…"` that points at it (`server/src/partial_rename.rs`, `workspace/willRenameFiles`)
 - [ ] Rename a local across a partial and its callers
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
-- [ ] Breadcrumbs follow the symbol tree
+- [x] Breadcrumbs follow the symbol tree (VS Code builds them from `textDocument/documentSymbol`)
 - [ ] Find all references to an i18n key
 
 ## 13. Embedded HTML/CSS/JS language features
@@ -206,6 +206,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
 - [ ] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
+- [x] Jbuilder/Builder views get partial navigation (`docs/JBUILDER_TODO.md`, `TemplateLang::Ruby`)
 - [x] Jbuilder/other templates in the same dir don't confuse partial resolution (`server/src/partials.rs` `renders_format`)
 - [x] Hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` (`server/src/partials.rs` `RENDER_STR`)
 
