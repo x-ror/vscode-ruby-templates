@@ -80,10 +80,11 @@ Note that a standalone render has no Rails helpers (`link_to`, `render`, …). T
 ```sh
 npm install
 npm run build:server  # cargo build --release, copies the binary into bin/<platform>/
-npm run test:tokens   # dump token scopes for the sample files in test/
+npm run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__ (UPDATE=1 rewrites them)
 npm run test:server   # cargo test + diagnostics check on the samples
-npm run test:unit     # pure JS helpers (Haml toggle, re-indent, haml-lint JSON)
-node test/e2e.js      # LSP smoke test against a fake Rails tree
+npm run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, re-indent, haml-lint JSON)
+npm run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
+node test/e2e.js      # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
 npm run test:slim     # Slim editing helpers and onEnterRules
 npm run test:format   # Slim formatter vs. the slim gem: test/format/*.slim compile the same before and after (needs `ruby -rslim`)
 npm run package       # build the .vsix

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** requires VS Code 1.91 or newer (`vscode-languageclient` 11).
+- Partials: hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` get navigation, completion and diagnostics.
+- Partials resolve only in the view's format: `render "users/user"` from `index.html.erb` no longer offers `_user.json.jbuilder`. Format-less partials still match; JS and turbo_stream views also take HTML partials.
+- Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
+
 ## 0.1.0
 
 - Rust language server: diagnostics for ERB/Haml/Slim, go to partial/component, hover, completions for partials, form builder methods and Rails helpers, `--check` CLI mode.
