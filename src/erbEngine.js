@@ -1,22 +1,12 @@
 // Pure part of ERB preview/compile (no vscode dependency; tested in test/clientPure.js).
+import path from "node:path";
 
-// Erubi with `escape: true` is how Rails compiles ERB: `<%=` escapes, `<%==` doesn't. Without the gem,
-// stdlib ERB still renders plain templates.
-const SCRIPT = `
-src = $stdin.read
-code = begin
-  require "erubi"
-  Erubi::Engine.new(src, escape: true).src
-rescue LoadError
-  require "erb"
-  ERB.new(src, trim_mode: "-").src
-end
-print(ARGV[0] == "compile" ? code : eval(code, TOPLEVEL_BINDING, "(template)"))
-`;
+// A script file, not `-e`: Windows runs commands through cmd.exe, which can't pass its quotes and newlines.
+const SCRIPT = path.join(import.meta.dirname, "erb_engine.rb");
 
 /** `ruby` arguments that compile (`"compile"`) or render (`"render"`) the ERB on stdin. */
 function erbRubyArgs(mode) {
-  return ["-e", SCRIPT, mode];
+  return [SCRIPT, mode];
 }
 
 export { erbRubyArgs };

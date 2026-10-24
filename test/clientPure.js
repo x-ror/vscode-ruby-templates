@@ -226,6 +226,12 @@ if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
   assert.strictEqual(rendered.stdout, "<p>&lt;b&gt;</p>\n<i>\nyes\n");
   assert.match(erb("compile", "<%= x %>").stdout, /__erubi\.h\(\( x \)\)/);
   assert.notStrictEqual(erb("render", "<% if %>").status, 0);
+  const ascii = spawnSync("ruby", erbRubyArgs("render"), {
+    input: 'é <%= "ü" %><%= defined?(src).inspect %>',
+    encoding: "utf8",
+    env: { ...process.env, LANG: "C", LC_ALL: "C" },
+  });
+  assert.strictEqual(ascii.stdout, "é ünil");
 }
 
 // herbLintReport
