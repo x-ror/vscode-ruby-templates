@@ -4,6 +4,16 @@ on:
   pull_request:
 
 jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - name: Known vulnerabilities in Rust dependencies
+        working-directory: server
+        run: cargo audit
+
   server:
     strategy:
       matrix:
