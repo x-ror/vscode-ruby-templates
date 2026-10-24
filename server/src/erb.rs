@@ -97,8 +97,11 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
             }
             BlockEffect::Neutral => {}
         }
-        // ERB ends a tag at the first `%>`, even inside a string. A heredoc body may hold lone quotes.
-        if code_end(snippet) == CodeEnd::String && !snippet.contains("<<") {
+        // ERB ends a tag at the first `%>`, even inside a string; the `%>` meant to close it follows on the line.
+        // A tag still being typed has no `%>` at all, and a heredoc body may hold lone quotes.
+        let rest_of_line = text[node.end_byte()..].split('\n').next().unwrap_or("");
+        let cut_short = text[..node.end_byte()].ends_with("%>") && rest_of_line.contains("%>");
+        if cut_short && code_end(snippet) == CodeEnd::String && !snippet.contains("<<") {
             let message = "String is not closed before `%>`: ERB ends the tag at the first `%>`, even inside a string";
             out.push(coded(warning(range, message), code::UNTERMINATED_STRING));
         }
@@ -205,9 +208,16 @@ mod tests {
         let codes = |t: &str| diagnostics(t).into_iter().filter_map(|d| d.code).collect::<Vec<_>>();
         let unterminated = NumberOrString::String(code::UNTERMINATED_STRING.into());
         assert_eq!(codes(r#"<%= "50%>" %>"#), [unterminated.clone()]);
-        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated]);
-        for clean in [r#"<%= "50%" %>"#, "<%= x # don't %>", "<% x = <<~T\n  don't\nT\n%>", r#"<%= "a\"b" %>"#] {
-            assert!(codes(clean).is_empty(), "{clean}");
+        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated.clone()]);
+        for clean in [
+            r#"<%= render "sh"#,
+            "<%= link_to 'x\n<p>%></p>",
+            r#"<%= "50%" %>"#,
+            "<%= x # don't %>",
+            "<% x = <<~T\n  don't\nT\n%>",
+            r#"<%= "a\"b" %>"#,
+        ] {
+            assert!(!codes(clean).contains(&unterminated), "{clean}");
         }
     }
 
