@@ -77,11 +77,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `content_for`, `yield`, `turbo_frame`, `stimulus`, `t`, `flash`, `errors` (`snippets/slim.json`)
 - [x] Engine blocks `js`, `css`, `ruby`, `md`, text `|`, HTML comment `/!` (`snippets/slim.json`)
 - [x] Snippet files validated for duplicate prefixes and stray `$` (`test/snippets.js`, CI `npm run test:snippets`)
-- [ ] Parity with ERB: `renderl`, `renderlayout`, `renderall`, `rendercomp`, `form_with_url`, `fselect`, `fcselect`, `cache`, `debug`, `content_tag`, `tag.`, `l`, `currency`, `pluralize`, `time_ago`, `meta_tags`, `assets`, `javascript_include_tag`, `favicon_link_tag`, `turbo_stream`, `ts-*`, `asset_path`, `data-action`, `turbo_script`
-- [ ] `elsif` / `else` / `when` single-line snippets
-- [ ] Strict locals magic comment `/# locals: (name:, default: nil)` (Rails scans the raw source, so it works in Slim)
-- [ ] `scss`, `sass`, `coffee`, `erb` engine block snippets and `'` text block
-- [ ] Wrapped-attribute tag snippet `tag(attr="")` and splat `*{}`
+- [x] Parity with ERB: `renderl`, `renderlayout`, `renderall`, `rendercomp`, `form_with_url`, `fselect`, `fcselect`, `cache`, `debug`, `content_tag`, `tag.`, `l`, `currency`, `pluralize`, `time_ago`, `meta_tags`, `assets`, `javascript_include_tag`, `favicon_link_tag`, `turbo_stream`, `ts-*`, `asset_path`, `data-action`, `turbo_script` (`snippets/slim.json`; `erb` engine and ERB-only `pe`/`pc`/`pend` left out)
+- [x] `elsif` / `else` / `when` single-line snippets (`snippets/slim.json` `elsif`, `else`, `when`)
+- [x] Strict locals magic comment `/# locals: (name:, default: nil)` (Rails scans the raw source, so it works in Slim) (`snippets/slim.json` `locals`)
+- [x] `scss`, `sass`, `coffee`, `erb` engine block snippets and `'` text block (`snippets/slim.json`; no `erb` snippet: Slim 5 has no `erb:` engine)
+- [x] Wrapped-attribute tag snippet `tag(attr="")` and splat `*{}` (`snippets/slim.json` `tagw`, `splat`)
 
 ## 5. Commands
 
@@ -100,7 +100,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 6. Diagnostics (server)
 
 - [x] Mixed tabs and spaces in indentation (`server/src/indented.rs` `diagnostics`)
-- [ ] Mixed tabs and spaces reported as an error for Slim, though Slim expands tabs and accepts it (downgrade or drop)
+- [x] Mixed tabs and spaces reported as an error for Slim, though Slim expands tabs and accepts it (downgrade or drop): now Haml-only (`server/src/indented.rs`)
 - [x] Inconsistent indentation step (warning for Slim) (`server/src/indented.rs` `detect_unit`; checked with `--check` on a probe file)
 - [x] Dedent to a level that never existed (`server/src/indented.rs`; `test/broken/bad.html.slim` line 11)
 - [x] Unexpected indentation at top level (`server/src/indented.rs`)
@@ -111,16 +111,16 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `,` / `\` continuation lines joined before analysis (`server/src/indented.rs` `join_continuation`)
 - [x] Unresolved `= render "dir/name"` warning (`server/src/main.rs` `unresolved_renders`; checked from a `.slim` document)
 - [x] CLI `ruby-templates-ls --check file.slim` (`server/src/main.rs`, CI runs it on `test/sample.*`)
-- [ ] Tabs counted as Slim does (`tabsize` default 4; the server counts a tab as 2 columns)
-- [ ] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today)
-- [ ] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported)
-- [ ] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block
-- [ ] `=` with a block helper but missing `do`, and `-` on an output block helper (`- form_with do` renders nothing)
-- [ ] Unknown engine check accepts engines registered by the app (setting for extra engine names)
-- [ ] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/indented.rs`)
-- [ ] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics)
+- [x] Tabs counted as Slim does (`tabsize` default 4; the server counts a tab as 2 columns) (`server/src/indented.rs` `indent_width`, tab stops of 4 for Slim)
+- [x] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today) (`server/src/indented.rs` `unmatched-branch`)
+- [x] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported): bracket/quote balance only, as a warning; no Ruby parser (`server/src/indented.rs` `unclosed-ruby`)
+- [x] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block: void elements and `tag/` (warning, HTML hosts only: `server/src/indented.rs` `void-children`, `server/src/main.rs` `slim_html_host`); inline-output tags with children are valid Slim (DoInserter adds `do`), so not reported
+- [x] `=` with a block helper but missing `do`, and `-` on an output block helper (`- form_with do` renders nothing): `- helper do` warns (`server/src/indented.rs` `silent-output-helper`); `= helper` without `do` is valid
+- [x] Unknown engine check accepts engines registered by the app (setting for extra engine names) (`rubyTemplates.slim.extraEngines`, `src/client.js` `initializationOptions.slim`)
+- [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/indented.rs`): trimmed to Slim 5's list (`server/src/indented.rs` `SLIM_ENGINES`)
+- [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)
 - [ ] Strict locals: missing/unknown locals passed to a Slim partial
-- [ ] Settings to enable/disable each built-in Slim check
+- [x] Settings to enable/disable each built-in Slim check (`rubyTemplates.slim.disabledDiagnostics`, codes in `server/src/indented.rs` `code`)
 
 ## 7. Navigation, completion, hover
 
@@ -137,10 +137,10 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 8. Outline, folding, symbols, rename
 
-- [ ] Document symbols / outline for Slim (`server/src/main.rs` `document_symbol` returns `None` for non-ERB)
-- [ ] Breadcrumbs from the tag tree (`tag#id`, `content_for`, `form_with`, `turbo_frame_tag`)
-- [ ] Server folding ranges for multi-line wrapped attributes and `,` continuations (indentation folding splits them)
-- [ ] Rename a Slim partial and update every `render` pointing at it
+- [x] Document symbols / outline for Slim (`server/src/main.rs` `document_symbol` returns `None` for non-ERB): done (`server/src/slim_outline.rs`)
+- [x] Breadcrumbs from the tag tree (`tag#id`, `content_for`, `form_with`, `turbo_frame_tag`) (`server/src/slim_outline.rs` hierarchical symbols)
+- [x] Server folding ranges for multi-line wrapped attributes and `,` continuations (indentation folding splits them) (`server/src/slim_outline.rs` logical lines)
+- [x] Rename a Slim partial and update every `render` pointing at it (`server/src/partial_rename.rs`, `workspace/willRenameFiles`; also folder renames and qualified refs in `.rb` files)
 
 ## 9. Formatting and semantic tokens
 
@@ -153,8 +153,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Token snapshot for the Slim sample (`test/sample.html.slim`, `test/__snapshots__/sample.html.slim.tokens.txt`, CI `npm run test:tokens`)
 - [x] Broken-file fixture (`test/broken/bad.html.slim`)
 - [x] Slim sample passes `--check` in CI (`.github/workflows/build.yml`)
-- [ ] Unit tests in `server/src/indented.rs` (it has no `#[cfg(test)]` module), one per Slim diagnostic with positions
-- [ ] Assert the expected diagnostics for `test/broken/bad.html.slim` (today nothing checks its output)
+- [x] Unit tests in `server/src/indented.rs` (it has no `#[cfg(test)]` module), one per Slim diagnostic with positions (`server/src/indented.rs` `mod tests`)
+- [x] Assert the expected diagnostics for `test/broken/bad.html.slim` (today nothing checks its output) (`server/src/indented.rs` `broken_fixture`)
 - [x] `test/e2e.js` opens `.slim` documents: diagnostics, definition, hover, completion, formatting (`test/e2e.js`)
 - [x] Slim formatter keeps the slim gem's compiled output, and is idempotent (`test/slim_format.js`, `test/format/`, `npm run test:format`)
 - [x] Sample lines for every `(?)` item in sections 1 and 2 (`test/sample.html.slim`, parsed with Slim 5.2.2 except the plugin-only `include` and `>` lines)
