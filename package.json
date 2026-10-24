@@ -706,6 +706,19 @@
           "uniqueItems": true,
           "description": "Built-in Haml diagnostics to turn off, by code."
         },
+        "rubyTemplates.jbuilder.disabledDiagnostics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "unresolved-render",
+              "strict-locals"
+            ]
+          },
+          "default": [],
+          "uniqueItems": true,
+          "description": "Built-in diagnostics to turn off in Jbuilder and Builder views, by code."
+        },
         "rubyTemplates.slim.disabledDiagnostics": {
           "type": "array",
           "items": {

@@ -83,6 +83,9 @@ async function doStart(context, output) {
         haml: {
           disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
         },
+        jbuilder: {
+          disabledDiagnostics: config.get("jbuilder.disabledDiagnostics", []),
+        },
       },
       synchronize: { fileEvents: watchers },
     },

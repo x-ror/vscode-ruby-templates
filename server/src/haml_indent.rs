@@ -195,11 +195,12 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
         let known_levels: Vec<usize> = std::iter::once(0).chain(stack.iter().map(|f| f.indent)).collect();
         let bad_dedent = indent < *known_levels.last().unwrap_or(&0) && !known_levels.contains(&indent);
         if bad_dedent {
-            let message = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
-                Some(doc_ws) => inconsistent_indentation_message(ws, doc_ws),
-                None => "Indentation does not match any outer level".to_string(),
+            // Off the indent unit, Haml reports it as inconsistent indentation; the code follows the message.
+            let (message, code) = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
+                Some(doc_ws) => (inconsistent_indentation_message(ws, doc_ws), code::INCONSISTENT_INDENT),
+                None => ("Indentation does not match any outer level".to_string(), code::BAD_DEDENT),
             };
-            out.push(coded(error(line_range(text, line_no, 0, ws.len()), message), code::BAD_DEDENT));
+            out.push(coded(error(line_range(text, line_no, 0, ws.len()), message), code));
         }
 
         // Pop to the parent level.

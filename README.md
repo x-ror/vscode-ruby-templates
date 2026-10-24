@@ -22,7 +22,7 @@ A small language server written in Rust (`server/`, built on tower-lsp and tree-
 - Diagnostics as you type:
   - ERB: unclosed `<%` tags, blocks without `<% end %>`, stray `end`, `if`/`end` inside `<%= %>`.
   - Haml / Slim: mixed tabs and spaces, inconsistent indentation, dedent to a level that doesn't exist, explicit `- end`, unclosed attribute brackets, unknown filters / embedded engines, nesting under a doctype, Haml illegal nesting (inline content + children).
-  - Each check has a code (shown in the Problems panel); turn one off with `rubyTemplates.erb.disabledDiagnostics`, `rubyTemplates.haml.disabledDiagnostics` or `rubyTemplates.slim.disabledDiagnostics`, e.g. `"rubyTemplates.erb.disabledDiagnostics": ["unclosed-element"]`.
+  - Each check has a code (shown in the Problems panel); turn one off with `rubyTemplates.erb.disabledDiagnostics`, `rubyTemplates.haml.disabledDiagnostics`, `rubyTemplates.slim.disabledDiagnostics` or (Jbuilder/Builder) `rubyTemplates.jbuilder.disabledDiagnostics`, e.g. `"rubyTemplates.erb.disabledDiagnostics": ["unclosed-element"]`.
 - Quick fix on an unresolved `render "dir/name"` warning: *Create partial `dir/_name.html.erb`* (the view's format and template language), in every language.
 - Go to definition (`F12` / Ctrl+click) on `render "users/card"`, `render partial: "row"`, `render template:`, `render layout:` and `render FooComponent.new` → opens the partial, template or component.
 - Hover on a render call shows the resolved file(s); hover on a Rails helper shows its signature. In Slim, hover on a line marker (`-`, `=`, `==`, `=<`, `=>`, `/`, `/!`, `/[if IE]`, `|`, `'`, `javascript:` and other engines) explains it.

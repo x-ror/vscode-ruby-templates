@@ -74,13 +74,14 @@ struct Doc {
 
 type LocaleFiles = Arc<Vec<(PathBuf, Vec<i18n::Translation>)>>;
 
-/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml}.*` settings.
+/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml,jbuilder}.*` settings.
 #[derive(Default, Debug, PartialEq)]
 struct Options {
     extra_engines: Vec<String>,
     disabled_slim: Vec<String>,
     disabled_erb: Vec<String>,
     disabled_haml: Vec<String>,
+    disabled_jbuilder: Vec<String>,
 }
 
 impl Options {
@@ -111,6 +112,7 @@ impl Options {
             disabled_slim: strings("slim", "disabledDiagnostics"),
             disabled_erb: strings("erb", "disabledDiagnostics"),
             disabled_haml: strings("haml", "disabledDiagnostics"),
+            disabled_jbuilder: strings("jbuilder", "disabledDiagnostics"),
         };
         (options, ignored)
     }
@@ -121,7 +123,7 @@ impl Options {
             TemplateLang::Slim | TemplateLang::Skim => &self.disabled_slim,
             TemplateLang::Erb => &self.disabled_erb,
             TemplateLang::Haml => &self.disabled_haml,
-            TemplateLang::Ruby => &[],
+            TemplateLang::Ruby => &self.disabled_jbuilder,
         }
     }
 }
@@ -1156,13 +1158,25 @@ mod tests {
             items.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
         };
         let declared = |sources: &[&str]| -> BTreeSet<String> {
-            let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z-]+)""#).unwrap();
+            let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z0-9-]+)""#).unwrap();
             let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
             sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
         };
         assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs")]));
         assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
         assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
+        assert_eq!(setting("jbuilder"), declared(&[]));
+        // A literal code would bypass the constants this test collects.
+        let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
+        for src in [
+            include_str!("main.rs"),
+            include_str!("erb.rs"),
+            include_str!("tags.rs"),
+            include_str!("haml_indent.rs"),
+            include_str!("slim_indent.rs"),
+        ] {
+            assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
+        }
     }
 
     #[test]
