@@ -215,11 +215,10 @@
 "    ==<> raw_html"
    "==<>"                      meta.line.output > punctuation.section.embedded.ruby
    "raw_html"                  meta.line.output > source.ruby > stub.source.ruby
-"    p ='x'"
+"    p =' @user.name"
    "p"                         meta.tag > entity.name.tag
    "='"                        meta.tag > meta.embedded.line.ruby > punctuation.section.embedded.ruby
-   "x"                         meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
-   "'"                         meta.tag > meta.embedded.line.ruby > source.ruby
+   "@user.name"                meta.tag > meta.embedded.line.ruby > source.ruby > stub.source.ruby
 "    a> Trailing"
    "a"                         meta.tag > entity.name.tag
    ">"                         meta.tag > keyword.operator.whitespace
