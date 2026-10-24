@@ -22,6 +22,7 @@
 - ERB: Ruby syntax errors inside tags, from tree-sitter-ruby over the template's Ruby as Erubi joins it; an open tag swallowing the next ones is reported where it opens.
 - ERB formatting through `htmlbeautifier` or `erb-format` (`rubyTemplates.erb.formatter`), with `bundle exec` support.
 - erb_lint diagnostics on open and save (`rubyTemplates.erbLint.enabled`).
+- Completion of model attributes after `f.text_field :` from `db/schema.rb`.
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

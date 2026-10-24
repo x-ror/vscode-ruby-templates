@@ -46,6 +46,11 @@ fs.writeFileSync(
 );
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
+fs.mkdirSync(path.join(root, "db"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "db", "schema.rb"),
+  'create_table "users", force: :cascade do |t|\n  t.string "name"\n  t.string "nickname"\n  t.string "email"\nend\n',
+);
 fs.mkdirSync(path.join(root, "config", "locales"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "config", "locales", "en.yml"),
@@ -713,6 +718,23 @@ const check = (label, actual, expected) => {
     "documentLink skips prose",
     streamLinks.result?.map((l) => l.range.start.character),
     [39],
+  );
+  await send(
+    "textDocument/didChange",
+    {
+      textDocument: { uri: streamUri, version: 4 },
+      contentChanges: [
+        {
+          text: "<%= form_with model: @user do |f| %>\n  <%= f.text_field :n\n",
+        },
+      ],
+    },
+    true,
+  );
+  check(
+    "schema attribute completion",
+    labels(await req("textDocument/completion", streamUri, 1, 21)),
+    ["name", "nickname"],
   );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");

@@ -10,6 +10,7 @@ mod partial_rename;
 mod partials;
 mod ruby;
 mod ruby_syntax;
+mod schema;
 mod slim_complete;
 mod slim_format;
 mod slim_hover;
@@ -861,6 +862,14 @@ impl LanguageServer for Backend {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, col);
             return items(stimulus_completions(path, typed, range));
+        }
+        if let Some(typed) = schema::attribute_prefix(before) {
+            let Some(path) = path.as_deref() else { return Ok(None) };
+            let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };
+            let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
+            return items(
+                columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
+            );
         }
         if let Some(found) = receiver_completions(before) {
             return items(found);

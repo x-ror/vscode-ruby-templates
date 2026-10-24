@@ -251,7 +251,7 @@ fn ends_with_consonant_y(word: &str) -> bool {
     word.strip_suffix('y').and_then(|w| w.chars().last()).is_some_and(|c| !"aeiou".contains(c))
 }
 
-fn pluralize(word: &str) -> String {
+pub fn pluralize(word: &str) -> String {
     if uncountable(word) {
         return word.to_string();
     }
@@ -267,7 +267,7 @@ fn pluralize(word: &str) -> String {
     format!("{word}s")
 }
 
-fn singularize(word: &str) -> String {
+pub fn singularize(word: &str) -> String {
     if uncountable(word) {
         return word.to_string();
     }

@@ -137,7 +137,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Go to `FooComponent` `.rb` and sidecar template from `render FooComponent.new` (`server/src/partials.rs` `resolve_component`)
 - [x] Document links on render strings (`server/src/main.rs` `document_link`)
 - [x] `render @user` / `render @users` → `users/_user` by model naming convention (`server/src/partials.rs` `resolve_model`; namespaced models skipped)
-- [ ] `render partial: name_var` (non-literal partial name): show nothing, don't guess
+- [x] `render partial: name_var` (non-literal partial name): show nothing, don't guess (`RENDER_STR` only takes string literals)
 - [ ] `render(...)` with `formats:`, `variants:`, `handlers:` picking the right file
 - [ ] View paths outside `app/views` (engines, `prepend_view_path`, `app/components` templates)
 - [ ] Layout navigation: `layout "admin"` in controllers → `app/views/layouts/admin.html.erb`
@@ -164,7 +164,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Block variables (`do |user|`) in scope
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [ ] Route helpers from `bin/rails routes` (cached)
-- [ ] Model attributes after `f.text_field :` (from `db/schema.rb`)
+- [x] Model attributes after `f.text_field :` (from `db/schema.rb`, model from the innermost `form_with model:` / `form_for` above) (`server/src/schema.rs`)
 - [ ] ViewComponent class names after `render `
 - [x] Stimulus controller names in `data-controller` / `data-action` values and `data: { controller: }` hashes (`server/src/stimulus.rs` `completion_prefix`, `controllers`)
 - [ ] Stimulus action method and target names
