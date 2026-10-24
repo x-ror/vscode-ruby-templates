@@ -175,7 +175,28 @@ const onServerStarted = (listener) => {
 const notifyServer = (method, params) =>
   client?.isRunning() ? client.sendNotification(method, params) : undefined;
 
+/**
+ * The server's formatting edits for `doc`: the whole document, or only the lines of `range`. None while the server
+ * is stopped or when it leaves the file as it is (it logs why).
+ */
+async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
+  if (!client?.isRunning()) return [];
+  const c2p = client.code2ProtocolConverter;
+  const params = {
+    textDocument: { uri: c2p.asUri(doc.uri) },
+    options: { tabSize, insertSpaces },
+  };
+  const edits = range
+    ? await client.sendRequest("textDocument/rangeFormatting", {
+        ...params,
+        range: c2p.asRange(range),
+      })
+    : await client.sendRequest("textDocument/formatting", params);
+  return (await client.protocol2CodeConverter.asTextEdits(edits)) ?? [];
+}
+
 export {
+  serverFormatEdits,
   startClient,
   stopClient,
   restartClient,

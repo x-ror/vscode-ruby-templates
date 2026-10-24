@@ -9,10 +9,11 @@ import {
   restartClient,
   onServerStarted,
   notifyServer,
+  serverFormatEdits,
 } from "./client.js";
 import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
 import { toggleErbTagAt } from "./erbTags.js";
-import { toggleHamlLines, reindentHaml, hamlLintOffenses } from "./haml.js";
+import { toggleHamlLines, hamlLintOffenses } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
 import {
@@ -203,31 +204,21 @@ async function toggleActiveHamlLines() {
   );
 }
 
-/** Edits re-indenting Haml lines `from`..`to`; nesting is computed over the whole document. */
-function reindentEdits(doc, tabSize, from = 0, to = doc.lineCount - 1) {
-  const lines = documentLines(doc);
-  const fixed = reindentHaml(lines, tabSize);
-  const edits = [];
-  for (let i = from; i <= to; i++) {
-    if (fixed[i] !== lines[i])
-      edits.push(vscode.TextEdit.replace(doc.lineAt(i).range, fixed[i]));
-  }
-  return edits;
-}
-
+/** Re-indents the selected lines, or the whole document, through the server's formatter. */
 async function reindentActiveHaml() {
   const ed = vscode.window.activeTextEditor;
   if (ed?.document.languageId !== "haml") return;
   const { selection, document: doc } = ed;
-  const lines = selection.isEmpty
-    ? [0, doc.lineCount - 1]
-    : selectedLines(selection);
-  const edits = reindentEdits(
-    doc,
-    Number(ed.options.tabSize),
-    lines[0],
-    lines.at(-1),
-  );
+  const lines = selectedLines(selection);
+  const range = selection.isEmpty
+    ? undefined
+    : new vscode.Range(lines[0], 0, lines.at(-1), 0);
+  const { tabSize, insertSpaces } = ed.options;
+  const options = {
+    tabSize: Number(tabSize),
+    insertSpaces: insertSpaces === true,
+  };
+  const edits = await serverFormatEdits(doc, options, range);
   await ed.edit((eb) =>
     edits.forEach(({ range, newText }) => eb.replace(range, newText)),
   );
@@ -1429,14 +1420,14 @@ async function formatErb(doc, options, tool, output) {
 function registerHamlFormatting(context, output) {
   context.subscriptions.push(
     vscode.languages.registerDocumentFormattingEditProvider("haml", {
-      provideDocumentFormattingEdits: (doc, { tabSize }) =>
+      provideDocumentFormattingEdits: (doc, options) =>
         cfg().get("haml.formatter", "reindent") === "haml-lint"
           ? formatWithHamlLint(doc, output)
-          : reindentEdits(doc, tabSize),
+          : serverFormatEdits(doc, options),
     }),
     vscode.languages.registerDocumentRangeFormattingEditProvider("haml", {
-      provideDocumentRangeFormattingEdits: (doc, range, { tabSize }) =>
-        reindentEdits(doc, tabSize, range.start.line, range.end.line),
+      provideDocumentRangeFormattingEdits: (doc, range, options) =>
+        serverFormatEdits(doc, options, range),
     }),
   );
 }
