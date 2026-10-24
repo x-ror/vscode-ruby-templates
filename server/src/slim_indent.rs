@@ -8,7 +8,6 @@ use tower_lsp::lsp_types::Diagnostic;
 pub mod code {
     pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
     pub const BAD_DEDENT: &str = "bad-dedent";
-    pub const TOP_LEVEL_INDENT: &str = "top-level-indent";
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const VOID_CHILDREN: &str = "void-children";
     pub const UNKNOWN_ENGINE: &str = "unknown-engine";
@@ -110,8 +109,6 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
                 let message = format!("Inconsistent indentation: expected {} spaces, found {}", u, step);
                 out.push(coded(warning(ws_range, message), code::INCONSISTENT_INDENT));
             }
-        } else if stack.is_empty() && indent > 0 {
-            out.push(coded(error(ws_range, "Unexpected indentation at top level"), code::TOP_LEVEL_INDENT));
         }
 
         // Illegal nesting checks against the parent.
@@ -269,6 +266,10 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
             let (joined, _) = join_continuation(lines, i, code);
             check_explicit_end(&joined, content_range, out);
             check_ruby_balance(&joined, content_range, out);
+        }
+        // Slim's parse_text_block takes every deeper line after inline text as text.
+        if !void && !rest_t.is_empty() && !rest_t.starts_with(['=', '/', ':']) {
+            return (LineKind::Verbatim, consumed);
         }
         return (LineKind::Tag { void }, consumed);
     }
@@ -625,7 +626,7 @@ mod tests {
 
     #[test]
     fn top_level_indent() {
-        assert_eq!(slim("  p\n"), one(code::TOP_LEVEL_INDENT, 0, 0, ERROR));
+        assert_eq!(slim("  p a\n  p b\n"), vec![]);
     }
 
     #[test]
