@@ -5,6 +5,7 @@ pub mod cli;
 mod controllers;
 mod erb;
 mod erb_complete;
+mod format;
 mod haml;
 mod haml_indent;
 mod helper_defs;
