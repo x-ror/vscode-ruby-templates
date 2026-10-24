@@ -205,7 +205,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
 - [ ] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
-- [ ] Jbuilder/other templates in the same dir don't confuse partial resolution
+- [x] Jbuilder/other templates in the same dir don't confuse partial resolution (`server/src/partials.rs` `renders_format`)
+- [x] Hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` (`server/src/partials.rs` `RENDER_STR`)
 
 ## 15. Server and client infrastructure
 
@@ -221,11 +222,13 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 16. Tests and CI
 
 - [x] Rust unit tests for render refs and block analysis (`server/src/partials.rs`, `server/src/ruby.rs`)
-- [x] LSP end-to-end smoke test: definition, hover, completion, diagnostics on a fake Rails tree (`test/e2e.js`)
+- [x] LSP end-to-end test: definition, hover, completion, diagnostics on a fake Rails tree (`test/e2e.js`)
 - [x] Broken-file fixture (`test/broken/bad.html.erb`)
 - [x] CI builds the server for 5 targets, runs `cargo test` on 4 (skipped for cross-built linux-arm64) and `test:tokens`, packages per-platform `.vsix` (`.github/workflows/build.yml`)
 - [x] Unit tests for `erb.rs` diagnostics (each message, positions with multibyte text) (`server/src/erb.rs` tests)
-- [ ] `test/e2e.js` asserts results (it only prints them) and runs in CI
+- [x] `test/e2e.js` asserts results and exits non-zero on a mismatch
+- [ ] `test/e2e.js` runs in CI (its npm steps are `test:tokens`, `test:snippets`, `test:unit`, `test:slim`)
+- [ ] `test/broken/bad.html.erb` asserted like the Haml/Slim fixtures (`broken_fixture`); today nothing reads it
 - [x] `test:server` (`--check` on samples) runs in CI (`.github/workflows/build.yml`)
 - [ ] Token test asserts scopes for every tag variant (`<%_`, `<%==`, `-%>`, attribute/script contexts)
 - [ ] Extension-host tests (`@vscode/test-electron`) for commands: toggle, wrap, convert

@@ -24,7 +24,7 @@ Legend as in `ERB_TODO.md`.
 - [ ] Commands stay ERB/Haml/Slim-only: `TEMPLATE_LANGS` (`src/extension.js`) and the `when` clauses don't match `liquid`, so preview/toggle stay hidden. No change.
 
 ### Server
-- [ ] `TemplateLang::Liquid` from id `liquid` or `.liquid` path (`server/src/main.rs` `TemplateLang::from_uri_or_id`). Arms for the exhaustive matches: `diagnostics` → `vec![]` at first, `ruby_line` → `false`, `in_ruby_context` → `false`.
+- [ ] `TemplateLang::Liquid` from id `liquid` or `.liquid` path (`server/src/main.rs` `TemplateLang::from_uri_or_id`). Arms for the exhaustive matches: `diagnostics` → `vec![]` at first, `render_in_code` → `None` (also keeps Liquid renders out of unresolved-render and strict-locals warnings), `in_ruby_context` → `false`.
 - [ ] Gate the Rails-only paths on `lang != Liquid` (`server/src/main.rs`). `goto_definition`, `hover`, `document_link` and `completion` call `partials::render_ref_at`/`render_refs`/`render_string_prefix` without checking `in_ruby_context`, and `RENDER_STR` matches `{% render "x" %}` (checked). Without the gate, Liquid renders would resolve as Rails partials by accident. The Rails `HELPERS` hover via `word_at` is ungated too, and so is the form-builder branch of `completion` (step 3, before any `in_ruby_context` check), so `{{ f.` would offer `FormBuilder` methods. One `lang == Liquid` early return at the top of each handler, not per call.
 - [ ] Phase 2: new `server/src/liquid.rs`:
   - `refs(line)` for `{%-? (render|include|include_relative) 'name' … %}`. Jekyll also allows unquoted `{% include footer.html %}`. Skip `{{ var }}` dynamic names.
@@ -37,9 +37,9 @@ Legend as in `ERB_TODO.md`.
 
 - [ ] `test/sample.html.liquid` covering every construct above, plus `'sample.html.liquid': 'text.html.liquid'` in `test/tokenize.js` `samples` and a baseline from `UPDATE=1 npm run test:tokens`. `test:tokens` fails on any unlisted `test/sample.*`.
 - [ ] `test:server` and CI (`.github/workflows/build.yml`) run `--check test/sample.*`, so the server's `.liquid` detection must land with the sample or the check exits 1 ("unknown template type").
-- [ ] Gate (phase 1), Rust unit test on a temp dir like `partials.rs` `model_render_partials`: `{% render "card" %}` in a `.liquid` file next to `_card.html.slim` → no definition, no link. `test/e2e.js` can't do this: it only logs and always exits 0.
+- [ ] Gate (phase 1), Rust unit test on a temp dir like `partials.rs` `model_render_partials`: `{% render "card" %}` in a `.liquid` file next to `_card.html.slim` → no definition, no link. Plus one `test/e2e.js` case (it asserts): definition on that render returns nothing.
 - [ ] `liquid.rs` unit tests (phase 2): refs with quotes / no quotes / `{%-`, `{{ x }}` ignored, `include_relative` path; resolve for Jekyll `_config.yml` and the `_x.liquid` fallback on a temp dir.
-- [ ] Block-balance diagnostics (phase 3): unit tests next to them. Not `test/broken/`: no script or CI runs it.
+- [ ] Block-balance diagnostics (phase 3): unit tests next to them. A `test/broken/bad.html.liquid` fixture only counts if a unit test reads it via `include_str!`, as `haml_indent.rs`/`slim_indent.rs` `broken_fixture` do.
 
 ## Open questions
 
