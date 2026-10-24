@@ -101,10 +101,20 @@ jobs:
         run: bun test/e2e.js
         env:
           RUBY_TEMPLATES_LS: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
+      - name: Command line
+        if: matrix.test
+        run: bun test/cli.js
+        env:
+          RUBY_TEMPLATES: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
       - uses: actions/upload-artifact@v7
         with:
           name: server-${{ matrix.dir }}
           path: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
+      # The command line goes to npm, not into the .vsix.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.dir }}
+          path: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
 
   extension:
     needs: [lint, server]
