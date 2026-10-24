@@ -117,6 +117,15 @@ pub fn line_at(text: &str, pos: Position) -> (usize, &str, usize) {
     (line_start, line, byte_col(line, pos.character))
 }
 
+/// The identifier (`?`/`!` included) around byte `col` of `line`.
+pub fn word_at(line: &str, col: usize) -> &str {
+    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
+    let (before, after) = line.split_at(col.min(line.len()));
+    let start = before.trim_end_matches(is_word).len();
+    let end = line.len() - after.trim_start_matches(is_word).len();
+    &line[start..end]
+}
+
 /// Byte offset of an LSP position; a column past the line end clamps to it, a line past the end is `None`.
 pub fn position_to_offset(text: &str, pos: Position) -> Option<usize> {
     let mut line_start = 0;
@@ -161,6 +170,25 @@ mod tests {
         assert_eq!(text, "é<%= user %>\nNext!\nend");
         apply_change(&mut text, edit(None, "fresh"));
         assert_eq!(text, "fresh");
+    }
+
+    #[test]
+    fn word_under_cursor() {
+        let cases = [
+            ("a user? b", 4, "user?"),
+            ("a user? b", 2, "user?"),
+            ("a user? b", 7, "user?"),
+            ("a user? b", 8, "b"),
+            ("a  b", 2, ""),
+            ("t(’greeting’)", 8, "greeting"),
+            ("— ok!", 5, "ok!"),
+            ("😀名前", 4, "名前"),
+            ("abc", 99, "abc"),
+            ("", 0, ""),
+        ];
+        for (line, col, word) in cases {
+            assert_eq!(word_at(line, col), word, "{line:?} at {col}");
+        }
     }
 
     #[test]

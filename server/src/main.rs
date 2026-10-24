@@ -637,7 +637,7 @@ impl LanguageServer for Backend {
         if let Some(md) = haml::hover(line, col).filter(|_| doc.lang == TemplateLang::Haml && role == LineRole::Start) {
             return Ok(markdown_hover(md));
         }
-        let word = word_at(line, col);
+        let word = util::word_at(line, col);
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word) {
             return Ok(markdown_hover(helper_hover(h)));
         }
@@ -896,14 +896,6 @@ fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Hel
     helpers::HELPERS.iter().chain(haml_only)
 }
 
-fn word_at(line: &str, col: usize) -> &str {
-    let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
-    let (before, after) = line.split_at(col.min(line.len()));
-    let start = before.trim_end_matches(is_word).len();
-    let end = line.len() - after.trim_start_matches(is_word).len();
-    &line[start..end]
-}
-
 /// Is byte `offset` of `text` in Ruby: inside an ERB code tag (`spans` from `erb::code_spans`, may cross lines)
 /// or on a Haml/Slim Ruby line. Slim documents go through `slim_parser` where the whole text is at hand.
 fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, usize)], offset: usize) -> bool {
@@ -1009,25 +1001,6 @@ mod tests {
         let locales = Path::new("/r/config/locales");
         assert!(stale(locales, &event("/r/config/locales/en.yml", FileChangeType::CHANGED), true));
         assert!(!stale(locales, &[], true));
-    }
-
-    #[test]
-    fn word_under_cursor() {
-        let cases = [
-            ("a user? b", 4, "user?"),
-            ("a user? b", 2, "user?"),
-            ("a user? b", 7, "user?"),
-            ("a user? b", 8, "b"),
-            ("a  b", 2, ""),
-            ("t(’greeting’)", 8, "greeting"),
-            ("— ok!", 5, "ok!"),
-            ("😀名前", 4, "名前"),
-            ("abc", 99, "abc"),
-            ("", 0, ""),
-        ];
-        for (line, col, word) in cases {
-            assert_eq!(word_at(line, col), word, "{line:?} at {col}");
-        }
     }
 
     #[test]
