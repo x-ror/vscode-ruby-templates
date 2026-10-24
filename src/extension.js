@@ -355,15 +355,33 @@ async function showCompiledSource() {
 function registerSlimLint(context, output) {
   const lints = vscode.languages.createDiagnosticCollection('slim-lint');
   let warnedMissing = false;
+  // Saves can overlap; only the latest run per document may publish.
+  const latestRun = new Map();
+
+  const warnMissing = message => {
+    if (!warnedMissing) vscode.window.showWarningMessage(message);
+    warnedMissing = true;
+  };
 
   const lint = async doc => {
     if (doc.languageId !== 'slim' || doc.uri.scheme !== 'file') return;
     if (!cfg().get('slimLint.enabled', false)) return;
+    const key = doc.uri.toString();
+    const runId = (latestRun.get(key) ?? 0) + 1;
+    latestRun.set(key, runId);
     const bin = cfg().get('commands.slimLint', 'slim-lint');
     const r = await run(bin, ['--reporter', 'json', doc.uri.fsPath], { cwd: workspaceFolderFor(doc) });
+    if (latestRun.get(key) !== runId || doc.isClosed) return;
     if (r.err?.code === 'ENOENT') {
-      if (!warnedMissing) vscode.window.showWarningMessage(`"${bin}" was not found. Install it with: gem install slim_lint — or set rubyTemplates.commands.slimLint.`);
-      warnedMissing = true;
+      const missing = r.err.path ?? bin;
+      warnMissing(missing === bin
+        ? `"${bin}" was not found. Install it with: gem install slim_lint — or set rubyTemplates.commands.slimLint.`
+        : `"${missing}" was not found, so slim-lint can't run through Bundler. Install Bundler or turn off rubyTemplates.preview.useBundler.`);
+      return;
+    }
+    // `bundle exec` exits 127 when the bundle doesn't include the command.
+    if (r.code === 127 || /command not found/.test(r.stderr)) {
+      warnMissing(`"${bin}" is not in the bundle. Add slim_lint to the Gemfile, or turn off rubyTemplates.preview.useBundler.`);
       return;
     }
     try {
@@ -376,7 +394,10 @@ function registerSlimLint(context, output) {
   context.subscriptions.push(
     lints,
     vscode.workspace.onDidSaveTextDocument(doc => lint(doc)),
-    vscode.workspace.onDidCloseTextDocument(doc => lints.delete(doc.uri)),
+    vscode.workspace.onDidCloseTextDocument(doc => {
+      lints.delete(doc.uri);
+      latestRun.delete(doc.uri.toString());
+    }),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('rubyTemplates.slimLint') && !cfg().get('slimLint.enabled', false)) lints.clear();
     })

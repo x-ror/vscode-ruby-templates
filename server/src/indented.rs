@@ -212,11 +212,15 @@ pub fn diagnostics(text: &str, lang: Lang, extra_engines: &[String]) -> Vec<Diag
         }
 
         // Illegal nesting checks against the parent.
+        // `/` is a Slim code comment (renders nothing); `/!` is an HTML comment.
+        let content = raw.trim_start();
+        let code_comment =
+            lang == Lang::Slim && content.starts_with('/') && !content.starts_with("/!");
         if let Some(parent) = stack.last_mut().filter(|_| is_child) {
             let parent_range = line_range(text, parent.line, 0, lines[parent.line].len());
             let line_content = line_range(text, line_no, ws.len(), raw.len());
-            let first_child = !parent.has_child;
-            parent.has_child = true;
+            let first_child = !parent.has_child && !code_comment;
+            parent.has_child |= !code_comment;
             match parent.kind {
                 LineKind::Tag {
                     inline_content: true,
@@ -242,11 +246,13 @@ pub fn diagnostics(text: &str, lang: Lang, extra_engines: &[String]) -> Vec<Diag
                     ));
                 }
                 LineKind::Tag { void: true, .. } if lang == Lang::Slim && first_child => {
-                    let message = format!(
-                        "`{}` is a void element and can't have children",
-                        tag_name(lines[parent.line])
-                    );
-                    out.push(coded(error(line_content, message), code::VOID_CHILDREN));
+                    let name = tag_name(lines[parent.line]);
+                    let message = if VOID_ELEMENTS.contains(&name) {
+                        format!("`{name}` is a void element and can't have children")
+                    } else {
+                        format!("`{name}` is explicitly closed with `/` and can't have children")
+                    };
+                    out.push(coded(warning(line_content, message), code::VOID_CHILDREN));
                 }
                 _ => {}
             }
@@ -254,7 +260,11 @@ pub fn diagnostics(text: &str, lang: Lang, extra_engines: &[String]) -> Vec<Diag
 
         // Classify the line and gather continuation lines.
         let (kind, consumed) = classify(lang, &lines, i, text, extra_engines, &mut out);
-        let mut chain = None;
+        // A code comment between branches is transparent: `- if` / `/ note` / `- else`.
+        let mut chain = prev_sibling
+            .as_ref()
+            .filter(|_| code_comment)
+            .and_then(|f| f.chain);
         if let (
             Lang::Slim,
             LineKind::Control {
@@ -264,14 +274,27 @@ pub fn diagnostics(text: &str, lang: Lang, extra_engines: &[String]) -> Vec<Diag
         {
             chain = Some(keyword);
             if let Some(openers) = branch_openers(keyword) {
-                chain = prev_sibling
-                    .and_then(|f| f.chain)
-                    .filter(|c| openers.contains(c));
+                chain = match &prev_sibling {
+                    Some(f) => f.chain.filter(|c| openers.contains(c)),
+                    // `- case x` with its `- when`s nested one level deeper.
+                    None => stack
+                        .last()
+                        .filter(|_| is_child)
+                        .and_then(|f| f.chain)
+                        .filter(|c| nested_branch_openers(keyword).contains(c)),
+                };
                 if chain.is_none() {
+                    let named: Vec<&str> = openers.iter().copied().filter(|o| *o != "do").collect();
+                    let block = if openers.contains(&"do") {
+                        " or a block (`do`)"
+                    } else {
+                        ""
+                    };
                     let message = format!(
-                        "`- {}` without a matching `- {}` at the same indentation",
+                        "`- {}` without a matching `- {}`{} at the same indentation",
                         keyword,
-                        openers.join("`/`- ")
+                        named.join("`/`- "),
+                        block
                     );
                     out.push(coded(
                         error(line_range(text, line_no, ws.len(), raw.len()), message),
@@ -316,6 +339,15 @@ fn branch_openers(keyword: &str) -> Option<&'static [&'static str]> {
         "when" | "in" => Some(&["case"]),
         "rescue" | "ensure" => Some(&["begin", "do"]),
         _ => None,
+    }
+}
+
+/// Openers a branch line may also continue from one level up, as the opener's first child.
+fn nested_branch_openers(keyword: &str) -> &'static [&'static str] {
+    match keyword {
+        "when" | "in" => &["case"],
+        "rescue" | "ensure" => &["begin"],
+        _ => &[],
     }
 }
 
@@ -510,7 +542,7 @@ fn control_keyword(code: &str) -> Option<&'static str> {
     const KEYWORDS: &[&str] = &[
         "if", "unless", "case", "begin", "else", "elsif", "when", "in", "rescue", "ensure",
     ];
-    let first = code
+    let first = strip_assignment(code)
         .trim_start()
         .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
         .next()
@@ -520,6 +552,23 @@ fn control_keyword(code: &str) -> Option<&'static str> {
         .copied()
         .find(|k| *k == first)
         .or_else(|| ends_with_block(code).then_some("do"))
+}
+
+/// The right-hand side of `x = …`, `@x ||= …`, `x &&= …`; otherwise `code` itself.
+fn strip_assignment(code: &str) -> &str {
+    let t = code.trim_start();
+    let name_len = t
+        .find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '@'))
+        .unwrap_or(t.len());
+    if name_len == 0 {
+        return t;
+    }
+    let rest = t[name_len..].trim_start();
+    ["||=", "&&=", "="]
+        .iter()
+        .find_map(|op| rest.strip_prefix(op))
+        .filter(|rhs| !rhs.starts_with(['=', '~', '>']))
+        .unwrap_or(t)
 }
 
 /// `- form_with … do` builds HTML and returns it; with `-` that result is thrown away.
@@ -561,19 +610,47 @@ fn check_ruby_balance(code: &str, range: tower_lsp::lsp_types::Range, out: &mut 
     } else {
         "bracket"
     };
+    // A warning: the scan is a heuristic, not a Ruby parser.
     out.push(coded(
-        error(range, format!("Unclosed {what} `{open}` in Ruby code")),
+        warning(range, format!("Unclosed {what} `{open}` in Ruby code")),
         code::UNCLOSED_RUBY,
     ));
 }
 
 /// Innermost bracket or string quote left open in a line of Ruby, ignoring a trailing `#` comment.
-/// Returns `None` on a closer that doesn't match: that's not a shape this scan can judge.
+/// Returns `None` on a closer that doesn't match, or on a regex, `%` literal or `?x` character
+/// literal: their contents aren't balanced, and telling them from operators needs a real parser.
 fn unclosed_delimiter(code: &str) -> Option<char> {
     // Interpolation `#{` inside a string is pushed as `#` so its `}` returns to the string.
     let mut stack: Vec<char> = Vec::new();
     let mut chars = code.chars().peekable();
+    let mut prev = ' ';
+    let mut prev_solid = ' ';
     while let Some(ch) = chars.next() {
+        let next = chars.peek().copied().unwrap_or(' ');
+        let after_operand =
+            prev_solid.is_alphanumeric() || matches!(prev_solid, '_' | ')' | ']' | '}');
+        let in_code = !matches!(stack.last(), Some('"' | '\'' | '`'));
+        if in_code {
+            match ch {
+                // `/re/` where an operand is expected; `foo /re/` too, but not `a / b`.
+                '/' if !after_operand || (prev == ' ' && next != ' ') => return None,
+                '%' if !after_operand || (prev == ' ' && next != ' ') => return None,
+                '?' if !after_operand && next != ' ' => return None,
+                // `$'`, `$"`, `$(`…: special globals.
+                '$' => {
+                    chars.next();
+                    prev = ch;
+                    prev_solid = 'x';
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if !ch.is_whitespace() {
+            prev_solid = ch;
+        }
+        prev = ch;
         if let Some(&quote @ ('"' | '\'' | '`')) = stack.last() {
             match ch {
                 '\\' => {
@@ -777,22 +854,21 @@ fn skip_tag_head(
     (s[pos..].to_string(), consumed)
 }
 
+/// Byte length of the attribute name at the start of `s`.
+fn attr_name_len(s: &str) -> usize {
+    s.find(|c: char| !(c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.')))
+        .unwrap_or(s.len())
+}
+
 fn looks_like_attr(s: &str) -> bool {
-    let name_len = s
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.'))
-        .count();
+    let name_len = attr_name_len(s);
     name_len > 0 && s[name_len..].starts_with('=')
 }
 
 /// Length of `name=value` where value is a quoted string, a balanced bracket group, or a bare word.
 /// Err(open) when a bracket in the value is never closed.
 fn consume_attr(s: &str) -> std::result::Result<usize, char> {
-    let name_len = s
-        .chars()
-        .take_while(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':' | '@' | '.'))
-        .count();
-    let mut pos = name_len;
+    let mut pos = attr_name_len(s);
     while s[pos..].starts_with('=') {
         pos += 1;
     }
@@ -1002,7 +1078,7 @@ mod tests {
     fn unmatched_branch() {
         assert!(slim("- if a\n  p\n- elsif b\n  p\n- else\n  p\n").is_empty());
         assert!(slim("- case x\n- when 1\n  p\n- else\n  p\n").is_empty());
-        assert!(slim("- begin\n  p\n- rescue\n  p\n- ensure\n  p\n").is_empty());
+        assert!(slim("- begin\n  p\n- rescue => e\n  p\n- ensure\n  p\n").is_empty());
         assert_eq!(
             slim("p\n- else\n  p\n"),
             one(code::UNMATCHED_BRANCH, 1, 0, ERROR)
@@ -1019,23 +1095,73 @@ mod tests {
             slim("- unless a\n  p\n- elsif b\n"),
             one(code::UNMATCHED_BRANCH, 2, 0, ERROR)
         );
+        let message = &diagnostics("p\n- else\n", Lang::Slim, &[])[0].message;
+        assert!(message.contains("or a block (`do`)"), "{message}");
+    }
+
+    #[test]
+    fn code_comment_between_branches() {
+        assert!(slim("- if x\n  p a\n/ note\n- else\n  p b\n").is_empty());
+        assert!(slim("- case x\n- when 1\n  p 1\n/ two\n- when 2\n  p 2\n").is_empty());
+        // `/!` renders an HTML comment, which ends the `if` in Slim's output.
+        assert_eq!(
+            slim("- if x\n  p a\n/! note\n- else\n"),
+            one(code::UNMATCHED_BRANCH, 3, 0, ERROR)
+        );
+    }
+
+    #[test]
+    fn branches_nested_under_opener() {
+        assert!(slim("- case x\n  - when 1\n    p one\n  - else\n    p other\n").is_empty());
+        assert!(slim("- begin\n  - rescue\n    p\n").is_empty());
+        assert_eq!(
+            slim("- if a\n  - elsif b\n"),
+            one(code::UNMATCHED_BRANCH, 1, 2, ERROR)
+        );
+    }
+
+    #[test]
+    fn branch_opener_after_assignment() {
+        assert!(slim("- r = case x\n- when 1\n  p 1\n").is_empty());
+        assert!(slim("- @r ||= case x\n- when 1\n").is_empty());
+        assert_eq!(
+            slim("- x == case y\n- when 1\n"),
+            one(code::UNMATCHED_BRANCH, 1, 0, ERROR)
+        );
     }
 
     #[test]
     fn void_children() {
         assert_eq!(
             slim("br\n  p x\n  p y\n"),
-            one(code::VOID_CHILDREN, 1, 2, ERROR)
+            one(code::VOID_CHILDREN, 1, 2, WARNING)
         );
         assert_eq!(
             slim("div\n  img/\n    p\n"),
-            one(code::VOID_CHILDREN, 2, 4, ERROR)
+            one(code::VOID_CHILDREN, 2, 4, WARNING)
         );
         assert_eq!(
             slim("input.big type=\"x\"\n  p\n"),
-            one(code::VOID_CHILDREN, 1, 2, ERROR)
+            one(code::VOID_CHILDREN, 1, 2, WARNING)
         );
+        assert!(slim("br\n  / old stuff\n").is_empty());
         assert!(slim("p = x\n  span y\n").is_empty());
+    }
+
+    #[test]
+    fn closed_tag_children() {
+        let d = diagnostics("div/\n  p x\n", Lang::Slim, &[]);
+        assert_eq!(d.len(), 1);
+        assert_eq!(
+            d[0].message,
+            "`div` is explicitly closed with `/` and can't have children"
+        );
+        assert_eq!(d[0].severity, Some(WARNING));
+    }
+
+    #[test]
+    fn non_ascii_text_after_tag() {
+        assert!(slim("p Größe\np ü\nspan.x ä=1 b\n").is_empty());
     }
 
     #[test]
@@ -1054,20 +1180,36 @@ mod tests {
 
     #[test]
     fn unclosed_ruby() {
-        assert_eq!(slim("= foo(\n"), one(code::UNCLOSED_RUBY, 0, 0, ERROR));
+        assert_eq!(slim("= foo(\n"), one(code::UNCLOSED_RUBY, 0, 0, WARNING));
         assert_eq!(
             slim("p = link_to \"x, y\n"),
-            one(code::UNCLOSED_RUBY, 0, 0, ERROR)
+            one(code::UNCLOSED_RUBY, 0, 0, WARNING)
         );
         assert_eq!(
             slim("- x = [1,\n  2\n"),
-            one(code::UNCLOSED_RUBY, 0, 0, ERROR)
+            one(code::UNCLOSED_RUBY, 0, 0, WARNING)
         );
         assert!(
             slim("- x = [1,\n  2]\n= \"#{a ? \"(\" : '['}\" # (\n= t('.x') if ok?\n").is_empty()
         );
         assert_eq!(unclosed_delimiter("foo(\"#{bar"), Some('{'));
         assert_eq!(unclosed_delimiter("a)"), None);
+        assert_eq!(unclosed_delimiter("total / count + (x"), Some('('));
+        assert_eq!(unclosed_delimiter("a % b + (x"), Some('('));
+    }
+
+    #[test]
+    fn unclosed_ruby_skips_literals_it_cannot_scan() {
+        for code in [
+            "= name.gsub(/'/, \"\")\n",
+            "- if path =~ /\\(/\n  p x\n",
+            "= t(\"x\", default: %q(it's))\n",
+            "= foo(?()\n",
+            "= $'\n",
+            "= foo /(/\n",
+        ] {
+            assert!(slim(code).is_empty(), "{code}");
+        }
     }
 
     #[test]
