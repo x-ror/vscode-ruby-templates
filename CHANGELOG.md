@@ -10,6 +10,7 @@
 - Every ERB and Haml diagnostic has a code; `rubyTemplates.erb.disabledDiagnostics` and `rubyTemplates.haml.disabledDiagnostics` turn checks off like the Slim setting. Strict-locals warnings are coded `strict-locals` in all languages.
 - Quick fix: create the missing partial or template of an unresolved `render "dir/name"`, in the view's format and template language.
 - Find All References on a partial lists the `render` calls that resolve to it.
+- Completion of Turbo Stream actions after `turbo_stream.` (`append`, `replace`, `remove`, `refresh`, `*_all`, `action`).
 - Server: tree-sitter 0.27, `once_cell` replaced by the standard library; builds need Rust 1.82.
 
 ## 0.1.0

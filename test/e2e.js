@@ -646,6 +646,25 @@ const check = (label, actual, expected) => {
     refs.result?.map((l) => `${rel(l.uri)} ${l.range.start.line}`).sort(),
     ["/app/views/users/index.html.erb 1", "/app/views/users/show.html.haml 3"],
   );
+  const streamUri =
+    "file://" + path.join(views, "users", "create.turbo_stream.erb");
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: streamUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= turbo_stream.rep %>\n",
+      },
+    },
+    true,
+  );
+  check(
+    "turbo_stream. completion",
+    labels(await req("textDocument/completion", streamUri, 0, 20)),
+    ["replace", "replace_all"],
+  );
   const jbuilderUri =
     "file://" + path.join(views, "users", "index.json.jbuilder");
   await send(

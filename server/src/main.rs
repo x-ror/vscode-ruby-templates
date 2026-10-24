@@ -811,7 +811,7 @@ impl LanguageServer for Backend {
             }
         }
 
-        // 3. Form builder methods after `f.` / `form.` / `ff.`
+        // 3. Form builder methods after `f.` / `form.` / `ff.`, Turbo Stream actions after `turbo_stream.`
         if let Some(idx) = before.rfind('.') {
             let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
             let typed = &before[idx + 1..];
@@ -826,6 +826,10 @@ impl LanguageServer for Backend {
                         ..Default::default()
                     })
                     .collect();
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+            if recv == "turbo_stream" && typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                let items = helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(helper_item).collect();
                 return Ok(Some(CompletionResponse::Array(items)));
             }
         }
@@ -862,15 +866,19 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let mut items = local_completions(&doc.text, typed);
-        items.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| CompletionItem {
-            label: h.name.to_string(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some(h.detail.to_string()),
-            insert_text: Some(h.snippet.to_string()),
-            insert_text_format: Some(InsertTextFormat::SNIPPET),
-            ..Default::default()
-        }));
+        items.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
         Ok(Some(CompletionResponse::Array(items)))
+    }
+}
+
+fn helper_item(h: &helpers::Helper) -> CompletionItem {
+    CompletionItem {
+        label: h.name.to_string(),
+        kind: Some(CompletionItemKind::FUNCTION),
+        detail: Some(h.detail.to_string()),
+        insert_text: Some(h.snippet.to_string()),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        ..Default::default()
     }
 }
 

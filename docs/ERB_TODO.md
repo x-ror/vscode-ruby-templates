@@ -167,7 +167,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Model attributes after `f.text_field :` (from `db/schema.rb`)
 - [ ] ViewComponent class names after `render `
 - [ ] Stimulus controller / action / target names in `data-*` attributes
-- [ ] Turbo stream actions after `turbo_stream.`
+- [x] Turbo stream actions after `turbo_stream.` (`server/src/helpers.rs` `TURBO_STREAM`)
 - [ ] HTML tag/attribute completion in ERB (VS Code's HTML language service, or `emmet`)
 - [x] `in_ruby_context` handles tags spanning several lines (it only looks at the current line) (`server/src/erb.rs` `code_spans`/`span_at`)
 
