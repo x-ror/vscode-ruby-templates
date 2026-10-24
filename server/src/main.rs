@@ -201,12 +201,13 @@ fn slim_html_host(uri: &Url) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
-/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`.
+/// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`. URIs that aren't
+/// file paths here (`untitled:`, a drive-less `file:///v/x` on Windows) are decoded by hand.
 fn file_name(uri: &Url) -> String {
     uri.to_file_path()
         .ok()
         .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
-        .unwrap_or_else(|| uri.path().rsplit('/').next().unwrap_or_default().to_owned())
+        .unwrap_or_else(|| util::percent_decode(uri.path().rsplit('/').next().unwrap_or_default()))
 }
 
 /// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.

@@ -35,6 +35,27 @@ pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
 }
 
+/// `%XX` escapes decoded; malformed escapes are kept as they are.
+pub fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Do `query`'s characters appear in `name` in order (`uscard` in `users/card`)?
 pub fn fuzzy_match(name: &str, query: &str) -> bool {
     let mut chars = name.chars();
@@ -160,6 +181,13 @@ mod tests {
     fn edit(range: Option<((u32, u32), (u32, u32))>, text: &str) -> TextDocumentContentChangeEvent {
         let range = range.map(|((sl, sc), (el, ec))| Range::new(Position::new(sl, sc), Position::new(el, ec)));
         TextDocumentContentChangeEvent { range, range_length: None, text: text.into() }
+    }
+
+    #[test]
+    fn percent_decoding() {
+        assert_eq!(percent_decode("show.html%2Bphone.erb"), "show.html+phone.erb");
+        assert_eq!(percent_decode("%C3%A9%2"), "é%2");
+        assert_eq!(percent_decode("100%"), "100%");
     }
 
     #[test]

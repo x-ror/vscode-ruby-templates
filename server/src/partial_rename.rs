@@ -217,6 +217,10 @@ mod tests {
         fn path(&self, rel: &str) -> PathBuf {
             self.0.join(rel)
         }
+        /// `path` relative to the tree, with `/` on every platform.
+        fn rel(&self, path: &Path) -> String {
+            path.strip_prefix(&self.0).unwrap().to_string_lossy().replace('\\', "/")
+        }
         fn source(&self, rel: &str, lang: Option<TemplateLang>, text: &str) -> Source {
             Source { path: self.path(rel), lang, text: text.into() }
         }
@@ -225,7 +229,7 @@ mod tests {
             let mut got: Vec<_> = render_edits(&renames, sources, &[])
                 .iter()
                 .flat_map(|(uri, edits)| {
-                    let file = uri.to_file_path().unwrap().strip_prefix(&self.0).unwrap().to_string_lossy().into_owned();
+                    let file = self.rel(&uri.to_file_path().unwrap());
                     edits.iter().map(move |e| (file.clone(), e.range.start.line, e.range.start.character, e.new_text.clone()))
                 })
                 .collect();
@@ -356,7 +360,7 @@ mod tests {
         let mut got: Vec<(String, u32, u32)> = references(&[card], &sources, &[])
             .into_iter()
             .map(|l| {
-                let file = l.uri.to_file_path().unwrap().strip_prefix(&t.0).unwrap().to_string_lossy().into_owned();
+                let file = t.rel(&l.uri.to_file_path().unwrap());
                 (file, l.range.start.line, l.range.start.character)
             })
             .collect();
@@ -384,7 +388,7 @@ mod tests {
         let found = |rel: &str| -> Vec<(String, u32)> {
             let mut got: Vec<_> = references(&[t.path(rel)], &sources, &[])
                 .into_iter()
-                .map(|l| (l.uri.to_file_path().unwrap().strip_prefix(&t.0).unwrap().to_string_lossy().into_owned(), l.range.start.line))
+                .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line))
                 .collect();
             got.sort();
             got
@@ -431,10 +435,8 @@ mod tests {
             ],
         );
         let open = HashMap::from([(t.path("app/views/users/index.html.erb"), "unsaved".to_string())]);
-        let mut found: Vec<_> = sources(&t.path("app/views"), &open)
-            .into_iter()
-            .map(|s| (s.path.strip_prefix(&t.0).unwrap().to_string_lossy().into_owned(), s.lang.is_none(), s.text))
-            .collect();
+        let mut found: Vec<_> =
+            sources(&t.path("app/views"), &open).into_iter().map(|s| (t.rel(&s.path), s.lang.is_none(), s.text)).collect();
         found.sort();
         let ruby = |p: &str| (p.to_string(), true, String::new());
         assert_eq!(
