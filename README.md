@@ -1,6 +1,32 @@
+<p align="center"><img src="images/icon.png" alt="Ruby Templates" width="128"></p>
+
 # Ruby Templates: ERB, Haml, Slim
 
+[![build](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml/badge.svg)](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.100-007ACC)
+![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
+![Server](https://img.shields.io/badge/language%20server-Rust-orange)
+
 One extension for the three most common Ruby HTML template languages.
+
+## Screenshots
+
+**Diagnostics as you type**: unclosed blocks, mismatched tags, missing `alt`, unresolved partials.
+
+![Diagnostics in an ERB view](images/screenshots/diagnostics.png)
+
+**Completion** of partial names inside `render "…"`.
+
+![Partial completion](images/screenshots/completion.png)
+
+**Hover** on a Rails helper shows its signature and links to the API docs.
+
+![Hover on link_to in Slim](images/screenshots/hover.png)
+
+**Highlighting** for Slim with embedded JavaScript and `#{}` interpolation, and the same for ERB and Haml.
+
+![Slim highlighting](images/screenshots/slim.png)
 
 ## Features
 

@@ -3,9 +3,11 @@
 .githooks/**
 .vscode/**
 .vscode-test/**
+.ruby-lsp/**
 .pkg/**
 artifacts/**
 docs/**
+images/screenshots/**
 node_modules/**
 server/**
 src/**

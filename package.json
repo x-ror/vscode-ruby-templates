@@ -4,6 +4,7 @@
   "description": "Syntax highlighting, diagnostics, go-to-partial, completion and hover, plus snippets, HTML preview, tag toggling and converters for ERB, Haml and Slim templates.",
   "version": "0.1.0",
   "publisher": "x-ror",
+  "icon": "images/icon.png",
   "license": "MIT",
   "packageManager": "bun@1.4.4",
   "type": "module",
