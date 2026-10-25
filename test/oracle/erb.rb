@@ -1,5 +1,6 @@
 # Compiles the ERB template on stdin the way Rails 8.1.4 does and parses the Ruby it would eval with Prism 2.0.0.
-# Usage: erb.rb [--file name.html.erb]; the name picks the format and appears in Rails' messages.
+# Usage: erb.rb [--file name.html.erb] [--normalize]; the name picks the format and appears in Rails' messages.
+# --normalize compiles the template with the leading whitespace of its text lines removed (see below).
 # Prints {"errors": [{message, line, column}]} for every error, else {"source": the method source Rails evals}.
 require "json"
 gem "minitest", "< 6" # minitest 6 (an ActiveSupport dependency) wants prism ~> 1.5
@@ -20,6 +21,149 @@ format = :html unless ActionView::Template::Types.symbols.include?(format)
 # The source line of ActionView's method definition: the template's first line follows `@virtual_path = …;` on the next.
 VIRTUAL_PATH_ASSIGNMENT = "@virtual_path = "
 
+# docs/LINT_PLAN.md 3b: ERB copies the template's text, indentation included, into the HTML, so re-indenting changes
+# the rendered whitespace by design. What formatting may change is therefore compared with the leading whitespace of
+# text lines removed, except in `pre`, `textarea`, `script` and `style` and inside ERB tags, whose Ruby stays
+# byte-identical. Erubi's own regexp finds the tags, so Rails' view of what is text and what is code is the one used;
+# the whitespace Erubi trims around a `<% %>` line is text too.
+#
+# "Text" is what the HTML tokenizer calls data: not inside a start or end tag (attribute values keep their
+# whitespace), a comment, a bogus comment, or the body of a `script`, `style` or `textarea` (raw text), nor inside a
+# `pre` (nested ones counted). ERB tags are invisible to this scan, so an ERB tag inside an attribute value keeps the
+# attribute's state.
+class TextWhitespace
+  RAW_TEXT_ELEMENTS = %w[script style textarea].freeze
+
+  def initialize
+    @mode = :data
+    @pre_depth = 0
+  end
+
+  # The text without the leading whitespace of the lines that start in HTML text; `at_line_start` says whether the
+  # text itself starts a line (it follows a newline, not an ERB tag).
+  def strip(text, at_line_start)
+    text.lines.each_with_index.map do |line, index|
+      stripped = (index.positive? || at_line_start) && @mode == :data && @pre_depth.zero? ? line.sub(/\A[ \t]+/, "") : line
+      advance(line)
+      stripped
+    end.join
+  end
+
+  private
+
+  def advance(line)
+    position = 0
+    position = step(line, position) while position < line.size
+  end
+
+  # Consumes the next token of `line` from `position` and returns the position after it (the line's end if the state
+  # continues on the next line).
+  def step(line, position)
+    case @mode
+    when :data then data(line, position)
+    when :comment then leave(line, position, /--!?>/, :data)
+    when :bogus then leave(line, position, />/, :data)
+    when :quote then leave(line, position, @quote, :tag)
+    when :raw then leave(line, position, /<\/#{@raw}(?=[\s\/>])/i, :raw_end)
+    else tag(line, position)
+    end
+  end
+
+  def data(line, position)
+    open = line.index("<", position) or return line.size
+    rest = line[open..]
+    if rest.start_with?("<!--")
+      @mode = :comment
+      open + 4
+    elsif (name = rest.match(%r{\A<(/?)([A-Za-z][^\s/>]*)}))
+      @closing = !name[1].empty?
+      @name = name[2].downcase
+      @mode = :tag
+      @after_equals = false
+      open + name[0].size
+    elsif rest.match?(/\A<[!?]/)
+      @mode = :bogus
+      open + 2
+    else
+      open + 1
+    end
+  end
+
+  def leave(line, position, terminator, next_mode)
+    found = line.index(terminator, position)
+    return line.size unless found
+
+    length = terminator.is_a?(Regexp) ? line[found..].match(terminator)[0].size : terminator.size
+    if next_mode == :raw_end
+      @closing = true
+      @name = @raw
+      @mode = :tag
+      @after_equals = false
+    else
+      @mode = next_mode
+      @after_equals = false
+    end
+    found + length
+  end
+
+  def tag(line, position)
+    char = line[position]
+    case char
+    when ">" then finish_tag
+    when '"', "'"
+      if @after_equals
+        @quote = char
+        @mode = :quote
+      end
+      @after_equals = false
+    when /\s/ then nil
+    else @after_equals = char == "="
+    end
+    position + 1
+  end
+
+  def finish_tag
+    @mode = :data
+    if @closing
+      @pre_depth -= 1 if @name == "pre" && @pre_depth.positive?
+    elsif @name == "pre"
+      @pre_depth += 1
+    elsif RAW_TEXT_ELEMENTS.include?(@name)
+      @mode = :raw
+      @raw = @name
+    end
+  end
+end
+
+def normalize_text_whitespace(source)
+  text_whitespace = TextWhitespace.new
+  at_line_start = true
+  position = 0
+  normalized = +""
+  source.to_enum(:scan, Erubi::Engine::DEFAULT_REGEXP).map { Regexp.last_match }.each do |tag|
+    normalized << text_whitespace.strip(source[position...tag.begin(0)], at_line_start)
+    normalized << tag[0]
+    at_line_start = tag[0].end_with?("\n")
+    position = tag.end(0)
+  end
+  normalized << text_whitespace.strip(source[position..], at_line_start)
+end
+
+# Elements whose whitespace shows, built by Ruby: the normalization can't see into them, so the file isn't compared.
+RUBY_BUILT_SENSITIVE_ELEMENT = /\b(?:content_tag|tag)\s*\(?\s*[:"'](?:pre|textarea|script|style)\b|\btag\.(?:pre|textarea|script|style)\b|\bjavascript_tag\b/
+RAW_HTML_OUTPUT = /\braw\b|\bhtml_safe\b/
+LITERAL_SENSITIVE_ELEMENT = /<(?:pre|textarea|script|style)\b/i
+
+def ruby_built_sensitive_element?(source)
+  source.to_enum(:scan, Erubi::Engine::DEFAULT_REGEXP).map { Regexp.last_match }.any? do |tag|
+    indicator, code = tag[1], tag[2]
+    next false if indicator == "#"
+
+    code.match?(RUBY_BUILT_SENSITIVE_ELEMENT) ||
+      ((indicator == "==" || code.match?(RAW_HTML_OUTPUT)) && code.match?(LITERAL_SENSITIVE_ELEMENT))
+  end
+end
+
 def error(message, line = nil) = { message:, line:, column: nil }
 
 # Prism's column is in the generated line, which doesn't map back to the template, so only lines are reported.
@@ -39,6 +183,13 @@ def prism_errors(compiled, template_lines, signature_line)
 end
 
 source = $stdin.read.force_encoding(Encoding::UTF_8)
+if ARGV.include?("--normalize")
+  if ruby_built_sensitive_element?(source)
+    puts JSON.generate(not_compared: "whitespace-sensitive element built by Ruby")
+    exit
+  end
+  source = normalize_text_whitespace(source)
+end
 comment = source.match(ActionView::Template::STRICT_LOCALS_REGEX)
 signature_line = comment && source[0...comment.begin(0)].count("\n") + 1
 template_lines = [source.lines.size, 1].max
@@ -61,4 +212,5 @@ errors =
   rescue StandardError => e
     [error(e.message.lines.first.to_s.chomp)]
   end
-puts JSON.generate(errors.empty? ? { source: compiled } : { errors: })
+# The method name holds the process-wide object id, which differs on every run.
+puts JSON.generate(errors.empty? ? { source: compiled.sub(template.send(:method_name), "_template") } : { errors: })

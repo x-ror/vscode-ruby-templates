@@ -202,6 +202,7 @@ Decided (2026-10-25):
 2. **Remove, false positives and duplicates:** `malformed-tag`, `prefer-image-tag`, Haml `bad-dedent`, the Ruby variant of Haml `illegal-nesting`, the `(` case of Haml `unclosed-attribute`, Slim `inconsistent-indent`.
 3. **Remove, real bugs without an official source:** `silent-output-helper` (ERB, Slim) and `unsafe-output`; no exception to principle 1. The first case of `unclosed-tag` stays: it has a source in WHATWG (3a).
 4. **HTML of Slim and Haml output** is in scope, citing WHATWG (1a, 2a); `void-children` stays with that source.
+5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
 
 ### Built-in diagnostic codes
 
@@ -265,18 +266,17 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ### Other items
 
-| Item                                       | Where                        | Official sources say                                           | Proposal                                                                        |
-| ------------------------------------------ | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| ERB formatting changes rendered whitespace | 3b                           | ERB copies text verbatim                                       | accept as described in 3b, or format ERB only where HTML ignores the whitespace |
-| `.editorconfig` and the editor's tab size  | `config.rs`, language server | none of the languages reads them                               | use them only for the indentation width (default 2)                             |
-| `ruby-templates.json`                      | not built                    | none                                                           | only our own settings (indent width, on/off per language), if wanted            |
-| The `herb` crate as ERB parser             | not built                    | Herb is third-party; Erubi's regexp is the official tag syntax | don't add it                                                                    |
+| Item                                      | Where                        | Official sources say                                           | Proposal                                                             |
+| ----------------------------------------- | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `.editorconfig` and the editor's tab size | `config.rs`, language server | none of the languages reads them                               | use them only for the indentation width (default 2)                  |
+| `ruby-templates.json`                     | not built                    | none                                                           | only our own settings (indent width, on/off per language), if wanted |
+| The `herb` crate as ERB parser            | not built                    | Herb is third-party; Erubi's regexp is the official tag syntax | don't add it                                                         |
 
 ## Order and status
 
 | Stage                    | Status      |
 | ------------------------ | ----------- |
-| 0. Harness               | in review   |
+| 0. Harness               | done        |
 | 0b. Context              | not started |
 | 1a. Slim errors          | not started |
 | 1b. Slim format          | not started |
