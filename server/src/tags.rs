@@ -205,7 +205,8 @@ pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
     Some(tokens)
 }
 
-/// Track the tag stack through ERB branches. Returns false when the stack is no longer certain.
+/// Track the tag stack through ERB branches. Returns false when the stack is no longer certain; the blocks are closed
+/// anyway, and the stack is the one the last branch left.
 // ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
 // open makes the stack path-dependent, so checking stops there. Conditional wrappers
 // (`<% if a %><div><% end %>…<% if a %></div><% end %>`) are therefore unchecked; per-path stacks would cover them.
@@ -227,13 +228,13 @@ pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Blo
             *stack = block.entry.clone();
         }
         BlockEffect::Close(n) => {
+            let mut agree = true;
             for _ in 0..n {
                 let Some(block) = blocks.pop() else { return false };
                 let open = names(stack);
-                if block.branch_ends.iter().any(|b| *b != open) || (!block.has_else && names(&block.entry) != open) {
-                    return false;
-                }
+                agree &= block.branch_ends.iter().all(|b| *b == open) && (block.has_else || names(&block.entry) == open);
             }
+            return agree;
         }
         BlockEffect::Neutral => {}
     }

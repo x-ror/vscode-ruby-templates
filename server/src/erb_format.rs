@@ -270,6 +270,8 @@ struct Nesting<'t> {
     partial: bool,
     stack: Vec<Tag>,
     blocks: Vec<Block>,
+    /// False after an ERB block whose branches left different tags open.
+    agreed: bool,
 }
 
 enum Kind {
@@ -299,10 +301,15 @@ impl Nesting<'_> {
         VOID.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
     }
 
-    /// Applies token `i`; false once the nesting depends on which branch ran.
+    /// Applies token `i`; false once an end tag doesn't match the stack.
     fn step(&mut self, i: usize) -> bool {
         match &self.tokens[i] {
-            Token::Erb(e) => tags::apply(e, &mut self.stack, &mut self.blocks),
+            // Branches that disagree (`<% if a %><div><% end %>`) go on with the tags the last one left open: the usual
+            // conditional wrapper closes them under the same condition, and a guess that's wrong ends in a mismatch.
+            Token::Erb(e) => {
+                self.agreed = tags::apply(e, &mut self.stack, &mut self.blocks);
+                true
+            }
             Token::Open { tag, pairs, .. } => {
                 if *pairs || self.paired.contains(&i) {
                     self.stack.push(tag.clone());
@@ -332,7 +339,7 @@ fn levels(
     roles: &[Role],
     partial: bool,
 ) -> (Vec<Option<usize>>, Option<usize>) {
-    let mut nesting = Nesting { tokens, paired, partial, stack: Vec::new(), blocks: Vec::new() };
+    let mut nesting = Nesting { tokens, paired, partial, stack: Vec::new(), blocks: Vec::new(), agreed: true };
     let mut out = vec![None; lines.len()];
     let mut next = 0;
     for (l, line) in lines.iter().enumerate() {
@@ -377,7 +384,9 @@ fn levels(
                 return (out, Some(l));
             }
             if matches!(kind, Kind::Closer) {
-                level = level.min(block_level.unwrap_or(nesting.depth()));
+                // An `<% end %>` whose branches disagree has no single opening to line up with.
+                let aligned = block_level.filter(|_| nesting.agreed);
+                level = level.min(aligned.unwrap_or(nesting.depth()));
             }
             at = end;
             next += 1;
@@ -560,10 +569,33 @@ mod tests {
     }
 
     #[test]
-    fn branches_that_disagree_freeze_the_rest() {
-        let text = lines(&["<div>", "<% if a %>", "<section>", "<% end %>", "  x", "<% if a %>", "</section>", "<% end %>", "</div>"]);
-        let want =
-            lines(&["<div>", "  <% if a %>", "    <section>", "<% end %>", "  x", "<% if a %>", "</section>", "<% end %>", "</div>"]);
+    fn branches_that_disagree_keep_the_tags_the_last_one_left_open() {
+        let text = lines(&["<div>", "<% if a %>", "<section>", "<% end %>", "x", "<% if a %>", "</section>", "<% end %>", "</div>"]);
+        let want = lines(&[
+            "<div>",
+            "  <% if a %>",
+            "    <section>",
+            "    <% end %>",
+            "    x",
+            "    <% if a %>",
+            "    </section>",
+            "  <% end %>",
+            "</div>",
+        ]);
+        assert_eq!(fmt(&text), want);
+        // A guess the markup contradicts keeps the indentation from there on.
+        let text = lines(&["<div>", "<% if a %>", "<section>", "<% else %>", "<article>", "<% end %>", "x", "</section>", "</div>"]);
+        let want = lines(&[
+            "<div>",
+            "  <% if a %>",
+            "    <section>",
+            "  <% else %>",
+            "    <article>",
+            "    <% end %>",
+            "    x",
+            "</section>",
+            "</div>",
+        ]);
         assert_eq!(fmt(&text), want);
         let agree = lines(&["<% if a %>", "<div class=\"x\">", "<% else %>", "<div class=\"y\">", "<% end %>", "body", "</div>"]);
         let want = lines(&["<% if a %>", "  <div class=\"x\">", "<% else %>", "  <div class=\"y\">", "<% end %>", "  body", "</div>"]);
