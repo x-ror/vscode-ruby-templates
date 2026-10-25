@@ -1,5 +1,7 @@
 # Slim lint rules
 
+> Superseded by D13 and [`docs/LINT_PLAN.md`](../LINT_PLAN.md): a record of third-party checks, not a source of rules.
+
 What the sources check in Slim (and Skim, where noted). Reference only: nothing here is implemented beyond the built-in checks. Index, cross-language matrix and helper guidance: [README.md](README.md). Herb covers HTML+ERB only.
 
 ## Built-in (this extension's language server)
