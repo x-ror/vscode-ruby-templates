@@ -1,6 +1,7 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 import {
   toggleSlimMarker,
   inVerbatimBlock,
@@ -104,3 +105,25 @@ for (const [line, action] of [
 }
 
 console.log("slim editing helpers ok");
+
+// Oracle helper: error columns are UTF-16 offsets (the server's unit), not Slim's character counts, and
+// a missing gem is reported as dependency_missing, not as a template error.
+const oracle = (source) =>
+  spawnSync("ruby", [path.join(import.meta.dirname, "oracle", "slim.rb")], {
+    input: source,
+    encoding: "utf8",
+  });
+if (spawnSync("ruby", ["-rslim", "-e", ""]).status === 0) {
+  const astral = JSON.parse(oracle("p \u{1F600} =x(").stdout);
+  assert.deepStrictEqual(
+    [astral.error.line, astral.error.slim_column, astral.error.column],
+    [1, 7, 8],
+  );
+  assert.deepStrictEqual(
+    JSON.parse(oracle("p\n  | ok").stdout).error,
+    undefined,
+  );
+  console.log("slim oracle helper ok");
+} else {
+  console.log("slim oracle helper: skipped (`ruby -rslim` unavailable)");
+}

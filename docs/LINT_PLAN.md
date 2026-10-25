@@ -276,7 +276,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 | Stage                    | Status      |
 | ------------------------ | ----------- |
-| 0. Harness               | not started |
+| 0. Harness               | in review   |
 | 0b. Context              | not started |
 | 1a. Slim errors          | not started |
 | 1b. Slim format          | not started |
