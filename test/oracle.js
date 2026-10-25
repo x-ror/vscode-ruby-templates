@@ -90,10 +90,10 @@ const collectCases = (checkout) => {
   return JSON.parse(r.stdout);
 };
 
-const officialResult = async ({ source }) => {
+const officialResult = async (source, ...flags) => {
   const r = await runWithInput(
     "ruby",
-    [path.join(oracleDir, "slim.rb")],
+    [path.join(oracleDir, "slim.rb"), ...flags],
     source,
   );
   if (r.status !== 0) throw new Error(`slim.rb failed: ${r.stderr}`);
@@ -155,6 +155,8 @@ const describe = ({ message, line, column }) =>
 const compare = (cases, official, ours, skip) => {
   const counts = { compared: 0, officialErrors: 0, oursErrors: 0, same: 0 };
   const mismatches = [];
+  const formattable = [];
+  const notFormatted = [];
   cases.forEach((c, i) => {
     const result = official[i];
     if (result.dependency_missing) {
@@ -170,6 +172,7 @@ const compare = (cases, official, ours, skip) => {
     const agree = officialError
       ? errors.some((e) => sameError(officialError, e))
       : !errors.length;
+    if (!officialError) (errors.length ? notFormatted : formattable).push(i);
     if (agree) {
       if (officialError) counts.same++;
       return;
@@ -180,7 +183,70 @@ const compare = (cases, official, ours, skip) => {
         `    ours:     ${errors.length ? errors.map(describe).join("; ") : "no error"}`,
     );
   });
-  return { ...counts, mismatches };
+  return { ...counts, mismatches, formattable, notFormatted };
+};
+
+// `ruby-templates format <file>` to stdout: the text, and whether the formatter left the file alone.
+const formatFile = (file) => {
+  const r = run(bin, ["format", file]);
+  if (r.status !== 0 && r.status !== 1) {
+    return { text: r.stdout, failure: `exit ${r.status}: ${r.stderr.trim()}` };
+  }
+  return { text: r.stdout, declined: r.stderr.includes("left unchanged") };
+};
+
+const firstDifference = (before, after) => {
+  let at = 0;
+  while (at < before.length && before[at] === after[at]) at++;
+  const around = (text) =>
+    JSON.stringify(text.slice(Math.max(0, at - 30), at + 50));
+  return `before ...${around(before)}\n      after  ...${around(after)}`;
+};
+
+// Formats each case, then checks the compiled Rails code is unchanged and a second format changes nothing.
+const formatReport = async (cases, dir, indexes) => {
+  const formatDir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-fmt-"));
+  try {
+    const rows = await mapParallel(
+      indexes,
+      PARALLEL_RUBY_PROCESSES,
+      async (i) => {
+        const once = formatFile(path.join(dir, `case-${i}.html.slim`));
+        const again = path.join(formatDir, `case-${i}.html.slim`);
+        fs.writeFileSync(again, once.text);
+        const twice = formatFile(again);
+        const before = await officialResult(cases[i].source, "--rails");
+        const after = await officialResult(once.text, "--rails");
+        if (before.source === undefined) {
+          throw new Error(
+            `case ${i} (${cases[i].file}#${cases[i].test}) doesn't compile with --rails: ${JSON.stringify(before)}`,
+          );
+        }
+        const identical = !once.failure && before.source === after.source;
+        const failures = [];
+        if (once.failure) failures.push(`formatter failed, ${once.failure}`);
+        else if (!identical) {
+          failures.push(
+            after.source === undefined
+              ? `formatted text no longer compiles: ${JSON.stringify(after)}`
+              : `compiled output differs\n      ${firstDifference(before.source, after.source)}`,
+          );
+        }
+        const idempotent = !twice.failure && twice.text === once.text;
+        if (!idempotent) {
+          failures.push(
+            twice.failure
+              ? `second format failed, ${twice.failure}`
+              : `second format changes it\n      ${firstDifference(once.text, twice.text)}`,
+          );
+        }
+        return { i, identical, idempotent, declined: once.declined, failures };
+      },
+    );
+    return rows;
+  } finally {
+    fs.rmSync(formatDir, { recursive: true, force: true });
+  }
 };
 
 const slimReport = async () => {
@@ -198,14 +264,19 @@ const slimReport = async () => {
     const official = await mapParallel(
       cases,
       PARALLEL_RUBY_PROCESSES,
-      officialResult,
+      ({ source }) => officialResult(source),
     );
-    const { compared, officialErrors, oursErrors, same, mismatches } = compare(
-      cases,
-      official,
-      oursByCase(dir),
-      skip,
-    );
+    const {
+      compared,
+      officialErrors,
+      oursErrors,
+      same,
+      mismatches,
+      formattable,
+      notFormatted,
+    } = compare(cases, official, oursByCase(dir), skip);
+    const formatted = await formatReport(cases, dir, formattable);
+    const count = (key) => formatted.filter((row) => row[key]).length;
 
     console.log(
       `slim ${SLIM_VERSION} vs ruby-templates  (${compared.toLocaleString("en-US")} files)`,
@@ -215,9 +286,23 @@ const slimReport = async () => {
     );
     const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
     const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
+    console.log(
+      `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
+        `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
+    );
     console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
     console.log(`mismatches: ${mismatches.length}`);
-    if (process.env.VERBOSE) mismatches.forEach((m) => console.log(m));
+    if (process.env.VERBOSE) {
+      mismatches.forEach((m) => console.log(m));
+      formatted
+        .filter((row) => row.failures.length)
+        .forEach(({ i, failures }) =>
+          console.log(
+            `format: ${cases[i].file}#${cases[i].test} (case ${i}) ${JSON.stringify(cases[i].source)}\n` +
+              failures.map((f) => `    ${f}`).join("\n"),
+          ),
+        );
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

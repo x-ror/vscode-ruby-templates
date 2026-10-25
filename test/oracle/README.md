@@ -24,5 +24,6 @@ Without Slim 5.2.2 on `ruby` it prints a skip message and exits 0.
 
 - `test/oracle/slim.rb`: compiles the template on stdin with Slim's defaults and prints `{"error": {message, line, column, slim_column}}`, `{"dependency_missing": gem}` or `{"source": ruby}`.
 - `test/oracle/slim_cases.rb`: replays `test/core/*.rb` of the Slim checkout against a recording stub and prints the templates they render. Tests that need non-default options are skipped and counted.
+- `format:` line: for each case Slim compiles and we don't flag, `ruby-templates format` runs, then `slim.rb --rails` compiles the text before and after (the Railtie's generator and options, without ActionView: only source is generated) and they must be identical; formatting the result again must change nothing. Cases with an error of ours aren't formatted and are counted apart.
 - The Slim checkout (tag `v5.2.2`, shallow) is cloned once into `$ORACLE_CACHE`, default `$TMPDIR/ruby-templates-oracle`, as `slim-5.2.2`.
 - `error.column` is a 0-based UTF-16 offset produced by `slim.rb` from Slim's character column (`slim_column`); the CLI prints 1-based columns, so they are compared with a +1.
