@@ -274,18 +274,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 0. Harness               | in progress: Slim errors and format safety on the Slim test suite (errors same 0/19; format identical 213/213, idempotent 213/213) |
-| 0b. Context              | not started                                                                                                                        |
-| 1a. Slim errors          | not started                                                                                                                        |
-| 1b. Slim format          | not started                                                                                                                        |
-| 2a. Haml errors          | not started                                                                                                                        |
-| 2b. Haml format          | not started                                                                                                                        |
-| 3a. ERB errors           | not started                                                                                                                        |
-| 3b. ERB format           | not started                                                                                                                        |
-| 4. Editor and CLI        | not started                                                                                                                        |
-| 5. Remove external tools | not started                                                                                                                        |
+| Stage                    | Status                                                                                                                                 |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Harness               | in progress: Slim on the suite (errors same 0/19; format 213/213 identical and idempotent) and on freeats (errors 0/0; format 170/170) |
+| 0b. Context              | not started                                                                                                                            |
+| 1a. Slim errors          | not started                                                                                                                            |
+| 1b. Slim format          | not started                                                                                                                            |
+| 2a. Haml errors          | not started                                                                                                                            |
+| 2b. Haml format          | not started                                                                                                                            |
+| 3a. ERB errors           | not started                                                                                                                            |
+| 3b. ERB format           | not started                                                                                                                            |
+| 4. Editor and CLI        | not started                                                                                                                            |
+| 5. Remove external tools | not started                                                                                                                            |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

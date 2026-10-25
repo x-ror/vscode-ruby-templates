@@ -21,8 +21,10 @@ const bin =
     `ruby-templates${exe}`,
   );
 const oracleDir = path.join(import.meta.dirname, "oracle");
-const cacheDir =
-  process.env.ORACLE_CACHE ?? path.join(os.tmpdir(), "ruby-templates-oracle");
+// Absolute, so item paths match the paths `check` prints.
+const cacheDir = path.resolve(
+  process.env.ORACLE_CACHE ?? path.join(os.tmpdir(), "ruby-templates-oracle"),
+);
 
 const run = (command, args, options = {}) => {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
@@ -101,7 +103,7 @@ const officialResult = async (source, ...flags) => {
 };
 
 // A recorded expectation from the official test must agree with what slim.rb sees, or the case was mis-recorded.
-const checkExpectation = ({ expected_error: expected, file, test }, result) => {
+const checkExpectation = ({ expected_error: expected, label }, result) => {
   if (!expected) return;
   const { message, line, slim_column: column } = result.error ?? {};
   const [, expectedLine, expectedColumn] =
@@ -112,20 +114,21 @@ const checkExpectation = ({ expected_error: expected, file, test }, result) => {
     Number(expectedColumn) === column;
   if (!agrees) {
     throw new Error(
-      `${file}#${test}: slim.rb gave ${JSON.stringify(result)}, the test expects ${JSON.stringify(expected)}`,
+      `${label}: slim.rb gave ${JSON.stringify(result)}, the test expects ${JSON.stringify(expected)}`,
     );
   }
 };
 
-// Diagnostics of every file in `dir`, by case index: [{line, column, severity, message}].
-const oursByCase = (dir) => {
-  const r = run(bin, ["check", dir]);
+// Diagnostics by absolute file path: [{line, column, severity, message}].
+const oursByPath = (files) => {
+  const known = new Set(files.map((file) => path.resolve(file)));
+  const r = run(bin, ["check", ...files]);
   if (r.status !== 0 && r.status !== 1)
     throw new Error(`check failed: ${r.stderr}`);
-  const byCase = new Map();
+  const byPath = new Map();
   let last;
   for (const text of r.stdout.split("\n")) {
-    const m = text.match(/case-(\d+)\.html\.slim:(\d+):(\d+): (\w+): (.*)$/);
+    const m = text.match(/^(.*\.slim):(\d+):(\d+): (\w+): (.*)$/);
     if (m) {
       last = {
         line: Number(m[2]),
@@ -133,13 +136,15 @@ const oursByCase = (dir) => {
         severity: m[4],
         message: m[5],
       };
-      const index = Number(m[1]);
-      byCase.set(index, [...(byCase.get(index) ?? []), last]);
+      const file = path.resolve(m[1]);
+      if (!known.has(file))
+        throw new Error(`check reported an unknown file: ${m[1]}`);
+      byPath.set(file, [...(byPath.get(file) ?? []), last]);
     } else if (last && text) {
       last.message += `\n${text}`;
     }
   }
-  return byCase;
+  return byPath;
 };
 
 const sameError = (official, ours) =>
@@ -152,20 +157,23 @@ const sameError = (official, ours) =>
 const describe = ({ message, line, column }) =>
   `${JSON.stringify(message)}${line === null ? "" : ` at ${line}:${column ?? "?"}`}`;
 
-const compare = (cases, official, ours, skip) => {
+// items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
+const compare = (items, official, ours, skip) => {
   const counts = { compared: 0, officialErrors: 0, oursErrors: 0, same: 0 };
   const mismatches = [];
   const formattable = [];
   const notFormatted = [];
-  cases.forEach((c, i) => {
+  items.forEach((item, i) => {
     const result = official[i];
     if (result.dependency_missing) {
       skip(`dependency missing (${result.dependency_missing})`);
       return;
     }
     counts.compared++;
-    checkExpectation(c, result);
-    const errors = (ours.get(i) ?? []).filter((d) => d.severity === "error");
+    checkExpectation(item, result);
+    const errors = (ours.get(path.resolve(item.path)) ?? []).filter(
+      (d) => d.severity === "error",
+    );
     const officialError = result.error;
     if (officialError) counts.officialErrors++;
     if (errors.length) counts.oursErrors++;
@@ -178,7 +186,7 @@ const compare = (cases, official, ours, skip) => {
       return;
     }
     mismatches.push(
-      `${c.file}#${c.test} (case ${i}) ${JSON.stringify(c.source)}\n` +
+      `${item.label} ${JSON.stringify(item.source)}\n` +
         `    official: ${officialError ? describe(officialError) : "compiles"}\n` +
         `    ours:     ${errors.length ? errors.map(describe).join("; ") : "no error"}`,
     );
@@ -186,9 +194,11 @@ const compare = (cases, official, ours, skip) => {
   return { ...counts, mismatches, formattable, notFormatted };
 };
 
-// `ruby-templates format <file>` to stdout: the text, and whether the formatter left the file alone.
-const formatFile = (file) => {
-  const r = run(bin, ["format", file]);
+// `ruby-templates format` of `text` as if it were the file `file`, to stdout: the text, and whether the formatter left it alone.
+const formatText = (file, text) => {
+  const r = run(bin, ["format", "--stdin-filepath", file, "-"], {
+    input: text,
+  });
   if (r.status !== 0 && r.status !== 1) {
     return { text: r.stdout, failure: `exit ${r.status}: ${r.stderr.trim()}` };
   }
@@ -203,50 +213,142 @@ const firstDifference = (before, after) => {
   return `before ...${around(before)}\n      after  ...${around(after)}`;
 };
 
-// Formats each case, then checks the compiled Rails code is unchanged and a second format changes nothing.
-const formatReport = async (cases, dir, indexes) => {
-  const formatDir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-fmt-"));
-  try {
-    const rows = await mapParallel(
-      indexes,
-      PARALLEL_RUBY_PROCESSES,
-      async (i) => {
-        const once = formatFile(path.join(dir, `case-${i}.html.slim`));
-        const again = path.join(formatDir, `case-${i}.html.slim`);
-        fs.writeFileSync(again, once.text);
-        const twice = formatFile(again);
-        const before = await officialResult(cases[i].source, "--rails");
-        const after = await officialResult(once.text, "--rails");
-        if (before.source === undefined) {
-          throw new Error(
-            `case ${i} (${cases[i].file}#${cases[i].test}) doesn't compile with --rails: ${JSON.stringify(before)}`,
-          );
-        }
-        const identical = !once.failure && before.source === after.source;
-        const failures = [];
-        if (once.failure) failures.push(`formatter failed, ${once.failure}`);
-        else if (!identical) {
-          failures.push(
-            after.source === undefined
-              ? `formatted text no longer compiles: ${JSON.stringify(after)}`
-              : `compiled output differs\n      ${firstDifference(before.source, after.source)}`,
-          );
-        }
-        const idempotent = !twice.failure && twice.text === once.text;
-        if (!idempotent) {
-          failures.push(
-            twice.failure
-              ? `second format failed, ${twice.failure}`
-              : `second format changes it\n      ${firstDifference(once.text, twice.text)}`,
-          );
-        }
-        return { i, identical, idempotent, declined: once.declined, failures };
-      },
-    );
-    return rows;
-  } finally {
-    fs.rmSync(formatDir, { recursive: true, force: true });
+// Formats each item, then checks the compiled Rails code is unchanged and a second format changes nothing.
+const formatReport = (items, indexes) =>
+  mapParallel(indexes, PARALLEL_RUBY_PROCESSES, async (i) => {
+    const { source, path: file, label } = items[i];
+    const once = formatText(file, source);
+    const twice = formatText(file, once.text);
+    const before = await officialResult(source, "--rails");
+    const after = await officialResult(once.text, "--rails");
+    if (before.source === undefined) {
+      throw new Error(
+        `${label} doesn't compile with --rails: ${JSON.stringify(before)}`,
+      );
+    }
+    const identical = !once.failure && before.source === after.source;
+    const failures = [];
+    if (once.failure) failures.push(`formatter failed, ${once.failure}`);
+    else if (!identical) {
+      failures.push(
+        after.source === undefined
+          ? `formatted text no longer compiles: ${JSON.stringify(after)}`
+          : `compiled output differs\n      ${firstDifference(before.source, after.source)}`,
+      );
+    }
+    const idempotent = !twice.failure && twice.text === once.text;
+    if (!idempotent) {
+      failures.push(
+        twice.failure
+          ? `second format failed, ${twice.failure}`
+          : `second format changes it\n      ${firstDifference(once.text, twice.text)}`,
+      );
+    }
+    return { i, identical, idempotent, declined: once.declined, failures };
+  });
+
+// Prints the report block for `items` under `title`.
+const report = async (title, items, skipped) => {
+  const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
+  const official = await mapParallel(
+    items,
+    PARALLEL_RUBY_PROCESSES,
+    ({ source }) => officialResult(source),
+  );
+  const {
+    compared,
+    officialErrors,
+    oursErrors,
+    same,
+    mismatches,
+    formattable,
+    notFormatted,
+  } = compare(items, official, oursByPath(items.map((i) => i.path)), skip);
+  const formatted = await formatReport(items, formattable);
+  const count = (key) => formatted.filter((row) => row[key]).length;
+
+  console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
+  console.log(
+    `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}`,
+  );
+  console.log(
+    `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
+      `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
+  );
+  const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
+  const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
+  console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
+  console.log(`mismatches: ${mismatches.length}`);
+  if (process.env.VERBOSE) {
+    mismatches.forEach((m) => console.log(m));
+    formatted
+      .filter((row) => row.failures.length)
+      .forEach(({ i, failures }) =>
+        console.log(
+          `format: ${items[i].label} ${JSON.stringify(items[i].source)}\n` +
+            failures.map((f) => `    ${f}`).join("\n"),
+        ),
+      );
   }
+};
+
+// Pinned public apps, fetched at one commit so the numbers are reproducible. `paths` are sparse-checked-out folders.
+const corpora = {
+  slim: [
+    {
+      name: "freeats",
+      url: "https://github.com/freeats/freeats.git",
+      commit: "aee7cf76d5206f4cd24fdaa4d18c024de07bfb3d",
+      paths: ["app/views"],
+    },
+  ],
+};
+
+const corpusCheckout = ({ name, url, commit, paths }) => {
+  const dir = path.join(cacheDir, "corpora", `${name}-${commit.slice(0, 7)}`);
+  if (fs.existsSync(dir)) return dir;
+  const partial = `${dir}.partial`;
+  fs.rmSync(partial, { recursive: true, force: true });
+  fs.mkdirSync(partial, { recursive: true });
+  const git = (...args) => {
+    const r = run("git", args, { cwd: partial });
+    if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${r.stderr}`);
+  };
+  git("init", "--quiet");
+  git("remote", "add", "origin", url);
+  git("sparse-checkout", "set", ...paths);
+  git(
+    "fetch",
+    "--quiet",
+    "--depth",
+    "1",
+    "--filter=blob:none",
+    "origin",
+    commit,
+  );
+  git("checkout", "--quiet", "FETCH_HEAD");
+  fs.renameSync(partial, dir);
+  return dir;
+};
+
+const corpusItems = (corpus, extension) => {
+  const root = corpusCheckout(corpus);
+  return corpus.paths
+    .flatMap((folder) =>
+      fs
+        .readdirSync(path.join(root, folder), { recursive: true })
+        .map((name) => path.join(folder, name)),
+    )
+    .filter((relative) => relative.endsWith(extension))
+    .sort()
+    .map((relative) => {
+      const file = path.join(root, relative);
+      return {
+        label: `${corpus.name}:${relative}`,
+        source: fs.readFileSync(file, "utf8"),
+        path: file,
+      };
+    });
 };
 
 const slimReport = async () => {
@@ -254,57 +356,28 @@ const slimReport = async () => {
   const skipped = new Map();
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   all.filter((c) => c.skipped).forEach((c) => skip(c.skipped.split(":")[0]));
-  const cases = all.filter((c) => !c.skipped);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-"));
   try {
-    cases.forEach((c, i) =>
-      fs.writeFileSync(path.join(dir, `case-${i}.html.slim`), c.source),
-    );
-    const official = await mapParallel(
-      cases,
-      PARALLEL_RUBY_PROCESSES,
-      ({ source }) => officialResult(source),
-    );
-    const {
-      compared,
-      officialErrors,
-      oursErrors,
-      same,
-      mismatches,
-      formattable,
-      notFormatted,
-    } = compare(cases, official, oursByCase(dir), skip);
-    const formatted = await formatReport(cases, dir, formattable);
-    const count = (key) => formatted.filter((row) => row[key]).length;
-
-    console.log(
-      `slim ${SLIM_VERSION} vs ruby-templates  (${compared.toLocaleString("en-US")} files)`,
-    );
-    console.log(
-      `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}`,
-    );
-    const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
-    const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
-    console.log(
-      `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
-        `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
-    );
-    console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
-    console.log(`mismatches: ${mismatches.length}`);
-    if (process.env.VERBOSE) {
-      mismatches.forEach((m) => console.log(m));
-      formatted
-        .filter((row) => row.failures.length)
-        .forEach(({ i, failures }) =>
-          console.log(
-            `format: ${cases[i].file}#${cases[i].test} (case ${i}) ${JSON.stringify(cases[i].source)}\n` +
-              failures.map((f) => `    ${f}`).join("\n"),
-          ),
-        );
-    }
+    const cases = all
+      .filter((c) => !c.skipped)
+      .map((c, i) => {
+        const file = path.join(dir, `case-${i}.html.slim`);
+        fs.writeFileSync(file, c.source);
+        return { ...c, label: `${c.file}#${c.test} (case ${i})`, path: file };
+      });
+    await report(`slim ${SLIM_VERSION} vs ruby-templates`, cases, skipped);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  for (const corpus of corpora.slim) {
+    console.log();
+    await report(
+      `slim ${SLIM_VERSION} vs ruby-templates, corpus ${corpus.name}@${corpus.commit.slice(0, 7)}`,
+      corpusItems(corpus, ".slim"),
+      new Map(),
+    );
   }
 };
 
