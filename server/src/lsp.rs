@@ -1,8 +1,9 @@
 use crate::lang::{file_name, html_host, slim_html_host, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, html_lint, i18n, ivars, outline,
-    partial_rename, partials, routes, ruby, schema, slim_complete, slim_hover, slim_indent, slim_outline, slim_parser, slots, stimulus,
-    tags, util,
+    partial_rename, partials,
+    project::{Framework, Project},
+    routes, ruby, schema, slim_complete, slim_hover, slim_indent, slim_outline, slim_parser, slots, stimulus, tags, util,
 };
 use dashmap::DashMap;
 use haml_indent::LineRole;
@@ -127,8 +128,9 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
     }
     if let Ok(path) = uri.to_file_path() {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
-        out.extend(unresolved_renders(&path, &doc.text, &in_code));
-        out.extend(strict_locals_mismatches(&path, &doc.text, &in_code));
+        let project = Project::for_template(&path);
+        out.extend(unresolved_renders(&path, &project, &doc.text, &in_code));
+        out.extend(strict_locals_mismatches(&path, &project, &doc.text, &in_code));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
@@ -138,6 +140,7 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
 /// Diagnostic codes every language shares.
 const UNRESOLVED_RENDER: &str = "unresolved-render";
 const STRICT_LOCALS: &str = "strict-locals";
+const STRICT_LOCALS_SINCE: &str = "7.1";
 
 /// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
 fn checked_renders<'a>(
@@ -155,11 +158,19 @@ fn checked_renders<'a>(
 }
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
+fn unresolved_renders(
+    path: &Path,
+    project: &Project,
+    text: &str,
+    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+) -> Vec<Diagnostic> {
+    if project.framework != Framework::Rails {
+        return vec![];
+    }
     let Some(views) = partials::views_root(path) else { return vec![] };
     checked_renders(&views, text, in_code)
         .into_iter()
-        .filter(|(_, _, r)| partials::resolve(path, r).is_empty() && !partials::gem_view(&views, &r.name))
+        .filter(|(_, _, r)| partials::resolve(path, r).is_empty() && !is_gem_view(project, &r.name))
         .map(|(i, line, r)| {
             let message = format!("{} `{}` not found", r.kind.name(), r.name);
             util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
@@ -167,8 +178,27 @@ fn unresolved_renders(path: &Path, text: &str, in_code: impl Fn(usize, usize, &p
         .collect()
 }
 
+/// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
+/// name (`devise/`, `spree/` from `spree_core`), and the app overrides only some of them, so the rest aren't on disk.
+fn is_gem_view(project: &Project, name: &str) -> bool {
+    name.split_once('/').is_some_and(|(top, _)| project.has_gem_family(top))
+}
+
+/// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
+fn supports_strict_locals(project: &Project) -> bool {
+    project.framework == Framework::Rails && project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_SINCE))
+}
+
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(path: &Path, text: &str, in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(
+    path: &Path,
+    project: &Project,
+    text: &str,
+    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+) -> Vec<Diagnostic> {
+    if !supports_strict_locals(project) {
+        return vec![];
+    }
     let Some(views) = partials::views_root(path) else { return vec![] };
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
@@ -1406,8 +1436,14 @@ mod tests {
         assert_eq!(codes(TemplateLang::Skim), [slim_indent::code::BAD_DEDENT]);
     }
 
+    const GEM_LOCK: &str = "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n";
+
+    fn lock_with(actionview: &str) -> Project {
+        Project::from_lockfile(&format!("{GEM_LOCK}    actionview ({actionview})\n"))
+    }
+
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
-        unresolved_renders(path, text, render_filter(lang, text, &[]))
+        unresolved_renders(path, &lock_with("7.1.0"), text, render_filter(lang, text, &[]))
     }
 
     /// `file line:col new_text` for each edit, sorted.
@@ -1583,11 +1619,6 @@ mod tests {
         for dir in ["devise/shared", "spree/admin", "admin"] {
             std::fs::create_dir_all(root.join("app/views").join(dir)).unwrap();
         }
-        std::fs::write(
-            root.join("Gemfile.lock"),
-            "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n",
-        )
-        .unwrap();
         let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"admin/x\" %>";
         let lines: Vec<String> = unresolved(TemplateLang::Erb, &file, gem_text).into_iter().map(|d| d.message).collect();
         assert_eq!(lines, ["Partial `admin/x` not found"]);
@@ -1629,10 +1660,11 @@ mod tests {
             "<%= render \"users/card\", Card::DEFAULTS %> <%= render \"card\" %> <%= render \"users/multi\" %>\n",
             "<%= render partial: \"users/plain\", locals: { a: 1 }, layout: \"users/card\" %>\n",
         );
-        let got: Vec<(String, Range)> = strict_locals_mismatches(&file, text, render_filter(TemplateLang::Erb, text, &[]))
-            .into_iter()
-            .map(|d| (d.message, d.range))
-            .collect();
+        let got: Vec<(String, Range)> =
+            strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Erb, text, &[]))
+                .into_iter()
+                .map(|d| (d.message, d.range))
+                .collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         assert_eq!(
             got,
@@ -1670,9 +1702,39 @@ mod tests {
             lines(unresolved(TemplateLang::Ruby, &file, text)),
             [(2, "Partial `posts/missing` not found".to_string()), (5, "Partial `posts/missing3` not found".to_string())]
         );
-        let mismatches = strict_locals_mismatches(&file, text, render_filter(TemplateLang::Ruby, text, &[]));
+        let mismatches = strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Ruby, text, &[]));
         assert_eq!(lines(mismatches), [(4, "Partial `posts/post` does not accept locals: `extra`".to_string())]);
         assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn render_checks_follow_framework_and_version() {
+        let root = std::env::temp_dir().join(format!("rt-gates-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "<%# locals: (user:) -%>").unwrap();
+        let file = users.join("index.html.erb");
+        let doc = Doc { lang: TemplateLang::Erb, text: "<%= render \"users/card\" %><%= render \"users/gone\" %>".into(), version: 0 };
+        let uri = Url::from_file_path(&file).unwrap();
+        let codes = || -> Vec<String> {
+            let found = diagnostics(&uri, &doc, &Options::default());
+            found.iter().filter_map(|d| util::code(d).map(String::from)).collect()
+        };
+        let lock = root.join("Gemfile.lock");
+        let (both, unresolved_only) = (vec![STRICT_LOCALS, UNRESOLVED_RENDER], vec![UNRESOLVED_RENDER]);
+        assert!(codes().is_empty(), "no lockfile");
+        for (specs, expected) in [
+            ("sinatra (4.0.0)", vec![]),
+            ("actionview (7.0.8)", unresolved_only),
+            ("actionview (7.1.0)", both.clone()),
+            ("actionview (8.0.2)", both),
+        ] {
+            std::fs::write(&lock, format!("GEM\n  specs:\n    {specs}\n")).unwrap();
+            let mut got = codes();
+            got.sort();
+            assert_eq!(got, expected, "{specs}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
