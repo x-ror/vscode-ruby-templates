@@ -78,7 +78,7 @@ format:  1,203 files, compiled output identical in 1,203, idempotent in 1,203
 
 ## Stage 0b. Context
 
-**Want:** [Context](#context-framework-and-versions) in the server: framework and gem versions from the nearest `Gemfile.lock`, passed to every check; Rails checks gated on `actionview` and its version.
+**Want:** [Context](#context-framework-and-versions) in the server: framework and gem versions from the nearest `Gemfile.lock`, passed to every check; Rails checks gated on `actionview` and its version. The same context holds the formats the app registers (`Mime::Type.register` / `register_alias "…", :name` in `config/initializers/*.rb`, D11), used with `KNOWN_FORMATS` wherever a template name is split into format and handler.
 
 **Get:** no `unresolved-render`/`strict-locals` in a Sinatra or unknown project; no `strict-locals` on Rails 7.0; the strict locals message matching the project's Rails.
 
