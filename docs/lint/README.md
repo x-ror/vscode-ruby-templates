@@ -1,5 +1,7 @@
 # Lint rules: ERB, Haml, Slim
 
+> Superseded by D13 (`docs/DECISIONS.md`) and `docs/LINT_PLAN.md`: this catalogue is kept only as a record of what third-party tools check, not as a source of rules. The checks follow only the official projects; their codes and sources are listed in `docs/LINT_PLAN.md`.
+
 A catalogue of what the template linters check, per language, to decide which rules this extension's language server should implement. Nothing here is a commitment: the built-in checks are listed as they are today, the external linters as they are in the versions below.
 
 | Language | File               | Sources                                                                                                                                                  |

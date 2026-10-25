@@ -1,5 +1,7 @@
 # ERB lint rules
 
+> Superseded by D13 and [`docs/LINT_PLAN.md`](../LINT_PLAN.md): a record of third-party checks, not a source of rules.
+
 What the three sources check in ERB (`.erb`, `.html.erb`, `.erubi`, …). Reference only: nothing here is implemented beyond the built-in checks. Index, cross-language matrix and helper guidance: [README.md](README.md).
 
 ## Built-in (this extension's language server)

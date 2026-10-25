@@ -1,0 +1,249 @@
+# Built-in checks and formatter: plan
+
+Goal: check and format Slim, Haml and ERB templates with our own Rust code, following only what the languages' official projects define: their documentation, their parsers' and compilers' errors, their changelogs and their test suites; for the HTML in `.html.erb`, the HTML standard (WHATWG). Decision: D13 in `docs/DECISIONS.md`.
+
+Each stage says **what we want**, **what we get** (with output of the official implementation) and **how we compare** against it, so a stage is done by measurement.
+
+## Principles
+
+1. **Official sources only.** A behaviour we implement cites one of the sources in the table below: a README/reference section, a file of the official implementation, a changelog entry or a test of its suite. Nothing else is a source.
+2. **Third-party tools are not sources.** slim-lint, haml-lint, erb_lint, Herb (linter, formatter, parser), htmlbeautifier and erb-format are community projects. We don't copy their rules, messages, options, config files (`.slim-lint.yml`, `.haml-lint.yml`, `.erb_lint.yml`, `.herb.yml`) or output formats, and we don't run them.
+3. **Checks = what the language itself rejects.** Errors raised by the official parser and compiler, with their messages; syntax the official changelog removed; Ruby that doesn't compile once the official compiler has turned the template into Ruby; for the HTML of ERB templates, what the HTML standard marks as a parse error or a "must". Rails' render-time errors that can be known statically (`unresolved-render`, `strict-locals`) are open: see their rows. No style rules: the official projects define none.
+4. **Format = whitespace only, as the official examples write it.** Indentation by nesting level in the unit the official documentation's examples use (2 spaces), trailing whitespace, final newline. Never a change to what the official compiler produces, except where a stage says so and why.
+5. **The official implementations are the oracle.** The official gems run on the developer's machine (isolated install, never in the product) to produce the reference: their errors for the checks, their compiled output for the formatter.
+6. **No external tool at runtime**, and no new runtime dependency without a reason in the commit (`CLAUDE.md`).
+
+## Official sources and pinned versions
+
+| Language                                                           | Project                                                                                                                                                                                                                                                     | Version                                                                               | What we use                                                                                                                                                                                                                            | License             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| Slim, Skim                                                         | https://github.com/slim-template/slim                                                                                                                                                                                                                       | 5.2.2                                                                                 | `README.md`, `CHANGES`, `lib/slim/parser.rb` (`syntax_error!`), `lib/slim/*` filters, `test/core` (311 tests)                                                                                                                          | MIT                 |
+| Haml                                                               | https://github.com/haml/haml                                                                                                                                                                                                                                | 7.5.1                                                                                 | `REFERENCE.md`, `CHANGELOG.md`, `lib/haml/parser.rb`, `lib/haml/error.rb` (`MESSAGES`), `test/haml` (`error_test.rb`, `engine_test.rb`, `haml-spec`, `templates`/`results`)                                                            | MIT                 |
+| ERB                                                                | https://github.com/ruby/erb                                                                                                                                                                                                                                 | 6.1.0                                                                                 | `README.md`, tag and trim-mode syntax                                                                                                                                                                                                  | BSD-2-Clause / Ruby |
+| ERB in Rails and Tilt                                              | https://github.com/jeremyevans/erubi                                                                                                                                                                                                                        | 1.13.1                                                                                | `README.rdoc`, `lib/erubi.rb` (the tag regexp and compilation)                                                                                                                                                                         | MIT                 |
+| HTML in ERB templates                                              | https://html.spec.whatwg.org (HTML Living Standard)                                                                                                                                                                                                         | living standard; section numbers as of 2026-10-25, re-checked when a stage cites them | 13.1.2 void elements and 13.1.2.4 optional tags (nesting, for 3a and 3b), 13.2.2 parse errors and 13.2.6.4.7 "in body" insertion mode (unclosed and mismatched tags), 4.8.3/4.8.4.4 `img` `alt`, 3.2.6 global attributes (`id` unique) | CC BY 4.0           |
+| Ruby syntax (the `-`/`=` code of all three, ERB's compiled source) | https://github.com/ruby/prism, Rust crate `ruby-prism`                                                                                                                                                                                                      | 2.0.0                                                                                 | the parser and its error messages (Ruby's default parser since 3.4); `ruby-prism-sys` builds the C parser with `cc` and `bindgen`, so CI needs libclang on every target                                                                | MIT                 |
+| ERB in Rails                                                       | https://github.com/rails/rails `actionview/lib/action_view/template/handlers/erb*.rb`, `template.rb` (`STRICT_LOCALS_REGEX`), `template/error.rb` (`MissingTemplate`, `StrictLocalsError`), Rails Guides "Action View Overview" and "Layouts and Rendering" | 8.1.4                                                                                 | Erubi options Rails uses (`trim: true` from `erb_trim_mode "-"`, `bufvar: @output_buffer`, `escape` for `text/plain`), the encoding magic comment, strict locals `<%# locals: (…) -%>`                                                 | MIT                 |
+
+Bumping a pinned version is its own commit: read `CHANGES`/`CHANGELOG.md`, re-run the oracle, update snapshots, note what changed here.
+
+## How we compare (oracle harness, stage 0)
+
+`bun test/oracle.js <language>` on the developer machine; skips with a message when the gem isn't installed. Isolated install: `GEM_HOME=<tmp> gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1`, plus the engine and filter gems the official docs list (Slim README "Embedded engines" table, the Haml filters' gems), since both compilers load them at compile time. A `LoadError` for a missing engine gem is reported as "dependency missing", never as a template error.
+
+1. **Errors.** For each file, the official parser/compiler's error (message, line, column where it gives one) vs ours. Fixtures: the official test suites' error cases (`slim/test/core/test_parser_errors.rb`, `haml/test/haml/error_test.rb` and the error cases in `engine_test.rb`), plus every template of those suites that compiles (we must report nothing). Target **100%**.
+2. **Formatter safety.** For each file we format: the official compiled output before and after is identical (Slim: `Slim::Engine` source with the Rails generator; Haml: `Haml::Engine` source; ERB: see stage 3). Target **100%**: a difference is a bug.
+3. **Corpora.** Public apps' views (Forem, Mastodon, rubygems.org, Whitehall, freeats; GitLab for Haml), shallow sparse clones outside the repo: errors as in 1, formatter safety as in 2, idempotence (formatting twice changes nothing more).
+
+Report:
+
+```
+slim 5.2.2 vs ruby-templates  (1,203 files)
+errors:  official 3, ours 3, same 3
+format:  1,203 files, compiled output identical in 1,203, idempotent in 1,203
+```
+
+## Stage 0. Harness
+
+**Want:** the three comparisons before any change, so each later step is measured.
+
+**Get:** `test/oracle.js`; a small Ruby script per language under `test/oracle/` that prints the official error (`{message, line, column}`) or the compiled source for a file; `test/oracle/README.md` with the isolated install and `UPDATE=1` for snapshots.
+
+**Done when:** it runs on the Slim test suite and the corpora and prints the report with today's code.
+
+## Stage 1. Slim (5.2.2)
+
+### 1a. Errors
+
+**Want:** our parser (`slim_parser.rs`, a port of `Slim::Parser`) rejects exactly what Slim 5.2.2 rejects, with Slim's message, line and column, parsing with Slim's default options (`README` "Available options": `tabsize: 4`, `default_tag: div`, shortcuts `.` → class and `#` → id, `code_attr_delims`/`attr_list_delims` `()[]{}`, `splat_prefix: *`, all engines enabled).
+
+**Syntax** (README sections, all must parse): line indicators `|`, `|<`, `|>`, `|<>` (5.1.0), `'`, `<`, `-`, `=`, `==` with `<`/`>`; `/`, `/!`, `/[…]`; doctype; closed tags `/`; tag whitespace `<` `>`; inline tags `:`; text content; dynamic content; attribute wrappers; quoted, Ruby and boolean attributes; attribute merging; splat `*` attributes and dynamic tags; default shortcuts; `#{}` interpolation; engines `ruby`, `javascript`, `css`, `sass`, `scss`, `coffee`, `asciidoc`, `markdown`, `textile`, `rdoc` (`less` removed in 5.2.2), with attributes for javascript/css/coffee/sass/scss.
+
+**Errors** (`lib/slim/parser.rb`, verbatim): `Unexpected indentation`, `Malformed indentation`, `Unknown line indicator`, `Illegal shortcut`, `Expected tag`, `Unexpected text after closed tag`, `Invalid empty attribute`, `Expected attribute`, `Expected closing delimiter <d>`, `Unexpected end of file`.
+
+**Removed syntax** (`CHANGES`): the 5.0.0 entries "Remove deprecated whitespace syntax =' etc" and "Remove deprecated syntax", and engines removed in 4.0.0 (except `asciidoc`, registered again in 5.2.2) and 5.2.2 (`less`); each is reported as Slim 5.2.2 reports it (an error above, or rendered as text, whichever the official parser does: checked against the oracle, not guessed).
+
+**Ruby:** the Ruby of `-`, `=`, `==` lines and Ruby attributes, as `Slim::Engine` compiles it, must be valid Ruby; Prism 2.0.0's error message is reported at the template line it comes from.
+
+**Get** (official, `Slim::Parser` on `div\n    p x\n  span`):
+
+```
+Malformed indentation
+  (__TEMPLATE__), Line 3, Column 2
+    span
+    ^
+```
+
+We show it as a diagnostic at line 3, column 2, message `Malformed indentation`, source `slim`.
+
+**Compare:** `test/core/test_parser_errors.rb` (message, line, column) and all `test/core` templates without error: 100%.
+
+### 1b. Format
+
+**Want:** re-indentation in steps of 2 spaces per nesting level, the unit of every example in the Slim README. The README (line 114) states that any depth is valid ("If you want to first indent 2 spaces, then 5 spaces, it's your choice"), so formatting is a convention from the examples, never a check: we never report indentation that Slim accepts.
+
+**Rules, each from the README:**
+
+- A nested line moves to its parent's indentation + 2.
+- Verbatim text (`|`, `'`): "each following line that is indented greater than the pipe is copied over" and the first line sets the left margin, so continuation lines move with the pipe line, keeping their offset from it.
+- Embedded engine bodies, multi-line Ruby (`,` or `\` continuation) and multi-line attribute wrappers move as a block with their first line.
+- Trailing whitespace is kept on every line whose output contains it: verbatim text (`|`, `'`, `|<`, `|>`, `|<>`) and its continuation lines, and inline tag text (`p foo   ` compiles to `<p>foo   </p>`); it is removed only on lines whose compiled output doesn't contain it. A single final newline.
+- Tabs: Slim reads a tab as `tabsize: 4`; a tab-indented file is converted to spaces only if the compiled output stays identical.
+- A file with an error (1a) is not formatted.
+
+**Get:**
+
+```slim
+div.card              div.card
+    - if user     →     - if user
+        h1 = name           h1 = name
+```
+
+**Compare:** compiled output identical before and after on the Slim test suite templates and the corpora; idempotent.
+
+## Stage 2. Haml (7.5.1)
+
+### 2a. Errors
+
+**Want:** what `Haml::Parser`/`Haml::Compiler` reject, with Haml's messages (`lib/haml/error.rb`), at Haml's line:
+
+`"%s" is indented at wrong level: expected %d, but was at %d.` · `Indentation can't use both tabs and spaces.` · `The line was indented %d levels deeper than the previous line.` · `FilterCompiler for '%s' was not found` (`Haml::FilterNotFound`, `lib/haml/filters.rb`; `filter_not_defined` in `error.rb` is unused) · `Illegal element: classes and ids must have values.` · `Illegal nesting: nesting within a tag that already has content is illegal.` · `Illegal nesting: nesting within a header command is illegal.` · `Illegal nesting: content can't be both given on the same line as %%%s and nested within it.` · `Illegal nesting: nesting within plain text is illegal.` · `Illegal nesting: nesting within a self-closing tag is illegal.` · `Inconsistent indentation: %s used for indentation, but the rest of the document was indented using %s.` · `Indenting at the beginning of the document is illegal.` · `Invalid attribute list: %s.` · `Invalid filter name ":%s".` · `Invalid tag: "%s".` · `Got "%s" with no preceding "if"` · `There's no Ruby code for %s to evaluate.` · `Self-closing tags can't have content.` · `Unbalanced brackets.` · `You don't need to use "- end" in Haml. Un-indent to close a block: …`
+
+(`cant_run_filter`, `gem_install_filter_deps`, `install_haml_contrib` and `filter_not_defined` are unused in 7.5.1: nothing in `lib/haml` raises them. A filter whose gem is missing fails with a plain `LoadError` at compile time.)
+
+**Syntax** (`REFERENCE.md` sections): plain text and `\`; elements `%`; attributes `{}`, `()`, Ruby 1.9 hashes, boolean and data attributes; `.`/`#` and implicit div; void tags `/`; whitespace removal `>`/`<`; object reference `[]`; doctype `!!!`; comments `/`, `/[]`, `-#`; `=`, `-`, Ruby blocks, `~`, `#{}`, `&=`, `!=`; filters as registered in `lib/haml/filters.rb`: `:cdata`, `:coffee`, `:coffeescript`, `:css`, `:erb`, `:escaped`, `:javascript`, `:less`, `:markdown`, `:plain`, `:preserve`, `:ruby`, `:sass`, `:scss` (REFERENCE.md also documents `:maruku` and `:textile`, which 7.5.1 rejects with `FilterNotFound`); multiline `|`.
+
+**Compare:** `test/haml/error_test.rb`, the error cases of `engine_test.rb`, and `haml-spec` (the implementation-independent Haml spec) plus `templates/` without error: 100%.
+
+### 2b. Format
+
+**Want:** re-indentation to 2 spaces per level, the unit of the `REFERENCE.md` examples. Haml requires one consistent unit per file (`inconsistent_indentation`), but doesn't fix it, so this too is a convention, never a check beyond Haml's own errors.
+
+**Rules, from `REFERENCE.md`:** nesting by indentation ("Ruby Blocks"); filter bodies move as a block with their filter line ("Filters"); `:preserve` and `~` content are left as they are (REFERENCE.md "`:preserve`" and "Whitespace Preservation: `~`"); multiline `|` lines move with their first line; a file with an error (2a) is not formatted.
+
+**Compare:** `Haml::Engine` compiled source identical before and after; idempotent.
+
+## Stage 3. ERB (ruby/erb 6.1.0, Erubi 1.13.1, Rails 8.1.4)
+
+### 3a. Errors
+
+**Want:** what fails when Rails compiles the template:
+
+- Tags per Erubi's regexp (`lib/erubi.rb`, indicator `(={1,2}|-|\#|%)?`): `<% %>`, `<%- %>`, `<%= %>`, `<%== %>`, `<%# %>`, `<%% %>` (literal), `-%>` trim with `trim: true` as Rails sets it. An unclosed `<%` with no `%>` after it is text to Erubi, not an error; we report nothing for it. When a later `%>` exists, Erubi's lazy match runs on to it and the generated Ruby fails: that is a Ruby syntax error (next item).
+- Ruby: the source Erubi generates with Rails' options must be valid Ruby; Prism's error message is reported at the template line it comes from. Example: `<%= if x %>y<% end %>` compiles to `@output_buffer << ( if x ).to_s; …; end`, on which Prism 2.0.0 reports ``expected `then` or `;` or '\n'`` and ``expected an `end` to close the conditional clause``.
+- Rails: the strict locals magic comment `<%# locals: (…) -%>` must hold a keyword-only parameter list: Rails rejects positional parameters (`template.rb`: "Locals can only be set as keyword arguments.").
+
+- HTML (WHATWG, ERB templates only): an end tag with no open element, an end tag closing a different element, an element never closed (13.2.2, 13.2.6.4.7; void elements 13.1.2 and optional end tags 13.1.2.4 are not errors), `<img>` without `alt` (4.8.3, 4.8.4.4), a static `id` used twice (3.2.6). The standard gives no message text for the three tag errors (the parser recovers silently), so those messages are ours and cite the section; the others quote the standard's "must".
+
+**Compare:** Erubi + Rails handler output parsed by Prism 2.0.0 on the corpora: same files with errors, same lines, same messages.
+
+### 3b. Format
+
+**Want:** indentation of nested HTML elements and ERB blocks (`<% if %>` … `<% end %>`, `do … end`) by 2 spaces per level, as in the examples of the Rails Guides "Action View Overview" and "Layouts and Rendering"; HTML nesting per WHATWG (void elements 13.1.2 open nothing, optional end tags 13.1.2.4 are closed where the standard closes them).
+
+**What changes in the output:** ERB copies the template's text, indentation included, into the HTML it renders. Re-indenting therefore changes whitespace in the rendered HTML; it never changes Ruby, tags or attributes. Content whose whitespace is visible is left as it is: `<pre>`, `<textarea>`, `<script>`, `<style>` bodies, multi-line ERB tags' Ruby, text with significant leading spaces. The compiled-output comparison for ERB is therefore: identical after removing whitespace at the start of text lines outside those elements.
+
+**Compare:** that comparison on the corpora; idempotent.
+
+## Stage 4. Editor and CLI
+
+**Get:** diagnostics carry the official message and position, source `slim`, `haml` or `erb`; Format Document runs 1b/2b/3b; the `ruby-templates` CLI checks and formats the same way. Settings left: indentation width (default 2, from the examples), on/off per language, `disabledDiagnostics` per language and `slim.extraEngines` for app-registered Slim engines (both exist today).
+
+## Stage 5. Remove the external tools
+
+**Remove** from `package.json` and `src/`: `rubyTemplates.erb.formatter` values `htmlbeautifier` and `erb-format`, `rubyTemplates.haml.formatter` value `haml-lint`, `rubyTemplates.commands.htmlbeautifier`, `commands.erbFormat`, `commands.hamlLint`, `commands.erbLint`, `commands.herbLint`, `commands.slimLint`, `hamlLint.enabled`, `hamlLint.useBundler`, `erbLint.enabled`, `herbLint.enabled`, `slimLint.enabled`, the client code that spawns them (`src/extension.js` runners, `src/erbLint.js`, `src/herbLint.js`, `src/erbFormat.js`, `hamlLintOffenses` in `src/haml.js`) with their tests (`test/clientPure.js`, `test/haml.js`, `test/vscode/suite.js`), and the reading of `.erb_lint.yml`, `.erb-lint.yml`, `.haml-lint.yml`, `.slim-lint.yml` in `server/src/config.rs`. Kept: `commands.slimrb` and `slim.compileForRails` (run the official Slim compiler for the preview).
+
+**Get:** a CHANGELOG `BREAKING CHANGE` entry listing the removed settings.
+
+## Not from official sources (needs a decision)
+
+What we have today, with its official source or none. Items still marked open or remove stay as they are (not extended) until decided here. Decided: HTML checks in ERB are in scope, citing WHATWG.
+
+### Built-in diagnostic codes
+
+Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_lint.rs`, `haml_indent.rs`, `slim_indent.rs`, constants in `lsp.rs`), 18 for ERB, 13 for Haml, 12 for Slim, as `docs/lint/*.md` count them. "Checked" means run against the official implementation (Slim 5.2.2 and Haml 7.5.1 from the clones, with the Erubi 1.13.1 source) or read in its source. "Fold" means the official source reports it as a Ruby syntax error of the compiled template (the "Ruby" rule of 1a/3a), not as its own error.
+
+#### ERB
+
+| Code                   | File             | Reports                                                                                               | Official source                                                                                                                                                                                                                                                                                  | Proposal                                                                                                                                                                    |
+| ---------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unclosed-tag`         | `erb.rs`         | `<%` with no `%>`                                                                                     | none when no `%>` follows: Erubi `DEFAULT_REGEXP` keeps it as text (ruby/erb drops the `<%`; Rails uses Erubi). When a later `%>` exists ("missing `%>` before the next `<%`"), the generated Ruby is invalid                                                                                    | remove the first case; fold the second into `ruby-syntax`                                                                                                                   |
+| `malformed-tag`        | `erb.rs`         | tag the tree-sitter grammar can't parse                                                               | none: Erubi has no malformed state, a stray `%>` is text                                                                                                                                                                                                                                         | remove                                                                                                                                                                      |
+| `stray-end`            | `erb.rs`         | `<% end %>` with no open block                                                                        | Ruby `SyntaxError` of the Erubi-generated source (3a "Ruby")                                                                                                                                                                                                                                     | fold into `ruby-syntax`                                                                                                                                                     |
+| `unmatched-branch`     | `erb.rs`         | `else`/`elsif`/`when` outside a block                                                                 | Ruby `SyntaxError` of the generated source                                                                                                                                                                                                                                                       | fold into `ruby-syntax`                                                                                                                                                     |
+| `unclosed-block`       | `erb.rs`         | `if`/`do`/`case` never closed with `end`                                                              | Ruby `SyntaxError` of the generated source                                                                                                                                                                                                                                                       | fold into `ruby-syntax`                                                                                                                                                     |
+| `output-control-flow`  | `erb.rs`         | `<%= if … %>`                                                                                         | Erubi wraps `<%= %>` in `@output_buffer.append=( … )`: Ruby `SyntaxError` of the generated source                                                                                                                                                                                                | fold into `ruby-syntax`                                                                                                                                                     |
+| `silent-output-helper` | `erb.rs`         | `<% form_with … do %>` renders nothing                                                                | none: valid Ruby, neither Erubi nor the Rails handler rejects it                                                                                                                                                                                                                                 | remove                                                                                                                                                                      |
+| `unterminated-string`  | `erb.rs`         | `%>` inside a Ruby string ends the tag early                                                          | cause is the lazy `(.*?)` in Erubi `DEFAULT_REGEXP`; the error is Ruby's                                                                                                                                                                                                                         | fold into `ruby-syntax`                                                                                                                                                     |
+| `ruby-syntax`          | `ruby_syntax.rs` | Ruby syntax error in the tags                                                                         | Erubi source (3a), Rails handler options (`trim: true`, `@output_buffer`)                                                                                                                                                                                                                        | keep citing Erubi and Rails; message from Prism 2.0.0 (`ruby-prism` crate), replacing tree-sitter-ruby's                                                                    |
+| `unexpected-close-tag` | `tags.rs`        | `</div>` with no open element                                                                         | WHATWG HTML 13.2.2 "Parse errors" and 13.2.6.4.7 "The "in body" insertion mode" ("any other end tag"; the parser recovers, it names no error code for this)                                                                                                                                      | keep (decided: HTML is in scope, citing WHATWG)                                                                                                                             |
+| `mismatched-close-tag` | `tags.rs`        | `</span>` closing a `<div>`                                                                           | same                                                                                                                                                                                                                                                                                             | keep (decided: HTML is in scope, citing WHATWG)                                                                                                                             |
+| `unclosed-element`     | `tags.rs`        | `<div>` never closed                                                                                  | same                                                                                                                                                                                                                                                                                             | keep (decided: HTML is in scope, citing WHATWG)                                                                                                                             |
+| `img-missing-alt`      | `html_lint.rs`   | `<img>` / `image_tag` without alt                                                                     | WHATWG HTML 4.8.3 "The `img` element" and 4.8.4.4 "Requirements for providing text to act as an alternative for images"                                                                                                                                                                          | keep (decided: HTML is in scope, citing WHATWG)                                                                                                                             |
+| `duplicate-id`         | `html_lint.rs`   | same static `id` twice                                                                                | WHATWG HTML 3.2.6 "Global attributes" (`id`: "must be unique amongst all the IDs in the element's tree")                                                                                                                                                                                         | keep (decided: HTML is in scope, citing WHATWG)                                                                                                                             |
+| `prefer-image-tag`     | `html_lint.rs`   | `<img>` whose `src` holds ERB output                                                                  | none (a style preference; not in WHATWG HTML either)                                                                                                                                                                                                                                             | remove                                                                                                                                                                      |
+| `unsafe-output`        | `html_lint.rs`   | `<%==`, `raw`, `.html_safe`                                                                           | none: `<%==` is a documented Erubi tag, not an error                                                                                                                                                                                                                                             | remove                                                                                                                                                                      |
+| `unresolved-render`    | `lsp.rs`         | `render "x"` with no matching template (also Haml, Slim)                                              | Rails raises `ActionView::MissingTemplate` at render time (Guides "Layouts and Rendering"; `actionview/lib/action_view/template/error.rb`); not a compile error                                                                                                                                  | open (render-time, principle 3); if kept, use Rails' wording: `Missing partial <prefix>/_<name> with {…}.` (or `template`/`layout`), then `Searched in:` and the view paths |
+| `strict-locals`        | `lsp.rs`         | `render` passes locals the partial's `locals: (…)` rejects, or misses required ones (also Haml, Slim) | Rails Guides "Action View Overview" § Strict Locals; `actionview/lib/action_view/template.rb` (`STRICT_LOCALS_REGEX`); Rails raises `ActionView::StrictLocalsError` at render time (`template/error.rb`: `missing local: …`, `unknown local: …`, `no locals accepted for …`, as the Guide shows) | open (render-time, principle 3); if kept, use those messages                                                                                                                |
+
+#### Haml
+
+| Code                                 | File             | Reports                                                                                             | Official source                                                                                                                                                           | Proposal                                                                                                                 |
+| ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `inconsistent-indent`                | `haml_indent.rs` | mixed tabs/spaces, indent off the file's unit, a step of several levels                             | `error.rb` `cant_use_tabs_and_spaces`, `inconsistent_indentation`, `deeper_indenting` (parser.rb)                                                                         | report with Haml's messages (ours differ, e.g. "Mixed tabs and spaces in indentation")                                   |
+| `bad-dedent`                         | `haml_indent.rs` | dedent to a level that never existed                                                                | none: Haml reports `inconsistent_indentation` (checked on `%p\n  a\n   b`); "Indentation does not match any outer level" has no Haml message                              | remove, covered by `inconsistent-indent`                                                                                 |
+| `top-level-indent`                   | `haml_indent.rs` | first line indented                                                                                 | `error.rb` `indenting_at_start` (checked on ` %p`)                                                                                                                        | report "Indenting at the beginning of the document is illegal."                                                          |
+| `illegal-nesting`                    | `haml_indent.rs` | content nested under a tag with inline content, plain text, a self-closing tag, a comment with text | `error.rb` `illegal_nesting_line`, `_plain`, `_self_closing`, `_content` (checked on `%p text\n  a`, `/ c\n  x`)                                                          | keep with Haml's messages; remove the "Ruby code that doesn't open a block" variant (Haml compiles `= x\n  %p`, checked) |
+| `doctype-children`                   | `haml_indent.rs` | anything under `!!!`                                                                                | `error.rb` `illegal_nesting_header` (checked on `!!!\n  p`)                                                                                                               | report "Illegal nesting: nesting within a header command is illegal."                                                    |
+| `unmatched-branch`                   | `haml_indent.rs` | `- else`/`elsif`/`when` without its opener                                                          | `error.rb` `missing_if`, `bad_script_indent` (checked on `%p\n- else`)                                                                                                    | report with Haml's messages                                                                                              |
+| `explicit-end`                       | `haml_indent.rs` | `- end`                                                                                             | `error.rb` `no_end`; REFERENCE.md (checked)                                                                                                                               | report with Haml's message                                                                                               |
+| `illegal-element`                    | `haml_indent.rs` | `.` / `#` without a name                                                                            | `error.rb` `illegal_element` (checked on `.`)                                                                                                                             | keep (message is already Haml's)                                                                                         |
+| `unknown-filter`                     | `haml_indent.rs` | `:name` that isn't a Haml filter                                                                    | Haml 7.5.1 raises `Haml::FilterNotFound` "FilterCompiler for 'x' was not found" (`lib/haml/filters.rb`, checked on `:nope`); `filter_not_defined` in `error.rb` is unused | report with that message                                                                                                 |
+| `self-closing-content`               | `haml_indent.rs` | `%br/ text`                                                                                         | `error.rb` `self_closing_content` (checked)                                                                                                                               | keep (message is already Haml's)                                                                                         |
+| `unclosed-attribute`                 | `haml_indent.rs` | `{`, `(`, `[` left open in attributes                                                               | `error.rb` `unbalanced_brackets` for `{` and `[`, `invalid_attribute_list` for a lone `(`; Haml accepts `%p(a=1` (all checked)                                            | report `{`/`[` with "Unbalanced brackets."; drop the `(` case except where Haml raises                                   |
+| `unresolved-render`, `strict-locals` | `lsp.rs`         | as in ERB                                                                                           | as in ERB                                                                                                                                                                 | as in ERB                                                                                                                |
+
+#### Slim
+
+| Code                                 | File             | Reports                                    | Official source                                                                                                                                                   | Proposal                                                          |
+| ------------------------------------ | ---------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `inconsistent-indent`                | `slim_indent.rs` | indent step differs from the file's unit   | none: README "the indentation depth can be chosen as you like"; Slim compiles `div\n  p\n   span\n  x` (checked)                                                  | remove (1b never checks it)                                       |
+| `bad-dedent`                         | `slim_indent.rs` | dedent to a level that never existed       | `parser.rb` `Malformed indentation`                                                                                                                               | report with Slim's message, line and column                       |
+| `doctype-children`                   | `slim_indent.rs` | anything under `doctype`                   | `parser.rb` `Unexpected indentation` (checked on `doctype html\n  p`)                                                                                             | report with Slim's message                                        |
+| `void-children`                      | `slim_indent.rs` | content under `br`, `img`, …               | none: Slim compiles `br\n  p x` to `<br><p>x</p></br>` (checked)                                                                                                  | remove                                                            |
+| `unknown-engine`                     | `slim_indent.rs` | `name:` that isn't a registered engine     | `parser.rb` `Expected tag` (checked on `mjml:\n  x`: only registered engines match `@embedded_re`)                                                                | report with Slim's message; app-registered engines stay a setting |
+| `unclosed-attribute`                 | `slim_indent.rs` | `(`, `[`, `{` left open                    | `parser.rb` `Expected closing delimiter <d>` (checked on `a href=(foo`)                                                                                           | report with Slim's message                                        |
+| `unclosed-ruby`                      | `slim_indent.rs` | bracket or string left open in Ruby        | none from Slim: it compiles `= foo(` and Ruby fails (`test/core/test_ruby_errors.rb`)                                                                             | fold into the Ruby check of 1a                                    |
+| `explicit-end`                       | `slim_indent.rs` | `- end`                                    | README "Control code": "`end` is forbidden behind `-`"; `lib/slim/end_inserter.rb` raises `Temple::FilterError` "Explicit end statements are forbidden" (checked) | report with that message                                          |
+| `unmatched-branch`                   | `slim_indent.rs` | `- else`/`elsif`/`when` without its opener | none from Slim: it compiles `p\n- else\n  p` to `else;` (checked) and Ruby fails                                                                                  | fold into the Ruby check of 1a                                    |
+| `silent-output-helper`               | `slim_indent.rs` | `- form_with … do` discards its HTML       | none: valid Slim and Ruby                                                                                                                                         | remove                                                            |
+| `unresolved-render`, `strict-locals` | `lsp.rs`         | as in ERB                                  | as in ERB                                                                                                                                                         | as in ERB                                                         |
+
+### Other items
+
+| Item                                       | Where                        | Official sources say                                           | Proposal                                                                        |
+| ------------------------------------------ | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| ERB formatting changes rendered whitespace | 3b                           | ERB copies text verbatim                                       | accept as described in 3b, or format ERB only where HTML ignores the whitespace |
+| `.editorconfig` and the editor's tab size  | `config.rs`, language server | none of the languages reads them                               | use them only for the indentation width (default 2)                             |
+| `ruby-templates.json`                      | not built                    | none                                                           | only our own settings (indent width, on/off per language), if wanted            |
+| The `herb` crate as ERB parser             | not built                    | Herb is third-party; Erubi's regexp is the official tag syntax | don't add it                                                                    |
+
+## Order and status
+
+| Stage                    | Status      |
+| ------------------------ | ----------- |
+| 0. Harness               | not started |
+| 1a. Slim errors          | not started |
+| 1b. Slim format          | not started |
+| 2a. Haml errors          | not started |
+| 2b. Haml format          | not started |
+| 3a. ERB errors           | not started |
+| 3b. ERB format           | not started |
+| 4. Editor and CLI        | not started |
+| 5. Remove external tools | not started |
+
+Each stage is its own branch and PR, with its harness report in the PR description.
+
+## Docs that change with the code
+
+Not edited yet: they describe the shipped code. `docs/FORMATTER_CONFIG.md` and the linter yml reading in `config.rs`: stage 5. `README.md` formatter and lint sections: stages 1b, 2b, 3b and 5. `CHANGELOG.md`: each stage's PR; stage 5 adds the `BREAKING CHANGE`. `docs/FORMATTER_PLAN.md`, `docs/*_TODO.md`: the stage that changes what they describe. `docs/lint/`: superseded now by D13 (kept as a record).
