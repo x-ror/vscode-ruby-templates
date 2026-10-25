@@ -51,16 +51,18 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 Run the ones that cover what you changed; all of them before a release.
 
 - Rust: `cargo fmt --manifest-path server/Cargo.toml --check`, `cargo clippy --manifest-path server/Cargo.toml`, `cargo test --manifest-path server/Cargo.toml` (also asserts `test/broken/bad.html.{haml,slim}`)
-- Server end to end: `bun run build:server && bun run test:server && bun test/e2e.js` (e2e asserts and exits non-zero on a mismatch)
+- Server end to end: `bun run build:server && bun run test:server && bun test/e2e.js && bun test/cli.js` (each asserts and exits non-zero on a mismatch)
 - Grammars: `bun run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
 - JS: `bun run format:check`, `bun run test:unit`, `bun run test:slim`, `bun run test:snippets`, `bun run build` (the bundle VS Code loads); any JS file: `bun build --no-bundle <file>`
-- Slim formatter: `bun run test:format` (needs `ruby -rslim`)
+- Slim/Haml formatters: `bun run test:format` (needs `ruby -rslim` / `ruby -rhaml`)
+- npm package: `bun test/npm.js` (after `cargo build --release`; packs and installs offline)
 - Client in a real VS Code: `bun run test:vscode`, under `xvfb-run -a` on Linux without a display (`test/vscode/suite.js`; skips formatter/linter checks whose gem isn't installed)
 
 ## Where tests go
 
 - Rust logic: `#[cfg(test)] mod tests` in the same file; file-system cases on a temp dir (see `partials.rs` `model_render_partials`).
 - LSP behaviour through the real server: a case in `test/e2e.js`.
+- The `ruby-templates` command line (arguments, exit codes, files written): a case in `test/cli.js`.
 - Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).
 - JS helpers: the matching `test/*.js` run by `test:unit`/`test:slim`/`test:snippets`, with `assert`.
 - Client behaviour that needs VS Code (commands, providers, settings): a check in `test/vscode/suite.js`.

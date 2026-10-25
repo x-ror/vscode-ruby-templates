@@ -642,11 +642,13 @@
           "type": "string",
           "enum": [
             "none",
+            "builtin",
             "htmlbeautifier",
             "erb-format"
           ],
           "enumDescriptions": [
             "No ERB formatter from this extension (another extension's stays in charge).",
+            "Built-in, through the language server: re-indents HTML views by HTML and ERB nesting (<script>/<style> bodies and multi-line tags move as a block) and fixes trailing whitespace, blank lines and the final newline per .editorconfig and .erb_lint.yml; never wraps lines or changes <pre>/<textarea> bodies or Ruby strings. Also Format Selection.",
             "htmlbeautifier (gem install htmlbeautifier): re-indents HTML and ERB blocks to the editor's tab size, keeps line breaks.",
             "erb-format (gem install erb-formatter): re-flows tags and attributes to a line width."
           ],
@@ -670,7 +672,7 @@
             "haml-lint"
           ],
           "enumDescriptions": [
-            "Built-in: re-indent every nesting level to the file's indent unit.",
+            "Built-in, through the language server: re-indent every nesting level to the file's indent unit and trim trailing whitespace on Haml lines; settings from .editorconfig and .haml-lint.yml. Files with errors other than indentation are left alone.",
             "haml-lint --auto-correct-only: applies the safe corrections of your haml-lint/RuboCop config, which can rewrite Ruby code."
           ],
           "default": "reindent",
@@ -826,7 +828,7 @@
         "rubyTemplates.server.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Run the Rust language server (diagnostics, go to partial, completions, hover)."
+          "description": "Run the Rust language server (diagnostics, go to partial, completions, hover, and the built-in ERB, Haml and Slim formatting)."
         },
         "rubyTemplates.server.path": {
           "type": "string",

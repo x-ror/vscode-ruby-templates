@@ -101,10 +101,25 @@ jobs:
         run: bun test/e2e.js
         env:
           RUBY_TEMPLATES_LS: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
+      - name: Command line
+        if: matrix.test
+        run: bun test/cli.js
+        env:
+          RUBY_TEMPLATES: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
+      - name: npm package
+        if: matrix.test
+        run: bun test/npm.js
+        env:
+          RUBY_TEMPLATES: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
       - uses: actions/upload-artifact@v7
         with:
           name: server-${{ matrix.dir }}
           path: server/target/${{ matrix.target }}/release/ruby-templates-ls${{ matrix.ext }}
+      # The command line goes to npm, not into the .vsix.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.dir }}
+          path: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
 
   extension:
     needs: [lint, server]
@@ -137,6 +152,46 @@ jobs:
       - if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with: { files: "*.vsix" }
+
+  # The npm packages: one per platform with its binary, and the main package with the bin wrapper.
+  npm:
+    needs: [lint, server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v8
+        with: { pattern: cli-*, path: .cli }
+      - run: bun npm/assemble.js .cli npm-dist
+      # Every platform the server matrix builds, plus the main package: a renamed artifact must not drop one.
+      - run: test "$(ls npm-dist | wc -l)" -eq 6
+      - uses: actions/upload-artifact@v7
+        with: { name: npm, path: npm-dist }
+
+  # npm trusted publishing: no token, npm trusts this repository and workflow file (needs npm 11.5+). Platform
+  # packages first, so the main package's optional dependencies exist when it appears.
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [npm, extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, registry-url: "https://registry.npmjs.org" }
+      - uses: actions/download-artifact@v8
+        with: { name: npm, path: npm-dist }
+      # Artifacts lose the executable bit.
+      - run: chmod +x npm-dist/*/bin/ruby-templates*
+      # A version already out is skipped, so a failed run can be re-run.
+      - run: |
+          publish() {
+            spec=$(node -p "const p = require('./$1/package.json'); p.name + '@' + p.version")
+            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "$1"
+          }
+          for dir in npm-dist/*/; do [ "$dir" = npm-dist/main/ ] || publish "${dir%/}"; done
+          publish npm-dist/main
 
   # Each registry gets its own job, so one failing doesn't block the other.
   publish-marketplace:

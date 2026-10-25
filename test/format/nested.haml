@@ -1,0 +1,19 @@
+!!!
+%html
+    %head
+        %title= title
+        :css
+          body { margin: 0; }
+    %body
+      - if user
+          %p.greeting{ class: "a",
+            data: { id: user.id } }= user.name
+      - else
+          %p
+            :plain
+              Hello,   
+                 stranger
+      = link_to "home", |
+        root_path |
+      -# a comment
+        with a body

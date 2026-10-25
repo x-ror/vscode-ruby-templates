@@ -57,16 +57,16 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 3. File types and language configuration
 
 - [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/main.rs` `TemplateLang::from_uri_or_id`, `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
+- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/lang.rs` `TemplateLang::from_uri_or_id`; `server/src/lsp.rs` `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
-- [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/main.rs` `folding_range`)
+- [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/lsp.rs` `folding_range`)
 - [x] Indent after tags, `- if/unless/...`, `do |x|`, engines (except `asciidoc:`, `org:`), `/`, `|` lines; dedent on `- else/elsif/when/rescue/ensure/end` (`language-configuration/slim.json` `indentationRules`)
 - [x] Word pattern includes `@ivar`, `$global`, `predicate?`, `kebab-case` (`language-configuration/slim.json` `wordPattern`)
 - [x] Default `tabSize: 2`, spaces, no indent detection (`package.json` `configurationDefaults["[slim]"]`)
 - [x] `onEnterRules`: indent after a `|`/`'` text line, keep indent after a `-`/`=`/`tag =` line ending in `,`/`\` (`language-configuration/slim.json`, shared by `skim`; regexes checked in `test/slim.js`). The line after the last continuation line still keeps the continued indent
 - [x] (?) Emmet in Slim: VS Code's Emmet lists `slim` among its native modes (Slim-syntax output); `skim` mapped to it (`package.json` `emmet.includeLanguages`), documented (`README.md` Tips). Not exercised in an editor here
-- [x] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) open as `slim` (`.slim` extension), and `void-children` only runs for HTML hosts, bare `.slim` and untitled (`server/src/main.rs` `slim_html_host`, `file_name` decodes `%2B`; test `void_children_only_for_html_slim`). Slim itself renders `img` children (`<img>x</img>`), so that is the only HTML-only Slim check; `doctype-children` is a Slim parse error in every host
+- [x] Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`) open as `slim` (`.slim` extension), and `void-children` only runs for HTML hosts, bare `.slim` and untitled (`server/src/lang.rs` `slim_html_host`, `file_name` decodes `%2B`; test `void_children_only_for_html_slim`). Slim itself renders `img` children (`<img>x</img>`), so that is the only HTML-only Slim check; `doctype-children` is a Slim parse error in every host
 
 ## 4. Snippets
 
@@ -109,27 +109,27 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Explicit `- end` is an error (`server/src/slim_indent.rs` `check_explicit_end`; `test/broken/bad.html.slim` line 8)
 - [x] Unknown embedded engine warning (`server/src/slim_indent.rs` `SLIM_ENGINES`; `test/broken/bad.html.slim` line 9)
 - [x] `,` / `\` continuation lines joined before analysis (`server/src/slim_indent.rs` `join_continuation`)
-- [x] Unresolved `= render "dir/name"` warning (`server/src/main.rs` `unresolved_renders`; checked from a `.slim` document)
-- [x] CLI `ruby-templates-ls --check file.slim` (`server/src/main.rs`, CI runs it on `test/sample.*`)
+- [x] Unresolved `= render "dir/name"` warning (`server/src/lsp.rs` `unresolved_renders`; checked from a `.slim` document)
+- [x] CLI `ruby-templates-ls --check file.slim` (`server/src/cli.rs`, CI runs it on `test/sample.*`)
 - [x] Tabs counted as Slim does (`tabsize` default 4; the server counts a tab as 2 columns) (`server/src/slim_indent.rs` `indent_width`, tab stops of 4 for Slim)
 - [x] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today) (`server/src/slim_indent.rs` `unmatched-branch`)
 - [x] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported): bracket/quote balance only, as a warning; no Ruby parser (`server/src/slim_indent.rs` `unclosed-ruby`)
-- [x] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block: void elements and `tag/` (warning, HTML hosts only: `server/src/slim_indent.rs` `void-children`, `server/src/main.rs` `slim_html_host`); inline-output tags with children are valid Slim (DoInserter adds `do`), so not reported
+- [x] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block: void elements and `tag/` (warning, HTML hosts only: `server/src/slim_indent.rs` `void-children`, `server/src/lang.rs` `slim_html_host`); inline-output tags with children are valid Slim (DoInserter adds `do`), so not reported
 - [x] `=` with a block helper but missing `do`, and `-` on an output block helper (`- form_with do` renders nothing): `- helper do` warns (`server/src/slim_indent.rs` `silent-output-helper`); `= helper` without `do` is valid
 - [x] Unknown engine check accepts engines registered by the app (setting for extra engine names) (`rubyTemplates.slim.extraEngines`, `src/client.js` `initializationOptions.slim`)
 - [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/slim_indent.rs`): trimmed to Slim 5's list (`server/src/slim_indent.rs` `SLIM_ENGINES`)
 - [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)
-- [x] Strict locals: missing/unknown locals passed to a Slim partial (`server/src/main.rs` `strict_locals_mismatches`, language-independent)
+- [x] Strict locals: missing/unknown locals passed to a Slim partial (`server/src/lsp.rs` `strict_locals_mismatches`, language-independent)
 - [x] Settings to enable/disable each built-in Slim check (`rubyTemplates.slim.disabledDiagnostics`, codes in `server/src/slim_indent.rs` `code`)
 
 ## 7. Navigation, completion, hover
 
-- [x] Go to definition on `= render "x"` and components from a Slim file (`server/src/main.rs` `goto_definition`; checked with an LSP probe on a `.slim` document)
+- [x] Go to definition on `= render "x"` and components from a Slim file (`server/src/lsp.rs` `goto_definition`; checked with an LSP probe on a `.slim` document)
 - [x] Slim partials (`_x.html.slim`) found when rendering from any template (`server/src/partials.rs` `matching_templates`, `test/e2e.js` `_card.html.slim`)
-- [x] Document links on render strings (`server/src/main.rs` `document_link`; checked on a `.slim` document)
-- [x] Hover on render shows resolved files; hover on Rails helpers shows the signature (`server/src/main.rs` `hover`; checked on a `.slim` document)
-- [x] Completion: partial names, form builder methods, Rails helpers on `-`/`=` lines (`server/src/main.rs` `completion`, `in_ruby_context`; checked on a `.slim` document)
-- [x] Exact Ruby spans for Slim completion and unresolved-render warnings: `-`/`=`/`==` (also `p= x`), `attr=ruby` in inline and wrapped attributes, splats, `#{}` in text, quoted values and interpolating engines, `ruby:` bodies, `,`/`\` continuations; Skim never counts as Ruby (`server/src/slim_parser.rs` `parse`, `in_ruby`, a port of `Slim::Parser`; `server/src/main.rs` `completion`, `unresolved_renders`). An unclosed `#{` before the cursor counts as Ruby for completion only (`in_open_interpolation`)
+- [x] Document links on render strings (`server/src/lsp.rs` `document_link`; checked on a `.slim` document)
+- [x] Hover on render shows resolved files; hover on Rails helpers shows the signature (`server/src/lsp.rs` `hover`; checked on a `.slim` document)
+- [x] Completion: partial names, form builder methods, Rails helpers on `-`/`=` lines (`server/src/lsp.rs` `completion`, `in_ruby_context`; checked on a `.slim` document)
+- [x] Exact Ruby spans for Slim completion and unresolved-render warnings: `-`/`=`/`==` (also `p= x`), `attr=ruby` in inline and wrapped attributes, splats, `#{}` in text, quoted values and interpolating engines, `ruby:` bodies, `,`/`\` continuations; Skim never counts as Ruby (`server/src/slim_parser.rs` `parse`, `in_ruby`, a port of `Slim::Parser`; `server/src/lsp.rs` `completion`, `unresolved_renders`). An unclosed `#{` before the cursor counts as Ruby for completion only (`in_open_interpolation`)
 - [x] Completion of embedded engine names (Slim 5 engines plus `rubyTemplates.slim.extraEngines`) where a tag starts (`server/src/slim_complete.rs`, `test/e2e.js`)
 - [x] HTML tag and attribute completion where a tag or attribute name may start (`server/src/slim_complete.rs`, `server/src/html.rs`; a modest static list, ERB has none to reuse)
 - [ ] Locals, instance variables, block variables, i18n keys, route helpers (same as ERB TODO sections 9-11). Nothing to port: ERB has none of these yet
@@ -137,7 +137,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 8. Outline, folding, symbols, rename
 
-- [x] Document symbols / outline for Slim (`server/src/main.rs` `document_symbol` returns `None` for non-ERB): done (`server/src/slim_outline.rs`)
+- [x] Document symbols / outline for Slim (`server/src/lsp.rs` `document_symbol` returns `None` for non-ERB): done (`server/src/slim_outline.rs`)
 - [x] Breadcrumbs from the tag tree (`tag#id`, `content_for`, `form_with`, `turbo_frame_tag`) (`server/src/slim_outline.rs` hierarchical symbols)
 - [x] Server folding ranges for multi-line wrapped attributes and `,` continuations (indentation folding splits them) (`server/src/slim_outline.rs` logical lines)
 - [x] Rename a Slim partial and update every `render` pointing at it (`server/src/partial_rename.rs`, `workspace/willRenameFiles`; also folder renames and qualified refs in `.rb` files)
@@ -145,7 +145,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 9. Formatting and semantic tokens
 
 - [x] Document formatting provider for Slim/Skim: indentation to the tab size in spaces, blocks and continuations moved with their line, trailing whitespace stripped only where Slim ignores it; files Slim rejects and `insertSpaces: false` are left alone (`server/src/slim_format.rs`; `test/slim_format.js` compiles `test/format/*.slim` with the slim gem before and after). Attribute spacing is not normalized: `p a = b` is an attribute but `b = c` is output, so the rewrite isn't safe without more parsing than it is worth
-- [x] Format on save via the provider (`README.md`; registered dynamically for slim/skim only, `server/src/main.rs` `initialized`)
+- [x] Format on save via the provider (`README.md`; registered dynamically for slim/skim only, `server/src/lsp.rs` `initialized`)
+- [x] Formatting from the command line and npm: `ruby-templates format`, settings from `.editorconfig` and `.slim-lint.yml`, trailing whitespace kept when they ask (`server/src/cli.rs`, `config.rs`, `slim_format.rs`)
 - [ ] Semantic tokens from the server for Ruby spans the TextMate grammar can't delimit (continuations, nested brackets). Skipped: there is no semantic tokens provider, and one token type per span would override the TextMate Ruby colours instead of adding to them; useful tokens need a Ruby lexer. `slim_parser::parse` already has the spans
 
 ## 10. Tests

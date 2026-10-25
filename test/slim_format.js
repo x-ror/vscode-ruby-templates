@@ -1,5 +1,5 @@
-// The Slim formatter must never change what Slim compiles: compile each fixture with the slim gem
-// before and after `ruby-templates-ls --format` and compare. Skipped when `ruby -rslim` is missing.
+// The Slim and Haml formatters must never change what the template compiles to: compile each fixture with the slim
+// or haml gem before and after formatting and compare. Skipped when the gem is missing.
 import assert from "assert";
 import { execFileSync, spawnSync } from "child_process";
 import fs from "fs";
@@ -22,37 +22,92 @@ const compile = (source) =>
 const format = (file) =>
   spawnSync(bin, ["--format", file], { encoding: "utf8" });
 
-if (spawnSync("ruby", ["-rslim", "-e", ""]).status !== 0) {
-  console.log("slim formatting: skipped (`ruby -rslim` unavailable)");
-  process.exit(0);
+const dir = path.join(import.meta.dirname, "format");
+const hasGem = (gem) => spawnSync("ruby", [`-r${gem}`, "-e", ""]).status === 0;
+
+// `ruby-templates-ls --format`, which the Slim half also keeps covered.
+function checkSlim() {
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".slim"))) {
+    const file = path.join(dir, name);
+    const source = fs.readFileSync(file, "utf8");
+    const run = format(file);
+    assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
+    assert.notStrictEqual(
+      run.stdout,
+      source,
+      `${name}: fixture should need formatting`,
+    );
+    assert.strictEqual(
+      compile(run.stdout),
+      compile(source),
+      `${name}: compiled output changed`,
+    );
+    const again = path.join(dir, `.${name}.formatted`);
+    fs.writeFileSync(again, run.stdout);
+    try {
+      assert.strictEqual(
+        format(again).stdout,
+        run.stdout,
+        `${name}: not idempotent`,
+      );
+    } finally {
+      fs.rmSync(again);
+    }
+  }
+  console.log("slim formatting keeps compiled output ok");
 }
 
-const dir = path.join(import.meta.dirname, "format");
-for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".slim"))) {
-  const file = path.join(dir, name);
-  const source = fs.readFileSync(file, "utf8");
-  const run = format(file);
-  assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
-  assert.notStrictEqual(
-    run.stdout,
-    source,
-    `${name}: fixture should need formatting`,
+const cli =
+  process.env.RUBY_TEMPLATES ??
+  path.join(
+    import.meta.dirname,
+    "..",
+    "server",
+    "target",
+    "release",
+    `ruby-templates${process.platform === "win32" ? ".exe" : ""}`,
   );
-  assert.strictEqual(
-    compile(run.stdout),
-    compile(source),
-    `${name}: compiled output changed`,
+// Haml numbers its temporaries per process; the numbers aren't output.
+const compileHaml = (source) =>
+  execFileSync(
+    "ruby",
+    [
+      "-rhaml",
+      "-e",
+      "print Haml::Engine.new.call(STDIN.read).gsub(/_(module|haml_compiler)\\d+/, '_x')",
+    ],
+    { input: source, encoding: "utf8" },
   );
-  const again = path.join(dir, `.${name}.formatted`);
-  fs.writeFileSync(again, run.stdout);
-  try {
+const formatHaml = (name, source) =>
+  spawnSync(cli, ["format", "--stdin-filepath", name], {
+    input: source,
+    encoding: "utf8",
+  });
+function checkHaml() {
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".haml"))) {
+    const source = fs.readFileSync(path.join(dir, name), "utf8");
+    const run = formatHaml(name, source);
+    assert.strictEqual(run.status, 0, `${name}: ${run.stderr}`);
+    assert.notStrictEqual(
+      run.stdout,
+      source,
+      `${name}: fixture should need formatting`,
+    );
     assert.strictEqual(
-      format(again).stdout,
+      compileHaml(run.stdout),
+      compileHaml(source),
+      `${name}: compiled output changed`,
+    );
+    assert.strictEqual(
+      formatHaml(name, run.stdout).stdout,
       run.stdout,
       `${name}: not idempotent`,
     );
-  } finally {
-    fs.rmSync(again);
   }
+  console.log("haml formatting keeps compiled output ok");
 }
-console.log("slim formatting keeps compiled output ok");
+
+if (hasGem("slim")) checkSlim();
+else console.log("slim formatting: skipped (`ruby -rslim` unavailable)");
+if (hasGem("haml")) checkHaml();
+else console.log("haml formatting: skipped (`ruby -rhaml` unavailable)");

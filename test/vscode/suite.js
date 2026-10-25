@@ -231,6 +231,31 @@ const checks = {
     await settings().update("commands.htmlbeautifier", undefined, global);
   },
 
+  async "ERB formatter: builtin, through the server"() {
+    const global = vscode.ConfigurationTarget.Global;
+    await settings().update("erb.formatter", "builtin", global);
+    const editor = await open("app/views/users/unformatted.html.erb");
+    try {
+      // Empty until the server is up.
+      const edits = await until("format edits", async () => {
+        const found = await vscode.commands.executeCommand(
+          "vscode.executeFormatDocumentProvider",
+          editor.document.uri,
+          { tabSize: 4, insertSpaces: true },
+        );
+        return found?.length && found;
+      });
+      await applyEdits(editor, edits);
+      assert.strictEqual(
+        editor.document.getText(),
+        "<div>\n    <% if x %>\n        <p>a</p>\n    <% end %>\n</div>\n",
+      );
+    } finally {
+      await revert(editor);
+      await settings().update("erb.formatter", undefined, global);
+    }
+  },
+
   async "erb_lint diagnostics"() {
     const bin = gemTool("erb_lint");
     if (!bin) return "skipped: erb_lint not installed";

@@ -2,12 +2,14 @@
 //! one at a time or with their folder. `textDocument/references`: the same references to given files, and the
 //! `t("…")` calls of an i18n key.
 
+use crate::lang::TemplateLang;
+use crate::lsp::render_filter;
 use crate::partials::{
     app_root, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind,
     RenderRef,
 };
 use crate::util::{lines_with_offsets, offset_to_position};
-use crate::{i18n, render_filter, ruby, slim_outline, TemplateLang};
+use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
