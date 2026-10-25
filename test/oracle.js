@@ -115,7 +115,9 @@ const languages = {
     officialScript: "erb.rb",
     // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
     officialArguments: (item) => ["--file", path.basename(item.path)],
-    formatNote: "not compared (3b whitespace rule undecided)",
+    // 3b: compared with the leading whitespace of text lines removed; the formatter must also change something.
+    formatFlags: ["--normalize"],
+    reportsChanged: true,
   },
 };
 
@@ -300,6 +302,18 @@ const formatText = (file, text) => {
   return { text: r.stdout, declined: r.stderr.includes("left unchanged") };
 };
 
+// What kind of change separates two compiled sources, to group the failures.
+const differenceKind = (before, after) => {
+  const without = (text, pattern) => text.replace(pattern, "");
+  if (without(before, /[ \t]+(?=\n)/g) === without(after, /[ \t]+(?=\n)/g)) {
+    return " (trailing whitespace only)";
+  }
+  if (without(before, /\s+/g) === without(after, /\s+/g)) {
+    return " (whitespace only)";
+  }
+  return "";
+};
+
 const firstDifference = (before, after) => {
   let at = 0;
   while (at < before.length && before[at] === after[at]) at++;
@@ -314,21 +328,27 @@ const formatReport = (lang, items, indexes) =>
     const { source, path: file, label } = items[i];
     const once = formatText(file, source);
     const twice = formatText(file, once.text);
-    const before = await officialResult(lang, source, "--rails");
-    const after = await officialResult(lang, once.text, "--rails");
-    if (before.source === undefined) {
+    const flags = [
+      ...(lang.formatFlags ?? ["--rails"]),
+      ...(lang.officialArguments?.(items[i]) ?? []),
+    ];
+    const before = await officialResult(lang, source, ...flags);
+    const after = await officialResult(lang, once.text, ...flags);
+    const notCompared = Boolean(before.not_compared);
+    if (before.source === undefined && !notCompared) {
       throw new Error(
-        `${label} doesn't compile with --rails: ${JSON.stringify(before)}`,
+        `${label} doesn't compile with ${flags.join(" ")}: ${JSON.stringify(before)}`,
       );
     }
-    const identical = !once.failure && before.source === after.source;
+    const identical =
+      !notCompared && !once.failure && before.source === after.source;
     const failures = [];
     if (once.failure) failures.push(`formatter failed, ${once.failure}`);
-    else if (!identical) {
+    else if (!identical && !notCompared) {
       failures.push(
         after.source === undefined
           ? `formatted text no longer compiles: ${JSON.stringify(after)}`
-          : `compiled output differs\n      ${firstDifference(before.source, after.source)}`,
+          : `compiled output differs${differenceKind(before.source, after.source)}\n      ${firstDifference(before.source, after.source)}`,
       );
     }
     const idempotent = !twice.failure && twice.text === once.text;
@@ -339,7 +359,15 @@ const formatReport = (lang, items, indexes) =>
           : `second format changes it\n      ${firstDifference(once.text, twice.text)}`,
       );
     }
-    return { i, identical, idempotent, declined: once.declined, failures };
+    return {
+      i,
+      identical,
+      notCompared,
+      idempotent,
+      declined: once.declined,
+      changed: !once.failure && once.text !== source,
+      failures,
+    };
   });
 
 // Prints the report block for `items` under `title`.
@@ -364,25 +392,22 @@ const report = async (lang, title, items, skipped) => {
     formattable,
     notFormatted,
   } = compare(lang, items, official, oursByPath(lang, files), skip);
-  const formatted = lang.formatNote
-    ? []
-    : await formatReport(lang, items, formattable);
+  const formatted = await formatReport(lang, items, formattable);
   const count = (key) => formatted.filter((row) => row[key]).length;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
   console.log(
     `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}`,
   );
-  if (lang.formatNote) {
+  if (lang.reportsChanged) {
     console.log(
       `lines:   official error line also in ours, in ${sameLine} files; ours only (HTML), in ${oursOnlyHtml} files`,
     );
-    console.log(`format:  ${lang.formatNote}`);
-  } else
-    console.log(
-      `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
-        `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
-    );
+  }
+  console.log(
+    `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
+      `  (formatter declined ${count("declined")}; ${lang.reportsChanged ? `changed ${count("changed")}; not compared, whitespace-sensitive element built by Ruby ${count("notCompared")}; ` : ""}not formatted, our error: ${notFormatted.length})`,
+  );
   const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
   const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
   console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
