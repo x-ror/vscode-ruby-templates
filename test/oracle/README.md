@@ -8,10 +8,10 @@ Isolated gems, so the pinned versions don't touch the system Ruby:
 
 ```sh
 export GEM_HOME=/tmp/oracle-gems GEM_PATH=/tmp/oracle-gems PATH=/tmp/oracle-gems/bin:$PATH
-gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1 prism:1.9.0
+gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1 prism:1.9.0 prism:2.0.0 actionview:8.1.4 minitest:5.27.0
 ```
 
-Haml 7.5.1 mis-parses nested hashes (`%div{:data => {:a => 1}}`) with prism 2.x, which `gem install haml` resolves to, so `haml.rb` activates prism 1.9.0 and the harness skips Haml when that version doesn't load. Slim doesn't use prism.
+Haml 7.5.1 mis-parses nested hashes (`%div{:data => {:a => 1}}`) with prism 2.x, which `gem install haml` resolves to, so `haml.rb` activates prism 1.9.0 and the harness skips Haml when that version doesn't load. Slim doesn't use prism. The ERB oracle needs prism 2.0.0 next to it (the plan's Ruby parser), so both versions stay installed and each script activates its own; `erb.rb` also activates `minitest < 6`, because minitest 6 (an ActiveSupport dependency) wants prism ~> 1.5.
 
 Embedded engines (Slim README "Embedded engines", the Haml filters) need their own gems; without one the case is reported as "dependency missing", never as a template error.
 
@@ -19,7 +19,7 @@ Embedded engines (Slim README "Embedded engines", the Haml filters) need their o
 
 ```sh
 cargo build --release --manifest-path server/Cargo.toml
-bun test/oracle.js slim          # or haml; VERBOSE=1 lists every mismatch
+bun test/oracle.js slim          # or haml, erb; VERBOSE=1 lists every mismatch
 ```
 
 Without the pinned gem version (Slim 5.2.2, Haml 7.5.1) on `ruby` it prints a skip message and exits 0.
@@ -31,3 +31,4 @@ Without the pinned gem version (Slim 5.2.2, Haml 7.5.1) on `ruby` it prints a sk
 - The official checkout (tag `v5.2.2` of Slim, `v7.5.1` of Haml, shallow) is cloned once into `$ORACLE_CACHE`, default `$TMPDIR/ruby-templates-oracle`, as `slim-5.2.2` / `haml-7.5.1`.
 - Haml: `haml.rb` takes the error Haml::Engine would turn into code that raises (Haml reports no column); its `line` is 1-based, Haml's own 0-based `Error#line` is kept as `haml_line`. `--rails` uses the options of `Haml::RailsTemplate` (that class needs ActionView, so they are repeated in `haml.rb`). `haml_cases.rb` replays `test/haml/**/*_test.rb` against a recording stand-in for `test_helper.rb` (every `Haml::Engine`/`Haml::Parser` call is a case; `EngineTest::EXCEPTION_MAP` supplies the expected messages), and adds `haml-spec/tests.yml` and `templates/*.haml`. Options other than `escape_html`, `escape_attrs`, `filename` and `file` count as non-default and are skipped.
 - `error.column` is a 0-based UTF-16 offset produced by `slim.rb` from Slim's character column (`slim_column`); the CLI prints 1-based columns, so they are compared with a +1.
+- ERB (`erb.rb`): corpora only, since Erubi's tests check output, not errors. It builds a real `ActionView::Template` (Rails 8.1.4, format from the file name, no view or lookup context needed) and parses the method source Rails would `module_eval` (`Template#compiled_source`: Erubi with `trim: true` and `@output_buffer`, wrapped in `def …(local_assigns, output_buffer, &_)`) with Prism 2.0.0, so class/module/constant definitions in a tag are errors as in Rails. Strict locals: a bad `locals:` signature is reported at the comment's line, and non-keyword locals through Rails' own `Template#compile` (its `ArgumentError`). Lines: the template's first line is the line after the wrapper's `@virtual_path = …`; errors past the template (the lines Erubi and the wrapper add) are clamped to its last line, and the wrapper's own unclosed-`def` error is dropped. Prism's column is in the generated line, which doesn't map back, so only line and message are compared. A file agrees when each official error has an error of ours with the same line and message; the `lines:` line counts files where an official error's line also has an error of ours, and files where only HTML-looking errors of ours appear. Formatting isn't compared (3b's whitespace rule is undecided). Corpora: forem, rubygems.org, whitehall (`app/views`, `app/components`, every `.erb`).

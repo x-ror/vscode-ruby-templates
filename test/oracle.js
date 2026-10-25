@@ -72,6 +72,7 @@ const hamlExpectation = (expected, { error }) =>
 
 const languages = {
   slim: {
+    name: "slim",
     gem: "slim",
     version: "5.2.2",
     versionExpression: "Slim::VERSION",
@@ -82,31 +83,52 @@ const languages = {
     expectationAgrees: slimExpectation,
   },
   haml: {
+    name: "haml",
     gem: "haml",
     version: "7.5.1",
     versionExpression: "Haml::VERSION",
     // Haml 7.5.1 mis-parses nested hashes with prism 2.x.
-    pin: { gem: "prism", version: "1.9.0", expression: "Prism::VERSION" },
+    pins: [{ gem: "prism", version: "1.9.0", expression: "Prism::VERSION" }],
     repository: "https://github.com/haml/haml.git",
     extension: ".haml",
     casesScript: "haml_cases.rb",
     officialScript: "haml.rb",
     expectationAgrees: hamlExpectation,
   },
+  // Corpora only: Erubi's own tests check output, not errors.
+  erb: {
+    name: "erb",
+    gem: "erubi",
+    version: "1.13.1",
+    versionExpression: "Erubi::VERSION",
+    pins: [
+      {
+        gem: "actionview",
+        version: "8.1.4",
+        expression: "ActionView::VERSION::STRING",
+        require: "action_view",
+      },
+      { gem: "prism", version: "2.0.0", expression: "Prism::VERSION" },
+    ],
+    title: "erb (Erubi 1.13.1, Rails 8.1.4 handler, Prism 2.0.0)",
+    extension: ".erb",
+    officialScript: "erb.rb",
+    // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
+    officialArguments: (item) => ["--file", path.basename(item.path)],
+    formatNote: "not compared (3b whitespace rule undecided)",
+  },
 };
 
-// Whether the gem, and the gem it is pinned to, load at the expected versions.
-const installed = ({ gem, version, versionExpression, pin }) => {
-  const activate = pin ? `gem "${pin.gem}", "${pin.version}"; ` : "";
-  const pinned = pin ? `, " ", ${pin.expression}` : "";
-  const r = spawnSync(
-    "ruby",
-    ["-e", `${activate}require "${gem}"; print ${versionExpression}${pinned}`],
-    { encoding: "utf8" },
-  );
-  return (
-    r.status === 0 && r.stdout === (pin ? `${version} ${pin.version}` : version)
-  );
+// Whether the gem and the gems it is pinned to load at the expected versions.
+const installed = ({ gem, version, versionExpression, pins = [] }) => {
+  const gems = [{ gem, version, expression: versionExpression }, ...pins];
+  const script = [
+    ...gems.map((g) => `gem "${g.gem}", "${g.version}"`),
+    ...gems.map((g) => `require "${g.require ?? g.gem}"`),
+    `print [${gems.map((g) => g.expression).join(", ")}].join(" ")`,
+  ].join("; ");
+  const r = spawnSync("ruby", ["-e", script], { encoding: "utf8" });
+  return r.status === 0 && r.stdout === gems.map((g) => g.version).join(" ");
 };
 
 // The checkout of the official repository at the tag of the pinned version, shallow, cached.
@@ -208,9 +230,21 @@ const rubySyntaxError = ({ invalid_ruby: message, line }) =>
 const describe = ({ message, line, column }) =>
   `${JSON.stringify(message)}${line === null ? "" : ` at ${line}:${column ?? "?"}`}`;
 
+// Our errors with no Ruby oracle: HTML structure, which WHATWG defines.
+const isHtmlMessage = (message) =>
+  /closing tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
+
 // items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
+// A file's official errors are `errors` (ERB lists every Prism error) or the one `error`.
 const compare = (lang, items, official, ours, skip) => {
-  const counts = { compared: 0, officialErrors: 0, oursErrors: 0, same: 0 };
+  const counts = {
+    compared: 0,
+    officialErrors: 0,
+    oursErrors: 0,
+    same: 0,
+    sameLine: 0,
+    oursOnlyHtml: 0,
+  };
   const mismatches = [];
   const formattable = [];
   const notFormatted = [];
@@ -225,20 +259,30 @@ const compare = (lang, items, official, ours, skip) => {
     const errors = (ours.get(path.resolve(item.path)) ?? []).filter(
       (d) => d.severity === "error",
     );
-    const officialError = result.error ?? rubySyntaxError(result);
-    if (officialError) counts.officialErrors++;
+    const officialList =
+      result.errors ??
+      [result.error ?? rubySyntaxError(result)].filter(Boolean);
+    if (officialList.length) counts.officialErrors++;
     if (errors.length) counts.oursErrors++;
-    const agree = officialError
-      ? errors.some((e) => sameError(officialError, e))
+    if (officialList.some((o) => errors.some((e) => e.line === o.line))) {
+      counts.sameLine++;
+    }
+    const agree = officialList.length
+      ? officialList.every((o) => errors.some((e) => sameError(o, e)))
       : !errors.length;
-    if (!officialError) (errors.length ? notFormatted : formattable).push(i);
+    if (!officialList.length) {
+      (errors.length ? notFormatted : formattable).push(i);
+    }
     if (agree) {
-      if (officialError) counts.same++;
+      if (officialList.length) counts.same++;
       return;
+    }
+    if (!officialList.length && errors.every((e) => isHtmlMessage(e.message))) {
+      counts.oursOnlyHtml++;
     }
     mismatches.push(
       `${item.label} ${JSON.stringify(item.source)}\n` +
-        `    official: ${officialError ? describe(officialError) : "compiles"}\n` +
+        `    official: ${officialList.length ? officialList.map(describe).join("; ") : "compiles"}\n` +
         `    ours:     ${errors.length ? errors.map(describe).join("; ") : "no error"}`,
     );
   });
@@ -302,31 +346,43 @@ const formatReport = (lang, items, indexes) =>
 const report = async (lang, title, items, skipped) => {
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   const files = items.map((item) => item.path);
-  const official = await mapParallel(
-    items,
-    PARALLEL_RUBY_PROCESSES,
-    ({ source }) => officialResult(lang, source),
+  const official = await mapParallel(items, PARALLEL_RUBY_PROCESSES, (item) =>
+    officialResult(
+      lang,
+      item.source,
+      ...(lang.officialArguments?.(item) ?? []),
+    ),
   );
   const {
     compared,
     officialErrors,
     oursErrors,
     same,
+    sameLine,
+    oursOnlyHtml,
     mismatches,
     formattable,
     notFormatted,
   } = compare(lang, items, official, oursByPath(lang, files), skip);
-  const formatted = await formatReport(lang, items, formattable);
+  const formatted = lang.formatNote
+    ? []
+    : await formatReport(lang, items, formattable);
   const count = (key) => formatted.filter((row) => row[key]).length;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
   console.log(
     `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}`,
   );
-  console.log(
-    `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
-      `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
-  );
+  if (lang.formatNote) {
+    console.log(
+      `lines:   official error line also in ours, in ${sameLine} files; ours only (HTML), in ${oursOnlyHtml} files`,
+    );
+    console.log(`format:  ${lang.formatNote}`);
+  } else
+    console.log(
+      `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
+        `  (formatter declined ${count("declined")}; not formatted, our error: ${notFormatted.length})`,
+    );
   const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
   const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
   console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
@@ -352,6 +408,26 @@ const corpora = {
       url: "https://github.com/freeats/freeats.git",
       commit: "aee7cf76d5206f4cd24fdaa4d18c024de07bfb3d",
       paths: ["app/views"],
+    },
+  ],
+  erb: [
+    {
+      name: "forem",
+      url: "https://github.com/forem/forem.git",
+      commit: "64ee7392247587e6bf390ddebe31a3f884be931b",
+      paths: ["app/views", "app/components"],
+    },
+    {
+      name: "rubygems.org",
+      url: "https://github.com/rubygems/rubygems.org.git",
+      commit: "395a0e253a6a947f40e74c4ac254819b2ed9c580",
+      paths: ["app/views", "app/components"],
+    },
+    {
+      name: "whitehall",
+      url: "https://github.com/alphagov/whitehall.git",
+      commit: "133b88a7c77460d40663d03e1c40b90dfe531191",
+      paths: ["app/views", "app/components"],
     },
   ],
   haml: [
@@ -394,6 +470,7 @@ const corpusCheckout = ({ name, url, commit, paths }) => {
 const corpusItems = (corpus, extension) => {
   const root = corpusCheckout(corpus);
   return corpus.paths
+    .filter((folder) => fs.existsSync(path.join(root, folder)))
     .flatMap((folder) =>
       fs
         .readdirSync(path.join(root, folder), { recursive: true })
@@ -411,12 +488,12 @@ const corpusItems = (corpus, extension) => {
     });
 };
 
-const languageReport = async (lang) => {
+// The official test suite's templates, written to a temp dir that is not a Rails project.
+const suiteReport = async (lang, name) => {
   const all = collectCases(lang, officialCheckout(lang));
   const skipped = new Map();
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   all.filter((c) => c.skipped).forEach((c) => skip(c.skipped.split(":")[0]));
-  const name = `${lang.gem} ${lang.version} vs ruby-templates`;
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-"));
   try {
@@ -431,9 +508,13 @@ const languageReport = async (lang) => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+};
 
-  for (const corpus of corpora[lang.gem]) {
-    console.log();
+const languageReport = async (lang) => {
+  const name = `${lang.title ?? `${lang.gem} ${lang.version}`} vs ruby-templates`;
+  if (lang.casesScript) await suiteReport(lang, name);
+  for (const [index, corpus] of corpora[lang.name].entries()) {
+    if (lang.casesScript || index > 0) console.log();
     await report(
       lang,
       `${name}, corpus ${corpus.name}@${corpus.commit.slice(0, 7)}`,
@@ -452,7 +533,7 @@ if (!lang) {
 }
 if (!installed(lang)) {
   console.log(
-    `skipped: ${lang.gem} ${lang.version}${lang.pin ? ` with ${lang.pin.gem} ${lang.pin.version}` : ""} is not installed (ruby -r${lang.gem}); see test/oracle/README.md`,
+    `skipped: ${lang.gem} ${lang.version}${lang.pins ? ` with ${lang.pins.map((p) => `${p.gem} ${p.version}`).join(", ")}` : ""} is not installed (ruby -r${lang.gem}); see test/oracle/README.md`,
   );
   process.exit(0);
 }

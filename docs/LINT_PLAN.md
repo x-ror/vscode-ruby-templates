@@ -274,18 +274,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0. Harness               | in progress: Slim (suite errors same 0/19, format 213/213; freeats 0/0, 170/170) and Haml (suite errors same 15/58, format 729/729; mastodon 0/0, 331/331) |
-| 0b. Context              | not started                                                                                                                                                |
-| 1a. Slim errors          | not started                                                                                                                                                |
-| 1b. Slim format          | not started                                                                                                                                                |
-| 2a. Haml errors          | not started                                                                                                                                                |
-| 2b. Haml format          | not started                                                                                                                                                |
-| 3a. ERB errors           | not started                                                                                                                                                |
-| 3b. ERB format           | not started                                                                                                                                                |
-| 4. Editor and CLI        | not started                                                                                                                                                |
-| 5. Remove external tools | not started                                                                                                                                                |
+| Stage                    | Status                                                                                                                                                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Harness               | in progress: Slim (suite errors same 0/19, format 213/213; freeats 0/0, 170/170), Haml (suite errors same 15/58, format 729/729; mastodon 0/0, 331/331), ERB errors (forem, rubygems.org, whitehall 0/0; format waits on the 3b decision) |
+| 0b. Context              | not started                                                                                                                                                                                                                               |
+| 1a. Slim errors          | not started                                                                                                                                                                                                                               |
+| 1b. Slim format          | not started                                                                                                                                                                                                                               |
+| 2a. Haml errors          | not started                                                                                                                                                                                                                               |
+| 2b. Haml format          | not started                                                                                                                                                                                                                               |
+| 3a. ERB errors           | not started                                                                                                                                                                                                                               |
+| 3b. ERB format           | not started                                                                                                                                                                                                                               |
+| 4. Editor and CLI        | not started                                                                                                                                                                                                                               |
+| 5. Remove external tools | not started                                                                                                                                                                                                                               |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 
