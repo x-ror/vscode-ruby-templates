@@ -400,7 +400,7 @@ const check = (label, actual, expected) => {
   );
   await new Promise((r) => setTimeout(r, 400));
   check("strict locals under actionview 7.1", diagnostics(strictUri), [
-    "1: Partial `strict/row` requires locals: `a`",
+    "1: missing local: :a",
   ]);
 
   await send(

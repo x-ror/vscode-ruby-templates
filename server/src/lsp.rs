@@ -7,7 +7,7 @@ use crate::{
 };
 use dashmap::DashMap;
 use haml_indent::LineRole;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
@@ -141,6 +141,7 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
 const UNRESOLVED_RENDER: &str = "unresolved-render";
 const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
+const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 /// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
 fn checked_renders<'a>(
@@ -200,6 +201,7 @@ fn strict_locals_mismatches(
         return vec![];
     }
     let Some(views) = partials::views_root(path) else { return vec![] };
+    let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
     for (i, line, r) in checked_renders(&views, text, in_code).into_iter().filter(|(_, _, r)| !r.from_layout) {
@@ -210,22 +212,33 @@ fn strict_locals_mismatches(
         let Some(sig) = partials::file_strict_locals(file) else { continue };
         let missing: Vec<&str> =
             sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
-        let unknown: Vec<&str> = passed.into_iter().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
-        let range = util::span_range(i, line, r.start, r.end);
-        if !missing.is_empty() {
-            let message = format!("Partial `{}` requires locals: {}", r.name, code_list(&missing));
-            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
+        let mut seen = HashSet::new();
+        let unknown: Vec<&str> =
+            passed.into_iter().filter(|p| seen.insert(*p) && !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
+        let no_locals = sig.locals.is_empty() && !sig.rest;
+        let Some(mut message) = strict_locals_message(&missing, &unknown, no_locals) else { continue };
+        if suffix_with_template {
+            // Rails prints the absolute path; relative to the app folder is stable and readable.
+            let app_root = views.parent().and_then(Path::parent).unwrap_or(&views);
+            let identifier = file.strip_prefix(app_root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+            message.push_str(&format!(" for {identifier}"));
         }
-        if !unknown.is_empty() {
-            let message = format!("Partial `{}` does not accept locals: {}", r.name, code_list(&unknown));
-            out.push(util::coded(util::warning(range, message), STRICT_LOCALS));
-        }
+        out.push(util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), STRICT_LOCALS));
     }
     out
 }
 
-fn code_list(names: &[&str]) -> String {
-    names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")
+/// Rails' error for one render: a missing local wins over an unknown one, and Ruby's plural `keywords` stays.
+fn strict_locals_message(missing: &[&str], unknown: &[&str], no_locals: bool) -> Option<String> {
+    let symbols = |names: &[&str]| names.iter().map(|n| format!(":{n}")).collect::<Vec<_>>().join(", ");
+    match (missing, unknown) {
+        ([], []) => None,
+        ([one], _) => Some(format!("missing local: :{one}")),
+        ([_, ..], _) => Some(format!("missing keywords: {}", symbols(missing))),
+        ([], _) if no_locals => Some("no locals accepted".to_string()),
+        ([], [one]) => Some(format!("unknown local: :{one}")),
+        ([], _) => Some(format!("unknown keywords: {}", symbols(unknown))),
+    }
 }
 
 fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
@@ -1666,13 +1679,57 @@ mod tests {
                 .map(|d| (d.message, d.range))
                 .collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
-        assert_eq!(
-            got,
-            vec![
-                ("Partial `users/card` requires locals: `user`".to_string(), at(1, 12, 22)),
-                ("Partial `users/card` does not accept locals: `colour`".to_string(), at(1, 12, 22)),
-            ]
-        );
+        assert_eq!(got, vec![("missing local: :user".to_string(), at(1, 12, 22))]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_messages_follow_rails() {
+        let root = std::env::temp_dir().join(format!("rt-locals-msg-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "<%# locals: (a:, b:) -%>").unwrap();
+        std::fs::write(users.join("_none.html.erb"), "<%# locals: () -%>").unwrap();
+        std::fs::write(users.join("_opt.html.erb"), "<%# locals: (a: 1) -%>").unwrap();
+        let file = users.join("index.html.erb");
+        let renders = [
+            r#"render "users/card""#,
+            r#"render "users/card", c: 3"#,
+            r#"render "users/card", a: 1"#,
+            r#"render "users/card", a: 1, c: 3"#,
+            r#"render "users/card", a: 1, b: 2, c: 3"#,
+            r#"render "users/card", a: 1, b: 2, d: 4, c: 3"#,
+            r#"render "users/none", x: 1"#,
+            r#"render "users/opt", z: 1"#,
+            r#"render "users/opt", a: 1"#,
+            r#"render "users/card", a: 1, b: 2, c: 3, c: 4"#,
+        ];
+        let text = renders.map(|r| format!("<%= {r} %>\n")).concat();
+        let messages = |actionview: &str| -> Vec<String> {
+            let project = lock_with(actionview);
+            let found = strict_locals_mismatches(&file, &project, &text, render_filter(TemplateLang::Erb, &text, &[]));
+            found.into_iter().map(|d| d.message).collect()
+        };
+        let rails_71 = [
+            "missing keywords: :a, :b",
+            "missing keywords: :a, :b",
+            "missing local: :b",
+            "missing local: :b",
+            "unknown local: :c",
+            "unknown keywords: :d, :c",
+            "no locals accepted",
+            "unknown local: :z",
+            "unknown local: :c",
+        ];
+        assert_eq!(messages("7.1.5"), rails_71);
+        let rails_80: Vec<String> = rails_71
+            .iter()
+            .zip(["card", "card", "card", "card", "card", "card", "none", "opt", "card"])
+            .map(|(m, partial)| format!("{m} for app/views/users/_{partial}.html.erb"))
+            .collect();
+        assert_eq!(messages("7.2.2"), rails_80);
+        assert_eq!(messages("8.0.1"), rails_80);
+        assert_eq!(messages("8.1.4"), rails_80);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1703,7 +1760,7 @@ mod tests {
             [(2, "Partial `posts/missing` not found".to_string()), (5, "Partial `posts/missing3` not found".to_string())]
         );
         let mismatches = strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Ruby, text, &[]));
-        assert_eq!(lines(mismatches), [(4, "Partial `posts/post` does not accept locals: `extra`".to_string())]);
+        assert_eq!(lines(mismatches), [(4, "unknown local: :extra".to_string())]);
         assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
         std::fs::remove_dir_all(&root).unwrap();
     }
