@@ -1,13 +1,12 @@
-// Oracle harness: compares the official template engine with ruby-templates. `bun test/oracle.js slim`
+// Oracle harness: compares the official template engine with ruby-templates. `bun test/oracle.js slim|haml`
 // Stage 0 measures today's code, so mismatches don't fail the run; only a broken harness does.
 import { spawn, spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
 
-const SLIM_VERSION = "5.2.2";
-// slim.rb's `column` is a 0-based UTF-16 offset in the line; `ruby-templates check` prints 1-based columns.
-const SLIM_COLUMN_TO_CLI = 1;
+// The oracle scripts' `column` (Haml reports none) is a 0-based UTF-16 offset in the line; `ruby-templates check` prints 1-based columns.
+const COLUMN_TO_CLI = 1;
 const PARALLEL_RUBY_PROCESSES = 8;
 const exe = process.platform === "win32" ? ".exe" : "";
 const bin =
@@ -57,15 +56,62 @@ const mapParallel = async (items, limit, fn) => {
   return results;
 };
 
-const slimInstalled = () => {
-  const r = spawnSync("ruby", ["-rslim", "-e", "print Slim::VERSION"], {
-    encoding: "utf8",
-  });
-  return r.status === 0 && r.stdout === SLIM_VERSION;
+// The test's own expectation (Slim: the message with "Line N, Column M"; Haml: {message, line}) against the oracle script's
+// answer for the same template.
+const slimExpectation = (expected, { error }) => {
+  const [, line, column] = expected.match(/Line (\d+), Column (\d+)/) ?? [];
+  return (
+    error &&
+    expected.split("\n")[0] === error.message &&
+    Number(line) === error.line &&
+    Number(column) === error.slim_column
+  );
+};
+const hamlExpectation = (expected, { error }) =>
+  error && expected.message === error.message && expected.line === error.line;
+
+const languages = {
+  slim: {
+    gem: "slim",
+    version: "5.2.2",
+    versionExpression: "Slim::VERSION",
+    repository: "https://github.com/slim-template/slim.git",
+    extension: ".slim",
+    casesScript: "slim_cases.rb",
+    officialScript: "slim.rb",
+    expectationAgrees: slimExpectation,
+  },
+  haml: {
+    gem: "haml",
+    version: "7.5.1",
+    versionExpression: "Haml::VERSION",
+    // Haml 7.5.1 mis-parses nested hashes with prism 2.x.
+    pin: { gem: "prism", version: "1.9.0", expression: "Prism::VERSION" },
+    repository: "https://github.com/haml/haml.git",
+    extension: ".haml",
+    casesScript: "haml_cases.rb",
+    officialScript: "haml.rb",
+    expectationAgrees: hamlExpectation,
+  },
 };
 
-const slimCheckout = () => {
-  const dir = path.join(cacheDir, `slim-${SLIM_VERSION}`);
+// Whether the gem, and the gem it is pinned to, load at the expected versions.
+const installed = ({ gem, version, versionExpression, pin }) => {
+  const activate = pin ? `gem "${pin.gem}", "${pin.version}"; ` : "";
+  const pinned = pin ? `, " ", ${pin.expression}` : "";
+  const r = spawnSync(
+    "ruby",
+    ["-e", `${activate}require "${gem}"; print ${versionExpression}${pinned}`],
+    { encoding: "utf8" },
+  );
+  return (
+    r.status === 0 && r.stdout === (pin ? `${version} ${pin.version}` : version)
+  );
+};
+
+// The checkout of the official repository at the tag of the pinned version, shallow, cached.
+const officialCheckout = ({ gem, version, repository }) => {
+  const dir = path.join(cacheDir, `${gem}-${version}`);
   if (fs.existsSync(dir)) return dir;
   fs.mkdirSync(cacheDir, { recursive: true });
   const partial = `${dir}.partial`;
@@ -75,8 +121,8 @@ const slimCheckout = () => {
     "--depth",
     "1",
     "--branch",
-    `v${SLIM_VERSION}`,
-    "https://github.com/slim-template/slim.git",
+    `v${version}`,
+    repository,
     partial,
   ]);
   if (clone.status !== 0) throw new Error(`git clone failed: ${clone.stderr}`);
@@ -84,51 +130,49 @@ const slimCheckout = () => {
   return dir;
 };
 
-const collectCases = (checkout) => {
-  const r = run("ruby", [path.join(oracleDir, "slim_cases.rb"), checkout], {
+const collectCases = ({ casesScript }, checkout) => {
+  const r = run("ruby", [path.join(oracleDir, casesScript), checkout], {
     maxBuffer: 1 << 28,
   });
-  if (r.status !== 0) throw new Error(`slim_cases.rb failed: ${r.stderr}`);
+  if (r.status !== 0) throw new Error(`${casesScript} failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 };
 
-const officialResult = async (source, ...flags) => {
+const officialResult = async ({ officialScript }, source, ...flags) => {
   const r = await runWithInput(
     "ruby",
-    [path.join(oracleDir, "slim.rb"), ...flags],
+    [path.join(oracleDir, officialScript), ...flags],
     source,
   );
-  if (r.status !== 0) throw new Error(`slim.rb failed: ${r.stderr}`);
+  if (r.status !== 0) throw new Error(`${officialScript} failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 };
 
-// A recorded expectation from the official test must agree with what slim.rb sees, or the case was mis-recorded.
-const checkExpectation = ({ expected_error: expected, label }, result) => {
-  if (!expected) return;
-  const { message, line, slim_column: column } = result.error ?? {};
-  const [, expectedLine, expectedColumn] =
-    expected.match(/Line (\d+), Column (\d+)/) ?? [];
-  const agrees =
-    expected.split("\n")[0] === message &&
-    Number(expectedLine) === line &&
-    Number(expectedColumn) === column;
-  if (!agrees) {
-    throw new Error(
-      `${label}: slim.rb gave ${JSON.stringify(result)}, the test expects ${JSON.stringify(expected)}`,
-    );
-  }
+// A recorded expectation from the official test must agree with what the oracle script sees, or the case was mis-recorded.
+const checkExpectation = (
+  lang,
+  { expected_error: expected, label },
+  result,
+) => {
+  if (!expected || lang.expectationAgrees(expected, result)) return;
+  throw new Error(
+    `${label}: ${lang.officialScript} gave ${JSON.stringify(result)}, the test expects ${JSON.stringify(expected)}`,
+  );
 };
 
 // Diagnostics by absolute file path: [{line, column, severity, message}].
-const oursByPath = (files) => {
+const oursByPath = ({ extension }, files) => {
   const known = new Set(files.map((file) => path.resolve(file)));
   const r = run(bin, ["check", ...files]);
   if (r.status !== 0 && r.status !== 1)
     throw new Error(`check failed: ${r.stderr}`);
+  const diagnostic = new RegExp(
+    `^(.*${extension.replace(".", "\\.")}):(\\d+):(\\d+): (\\w+): (.*)$`,
+  );
   const byPath = new Map();
   let last;
   for (const text of r.stdout.split("\n")) {
-    const m = text.match(/^(.*\.slim):(\d+):(\d+): (\w+): (.*)$/);
+    const m = text.match(diagnostic);
     if (m) {
       last = {
         line: Number(m[2]),
@@ -151,14 +195,21 @@ const sameError = (official, ours) =>
   ours.severity === "error" &&
   ours.message === official.message &&
   (official.line === null || ours.line === official.line) &&
-  (official.column === null ||
-    ours.column === official.column + SLIM_COLUMN_TO_CLI);
+  (official.column === null || ours.column === official.column + COLUMN_TO_CLI);
+
+// Haml can accept a template and generate Ruby that doesn't parse; that is the template's error, not Haml's.
+const rubySyntaxError = ({ invalid_ruby: message, line }) =>
+  message && {
+    message: `Ruby syntax error: ${message}`,
+    line: line ?? null,
+    column: null,
+  };
 
 const describe = ({ message, line, column }) =>
   `${JSON.stringify(message)}${line === null ? "" : ` at ${line}:${column ?? "?"}`}`;
 
 // items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
-const compare = (items, official, ours, skip) => {
+const compare = (lang, items, official, ours, skip) => {
   const counts = { compared: 0, officialErrors: 0, oursErrors: 0, same: 0 };
   const mismatches = [];
   const formattable = [];
@@ -170,11 +221,11 @@ const compare = (items, official, ours, skip) => {
       return;
     }
     counts.compared++;
-    checkExpectation(item, result);
+    checkExpectation(lang, item, result);
     const errors = (ours.get(path.resolve(item.path)) ?? []).filter(
       (d) => d.severity === "error",
     );
-    const officialError = result.error;
+    const officialError = result.error ?? rubySyntaxError(result);
     if (officialError) counts.officialErrors++;
     if (errors.length) counts.oursErrors++;
     const agree = officialError
@@ -214,13 +265,13 @@ const firstDifference = (before, after) => {
 };
 
 // Formats each item, then checks the compiled Rails code is unchanged and a second format changes nothing.
-const formatReport = (items, indexes) =>
+const formatReport = (lang, items, indexes) =>
   mapParallel(indexes, PARALLEL_RUBY_PROCESSES, async (i) => {
     const { source, path: file, label } = items[i];
     const once = formatText(file, source);
     const twice = formatText(file, once.text);
-    const before = await officialResult(source, "--rails");
-    const after = await officialResult(once.text, "--rails");
+    const before = await officialResult(lang, source, "--rails");
+    const after = await officialResult(lang, once.text, "--rails");
     if (before.source === undefined) {
       throw new Error(
         `${label} doesn't compile with --rails: ${JSON.stringify(before)}`,
@@ -248,12 +299,13 @@ const formatReport = (items, indexes) =>
   });
 
 // Prints the report block for `items` under `title`.
-const report = async (title, items, skipped) => {
+const report = async (lang, title, items, skipped) => {
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
+  const files = items.map((item) => item.path);
   const official = await mapParallel(
     items,
     PARALLEL_RUBY_PROCESSES,
-    ({ source }) => officialResult(source),
+    ({ source }) => officialResult(lang, source),
   );
   const {
     compared,
@@ -263,8 +315,8 @@ const report = async (title, items, skipped) => {
     mismatches,
     formattable,
     notFormatted,
-  } = compare(items, official, oursByPath(items.map((i) => i.path)), skip);
-  const formatted = await formatReport(items, formattable);
+  } = compare(lang, items, official, oursByPath(lang, files), skip);
+  const formatted = await formatReport(lang, items, formattable);
   const count = (key) => formatted.filter((row) => row[key]).length;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
@@ -299,6 +351,14 @@ const corpora = {
       name: "freeats",
       url: "https://github.com/freeats/freeats.git",
       commit: "aee7cf76d5206f4cd24fdaa4d18c024de07bfb3d",
+      paths: ["app/views"],
+    },
+  ],
+  haml: [
+    {
+      name: "mastodon",
+      url: "https://github.com/mastodon/mastodon.git",
+      commit: "f045f6b43fa813564ddeaeffd8d7736e0ef19835",
       paths: ["app/views"],
     },
   ],
@@ -351,47 +411,48 @@ const corpusItems = (corpus, extension) => {
     });
 };
 
-const slimReport = async () => {
-  const all = collectCases(slimCheckout());
+const languageReport = async (lang) => {
+  const all = collectCases(lang, officialCheckout(lang));
   const skipped = new Map();
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   all.filter((c) => c.skipped).forEach((c) => skip(c.skipped.split(":")[0]));
+  const name = `${lang.gem} ${lang.version} vs ruby-templates`;
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-"));
   try {
     const cases = all
       .filter((c) => !c.skipped)
       .map((c, i) => {
-        const file = path.join(dir, `case-${i}.html.slim`);
+        const file = path.join(dir, `case-${i}.html${lang.extension}`);
         fs.writeFileSync(file, c.source);
         return { ...c, label: `${c.file}#${c.test} (case ${i})`, path: file };
       });
-    await report(`slim ${SLIM_VERSION} vs ruby-templates`, cases, skipped);
+    await report(lang, name, cases, skipped);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  for (const corpus of corpora.slim) {
+  for (const corpus of corpora[lang.gem]) {
     console.log();
     await report(
-      `slim ${SLIM_VERSION} vs ruby-templates, corpus ${corpus.name}@${corpus.commit.slice(0, 7)}`,
-      corpusItems(corpus, ".slim"),
+      lang,
+      `${name}, corpus ${corpus.name}@${corpus.commit.slice(0, 7)}`,
+      corpusItems(corpus, lang.extension),
       new Map(),
     );
   }
 };
 
-const languages = { slim: slimReport };
-const language = process.argv[2];
-if (!languages[language]) {
+const lang = languages[process.argv[2]];
+if (!lang) {
   console.error(
     `usage: bun test/oracle.js <${Object.keys(languages).join("|")}>`,
   );
   process.exit(2);
 }
-if (!slimInstalled()) {
+if (!installed(lang)) {
   console.log(
-    `skipped: slim ${SLIM_VERSION} is not installed (ruby -rslim); see test/oracle/README.md`,
+    `skipped: ${lang.gem} ${lang.version}${lang.pin ? ` with ${lang.pin.gem} ${lang.pin.version}` : ""} is not installed (ruby -r${lang.gem}); see test/oracle/README.md`,
   );
   process.exit(0);
 }
@@ -401,4 +462,4 @@ if (!fs.existsSync(bin)) {
   );
   process.exit(2);
 }
-await languages[language]();
+await languageReport(lang);

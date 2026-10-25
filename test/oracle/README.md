@@ -8,8 +8,10 @@ Isolated gems, so the pinned versions don't touch the system Ruby:
 
 ```sh
 export GEM_HOME=/tmp/oracle-gems GEM_PATH=/tmp/oracle-gems PATH=/tmp/oracle-gems/bin:$PATH
-gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1
+gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1 prism:1.9.0
 ```
+
+Haml 7.5.1 mis-parses nested hashes (`%div{:data => {:a => 1}}`) with prism 2.x, which `gem install haml` resolves to, so `haml.rb` activates prism 1.9.0 and the harness skips Haml when that version doesn't load. Slim doesn't use prism.
 
 Embedded engines (Slim README "Embedded engines", the Haml filters) need their own gems; without one the case is reported as "dependency missing", never as a template error.
 
@@ -17,14 +19,15 @@ Embedded engines (Slim README "Embedded engines", the Haml filters) need their o
 
 ```sh
 cargo build --release --manifest-path server/Cargo.toml
-bun test/oracle.js slim          # VERBOSE=1 lists every mismatch
+bun test/oracle.js slim          # or haml; VERBOSE=1 lists every mismatch
 ```
 
-Without Slim 5.2.2 on `ruby` it prints a skip message and exits 0.
+Without the pinned gem version (Slim 5.2.2, Haml 7.5.1) on `ruby` it prints a skip message and exits 0.
 
 - `test/oracle/slim.rb`: compiles the template on stdin with Slim's defaults and prints `{"error": {message, line, column, slim_column}}`, `{"dependency_missing": gem}` or `{"source": ruby}`.
 - `test/oracle/slim_cases.rb`: replays `test/core/*.rb` of the Slim checkout against a recording stub and prints the templates they render. Tests that need non-default options are skipped and counted.
 - `format:` line: for each case Slim compiles and we don't flag, `ruby-templates format` runs, then `slim.rb --rails` compiles the text before and after (the Railtie's generator and options, without ActionView: only source is generated) and they must be identical; formatting the result again must change nothing. Cases with an error of ours aren't formatted and are counted apart.
-- Corpora: pinned public apps listed in `corpora` in `test/oracle.js` (name, url, full commit, sparse paths). Each is fetched shallow and blob-less at its commit into `$ORACLE_CACHE/corpora/<name>-<sha7>` and reused; the files keep their real paths there (so the project context is the app's), and `ruby-templates` only reads them (`format` goes to stdout via `--stdin-filepath`). Each corpus gets its own report block with the same `errors:` and `format:` lines; a file Slim can't compile for a missing engine gem is skipped. Today: freeats (Slim) at `aee7cf7`.
-- The Slim checkout (tag `v5.2.2`, shallow) is cloned once into `$ORACLE_CACHE`, default `$TMPDIR/ruby-templates-oracle`, as `slim-5.2.2`.
+- Corpora: pinned public apps listed in `corpora` in `test/oracle.js` (name, url, full commit, sparse paths). Each is fetched shallow and blob-less at its commit into `$ORACLE_CACHE/corpora/<name>-<sha7>` and reused; the files keep their real paths there (so the project context is the app's), and `ruby-templates` only reads them (`format` goes to stdout via `--stdin-filepath`). Each corpus gets its own report block with the same `errors:` and `format:` lines; a file the official engine can't compile for a missing engine gem is skipped. Today: freeats (Slim) at `aee7cf7`, mastodon (Haml) at `f045f6b`; GitLab (Haml) is left out as too big for a routine run.
+- The official checkout (tag `v5.2.2` of Slim, `v7.5.1` of Haml, shallow) is cloned once into `$ORACLE_CACHE`, default `$TMPDIR/ruby-templates-oracle`, as `slim-5.2.2` / `haml-7.5.1`.
+- Haml: `haml.rb` takes the error Haml::Engine would turn into code that raises (Haml reports no column); its `line` is 1-based, Haml's own 0-based `Error#line` is kept as `haml_line`. `--rails` uses the options of `Haml::RailsTemplate` (that class needs ActionView, so they are repeated in `haml.rb`). `haml_cases.rb` replays `test/haml/**/*_test.rb` against a recording stand-in for `test_helper.rb` (every `Haml::Engine`/`Haml::Parser` call is a case; `EngineTest::EXCEPTION_MAP` supplies the expected messages), and adds `haml-spec/tests.yml` and `templates/*.haml`. Options other than `escape_html`, `escape_attrs`, `filename` and `file` count as non-default and are skipped.
 - `error.column` is a 0-based UTF-16 offset produced by `slim.rb` from Slim's character column (`slim_column`); the CLI prints 1-based columns, so they are compared with a +1.
