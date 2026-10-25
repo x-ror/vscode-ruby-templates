@@ -30,7 +30,7 @@ Applies to all code in this repo: Rust (`server/`), JS (`src/`, `test/`), Ruby i
 - Rust: `rustfmt` with `server/rustfmt.toml` (`max_width = 140`, `use_small_heuristics = "Max"`). Run `cargo fmt` before committing.
 - JS: `bun fmt` with its default rules (no config file): `bun run format` before committing, `bun run format:check` to verify.
 - JSON (grammars, snippets, `package.json`): 2 spaces, keep key order.
-- `.githooks/pre-commit` (enabled by `bun install` via `prepare`) formats staged JS and Rust files and re-stages them; it refuses files that also have unstaged changes.
+- `.githooks/pre-commit` (enabled by `bun install` via `prepare`) formats staged Rust files and re-stages them, and refuses the commit when staged JS, Markdown, JSON, YAML or TOML files fail `bun run format:check`; it refuses files that also have unstaged changes.
 - Formatting-only changes go in their own `style:` commit, never mixed with logic.
 
 ## Language idioms

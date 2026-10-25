@@ -1,19 +1,26 @@
 #!/bin/sh
-# Formats staged JS (bun fmt) and Rust (rustfmt) files and re-stages them.
+# Formats staged Rust files (rustfmt) and re-stages them; refuses the commit when staged files fail `bun run format:check`.
 set -e
 
-js=$(git diff --cached --name-only --diff-filter=ACMR -- 'src/*.js' 'test/*.js')
+fmt=$(git diff --cached --name-only --diff-filter=ACMR -- '*.js' '*.md' '*.json' '*.yml' '*.yaml' '*.toml')
 rs=$(git diff --cached --name-only --diff-filter=ACMR -- 'server/*.rs')
-[ -z "$js$rs" ] && exit 0
+[ -z "$fmt$rs" ] && exit 0
 
-# Re-staging a partly staged file would also commit its unstaged changes.
-partial=$(git diff --name-only -- $js $rs)
+# Checking or re-staging a partly staged file would judge or commit its unstaged changes.
+partial=$(git diff --name-only -- $fmt $rs)
 if [ -n "$partial" ]; then
   echo "pre-commit: these files have unstaged changes, stage or stash them first:" >&2
   echo "$partial" >&2
   exit 1
 fi
 
-[ -n "$js" ] && bun fmt $js >/dev/null
-[ -n "$rs" ] && rustfmt --edition 2021 $rs
-git add $js $rs
+if [ -n "$rs" ]; then
+  rustfmt --edition 2021 $rs
+  git add $rs
+fi
+
+if [ -n "$fmt" ] && ! bun run format:check $fmt >/dev/null 2>&1; then
+  echo "pre-commit: run \`bun run format\` and stage the result:" >&2
+  bun run format:check $fmt >&2 || true
+  exit 1
+fi
