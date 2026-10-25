@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Development
+
+- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views (`test/oracle/README.md`).
+
 ## 0.1.0
 
 First release. Requires VS Code 1.100 or newer.
