@@ -10,9 +10,14 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::DiagnosticSeverity;
+use tree_sitter::{Node, Parser};
 
-// `<<~SQL`, `<<-EOS`, `<<"END"`: the body's indentation is the string's content.
-static HEREDOC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"<<[~-]?["'`]?[A-Za-z_]"#).unwrap());
+// A `<pre>`/`<textarea>` built by a helper: its block body keeps every space, but `tags.rs` sees no element.
+static PRE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(tag\.(pre|textarea)|content_tag[ (]\s*:(pre|textarea))\b").unwrap());
+
+// Ruby nodes whose text is content: a line break inside one can't move.
+const RUBY_LITERALS: &[&str] =
+    &["string", "string_array", "symbol_array", "delimited_symbol", "regex", "subshell", "heredoc_body", "comment"];
 
 /// Where a line starts.
 #[derive(Clone, Copy, PartialEq)]
@@ -72,7 +77,10 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
     for (i, token) in tokens.iter().enumerate() {
         match token {
             Token::Erb(e) => {
-                let code = &text[e.at..e.end];
+                let code = erb_code(&text[e.at..e.end]);
+                if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(code) {
+                    return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(e.at) + 1));
+                }
                 unit_spans.push(span(e.at + 1, e.end - 1, e.at, rigid_ruby(code)));
                 keep_end.push((e.at + 1, e.end - 1));
             }
@@ -98,8 +106,9 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Resul
                 };
                 keep_end.push((tag.end, close_start.saturating_sub(1)));
                 if tag.name == "script" || tag.name == "style" {
-                    // A JS template literal across lines is content, like a Ruby string.
-                    let rigid = text[tag.end..close_start].contains('`');
+                    // A JS template literal or a `\` line continuation is content, like a Ruby string.
+                    let body = &text[tag.end..close_start];
+                    let rigid = body.contains('`') || body.lines().any(|l| l.trim_end().ends_with('\\'));
                     unit_spans.push(span(tag.start + 1, close_end - 1, tag.start, rigid));
                 } else {
                     unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start, false));
@@ -183,63 +192,38 @@ fn lines_starting_in(starts: &[usize], first: usize, last: usize) -> std::ops::R
     starts.partition_point(|&s| s < first)..starts.partition_point(|&s| s <= last)
 }
 
-/// Ruby code that a move could change: a heredoc, or a line break inside a string, `%` literal, backtick command
-/// or regexp. Unsure readings (`a %(b)`, `x /y/`) count as literals, which only keeps more code where it is.
-fn rigid_ruby(code: &str) -> bool {
-    code.contains('\n') && (HEREDOC.is_match(code) || literal_spans_lines(code))
+/// The Ruby inside an ERB tag; empty for an ERB comment, whose text never reaches the output.
+fn erb_code(tag: &str) -> &str {
+    if tag.starts_with("<%#") {
+        return "";
+    }
+    let inner = tag.strip_prefix("<%").unwrap_or(tag).trim_start_matches(['=', '-']);
+    inner.strip_suffix("%>").unwrap_or(inner).trim_end_matches('-')
 }
 
-fn literal_spans_lines(code: &str) -> bool {
-    let chars: Vec<char> = code.chars().collect();
-    let mut i = 0;
-    // The last character of code before `i`, outside literals and comments: tells a regexp from a division.
-    let mut prev = ' ';
-    while i < chars.len() {
-        let c = chars[i];
-        let close = match c {
-            '#' => {
-                while chars.get(i).is_some_and(|&c| c != '\n') {
-                    i += 1;
-                }
-                continue;
-            }
-            '"' | '\'' | '`' => Some(c),
-            '/' if !(prev.is_alphanumeric() || matches!(prev, '_' | ')' | ']' | '}')) => Some('/'),
-            '%' if chars.get(i + 1).is_some_and(|n| !n.is_whitespace() && *n != '=') => {
-                if chars.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
-                    i += 1;
-                }
-                chars.get(i + 1).map(|&open| match open {
-                    '(' => ')',
-                    '[' => ']',
-                    '{' => '}',
-                    '<' => '>',
-                    other => other,
-                })
-            }
-            _ => None,
-        };
-        let Some(close) = close else {
-            if !c.is_whitespace() {
-                prev = c;
-            }
-            i += 1;
-            continue;
-        };
-        i += if c == '%' { 2 } else { 1 };
-        while let Some(&c) = chars.get(i) {
-            match c {
-                '\\' => i += 1,
-                '\n' => return true,
-                _ if c == close => break,
-                _ => {}
-            }
-            i += 1;
-        }
-        prev = close;
-        i += 1;
+/// Ruby code that a move could change: a string, regexp, heredoc, command or `=begin` comment across lines. Code
+/// the parser can't read across lines counts too, which only keeps more code where it is.
+fn rigid_ruby(code: &str) -> bool {
+    if !code.contains('\n') {
+        return false;
     }
-    false
+    let mut parser = Parser::new();
+    if parser.set_language(&tree_sitter_ruby::LANGUAGE.into()).is_err() {
+        return true;
+    }
+    parser.parse(code, None).is_none_or(|tree| literal_across_lines(tree.root_node()))
+}
+
+fn literal_across_lines(node: Node) -> bool {
+    if node.start_position().row == node.end_position().row {
+        return false;
+    }
+    if node.is_error() || RUBY_LITERALS.contains(&node.kind()) {
+        return true;
+    }
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).any(literal_across_lines);
+    found
 }
 
 fn closing<'t>(tokens: &'t [Token], name: &str) -> Option<&'t Tag> {
@@ -534,7 +518,12 @@ mod tests {
             let text = format!("<div>\n<%= {literal} %>\n</div>");
             assert_eq!(fmt(&text), text, "{literal}");
         }
+        for literal in ["\"a\n b\".scan /a\n b/", "x\n=begin\nnote\n=end\n", "case y\nwhen /a\n b/ then 1 end"] {
+            let text = format!("<div>\n<%= {literal} %>\n</div>");
+            assert_eq!(fmt(&text), text, "{literal}");
+        }
         assert_eq!(fmt("<div>\n<%= a / b +\n  c %>\n</div>"), "<div>\n  <%= a / b +\n    c %>\n</div>", "a division moves");
+        assert_eq!(fmt("<div>\n<%# a\n  b %>\n</div>"), "<div>\n  <%# a\n    b %>\n</div>", "a comment tag moves");
         let block = lines(&["<%= link_to x,", "      class: \"a\" do %>", "<span>y</span>", "<% end %>"]);
         assert_eq!(fmt(&block), lines(&["<%= link_to x,", "      class: \"a\" do %>", "  <span>y</span>", "<% end %>"]));
     }
@@ -545,6 +534,8 @@ mod tests {
         assert_eq!(fmt(&script), lines(&["<div>", "  <script>", "    if (a) {", "      b();", "    }", "  </script>", "</div>"]));
         let template = lines(&["<div>", "<script>", "  var a = `x", "  y`;", "</script>", "</div>"]);
         assert_eq!(fmt(&template), template, "a template literal is content");
+        let continued = lines(&["<div>", "<script>", "  var s = \"a\\", "  b\";", "</script>", "</div>"]);
+        assert_eq!(fmt(&continued), continued, "a line continuation is content");
         let nested = lines(&["<div>", "<script>", "  var a = <%= raw \"x", "  y\" %>;", "</script>", "</div>"]);
         assert_eq!(fmt(&nested), nested, "a stuck ERB tag holds its script too");
         let shallow = lines(&["<div>", "    <style>", "a {}", "    </style>", "</div>"]);
@@ -593,7 +584,9 @@ mod tests {
         for broken in ["<div><% if a %>", "<div>\n<span>\n</div>", "<% end %>", "<div><% foo", "<pre>\nx", "<script>x", "<div class=\"a"] {
             assert!(indent(broken, "  ", true, false).is_err(), "{broken}");
         }
-        assert!(indent("<%= javascript_tag do %>\n  x()\n<% end %>", "  ", true, false).is_err());
+        for helper in ["<%= javascript_tag do %>", "<%= content_tag :pre do %>", "<%= tag.textarea(name: \"a\") do %>"] {
+            assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", true, false).is_err(), "{helper}");
+        }
         assert!(indent("<p><div></p></div>", "  ", true, false).is_ok_and(|i| i.text == "<p><div></p></div>"));
     }
 }
