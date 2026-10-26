@@ -1,5 +1,6 @@
 //! Which template language a document is, and whether its output is HTML.
 
+use crate::project::Project;
 use crate::{partials, util};
 use std::path::Path;
 use tower_lsp::lsp_types::Url;
@@ -61,7 +62,7 @@ pub fn html_host(uri: &Url) -> bool {
     in_views
         && parts.len() == 3
         && partials::is_locale(parts[1])
-        && partials::template_format(Path::new(&file)).is_none()
+        && partials::template_format(&Project::unknown(), Path::new(&file)).is_none()
         && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
 }
 
@@ -81,7 +82,8 @@ pub fn file_name(uri: &Url) -> String {
 
 /// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.
 fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
-    file.ends_with(ext).then(|| partials::template_format(Path::new(file)))?
+    // A file name alone doesn't tell the app's registered formats; only Rails' own count here.
+    file.ends_with(ext).then(|| partials::template_format(&Project::unknown(), Path::new(file)))?
 }
 
 fn is_html_format(format: &str) -> bool {

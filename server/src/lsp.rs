@@ -171,7 +171,7 @@ fn unresolved_renders(
     let Some(views) = partials::views_root(path) else { return vec![] };
     checked_renders(&views, text, in_code)
         .into_iter()
-        .filter(|(_, _, r)| partials::resolve(path, r).is_empty() && !is_gem_view(project, &r.name))
+        .filter(|(_, _, r)| partials::resolve(project, path, r).is_empty() && !is_gem_view(project, &r.name))
         .map(|(i, line, r)| {
             let message = format!("{} `{}` not found", r.kind.name(), r.name);
             util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
@@ -207,7 +207,7 @@ fn strict_locals_mismatches(
     for (i, line, r) in checked_renders(&views, text, in_code).into_iter().filter(|(_, _, r)| !r.from_layout) {
         let Some(passed) = partials::passed_locals(line, &r) else { continue };
         // Several variants/formats: which one Rails picks depends on the request.
-        let found = partials::resolve(path, &r);
+        let found = partials::resolve(project, path, &r);
         let [file] = found.as_slice() else { continue };
         let Some(sig) = partials::file_strict_locals(file) else { continue };
         let missing: Vec<&str> =
@@ -241,8 +241,8 @@ fn strict_locals_message(missing: &[&str], unknown: &[&str], no_locals: bool) ->
     }
 }
 
-fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
-    let found = partials::resolve(path, r);
+fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> String {
+    let found = partials::resolve(project, path, r);
     if found.is_empty() {
         return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
@@ -256,12 +256,12 @@ fn render_hover(path: &Path, r: &partials::RenderRef) -> String {
 
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
 /// With `col`, only the ones under it are resolved.
-fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
+fn convention_targets(project: &Project, path: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
     let models = partials::model_renders(line)
         .into_iter()
         .filter(|&(s, e, _)| at(s, e))
-        .map(|(s, e, name)| (s, e, partials::resolve_model(path, name)));
+        .map(|(s, e, name)| (s, e, partials::resolve_model(project, path, name)));
     let controllers =
         stimulus::identifiers(line).into_iter().filter(|&(s, e, _)| at(s, e)).map(|(s, e, id)| (s, e, stimulus::resolve(path, &id)));
     let assets = assets::asset_refs(line).into_iter().filter(|r| at(r.start, r.end)).map(|r| (r.start, r.end, assets::resolve(path, &r)));
@@ -269,12 +269,20 @@ fn convention_targets(path: &Path, line: &str, col: Option<usize>) -> Vec<(usize
 }
 
 /// Full key of the `t("…")` literal under `col`, when the call is Ruby.
-fn i18n_key_at(doc: &Doc, path: &Path, line_start: usize, line: &str, col: usize, extra_engines: &[String]) -> Option<String> {
+fn i18n_key_at(
+    project: &Project,
+    doc: &Doc,
+    path: &Path,
+    line_start: usize,
+    line: &str,
+    col: usize,
+    extra_engines: &[String],
+) -> Option<String> {
     let (start, end) = i18n::key_at(line, col)?;
     if !code_at(doc.lang, &doc.text, line_start + start, extra_engines) {
         return None;
     }
-    i18n::full_key(path, &line[start..end])
+    i18n::full_key(project, path, &line[start..end])
 }
 
 fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
@@ -532,7 +540,11 @@ impl Backend {
         let word = util::word_at(line, col);
         let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
         if before.ends_with('@') && !before.ends_with("@@") {
-            return ivars::for_view(path).into_iter().filter(|a| a.name == word).filter_map(|a| at_line(&a.file, a.line)).collect();
+            return ivars::for_view(&Project::for_template(path), path)
+                .into_iter()
+                .filter(|a| a.name == word)
+                .filter_map(|a| at_line(&a.file, a.line))
+                .collect();
         }
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
         // `link_to` or `t` is never a local; the scan below reads every view.
@@ -540,7 +552,7 @@ impl Backend {
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return vec![] };
         let Some(views) = partials::views_root(path) else { return vec![] };
         let sources = partial_rename::sources(&views, &self.open_texts());
-        let passes = partial_rename::local_passes(path, name, &sources, &self.options().extra_engines);
+        let passes = partial_rename::local_passes(&Project::for_template(path), path, name, &sources, &self.options().extra_engines);
         if !passes.is_empty() {
             return passes;
         }
@@ -691,25 +703,27 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let project = Project::for_template(&path);
         if let Some(text) = self.controllers.get(&uri) {
             let (_, line, col) = util::line_at(&text, pos);
-            let found = controllers::targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default();
+            let found =
+                controllers::targets(&project, &path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default();
             let locs: Vec<Location> = found.into_iter().filter_map(file_location).collect();
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
-        if let Some(key) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines) {
+        if let Some(key) = i18n_key_at(&project, &doc, &path, line_start, line, col, &self.options().extra_engines) {
             let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
-            partials::resolve(&path, &r)
+            partials::resolve(&project, &path, &r)
         } else if let Some(c) = partials::component_ref_at(line, col) {
-            partials::resolve_component(&path, &c)
+            partials::resolve_component(&project, &path, &c)
         } else {
-            convention_targets(&path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
+            convention_targets(&project, &path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
         };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
         if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
@@ -737,10 +751,11 @@ impl LanguageServer for Backend {
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let project = Project::for_template(&path);
         if let Some(text) = self.controllers.get(&uri) {
             let links = util::lines_with_offsets(&text)
                 .enumerate()
-                .flat_map(|(i, (_, line))| controllers::targets(&path, line, None).into_iter().map(move |t| (i, line, t)))
+                .flat_map(|(i, (_, line))| controllers::targets(&project, &path, line, None).into_iter().map(move |t| (i, line, t)))
                 .filter_map(|(i, line, (start, end, found))| file_link(util::span_range(i, line, start, end), found.first()?));
             return Ok(Some(links.collect()));
         }
@@ -752,8 +767,8 @@ impl LanguageServer for Backend {
             let renders = partials::render_refs(line)
                 .into_iter()
                 .filter(|r| in_code(i, line_start, r))
-                .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&path, &r))));
-            for (start, end, found) in renders.chain(convention_targets(&path, line, None)) {
+                .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
+            for (start, end, found) in renders.chain(convention_targets(&project, &path, line, None)) {
                 links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target)));
             }
         }
@@ -778,10 +793,11 @@ impl LanguageServer for Backend {
             }
         }
         if let Ok(path) = uri.to_file_path() {
+            let project = Project::for_template(&path);
             if let Some(r) = partials::render_ref_at(line, col) {
-                return Ok(markdown_hover(render_hover(&path, &r)));
+                return Ok(markdown_hover(render_hover(&project, &path, &r)));
             }
-            if let Some(md) = i18n_key_at(&doc, &path, line_start, line, col, &self.options().extra_engines)
+            if let Some(md) = i18n_key_at(&project, &doc, &path, line_start, line, col, &self.options().extra_engines)
                 .and_then(|key| i18n::hover(&self.locale_files(&path), &key))
             {
                 return Ok(markdown_hover(md));
@@ -832,6 +848,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let project = Project::for_template(&path);
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
@@ -840,7 +857,7 @@ impl LanguageServer for Backend {
         let quick_fixes = unresolved.filter_map(|d| {
             let (_, line, start) = util::line_at(&doc.text, d.range.start);
             let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
-            let target = partials::new_template_path(&path, &r)?;
+            let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
                 uri: Url::from_file_path(&target).ok()?,
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
@@ -868,15 +885,16 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let project = Project::for_template(&path);
         let extra_engines = self.options().extra_engines.clone();
         let i18n_key = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             let (line_start, line, col) = util::line_at(&doc.text, pos);
-            i18n_key_at(&doc, &path, line_start, line, col, &extra_engines)
+            i18n_key_at(&project, &doc, &path, line_start, line, col, &extra_engines)
         };
         if let Some((key, app)) = i18n_key.zip(partials::app_root(&path)) {
             let sources = partial_rename::i18n_sources(&app, &self.open_texts());
-            let mut locations = partial_rename::i18n_references(&key, &sources, &extra_engines);
+            let mut locations = partial_rename::i18n_references(&project, &key, &sources, &extra_engines);
             if p.context.include_declaration {
                 locations.extend(translation_locations(&self.locale_files(&path), &key));
             }
@@ -888,8 +906,8 @@ impl LanguageServer for Backend {
             let (_, line, col) = util::line_at(&doc.text, pos);
             let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
             match (partials::render_ref_at(line, col), model) {
-                (Some(r), _) => partials::first_folder_only(partials::resolve(&path, &r)),
-                (None, Some((_, _, name))) => partials::resolve_model(&path, name),
+                (Some(r), _) => partials::first_folder_only(partials::resolve(&project, &path, &r)),
+                (None, Some((_, _, name))) => partials::resolve_model(&project, &path, name),
                 // On a component render the question isn't about this partial.
                 (None, None) if partials::component_ref_at(line, col).is_some() => return Ok(None),
                 (None, None) if file_name(&uri).starts_with('_') => vec![path],
@@ -897,7 +915,7 @@ impl LanguageServer for Backend {
             }
         };
         let sources = partial_rename::sources(&views, &self.open_texts());
-        let mut locations = partial_rename::references(&files, &sources, &extra_engines);
+        let mut locations = partial_rename::references(&project, &files, &sources, &extra_engines);
         if p.context.include_declaration {
             locations.extend(files.iter().filter_map(file_location));
         }
@@ -925,7 +943,8 @@ impl LanguageServer for Backend {
         for views in roots {
             let is_template = |f: &&PathBuf| Url::from_file_path(f).is_ok_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
-            for (name, kind, file) in partials::named_templates(&views, &templates) {
+            let project = Project::for_template(&views.join("_"));
+            for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
                 if !util::fuzzy_match(&name.to_lowercase(), &query) {
                     continue;
                 }
@@ -954,7 +973,8 @@ impl LanguageServer for Backend {
         let mut changes = HashMap::new();
         for views in roots {
             let sources = partial_rename::sources(&views, &open);
-            changes.extend(partial_rename::render_edits(&renames, &sources, &self.options().extra_engines));
+            let project = Project::for_template(&views.join("_"));
+            changes.extend(partial_rename::render_edits(&project, &renames, &sources, &self.options().extra_engines));
         }
         Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
@@ -987,14 +1007,14 @@ impl LanguageServer for Backend {
 
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
-            return items(render_completions(path, kind, &prefix, &self.template_files(path)));
+            return items(render_completions(&Project::for_template(path), path, kind, &prefix, &self.template_files(path)));
         }
         let i18n_prefix = i18n::completion_prefix(line, col)
             .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
-            return items(i18n_completions(&self.locale_files(path), path, prefix, range));
+            return items(i18n_completions(&Project::for_template(path), &self.locale_files(path), path, prefix, range));
         }
         if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
@@ -1018,7 +1038,10 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
-        if let Some(found) = path.as_deref().and_then(|p| slot_setter_completions(p, &doc.text[..line_start + col])).filter(|_| code_here())
+        if let Some(found) = path
+            .as_deref()
+            .and_then(|p| slot_setter_completions(&Project::for_template(p), p, &doc.text[..line_start + col]))
+            .filter(|_| code_here())
         {
             return items(found);
         }
@@ -1068,14 +1091,17 @@ impl LanguageServer for Backend {
         let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
         if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
             let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
-            return items(ivar_completions(path, typed, range));
+            return items(ivar_completions(&Project::for_template(path), path, typed, range));
         }
         if typed.is_empty() {
             return Ok(None);
         }
         let mut found = local_completions(&doc.text, typed);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
-        let own_slots = path.as_deref().and_then(slots::class_of_template).and_then(|class| std::fs::read_to_string(class).ok());
+        let own_slots = path
+            .as_deref()
+            .and_then(|p| slots::class_of_template(&Project::for_template(p), p))
+            .and_then(|class| std::fs::read_to_string(class).ok());
         let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
         found.extend(
             readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
@@ -1091,8 +1117,14 @@ impl LanguageServer for Backend {
 }
 
 /// Partial, template or layout names for the `render "…"` string being typed.
-fn render_completions(path: &Path, kind: partials::RenderKind, prefix: &str, templates: &[PathBuf]) -> Vec<CompletionItem> {
-    partials::render_candidates(path, kind, templates)
+fn render_completions(
+    project: &Project,
+    path: &Path,
+    kind: partials::RenderKind,
+    prefix: &str,
+    templates: &[PathBuf],
+) -> Vec<CompletionItem> {
+    partials::render_candidates(project, path, kind, templates)
         .into_iter()
         .filter(|(name, _)| name.starts_with(prefix))
         .map(|(name, file)| {
@@ -1103,8 +1135,14 @@ fn render_completions(path: &Path, kind: partials::RenderKind, prefix: &str, tem
 }
 
 /// i18n keys for the `t("…")` string being typed; each replaces `range`.
-fn i18n_completions(locales: &[(PathBuf, Vec<i18n::Translation>)], path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
-    i18n::completions(locales, path, prefix)
+fn i18n_completions(
+    project: &Project,
+    locales: &[(PathBuf, Vec<i18n::Translation>)],
+    path: &Path,
+    prefix: &str,
+    range: Range,
+) -> Vec<CompletionItem> {
+    i18n::completions(project, locales, path, prefix)
         .into_iter()
         .map(|(key, value)| CompletionItem {
             text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
@@ -1132,9 +1170,9 @@ fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: R
 }
 
 /// `@name` for the instance variables the view's controller action assigns; each replaces `range`.
-fn ivar_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
+fn ivar_completions(project: &Project, path: &Path, typed: &str, range: Range) -> Vec<CompletionItem> {
     let mut seen = std::collections::HashSet::new();
-    ivars::for_view(path)
+    ivars::for_view(project, path)
         .into_iter()
         .filter(|a| a.name.starts_with(typed) && seen.insert(a.name.clone()))
         .map(|a| {
@@ -1150,7 +1188,7 @@ fn ivar_completions(path: &Path, typed: &str, range: Range) -> Vec<CompletionIte
 }
 
 /// `with_header` … after `card.` inside `render CardComponent.new do |card|`.
-fn slot_setter_completions(path: &Path, before: &str) -> Option<Vec<CompletionItem>> {
+fn slot_setter_completions(project: &Project, path: &Path, before: &str) -> Option<Vec<CompletionItem>> {
     let (head, typed) = before.rsplit_once('.')?;
     let var = head.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next()?;
     if var.is_empty() || !typed.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -1158,7 +1196,7 @@ fn slot_setter_completions(path: &Path, before: &str) -> Option<Vec<CompletionIt
     }
     let component = slots::block_component(head, var)?;
     let detail = format!("{component} slot");
-    let setters = slots::setters(&slots::component_slots(path, component));
+    let setters = slots::setters(&slots::component_slots(project, path, component));
     // Not a component with slots (or a reused name like `f`): leave `f.` to the form builder completions.
     if setters.is_empty() {
         return None;
@@ -1314,7 +1352,7 @@ mod tests {
     #[test]
     fn slot_setters_leave_other_receivers_alone() {
         let before = "<%= render CardComponent.new do |f| %><% end %>\n<%= form_with model: @user do |f| %>\n  <%= f.te";
-        assert!(slot_setter_completions(Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
+        assert!(slot_setter_completions(&Project::unknown(), Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
         assert!(receiver_completions(before).is_some_and(|items| !items.is_empty()));
     }
     #[test]
@@ -1463,7 +1501,7 @@ mod tests {
     fn rename(renames: &[(PathBuf, PathBuf)]) -> Vec<String> {
         let views = partials::views_root(&renames[0].0).unwrap();
         let sources = partial_rename::sources(&views, &HashMap::new());
-        let mut got: Vec<String> = partial_rename::render_edits(renames, &sources, &[])
+        let mut got: Vec<String> = partial_rename::render_edits(&Project::unknown(), renames, &sources, &[])
             .into_iter()
             .flat_map(|(uri, edits)| {
                 let file = uri.path().rsplit('/').next().unwrap_or("").to_string();
@@ -1600,7 +1638,7 @@ mod tests {
             ]
         );
         let card = partials::render_refs(r#"<%= render layout: "card" do %>"#);
-        assert_eq!(partials::resolve(&file, &card[0]), vec![users.join("_card.html.erb")]);
+        assert_eq!(partials::resolve(&Project::unknown(), &file, &card[0]), vec![users.join("_card.html.erb")]);
         assert!(diags.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
 
         let layouts = root.join("app/views/layouts");
@@ -1654,9 +1692,9 @@ mod tests {
         let file = users.join("index.html.erb");
 
         let line = r#"<%= render partial: "card" %>"#;
-        let md = render_hover(&file, &partials::render_ref_at(line, 22).unwrap());
+        let md = render_hover(&Project::unknown(), &file, &partials::render_ref_at(line, 22).unwrap());
         assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
-        assert!(!render_hover(&file, &partials::render_ref_at(r#"render "plain""#, 9).unwrap()).contains("locals:"));
+        assert!(!render_hover(&Project::unknown(), &file, &partials::render_ref_at(r#"render "plain""#, 9).unwrap()).contains("locals:"));
 
         let items: Vec<(String, Option<String>)> = local_completions(card, "").into_iter().map(|c| (c.label, c.detail)).collect();
         assert_eq!(

@@ -8,6 +8,7 @@ use crate::partials::{
     app_root, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind,
     RenderRef,
 };
+use crate::project::Project;
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -27,9 +28,9 @@ pub struct Source {
 }
 
 /// `app/views/users/_card.html.slim` → `users/card`; `None` for non-partials and files outside a views dir.
-fn qualified_name(views: &Path, file: &Path) -> Option<String> {
+fn qualified_name(project: &Project, views: &Path, file: &Path) -> Option<String> {
     let dir = file.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
-    let name = template_stem(file.file_name()?.to_str()?.strip_prefix('_')?);
+    let name = template_stem(project, file.file_name()?.to_str()?.strip_prefix('_')?);
     (!dir.is_empty() && !name.is_empty()).then(|| format!("{dir}/{name}"))
 }
 
@@ -43,8 +44,8 @@ fn moved(path: &Path, renames: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
 }
 
 /// A bare name stays bare only while it is looked up first in the referencing file's own folder.
-fn new_ref_name(written: &str, source: &Path, target: &Path, renames: &[(PathBuf, PathBuf)]) -> Option<String> {
-    let qualified = qualified_name(&views_root(target)?, target)?;
+fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, renames: &[(PathBuf, PathBuf)]) -> Option<String> {
+    let qualified = qualified_name(project, &views_root(target)?, target)?;
     let source_after = moved(source, renames).unwrap_or_else(|| source.to_path_buf());
     if written.contains('/') || source_after.parent() != target.parent() {
         return Some(qualified);
@@ -74,27 +75,27 @@ fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<Re
 /// The files a reference points at. Views look partials up from their own folder (and `layout:` there is a
 /// partial too); code outside app/views is checked only for qualified names, since its controller prefix is
 /// unknown, and controllers' plain `render "x"` is a template, so only `partial:` counts there.
-fn targets(source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBuf> {
+fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: bool) -> Vec<PathBuf> {
     let as_partial = RenderRef { kind: RenderKind::Partial, ..r.clone() };
     if views_root(&source.path).is_some() {
         return match r.kind {
             RenderKind::Template => vec![],
-            RenderKind::Partial => resolve(&source.path, &as_partial),
+            RenderKind::Partial => resolve(project, &source.path, &as_partial),
         };
     }
     let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
     match app_root(&source.path).map(|app| app.join("views")) {
-        Some(views) if partial && r.name.contains('/') => resolve(&views.join("_"), &as_partial),
+        Some(views) if partial && r.name.contains('/') => resolve(project, &views.join("_"), &as_partial),
         _ => vec![],
     }
 }
 
 /// `targets` of the reference whose string starts at byte `start` of `source`.
 /// Only the first folder's matches: the files Rails would pick.
-fn ref_targets(source: &Source, start: usize, r: &RenderRef) -> Vec<PathBuf> {
+fn ref_targets(project: &Project, source: &Source, start: usize, r: &RenderRef) -> Vec<PathBuf> {
     let explicit_partial = source.lang.is_none() && PARTIAL_KEY.is_match(source.text[..start].rsplit('\n').next().unwrap_or(""));
-    first_folder_only(targets(source, r, explicit_partial))
+    first_folder_only(targets(project, source, r, explicit_partial))
 }
 
 /// `render @users` as a reference named after the model (`users`).
@@ -113,8 +114,8 @@ fn model_refs(line: &str) -> Vec<RenderRef> {
 }
 
 /// `_card.html.slim` → `card` for each partial among `files`.
-fn partial_stems<'a>(files: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a str> {
-    files.into_iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(template_stem)).collect()
+fn partial_stems<'a>(project: &Project, files: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a str> {
+    files.into_iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(|stem| template_stem(project, stem))).collect()
 }
 
 /// Whether a reference to `name` can name a partial with one of `stems`; lets callers skip `resolve`, a directory listing.
@@ -123,17 +124,17 @@ fn may_name(stems: &[&str], name: &str) -> bool {
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
-pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
-    let stems = partial_stems(files);
+pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    let stems = partial_stems(project, files);
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let named = code_refs(source, extra_engines, render_refs)
             .into_iter()
-            .filter(|(start, _, r)| may_name(&stems, &r.name) && ref_targets(source, *start, r).iter().any(|t| files.contains(t)));
+            .filter(|(start, _, r)| may_name(&stems, &r.name) && ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
         let models = code_refs(source, extra_engines, model_refs)
             .into_iter()
-            .filter(|(_, _, r)| resolve_model(&source.path, &r.name).iter().any(|t| files.contains(t)));
+            .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
         for (start, end, _) in named.chain(models) {
             let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
             out.push(Location::new(uri.clone(), range));
@@ -143,14 +144,14 @@ pub fn references(files: &[PathBuf], sources: &[Source], extra_engines: &[String
 }
 
 /// The `render` calls of `partial` that pass `local` (`render "card", user: u`), at the local's key.
-pub fn local_passes(partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
     let files = [partial.to_path_buf()];
-    let stems = partial_stems(&files);
+    let stems = partial_stems(project, &files);
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         for (start, _, r) in code_refs(source, extra_engines, render_refs) {
-            if !may_name(&stems, &r.name) || !ref_targets(source, start, &r).contains(&files[0]) {
+            if !may_name(&stems, &r.name) || !ref_targets(project, source, start, &r).contains(&files[0]) {
                 continue;
             }
             let line_start = start - r.start;
@@ -169,13 +170,13 @@ pub fn local_passes(partial: &Path, local: &str, sources: &[Source], extra_engin
 }
 
 /// The `t("…")` calls in code whose full key is `key`; lazy `.x` keys count only in views, where they have a scope.
-pub fn i18n_references(key: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         for (start, end, _) in code_refs(source, extra_engines, i18n_refs)
             .into_iter()
-            .filter(|(_, _, r)| i18n::full_key(&source.path, &r.name).is_some_and(|full| full == key))
+            .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
             let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
             out.push(Location::new(uri.clone(), range));
@@ -236,9 +237,14 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
 
 /// Edits for every partial reference that resolves only to renamed files that all agree on the new name;
 /// a reference also matching a file left in place (another format or variant) is not touched.
-pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_engines: &[String]) -> HashMap<Url, Vec<TextEdit>> {
+pub fn render_edits(
+    project: &Project,
+    renames: &[(PathBuf, PathBuf)],
+    sources: &[Source],
+    extra_engines: &[String],
+) -> HashMap<Url, Vec<TextEdit>> {
     let folder_renamed = renames.iter().any(|(old, _)| old.is_dir());
-    let stems = partial_stems(renames.iter().map(|(old, _)| old));
+    let stems = partial_stems(project, renames.iter().map(|(old, _)| old));
 
     let mut out = HashMap::new();
     for source in sources {
@@ -247,8 +253,10 @@ pub fn render_edits(renames: &[(PathBuf, PathBuf)], sources: &[Source], extra_en
             if !folder_renamed && !may_name(&stems, &r.name) {
                 continue;
             }
-            let names: Option<Vec<String>> =
-                ref_targets(source, start, &r).iter().map(|t| new_ref_name(&r.name, &source.path, &moved(t, renames)?, renames)).collect();
+            let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
+                .iter()
+                .map(|t| new_ref_name(project, &r.name, &source.path, &moved(t, renames)?, renames))
+                .collect();
             let Some(names) = names else { continue };
             let Some(name) = names.first().filter(|n| **n != r.name && names.iter().all(|m| m == *n)) else {
                 continue;
@@ -292,7 +300,7 @@ mod tests {
         }
         fn edits(&self, renames: &[(&str, &str)], sources: &[Source]) -> Vec<(String, u32, u32, String)> {
             let renames: Vec<_> = renames.iter().map(|(a, b)| (self.path(a), self.path(b))).collect();
-            let mut got: Vec<_> = render_edits(&renames, sources, &[])
+            let mut got: Vec<_> = render_edits(&Project::unknown(), &renames, sources, &[])
                 .iter()
                 .flat_map(|(uri, edits)| {
                     let file = self.rel(&uri.to_file_path().unwrap());
@@ -426,13 +434,13 @@ mod tests {
             t.source("app/views/home/other.html.erb", ERB, "<%= render \"other\", user: u %>\n"),
         ];
         let card = t.path("app/views/users/_card.html.erb");
-        let mut got: Vec<(String, u32, u32)> = local_passes(&card, "user", &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = local_passes(&Project::unknown(), &card, "user", &sources, &[])
             .into_iter()
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
         got.sort();
         assert_eq!(got, [("app/views/home/show.html.slim".into(), 0, 23), ("app/views/users/index.html.erb".into(), 0, 37)]);
-        assert!(local_passes(&card, "missing", &sources, &[]).is_empty());
+        assert!(local_passes(&Project::unknown(), &card, "missing", &sources, &[]).is_empty());
     }
 
     #[test]
@@ -447,7 +455,7 @@ mod tests {
             t.source("app/views/users/show.html.slim", SLIM, "h1 = t(\".title\")\n= t(\"users.index.title\")\n"),
             t.source("app/helpers/users_helper.rb", None, "def x = I18n.t(\"users.index.title\") + t(\".title\")\n"),
         ];
-        let mut got: Vec<(String, u32, u32)> = i18n_references("users.index.title", &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = i18n_references(&Project::unknown(), "users.index.title", &sources, &[])
             .into_iter()
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
@@ -473,7 +481,7 @@ mod tests {
             t.source("app/controllers/users_controller.rb", None, "render partial: \"users/card\"\n"),
         ];
         let card = t.path("app/views/users/_card.html.slim");
-        let mut got: Vec<(String, u32, u32)> = references(&[card], &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = references(&Project::unknown(), &[card], &sources, &[])
             .into_iter()
             .map(|l| {
                 let file = t.rel(&l.uri.to_file_path().unwrap());
@@ -502,7 +510,7 @@ mod tests {
             t.source("app/views/posts/index.html.erb", ERB, "<%= render \"card\" %>\n<%# render @users %>\n"),
         ];
         let found = |rel: &str| -> Vec<(String, u32)> {
-            let mut got: Vec<_> = references(&[t.path(rel)], &sources, &[])
+            let mut got: Vec<_> = references(&Project::unknown(), &[t.path(rel)], &sources, &[])
                 .into_iter()
                 .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line))
                 .collect();
@@ -527,7 +535,7 @@ mod tests {
         let t = Tree::new("ranges", &["app/views/users/_card.html.slim"]);
         let rename = [(t.path("app/views/users/_card.html.slim"), t.path("app/views/users/_tile.html.slim"))];
         let range_of = |source: Source| {
-            let edits = render_edits(&rename, &[source], &[]);
+            let edits = render_edits(&Project::unknown(), &rename, &[source], &[]);
             let edit = edits.into_values().next().unwrap().remove(0);
             (edit.range.start, edit.range.end)
         };

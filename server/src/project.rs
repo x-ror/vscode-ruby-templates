@@ -2,7 +2,9 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::partials::{app_root, files_under, KNOWN_FORMATS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
@@ -15,20 +17,38 @@ pub enum Framework {
 pub struct Project {
     pub framework: Framework,
     gems: HashMap<String, String>,
+    /// Format names the app registers in `config/initializers/**/*.rb`, beyond Rails' own.
+    formats: Vec<String>,
 }
 
 impl Project {
-    fn unknown() -> Self {
-        Project { framework: Framework::Unknown, gems: HashMap::new() }
+    pub fn unknown() -> Self {
+        Project { framework: Framework::Unknown, gems: HashMap::new(), formats: Vec::new() }
     }
 
-    /// The project of the nearest `Gemfile.lock` above `template`; unknown when there is none.
+    /// The project of the nearest `Gemfile.lock` above `template`, unknown when there is none, with the formats
+    /// registered by the initializers of the app that holds `template` and of the lockfile's app (Mime::SET is
+    /// process-wide, so an engine's views see the host app's registrations).
     pub fn for_template(template: &Path) -> Self {
-        template
-            .ancestors()
-            .skip(1)
-            .find_map(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok())
-            .map_or_else(Self::unknown, |lock| Self::from_lockfile(&lock))
+        let lock_dir = template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file());
+        let project = lock_dir
+            .and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok())
+            .map_or_else(Self::unknown, |lock| Self::from_lockfile(&lock));
+        let template_app = app_root(template).and_then(|app| Some(app.parent()?.to_path_buf()));
+        let mut formats: Vec<String> = template_app
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(lock_dir)
+            .flat_map(|app| registered_formats(&app.join("config/initializers")))
+            .collect();
+        formats.sort();
+        formats.dedup();
+        Project { formats, ..project }
+    }
+
+    /// Is `segment` a template format: one of Rails' own or registered by the app?
+    pub fn is_format(&self, segment: &str) -> bool {
+        KNOWN_FORMATS.contains(&segment) || self.formats.iter().any(|f| f == segment)
     }
 
     pub fn from_lockfile(lock: &str) -> Self {
@@ -50,7 +70,7 @@ impl Project {
         } else {
             Framework::Unknown
         };
-        Project { framework, gems }
+        Project { framework, gems, formats: Vec::new() }
     }
 
     pub fn gem_version(&self, name: &str) -> Option<Version> {
@@ -61,6 +81,28 @@ impl Project {
     pub fn has_gem_family(&self, name: &str) -> bool {
         self.gems.keys().any(|gem| gem == name || gem.strip_prefix(name).is_some_and(|rest| rest.starts_with(['_', '-'])))
     }
+}
+
+/// Names registered by `Mime::Type.register` / `register_alias` in the `*.rb` files under `dir`, as Rails loads them.
+fn registered_formats(dir: &Path) -> Vec<String> {
+    files_under(dir, usize::MAX)
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rb"))
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .flat_map(|text| text.lines().filter_map(registered_format).map(str::to_string).collect::<Vec<_>>())
+        .collect()
+}
+
+// Rails API `Mime::Type.register(string, symbol, …)` and `register_alias(string, symbol, …)` (actionpack mime_type.rb).
+fn registered_format(line: &str) -> Option<&str> {
+    let call = line.trim_start().strip_prefix("::").unwrap_or(line.trim_start()).strip_prefix("Mime::Type.register")?;
+    let args = call.strip_prefix("_alias").unwrap_or(call).trim_start();
+    let args = args.strip_prefix('(').unwrap_or(args).trim_start();
+    let quote = args.chars().next().filter(|q| matches!(q, '"' | '\''))?;
+    let after_type = args[1..].split_once(quote)?.1;
+    let symbol = after_type.trim_start().strip_prefix(',')?.trim_start().strip_prefix(':')?;
+    let end = symbol.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(symbol.len());
+    (end > 0).then(|| &symbol[..end])
 }
 
 /// `    name (1.2.3)` or `    name (1.2.3-x86_64-linux)`; the 6-space dependency lines don't match.
@@ -185,6 +227,54 @@ mod tests {
         assert_eq!(Project::for_template(&template).framework, Framework::Rails);
         std::fs::write(root.join("engine/Gemfile.lock"), "GEM\n  specs:\n    sinatra (4.0.0)\n").unwrap();
         assert_eq!(Project::for_template(&template).framework, Framework::Sinatra);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn registered_format_lines() {
+        let name = |line| registered_format(line);
+        assert_eq!(name(r#"Mime::Type.register "text/richtext", :rtf"#), Some("rtf"));
+        assert_eq!(name(r#"  Mime::Type.register_alias "text/html", :mobile"#), Some("mobile"));
+        assert_eq!(name("Mime::Type.register_alias 'text/html', :phone_x"), Some("phone_x"));
+        assert_eq!(name(r#"Mime::Type.register("application/x-md", :md, %w[text/x-md], %w[markdown])"#), Some("md"));
+        assert_eq!(name(r#"Mime::Type.register_alias("text/html", :tablet, [:tab])"#), Some("tablet"));
+        assert_eq!(name(r#"::Mime::Type.register "a/b", :ab # trailing"#), Some("ab"));
+        assert_eq!(name(r#"# Mime::Type.register "a/b", :ab"#), None);
+        assert_eq!(name(r#"Mime::Type.registered "a/b", :ab"#), None);
+        assert_eq!(name(r#"Mime::Type.register "a/b", "ab""#), None);
+        assert_eq!(name("Mime::Type.register"), None);
+        assert_eq!(name("config.x = 1"), None);
+    }
+
+    #[test]
+    fn app_registered_formats() {
+        let root = std::env::temp_dir().join(format!("rt-project-formats-{}", std::process::id()));
+        let initializers = root.join("config/initializers");
+        let template = root.join("app/views/users/show.html.erb");
+        std::fs::create_dir_all(&initializers).unwrap();
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        assert!(!Project::for_template(&template).is_format("mobile"));
+        std::fs::write(initializers.join("mime_types.rb"), "# comment\nMime::Type.register_alias \"text/html\", :mobile\n").unwrap();
+        std::fs::write(initializers.join("notes.txt"), "Mime::Type.register \"a/b\", :ignored\n").unwrap();
+        std::fs::create_dir_all(initializers.join("mime")).unwrap();
+        std::fs::write(initializers.join("mime/types.rb"), "Mime::Type.register \"text/x-md\", :md\n").unwrap();
+        let project = Project::for_template(&template);
+        assert!(project.is_format("mobile") && project.is_format("md") && project.is_format("html"));
+        assert!(!project.is_format("ignored") && !project.is_format("de"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn engine_sees_host_app_formats() {
+        let root = std::env::temp_dir().join(format!("rt-project-engine-{}", std::process::id()));
+        let template = root.join("engines/admin/app/views/x/show.mobile.erb");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(root.join("config/initializers")).unwrap();
+        std::fs::write(root.join("Gemfile.lock"), "GEM\n  specs:\n    actionview (7.1.3)\n").unwrap();
+        std::fs::write(root.join("config/initializers/mime.rb"), "Mime::Type.register_alias \"text/html\", :mobile\n").unwrap();
+        let project = Project::for_template(&template);
+        assert!(project.is_format("mobile"));
+        assert_eq!(project.framework, Framework::Rails);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
