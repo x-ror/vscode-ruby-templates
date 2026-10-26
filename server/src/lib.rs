@@ -22,6 +22,7 @@ mod lsp;
 mod outline;
 mod partial_rename;
 mod partials;
+mod project;
 mod routes;
 mod ruby;
 mod ruby_syntax;

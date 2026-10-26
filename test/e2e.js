@@ -21,8 +21,17 @@ const fileUri = (p) => pathToFileURL(p).href.replaceAll("%7E", "~");
 // macOS puts tmpdir under the /var symlink; one spelling of each path keeps built and returned URIs equal.
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-e2e-")));
 const views = path.join(root, "app", "views");
+fs.writeFileSync(
+  path.join(root, "Gemfile.lock"),
+  "GEM\n  specs:\n    actionview (7.1.3)\n",
+);
 fs.mkdirSync(path.join(views, "users"), { recursive: true });
 fs.mkdirSync(path.join(views, "shared"), { recursive: true });
+fs.mkdirSync(path.join(views, "strict"), { recursive: true });
+fs.writeFileSync(
+  path.join(views, "strict", "_row.html.erb"),
+  "<%# locals: (a:) %>\n",
+);
 fs.mkdirSync(path.join(root, "app", "components"), { recursive: true });
 fs.writeFileSync(
   path.join(views, "users", "_card.html.slim"),
@@ -373,7 +382,25 @@ const check = (label, actual, expected) => {
   check("diagnostics", diagnostics(uri), [
     "4: Unclosed ERB tag: missing `%>` before the next `<%`",
     "13: Unclosed ERB tag: missing `%>` before the next `<%`",
-    "7: Partial `shared/missing` not found",
+    "7: Missing partial shared/_missing",
+  ]);
+
+  const strictUri = fileUri(path.join(views, "strict", "show.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: strictUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= render "strict/row" %>\n',
+      },
+    },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  check("strict locals under actionview 7.1", diagnostics(strictUri), [
+    "1: missing local: :a",
   ]);
 
   await send(
@@ -464,7 +491,7 @@ const check = (label, actual, expected) => {
   check("haml diagnostics", diagnostics(hamlUri), [
     "10: Unknown Haml filter `:jav`",
     "13: Illegal nesting: content can't be both given on the same line as %p and nested within it.",
-    "12: Partial `shared/missing` not found",
+    "12: Missing partial shared/_missing",
   ]);
 
   await send(

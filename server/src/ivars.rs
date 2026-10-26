@@ -2,6 +2,7 @@
 //! callbacks that run for it. A partial has no action of its own, so it gets every action's.
 
 use crate::partials::{app_root, snake_case, template_stem, views_root};
+use crate::project::Project;
 use crate::ruby::logical_lines;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -30,10 +31,10 @@ pub struct Assignment {
 
 /// The controller (or mailer) of the view folder `views/<dir>`, and the action the view renders (`None` for a
 /// partial).
-fn source_of(view: &Path) -> Option<(PathBuf, Option<String>)> {
+fn source_of(project: &Project, view: &Path) -> Option<(PathBuf, Option<String>)> {
     let rel = view.strip_prefix(views_root(view)?).ok()?;
     let dir = rel.parent()?.to_str()?.replace('\\', "/");
-    let name = template_stem(rel.file_name()?.to_str()?);
+    let name = template_stem(project, rel.file_name()?.to_str()?);
     if dir.is_empty() || dir.starts_with("layouts") {
         return None;
     }
@@ -119,8 +120,8 @@ fn assignments_in(file: &Path, text: &str, lines: std::ops::Range<usize>) -> Vec
 
 /// Assignments the view at `view` can see: from the action and the callbacks its controller and the controller's
 /// parents in the app run for it, wherever along that chain the methods are defined.
-pub fn for_view(view: &Path) -> Vec<Assignment> {
-    let (Some((controller, action)), Some(app)) = (source_of(view), app_root(view)) else { return vec![] };
+pub fn for_view(project: &Project, view: &Path) -> Vec<Assignment> {
+    let (Some((controller, action)), Some(app)) = (source_of(project, view), app_root(view)) else { return vec![] };
     let chain = ancestry(&app, controller);
     let Some((_, own_text)) = chain.first() else { return vec![] };
     let mut wanted: Vec<String> = chain.iter().flat_map(|(_, text)| callbacks_for(text, action.as_deref())).collect();
@@ -207,7 +208,7 @@ end
         );
         std::fs::create_dir_all(root.join("app/views/users")).unwrap();
         let names = |view: &str| -> Vec<String> {
-            let mut names: Vec<String> = for_view(&root.join(view)).into_iter().map(|a| a.name).collect();
+            let mut names: Vec<String> = for_view(&Project::unknown(), &root.join(view)).into_iter().map(|a| a.name).collect();
             names.sort();
             names.dedup();
             names
@@ -217,7 +218,8 @@ end
         assert_eq!(names("app/views/users/_card.html.erb"), ["count", "locale", "menu", "tab", "user", "users"]);
         assert!(names("app/views/layouts/application.html.erb").is_empty());
         assert_eq!(names("app/views/admin/users/show.html.erb"), ["admin", "locale", "user"]);
-        let user = for_view(&root.join("app/views/users/show.html.erb")).into_iter().find(|a| a.name == "user").unwrap();
+        let user =
+            for_view(&Project::unknown(), &root.join("app/views/users/show.html.erb")).into_iter().find(|a| a.name == "user").unwrap();
         assert_eq!((user.file.file_name().unwrap().to_str().unwrap(), user.line), ("users_controller.rb", 18));
         std::fs::remove_dir_all(&root).unwrap();
     }

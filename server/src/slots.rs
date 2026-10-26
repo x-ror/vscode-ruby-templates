@@ -2,6 +2,7 @@
 //! `c.with_header` inside `render(CardComponent.new) do |c|`, read in the component's template as `header`.
 
 use crate::partials::{resolve_component, singularize, template_stem};
+use crate::project::Project;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -44,8 +45,8 @@ pub fn block_component<'a>(before: &'a str, var: &str) -> Option<&'a str> {
 
 /// The class file of a component's template: `card_component.html.erb` next to it, or one folder up for a
 /// sidecar `card_component/card_component.html.erb`.
-pub fn class_of_template(template: &Path) -> Option<PathBuf> {
-    let stem = template_stem(template.file_name()?.to_str()?);
+pub fn class_of_template(project: &Project, template: &Path) -> Option<PathBuf> {
+    let stem = template_stem(project, template.file_name()?.to_str()?);
     if !stem.ends_with("_component") {
         return None;
     }
@@ -56,8 +57,8 @@ pub fn class_of_template(template: &Path) -> Option<PathBuf> {
 }
 
 /// Slots of the component class `name` as seen from `current`.
-pub fn component_slots(current: &Path, name: &str) -> Vec<Slot> {
-    let class = resolve_component(current, name).into_iter().find(|f| f.extension().is_some_and(|e| e == "rb"));
+pub fn component_slots(project: &Project, current: &Path, name: &str) -> Vec<Slot> {
+    let class = resolve_component(project, current, name).into_iter().find(|f| f.extension().is_some_and(|e| e == "rb"));
     class.and_then(|f| std::fs::read_to_string(f).ok()).map(|text| slots(&text)).unwrap_or_default()
 }
 
@@ -91,13 +92,16 @@ mod tests {
             std::fs::write(components.join(f), CARD).unwrap();
         }
         assert_eq!(
-            class_of_template(&components.join("card_component/card_component.html.erb")),
+            class_of_template(&Project::unknown(), &components.join("card_component/card_component.html.erb")),
             Some(components.join("card_component.rb"))
         );
-        assert_eq!(class_of_template(&components.join("list_component.html.slim")), Some(components.join("list_component.rb")));
-        assert_eq!(class_of_template(&root.join("app/views/users/show.html.erb")), None);
+        assert_eq!(
+            class_of_template(&Project::unknown(), &components.join("list_component.html.slim")),
+            Some(components.join("list_component.rb"))
+        );
+        assert_eq!(class_of_template(&Project::unknown(), &root.join("app/views/users/show.html.erb")), None);
         let view = root.join("app/views/home/index.html.erb");
-        assert_eq!(component_slots(&view, "CardComponent").len(), 3);
+        assert_eq!(component_slots(&Project::unknown(), &view, "CardComponent").len(), 3);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

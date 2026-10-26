@@ -2,6 +2,7 @@
 
 use crate::erb::truncate;
 use crate::partials::{app_root, views_root};
+use crate::project::Project;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -45,17 +46,17 @@ pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)>
 }
 
 /// `users/_form.html.erb` → `users.form`, like ActionView's `@virtual_path.gsub(%r{/_?}, ".")`.
-pub fn lazy_scope(current: &Path) -> Option<String> {
+pub fn lazy_scope(project: &Project, current: &Path) -> Option<String> {
     let rel = current.strip_prefix(views_root(current)?).ok()?;
-    let stem = crate::partials::template_stem(rel.file_name()?.to_str()?);
+    let stem = crate::partials::template_stem(project, rel.file_name()?.to_str()?);
     let virtual_path = rel.with_file_name(stem).to_str()?.replace('\\', "/");
     Some(format!("/{virtual_path}").replace("/_", "/").replace('/', ".")[1..].to_string())
 }
 
 /// `.title` → `users.index.title` in users/index; other keys as written.
-pub fn full_key(current: &Path, key: &str) -> Option<String> {
+pub fn full_key(project: &Project, current: &Path, key: &str) -> Option<String> {
     if key.starts_with('.') {
-        Some(format!("{}{key}", lazy_scope(current)?))
+        Some(format!("{}{key}", lazy_scope(project, current)?))
     } else {
         Some(key.to_string())
     }
@@ -114,8 +115,8 @@ fn inline_code(v: &str) -> String {
 }
 
 /// Leaf keys of every locale starting with `prefix` and a preview value; `.x` prefixes list the view's lazy keys as `.x`.
-pub fn completions(files: &[(PathBuf, Vec<Translation>)], current: &Path, prefix: &str) -> Vec<(String, String)> {
-    let scope = if prefix.starts_with('.') { lazy_scope(current) } else { Some(String::new()) };
+pub fn completions(project: &Project, files: &[(PathBuf, Vec<Translation>)], current: &Path, prefix: &str) -> Vec<(String, String)> {
+    let scope = if prefix.starts_with('.') { lazy_scope(project, current) } else { Some(String::new()) };
     let Some(scope) = scope else { return vec![] };
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for t in files.iter().flat_map(|(_, keys)| keys) {
@@ -262,12 +263,12 @@ mod tests {
     #[test]
     fn lazy_scope_from_view_path() {
         let views = Path::new("/r/app/views");
-        assert_eq!(lazy_scope(&views.join("users/index.html.erb")).as_deref(), Some("users.index"));
-        assert_eq!(lazy_scope(&views.join("users/_form.html+phone.erb")).as_deref(), Some("users.form"));
-        assert_eq!(lazy_scope(&views.join("users/_user.v2.html.erb")).as_deref(), Some("users.user.v2"));
-        assert_eq!(lazy_scope(&views.join("admin/_x/_card.html.haml")).as_deref(), Some("admin.x.card"));
-        assert_eq!(full_key(&views.join("users/index.html.erb"), "a.b").as_deref(), Some("a.b"));
-        assert_eq!(full_key(Path::new("/tmp/x.html.erb"), ".title"), None);
+        assert_eq!(lazy_scope(&Project::unknown(), &views.join("users/index.html.erb")).as_deref(), Some("users.index"));
+        assert_eq!(lazy_scope(&Project::unknown(), &views.join("users/_form.html+phone.erb")).as_deref(), Some("users.form"));
+        assert_eq!(lazy_scope(&Project::unknown(), &views.join("users/_user.v2.html.erb")).as_deref(), Some("users.user.v2"));
+        assert_eq!(lazy_scope(&Project::unknown(), &views.join("admin/_x/_card.html.haml")).as_deref(), Some("admin.x.card"));
+        assert_eq!(full_key(&Project::unknown(), &views.join("users/index.html.erb"), "a.b").as_deref(), Some("a.b"));
+        assert_eq!(full_key(&Project::unknown(), Path::new("/tmp/x.html.erb"), ".title"), None);
     }
 
     #[test]
@@ -330,7 +331,7 @@ mod tests {
 
         let defs: Vec<(PathBuf, usize)> = lookup(&files, "hello").map(|(p, t)| (p.to_path_buf(), t.line)).collect();
         assert_eq!(defs, [(locales.join("en.yml"), 1), (locales.join("uk.yml"), 1)]);
-        let key = full_key(&partial, ".title").unwrap();
+        let key = full_key(&Project::unknown(), &partial, ".title").unwrap();
         assert_eq!(lookup(&files, &key).count(), 2);
 
         assert_eq!(hover(&files, "hello").unwrap(), "`hello`\n\n- **en**: `Hello`\n- **uk**: `Привіт`\n\nMissing in `de`");
@@ -338,11 +339,11 @@ mod tests {
         assert_eq!(hover(&files, "html").unwrap().lines().nth(2), Some("- **en**: ``<b>`x`</b>``"));
         assert_eq!(inline_code("`a"), "`` `a ``");
 
-        let labels = |prefix| completions(&files, &partial, prefix).into_iter().map(|(l, _)| l).collect::<Vec<_>>();
+        let labels = |prefix| completions(&Project::unknown(), &files, &partial, prefix).into_iter().map(|(l, _)| l).collect::<Vec<_>>();
         assert_eq!(labels(""), ["hello", "html", "users.form.title"]);
         assert_eq!(labels("users."), ["users.form.title"]);
         assert_eq!(labels("."), [".title"]);
-        assert_eq!(completions(&files, &partial, ".t")[0].1, "en: New user");
+        assert_eq!(completions(&Project::unknown(), &files, &partial, ".t")[0].1, "en: New user");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

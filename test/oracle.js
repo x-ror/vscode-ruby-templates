@@ -549,14 +549,213 @@ const languageReport = async (lang) => {
   }
 };
 
-const lang = languages[process.argv[2]];
+// The rendering context: what Rails raises for `render` calls, per version of actionview, against ours per project.
+const CONTEXT_ACTIONVIEW_VERSIONS = ["7.0.8.7", "7.1.5.1", "8.0.1", "8.0.2"];
+
+const lockfile = (gem, version) =>
+  `GEM\n  remote: https://rubygems.org/\n  specs:\n    ${gem} (${version})\n\nPLATFORMS\n  ruby\n\nDEPENDENCIES\n  ${gem}\n`;
+
+// `lock` is null for the app without a Gemfile.lock; `rails` is the actionview version Rails renders with.
+const contextFixtures = [
+  ...CONTEXT_ACTIONVIEW_VERSIONS.map((version) => ({
+    title: `actionview ${version}`,
+    dir: `actionview-${version}`,
+    lock: lockfile("actionview", version),
+    rails: version,
+  })),
+  {
+    title: "sinatra (no actionview)",
+    dir: "sinatra",
+    lock: lockfile("sinatra", "4.1.1"),
+  },
+  { title: "no Gemfile.lock", dir: "no-lockfile", lock: null },
+];
+
+const contextPartials = {
+  "_card.html.erb": "<%# locals: (a:, b:) -%>\n<p><%= a %><%= b %></p>\n",
+  "_none.html.erb": "<%# locals: () -%>\n<p>none</p>\n",
+  "t.html.erb": "T",
+  "../layouts/lt.html.erb": "LT[<%= yield %>]",
+};
+
+// Each render is its own template, so every error is attributable (Rails stops at the first per render).
+const contextRenders = [
+  'render "users/missing"',
+  'render partial: "users/missing"',
+  'render partial: "users/card", locals: {}',
+  'render partial: "users/card", locals: { a: 1 }',
+  'render partial: "users/card", locals: { a: 1, b: 2, c: 3 }',
+  'render partial: "users/card", locals: { a: 1, b: 2, c: 3, d: 4 }',
+  'render "users/card", a: 1',
+  'render "users/card", a: 1, b: 2, c: 3',
+  'render "users/card", a: 1, b: 2',
+  'render partial: "users/none", locals: { x: 1 }',
+  'render "users/none", x: 1',
+  'render "users/none"',
+  'render template: "users/t", layout: "layouts/lt"',
+  'render template: "users/t", layout: "layouts/gone"',
+  'render partial: "users/card", layout: "users/missing_layout", locals: { a: 1, b: 2 }',
+  'render template: "users/gone"',
+];
+
+// The diagnostics of ours that answer a render: the unresolved partial and the strict locals ones.
+const isRenderDiagnostic = (message) =>
+  /^Missing (partial|template) |^(missing|unknown) (local|keywords?)\b|^no locals accepted/.test(
+    message,
+  );
+
+// On 7.0 the `locals:` line is a comment, so a partial that uses its locals raises NameError from its own body; no
+// render check covers that. Any other error is a Rails error our render checks are measured against.
+const isBodyError = (fixture, error) =>
+  fixture.rails.startsWith("7.0.") &&
+  error.class === "NameError" &&
+  error.message.startsWith("undefined local variable or method");
+
+// MissingTemplate's message goes on with the formats and search paths, which depend on the app; only its start is compared.
+const MISSING_TEMPLATE_DETAILS = " with ";
+
+const contextOfficial = async (fixture, root, template) => {
+  const r = await runWithInput("ruby", [
+    path.join(oracleDir, "context.rb"),
+    fixture.rails,
+    root,
+    `users/${template}`,
+  ]);
+  if (r.status !== 0) throw new Error(`context.rb failed: ${r.stderr}`);
+  const { error, rendered } = JSON.parse(r.stdout);
+  if (!error) return null;
+  if (isBodyError(fixture, error)) return { bodyError: true };
+  const cut = error.message.indexOf(MISSING_TEMPLATE_DETAILS);
+  const missing = error.class === "ActionView::MissingTemplate" && cut >= 0;
+  return {
+    message: missing ? error.message.slice(0, cut) : error.message,
+    line: error.line,
+    partlyCompared: missing,
+  };
+};
+
+const contextReport = async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-context-"));
+  try {
+    for (const fixture of contextFixtures) {
+      const root = path.join(dir, fixture.dir);
+      const views = path.join(root, "app", "views", "users");
+      fs.mkdirSync(views, { recursive: true });
+      if (fixture.lock !== null) {
+        fs.writeFileSync(path.join(root, "Gemfile.lock"), fixture.lock);
+      }
+      for (const [name, text] of Object.entries(contextPartials)) {
+        fs.mkdirSync(path.dirname(path.join(views, name)), { recursive: true });
+        fs.writeFileSync(path.join(views, name), text);
+      }
+      const renders = contextRenders.map((call, i) => {
+        const template = `render_${i + 1}`;
+        const file = path.join(views, `${template}.html.erb`);
+        // The render sits on a different line in each template, so the line check tells lines apart.
+        fs.writeFileSync(file, `${"<p>x</p>\n".repeat(i)}<%= ${call} %>\n`);
+        return { call, template, file };
+      });
+      const official = await mapParallel(
+        renders,
+        PARALLEL_RUBY_PROCESSES,
+        // Without actionview in the lockfile nothing renders through Rails, and no render check applies.
+        (render) =>
+          fixture.rails
+            ? contextOfficial(fixture, root, render.template)
+            : null,
+      );
+      const ours = oursByPath(
+        { extension: ".erb" },
+        renders.map((render) => render.file),
+      );
+      let officialErrors = 0;
+      let oursErrors = 0;
+      const same = { warning: 0, error: 0 };
+      let partlyCompared = 0;
+      let bodyErrors = 0;
+      const mismatches = [];
+      renders.forEach((render, i) => {
+        const expected = official[i]?.bodyError ? null : official[i];
+        if (official[i]?.bodyError) bodyErrors++;
+        const answers = (ours.get(path.resolve(render.file)) ?? []).filter(
+          (d) => isRenderDiagnostic(d.message),
+        );
+        if (expected) officialErrors++;
+        if (expected?.partlyCompared) partlyCompared++;
+        if (answers.length) oursErrors++;
+        const agreeing = expected
+          ? answers.find(
+              (d) => d.message === expected.message && d.line === expected.line,
+            )
+          : undefined;
+        if (agreeing || (!expected && !answers.length)) {
+          if (agreeing) same[agreeing.severity]++;
+          return;
+        }
+        const show = (d) => `${JSON.stringify(d.message)} at line ${d.line}`;
+        mismatches.push(
+          `${render.call}  (render_${i + 1}.html.erb)\n` +
+            `    official: ${expected ? show(expected) : "no error"}${expected?.partlyCompared ? " (rest of the message not compared)" : ""}\n` +
+            `    ours:     ${answers.length ? answers.map(show).join("; ") : "no diagnostic"}`,
+        );
+      });
+      if (fixture !== contextFixtures[0]) console.log();
+      console.log(`context ${fixture.title}  (${renders.length} renders)`);
+      if (!fixture.rails) {
+        console.log(
+          `errors:  official n/a (no Rails render), ours ${oursErrors}`,
+        );
+      } else {
+        // Ours are predictions of a render-time error, so they are warnings; say which severity agreed.
+        const severities = Object.entries(same)
+          .filter(([, count]) => count)
+          .map(([severity, count]) => `${count} as ${severity}`);
+        const agreed = same.warning + same.error;
+        console.log(
+          `errors:  official ${officialErrors}, ours ${oursErrors}, same ${agreed}${agreed ? ` (ours ${severities.join(", ")})` : ""}`,
+        );
+      }
+      if (partlyCompared) {
+        console.log(
+          `not compared: ${partlyCompared} (MissingTemplate's formats and search paths)`,
+        );
+      }
+      if (bodyErrors) {
+        console.log(
+          `not compared: ${bodyErrors} (errors from the partial's own body, which no render check covers)`,
+        );
+      }
+      console.log(`mismatches: ${mismatches.length}`);
+      if (process.env.VERBOSE) mismatches.forEach((m) => console.log(m));
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+// Every actionview version of the fixtures must load at exactly that version.
+const contextInstalled = () =>
+  CONTEXT_ACTIONVIEW_VERSIONS.every((version) => {
+    const script = `gem "actionview", "${version}"; require "logger"; require "uri"; require "action_view"; print ActionView::VERSION::STRING`;
+    const r = spawnSync("ruby", ["-e", script], { encoding: "utf8" });
+    return r.status === 0 && r.stdout === version;
+  });
+
+const contextLanguage = {
+  gem: "actionview",
+  version: CONTEXT_ACTIONVIEW_VERSIONS.join(", "),
+  installed: contextInstalled,
+  report: contextReport,
+};
+const lang =
+  process.argv[2] === "context" ? contextLanguage : languages[process.argv[2]];
 if (!lang) {
   console.error(
-    `usage: bun test/oracle.js <${Object.keys(languages).join("|")}>`,
+    `usage: bun test/oracle.js <${[...Object.keys(languages), "context"].join("|")}>`,
   );
   process.exit(2);
 }
-if (!installed(lang)) {
+if (!(lang.installed ?? installed)(lang)) {
   console.log(
     `skipped: ${lang.gem} ${lang.version}${lang.pins ? ` with ${lang.pins.map((p) => `${p.gem} ${p.version}`).join(", ")}` : ""} is not installed (ruby -r${lang.gem}); see test/oracle/README.md`,
   );
@@ -568,4 +767,4 @@ if (!fs.existsSync(bin)) {
   );
   process.exit(2);
 }
-await languageReport(lang);
+await (lang.report ?? (() => languageReport(lang)))();

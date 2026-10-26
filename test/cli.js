@@ -113,6 +113,26 @@ try {
     run(["format", path.join(root, "missing.html.slim")]).status,
     2,
   );
+  const dangling = file("dangling.html.erb", '<%= render "users/missing" %>\n');
+  const unresolved = /Missing partial users\/_missing/;
+  assert.doesNotMatch(
+    run(["check", dangling]).stdout,
+    unresolved,
+    "no lockfile",
+  );
+  const lock = path.join(root, "Gemfile.lock");
+  fs.writeFileSync(lock, "GEM\n  specs:\n    actionview (7.1.3)\n");
+  assert.match(run(["check", dangling]).stdout, unresolved, "Rails lockfile");
+  fs.writeFileSync(lock, "GEM\n  specs:\n    sinatra (4.0.0)\n");
+  assert.doesNotMatch(run(["check", dangling]).stdout, unresolved, "Sinatra");
+  fs.writeFileSync(lock, "GEM\n  specs:\n    actionview (7.1.3)\n");
+  const template = file(
+    "template.html.erb",
+    '<%= render template: "users/gone" %>\n',
+  );
+  assert.match(run(["check", template]).stdout, /Missing template users\/gone/);
+  fs.rmSync(lock);
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

@@ -32,7 +32,7 @@ Status: pending
 - **Locale-only ERB views are HTML** (D1): `<name>.<locale>.erb` under `app/views` gets the HTML checks (`html_host`).
 - **turbo_stream views keep the HTML partial fallback** (D2): turbo-rails registers no lookup fallback itself, but Turbo sends `Accept: text/vnd.turbo-stream.html, text/html`, so ActionView looks up both formats. A missed warning is the worse case of being wrong.
 - **Erubi, Jbuilder and Builder are supported; Liquid is deferred** (D5) until someone asks, since Shopify ships its own extension. Plans stay in `docs/*_TODO.md`.
-- **Formats an app registers itself are deferred to the project context** (D11): `KNOWN_FORMATS` (`partials.rs`) is a fresh app's `Mime::SET`, so `_card.mobile.erb` after `Mime::Type.register_alias "text/html", :mobile` isn't the partial `card`. No one has hit it; when `docs/LINT_PLAN.md` stage 0b builds the project context, it also reads `Mime::Type.register` / `register_alias "…", :name` from `config/initializers/*.rb`, so passing the formats to the 20 `template_format` / `template_stem` calls happens once. A setting for gem-registered formats only when one comes up; not `bin/rails runner` (boots the app).
+- **Formats an app registers itself are read into the project context** (D11): `KNOWN_FORMATS` (`partials.rs`) is a fresh app's `Mime::SET`; `Mime::Type.register` / `register_alias "…", :name` in `config/initializers/**/*.rb` (the template's app and the lockfile's app, as `Mime::SET` is process-wide) are added by `Project::is_format`, used wherever a template name is split, so `_card.mobile.erb` is the partial `card`. Not read: gem registrations (a setting only when one comes up), multi-line or indirect calls; not `bin/rails runner` (boots the app).
 - **Symlinked folders under `app/views` are followed** (D7), by completion, partial rename and the template index; walkdir detects loops.
 - **Form-builder completion and helper hover only inside Ruby code** (D8), not in template text.
 - **Coding rules live in `CLAUDE.md`, and the agents point to it.** Bugs go through the cycle feature-dev → refactorer → test-writer. feature-dev and test-writer run on Sonnet.
@@ -51,4 +51,4 @@ Status: pending
 
 ## Open bugs
 
-- See also D11 (app-registered formats). The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.
+- None known. The fixed bugs are in `git log --grep "^fix"` and `CHANGELOG.md`.

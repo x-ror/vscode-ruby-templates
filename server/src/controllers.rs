@@ -2,6 +2,7 @@
 //! Controllers reach the server only for navigation; Ruby LSP owns everything else in them.
 
 use crate::partials::{app_root, matching_templates};
+use crate::project::Project;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -21,7 +22,7 @@ pub fn controller_path(file: &Path) -> Option<String> {
 
 /// Byte ranges on `line` of a controller that name views, with the files they name. `col` keeps only the
 /// reference under the cursor; links (`col` = None) leave out action names, which every `def` would carry.
-pub fn targets(file: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
+pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
     let (Some(app), Some(controller)) = (app_root(file), controller_path(file)) else { return vec![] };
     let views = app.join("views");
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
@@ -30,11 +31,11 @@ pub fn targets(file: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize
             Some((dir, base)) => (views.join(dir), base),
             None => (views.join(&controller), name),
         };
-        matching_templates(&dir, &if partial { format!("_{base}") } else { base.to_string() })
+        matching_templates(project, &dir, &if partial { format!("_{base}") } else { base.to_string() })
     };
     let mut out = Vec::new();
     if let Some(m) = LAYOUT.captures(line).and_then(|cap| cap.get(1)).filter(|m| at(m.start(), m.end())) {
-        out.push((m.start(), m.end(), matching_templates(&views.join("layouts"), m.as_str())));
+        out.push((m.start(), m.end(), matching_templates(project, &views.join("layouts"), m.as_str())));
     }
     if let Some(m) = ACTION.captures(line).and_then(|cap| cap.get(1)).filter(|m| col.is_some() && at(m.start(), m.end())) {
         out.push((m.start(), m.end(), in_views(m.as_str(), false)));
@@ -69,7 +70,7 @@ mod tests {
         let file = root.join("app/controllers/admin/users_controller.rb");
         assert_eq!(controller_path(&file).as_deref(), Some("admin/users"));
         let names = |line: &str, col: Option<usize>| -> Vec<(String, Vec<String>)> {
-            targets(&file, line, col)
+            targets(&Project::unknown(), &file, line, col)
                 .into_iter()
                 .map(|(s, e, found)| {
                     let rel = found.iter().map(|f| f.strip_prefix(root.join("app/views")).unwrap().to_string_lossy().replace('\\', "/"));
