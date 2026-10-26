@@ -128,6 +128,8 @@ pub struct Parsed {
     pub syntax_error: Option<SyntaxError>,
     /// Line and name of the first attribute repeated in one tag; Temple rejects it after parsing (only `class` merges).
     pub repeated_attribute: Option<(usize, String)>,
+    /// Line and (lower-cased) name of the first doctype Temple's xhtml format doesn't know.
+    pub invalid_doctype: Option<(usize, String)>,
     pub pieces: Vec<Piece>,
 }
 
@@ -195,6 +197,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             stop_line: None,
             syntax_error: None,
             repeated_attribute: None,
+            invalid_doctype: None,
             pieces: Vec::new(),
         },
         lines,
@@ -266,6 +269,14 @@ fn match_tag(r: &str) -> Option<(usize, bool)> {
     }
     let run = r.find(|c: char| !(is_word(c) || c == ':' || c == '-')).unwrap_or(r.len());
     Some((r[..run].trim_end_matches([':', '-']).len(), true))
+}
+
+/// Temple::HTML::Fast's `DOCTYPES[:xhtml]` and its `xml` directive.
+fn is_known_doctype(kind: &str) -> bool {
+    const KNOWN: &[&str] = &["1.1", "5", "html", "strict", "frameset", "mobile", "basic", "transitional", "svg"];
+    KNOWN.contains(&kind)
+        || kind == "xml"
+        || kind.strip_prefix("xml").is_some_and(|rest| rest.starts_with(is_space) && !trim_start(rest).is_empty())
 }
 
 fn is_doctype(r: &str) -> bool {
@@ -534,6 +545,10 @@ impl<'a> Parser<'a> {
         } else if let Some(engine) = self.match_engine(r) {
             self.embedded(engine);
         } else if is_doctype(r) {
+            let kind = r["doctype".len()..].trim_matches(is_space).to_lowercase();
+            if !is_known_doctype(&kind) {
+                self.out.invalid_doctype.get_or_insert((self.i, kind));
+            }
             self.out.pieces.push(Piece::Static("<!DOCTYPE html>".to_string()));
         } else if let Some((len, named)) = match_tag(r) {
             self.out.tag_slots.push(self.at());

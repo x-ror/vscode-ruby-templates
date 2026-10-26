@@ -74,11 +74,16 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         // Temple raises this while compiling, so it carries no line; the tag's line stands in.
         out.push(coded(error(range, format!("Multiple {name} attributes specified")), code::SYNTAX_ERROR));
     }
+    // Temple raises this after `EndInserter` and the attribute merger, so it only shows when they stay quiet.
+    let explicit_end = parsed.pieces.iter().any(|p| matches!(p, Piece::Control { code, .. } if is_explicit_end(code)));
+    let invalid_doctype = parsed.invalid_doctype.as_ref().filter(|_| parsed.valid && parsed.repeated_attribute.is_none() && !explicit_end);
+    if let Some((line, kind)) = invalid_doctype {
+        let raw = lines[*line];
+        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        out.push(coded(error(range, format!("Invalid doctype {kind}")), code::SYNTAX_ERROR));
+    }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
-    if parsed.valid
-        && parsed.repeated_attribute.is_none()
-        && !parsed.pieces.iter().any(|p| matches!(p, Piece::Control { code, .. } if is_explicit_end(code)))
-    {
+    if parsed.valid && parsed.repeated_attribute.is_none() && invalid_doctype.is_none() && !explicit_end {
         out.extend(slim_ruby::diagnostics(text, &parsed));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
@@ -564,6 +569,48 @@ mod tests {
         // The engines 5.2.2 still has.
         for name in ["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"] {
             assert_eq!(diagnostics(&format!("{name}:\n  x\n"), &[]).iter().filter(|d| d.message == "Expected tag").count(), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn doctypes_temple_does_not_know() {
+        // Temple::HTML::Fast, format xhtml: the table's keys and `xml [encoding]`, any case.
+        for (text, kind, line) in [
+            ("doctype\n", "", 0),
+            ("p\ndoctype foo\n", "foo", 1),
+            ("doctype html5\n", "html5", 0),
+            ("doctype  HTML Extra \n", "html extra", 0),
+            ("doctype xmlfoo\n", "xmlfoo", 0),
+            ("doctype foo\n= bar(\n", "foo", 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, format!("Invalid doctype {kind}"), "{text:?}");
+            assert_eq!(found[0].range.start.line, line, "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::SYNTAX_ERROR.into())), "{text:?}");
+        }
+        for kind in [
+            "html",
+            "HTML",
+            "5",
+            "1.1",
+            "Strict",
+            "frameset",
+            "mobile",
+            "basic",
+            "transitional",
+            "svg",
+            "xml",
+            "xml ISO-8859-1",
+            "XML utf-8",
+        ] {
+            assert_eq!(diagnostics(&format!("doctype {kind}\n"), &[]), vec![], "{kind}");
+        }
+        assert_eq!(diagnostics("p\n  doctype foo\n", &[]).len(), 1);
+        // Slim stops at its parser, `EndInserter` and the attribute merger first.
+        for text in ["doctype foo\n?bad\n", "doctype foo\n- end\n", "doctype foo\na id=1 id=2\n"] {
+            let found = diagnostics(text, &[]);
+            assert!(found.iter().all(|d| !d.message.starts_with("Invalid doctype")), "{text:?}");
         }
     }
 
