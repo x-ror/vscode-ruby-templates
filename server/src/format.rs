@@ -5,7 +5,7 @@
 use crate::lang::{html_host, slim_html_host, TemplateLang};
 use crate::{erb, erb_format, haml_format, haml_indent, slim_format, slim_indent, tags, util};
 use std::fmt;
-use tower_lsp::lsp_types::{Diagnostic, FormattingOptions, Url};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IndentStyle {
@@ -192,6 +192,10 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Res
     if settings.indent_style == IndentStyle::Tab {
         return skip(SkipKind::NotHandled, "Slim is only indented with spaces");
     }
+    let rejected = slim_indent::diagnostics(text, extra_engines).iter().any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+    if rejected {
+        return skip(SkipKind::Doubt, "Slim would reject the file");
+    }
     let Some(text) = slim_format::format(text, settings.indent_size, extra_engines, settings.trim_trailing_whitespace) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
@@ -318,6 +322,26 @@ mod tests {
     fn fmt(name: &str, text: &str, settings: &Settings) -> Result<String, Skipped> {
         let lang = TemplateLang::from_uri_or_id(&uri(name), None).unwrap();
         format(&uri(name), lang, text, settings, &[]).map(|f| f.text)
+    }
+
+    #[test]
+    fn slim_files_with_an_error_are_left_alone() {
+        // Misindented, so formatting would change them, each with an error Slim raises while compiling.
+        for text in [
+            "div\n    p\n        - end\n",
+            "div\n    p\n        a id=1 id=2\n",
+            "div\n    p\n        doctype foo\n",
+            "div\n    p\n        = foo(\n",
+            "div\n    p\n        ?bad\n",
+            "div\n    p\n        a(href=x\n",
+            "div\n    br/\n        p\n",
+            "div\n    p\n   q\n",
+        ] {
+            let skipped = fmt("a.html.slim", text, &Settings::default()).expect_err(text);
+            assert_eq!(skipped.reason, "Slim would reject the file", "{text:?}");
+        }
+        // Warnings don't count.
+        assert_eq!(fmt("a.html.slim", "div\n    br\n        p\n", &Settings::default()).as_deref(), Ok("div\n  br\n    p\n"));
     }
 
     #[test]
