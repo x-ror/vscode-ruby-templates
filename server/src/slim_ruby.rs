@@ -74,6 +74,16 @@ struct Generator<'a> {
     markup: String,
 }
 
+/// The Ruby `Slim::Engine` would generate, as far as this module reproduces it: markup, code and line breaks.
+fn generated(text: &str, extra_engines: &[String]) -> String {
+    compile(&crate::slim_parser::parse(text, extra_engines).pieces).source
+}
+
+/// Whether `Slim::Engine` would compile both texts to the same Ruby.
+pub fn same_compilation(before: &str, after: &str, extra_engines: &[String]) -> bool {
+    generated(before, extra_engines) == generated(after, extra_engines)
+}
+
 pub fn diagnostics(text: &str, parsed: &Parsed) -> Vec<Diagnostic> {
     let lines: Vec<&str> = text.lines().collect();
     let compiled = compile(&parsed.pieces);
@@ -323,6 +333,24 @@ mod tests {
 
     fn at(line: u32, message: &str) -> (u32, String) {
         (line, message.to_string())
+    }
+
+    #[test]
+    fn compilation_changes_with_text_offsets_but_not_with_indentation() {
+        let same = |a, b| same_compilation(a, b, &[]);
+        // A `|` continuation line that lost its offset, or text that lost its trailing space, changes the output.
+        assert!(!same("div\n  | a\n      b\n", "div\n  | a\n   b\n"));
+        assert!(!same("div\n  | a\n      b\n", "div\n  | a\n  b\n"));
+        assert!(!same("p text  \n", "p text\n"));
+        assert!(!same("p\n  | a\n\n  b\n", "p\n  | a\n  b\n"));
+        assert!(!same("javascript:\n  if (x) {\n    y();\n  }\n", "javascript:\n  if (x) {\n  y();\n  }\n"));
+        assert!(!same("ruby:\n  a = <<~T\n    x\n  T\n", "ruby:\n  a = <<~T\n  x\n  T\n"));
+        // Moving a block as a whole, trailing empty lines and a tab for four spaces change nothing.
+        assert!(same("div\n  | a\n      b\n", "div\n      | a\n          b\n"));
+        assert!(same("p\n  - if x\n    a\n", "p\n    - if x\n        a\n"));
+        assert!(same("p\n\n\n", "p\n"));
+        assert!(same("p\n\tq\n", "p\n    q\n"));
+        assert!(same("p\r\n  q\r\n", "p\n  q\n"));
     }
 
     #[test]

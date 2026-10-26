@@ -291,18 +291,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                               |
-| ------------------------ | ------------------------------------------------------------------------------------ |
-| 0. Harness               | done                                                                                 |
-| 0b. Context              | done                                                                                 |
-| 1a. Slim errors          | done                                                                                 |
-| 1b. Slim format          | in progress: files with a 1a error are left unchanged; trailing empty lines collapse |
-| 2a. Haml errors          | not started                                                                          |
-| 2b. Haml format          | not started                                                                          |
-| 3a. ERB errors           | not started                                                                          |
-| 3b. ERB format           | not started                                                                          |
-| 4. Editor and CLI        | not started                                                                          |
-| 5. Remove external tools | not started                                                                          |
+| Stage                    | Status                                                                                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Harness               | done                                                                                                                                           |
+| 0b. Context              | done                                                                                                                                           |
+| 1a. Slim errors          | done                                                                                                                                           |
+| 1b. Slim format          | in progress: files with a 1a error are left unchanged; trailing empty lines collapse; compiled-output guard; oracle perturbed pass 1,393/1,393 |
+| 2a. Haml errors          | not started                                                                                                                                    |
+| 2b. Haml format          | not started                                                                                                                                    |
+| 3a. ERB errors           | not started                                                                                                                                    |
+| 3b. ERB format           | not started                                                                                                                                    |
+| 4. Editor and CLI        | not started                                                                                                                                    |
+| 5. Remove external tools | not started                                                                                                                                    |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

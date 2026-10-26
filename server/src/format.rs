@@ -3,7 +3,7 @@
 //! with the reason.
 
 use crate::lang::{html_host, slim_html_host, TemplateLang};
-use crate::{erb, erb_format, haml_format, haml_indent, slim_format, slim_indent, tags, util};
+use crate::{erb, erb_format, haml_format, haml_indent, slim_format, slim_indent, slim_ruby, tags, util};
 use std::fmt;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
 
@@ -196,9 +196,13 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Res
     if rejected {
         return skip(SkipKind::Doubt, "Slim would reject the file");
     }
+    let original = text;
     let Some(text) = slim_format::format(text, settings.indent_size, extra_engines, settings.trim_trailing_whitespace) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
+    if !slim_ruby::same_compilation(original, &text, extra_engines) {
+        return skip(SkipKind::Doubt, "the compiled output would change");
+    }
     // Slim compiles every line, blank ones included, so line counts stay as they are.
     let fixed = vec![true; text.split('\n').count()];
     Ok(Indented { text, fixed, notes: vec![] })
