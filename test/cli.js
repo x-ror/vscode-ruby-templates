@@ -34,6 +34,7 @@ const file = (name, text) => {
 const messy = file("show.html.slim", "div\n    p  \n");
 const clean = file("index.html.slim", "div\n  p\n");
 const broken = file("broken.html.slim", "p\n    a\n  b\n");
+const compileError = file("ending.html.slim", "div\n    p\n        - end\n");
 const notes = file("notes.txt", "x");
 
 try {
@@ -64,6 +65,11 @@ try {
   assert.strictEqual(r.status, 1);
   assert.deepStrictEqual(r.stdout.trim().split("\n"), [messy]);
   assert.match(r.stderr, /broken\.html\.slim: left unchanged: /);
+  assert.match(
+    r.stderr,
+    /ending\.html\.slim: left unchanged: Slim would reject the file/,
+    "an error Slim raises while compiling stops the formatter too",
+  );
   assert.doesNotMatch(r.stderr, /notes|index/, "only doubts are reported");
   assert.strictEqual(run(["format", views]).status, 2, "stdout takes one file");
 

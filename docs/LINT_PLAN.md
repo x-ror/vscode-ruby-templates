@@ -137,7 +137,7 @@ We show it as a diagnostic at line 3, column 2, message `Malformed indentation`,
 - A nested line moves to its parent's indentation + 2.
 - Verbatim text (`|`, `'`): "each following line that is indented greater than the pipe is copied over" and the first line sets the left margin, so continuation lines move with the pipe line, keeping their offset from it.
 - Embedded engine bodies, multi-line Ruby (`,` or `\` continuation) and multi-line attribute wrappers move as a block with their first line.
-- Trailing whitespace is kept on every line whose output contains it: verbatim text (`|`, `'`, `|<`, `|>`, `|<>`) and its continuation lines, and inline tag text (`p foo   ` compiles to `<p>foo   </p>`); it is removed only on lines whose compiled output doesn't contain it. A single final newline.
+- Trailing whitespace is kept on every line whose output contains it: verbatim text (`|`, `'`, `|<`, `|>`, `|<>`) and its continuation lines, and inline tag text (`p foo   ` compiles to `<p>foo   </p>`); it is removed only on lines whose compiled output doesn't contain it. A single final newline: whitespace-only lines at the end stay, since Slim compiles them, and the empty lines after them collapse into it, since Slim drops them (checked with the oracle, also at the end of `|` text blocks and engine bodies).
 - Tabs: Slim reads a tab as `tabsize: 4`; a tab-indented file is converted to spaces only if the compiled output stays identical.
 - A file with an error (1a) is not formatted.
 
@@ -218,6 +218,7 @@ Decided (2026-10-25):
 3. **Remove, real bugs without an official source:** `silent-output-helper` (ERB, Slim) and `unsafe-output`; no exception to principle 1. The first case of `unclosed-tag` stays: it has a source in WHATWG (3a).
 4. **HTML of Slim and Haml output** is in scope, citing WHATWG (1a, 2a); `void-children` stays with that source.
 5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
+6. **Editor and `.editorconfig` give the Slim formatter only the indentation width (default 2); it always writes spaces and keeps the file's line endings** (decided 2026-10-26).
 
 ### Built-in diagnostic codes
 
@@ -285,7 +286,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 | Item                                      | Where                        | Official sources say                                           | Proposal                                                             |
 | ----------------------------------------- | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `.editorconfig` and the editor's tab size | `config.rs`, language server | none of the languages reads them                               | use them only for the indentation width (default 2)                  |
+| `.editorconfig` and the editor's tab size | `config.rs`, language server | none of the languages reads them                               | decided: width only (6)                                              |
 | `ruby-templates.json`                     | not built                    | none                                                           | only our own settings (indent width, on/off per language), if wanted |
 | The `herb` crate as ERB parser            | not built                    | Herb is third-party; Erubi's regexp is the official tag syntax | don't add it                                                         |
 
@@ -295,8 +296,8 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | ------------------------ | ----------- |
 | 0. Harness               | done        |
 | 0b. Context              | done        |
-| 1a. Slim errors          | in review   |
-| 1b. Slim format          | not started |
+| 1a. Slim errors          | done        |
+| 1b. Slim format          | in review   |
 | 2a. Haml errors          | not started |
 | 2b. Haml format          | not started |
 | 3a. ERB errors           | not started |

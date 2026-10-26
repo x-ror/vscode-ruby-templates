@@ -27,7 +27,7 @@ What each language does with them:
 
 - **ERB** (HTML views only): all of them. Content whitespace (`<pre>`, `<textarea>`, Ruby strings…) is never trimmed or collapsed.
 - **Haml**: keeps the file's own indent unit (its first indented line, as Haml reads it), so indent settings don't apply; whitespace is trimmed on structural lines only, as Haml does itself.
-- **Slim**: spaces only (a tab-indented editor or `indent_style = tab` leaves the file alone); blank lines are kept, since Slim compiles every line.
+- **Slim**: only the indentation width counts (the editor's tab size or `indent_size`, default 2). It always writes spaces, even for a tab-indenting editor or `indent_style = tab`, keeps each line's ending, ends the file with one line ending, trims trailing whitespace only where Slim ignores it and keeps blank lines, since Slim compiles every line. `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace`, the editor's file options and `.slim-lint.yml` change nothing.
 
 ## Ignored on purpose
 

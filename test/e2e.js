@@ -651,7 +651,11 @@ const check = (label, actual, expected) => {
     textDocument: { uri: editUri },
     options: { tabSize: 2, insertSpaces: false },
   });
-  expect("slim formatting, tabs", tabs.result === null, tabs.result);
+  expect(
+    "slim formatting, tabs",
+    tabs.result?.length === 1 && tabs.result[0].newText === formatted,
+    JSON.stringify(tabs.result?.[0]?.newText),
+  );
 
   // Haml through the same formatter: the file's own unit, the whole document or the lines of a range.
   const reindentUri = fileUri(path.join(views, "users", "reindent.html.haml"));

@@ -210,8 +210,10 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         indents: Vec::new(),
         expecting: false,
     };
+    // Slim's `split` drops the empty lines at the end.
+    let count = p.lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
     let mut next = 0;
-    while next < p.lines.len() {
+    while next < count {
         p.i = next;
         p.parse_line();
         next = p.i + 1;
@@ -322,30 +324,22 @@ fn matching_braces(s: &str) -> Vec<Option<usize>> {
     closers
 }
 
-/// Slim's `parse_text_block` of a `ruby:` body, as `collect_text` joins it.
-struct RubyBody {
-    /// The line the code starts on: the inline text's, else the first line of the block.
-    line: Option<usize>,
-    text: String,
-    /// Column the lines are measured from; the first line's, lowered by any line indented less.
+/// How `parse_text_block` lays a text block out: the column the lines are measured from (the first line's, lowered by any
+/// line indented less) and the empty lines waiting for the next one.
+struct Layout {
     text_indent: Option<usize>,
     blank: usize,
 }
 
-impl RubyBody {
-    fn new(first: usize, inline: Option<(usize, &str)>) -> Self {
-        let (text_indent, text) = inline.map_or((None, String::new()), |(column, text)| (Some(column), text.to_string()));
-        RubyBody { line: inline.map(|_| first), text, text_indent, blank: 0 }
-    }
-
+impl Layout {
     fn push_blank(&mut self) {
         if self.text_indent.is_some() {
             self.blank += 1;
         }
     }
 
-    fn push_line(&mut self, number: usize, indent: usize, line: &str) {
-        self.line.get_or_insert(number);
+    /// What goes before the text of a line indented `indent`: its empty lines, a line break, and its offset.
+    fn lead(&mut self, indent: usize) -> String {
         let mut offset = 0;
         if let Some(base) = self.text_indent {
             if indent < base {
@@ -354,14 +348,29 @@ impl RubyBody {
                 offset = indent - base;
             }
         }
-        self.text.push_str(&"\n".repeat(self.blank));
+        let mut lead = "\n".repeat(self.blank);
         self.blank = 0;
         if self.text_indent.is_some() {
-            self.text.push('\n');
+            lead.push('\n');
         }
-        self.text.push_str(&" ".repeat(offset));
-        self.text.push_str(line);
+        lead.push_str(&" ".repeat(offset));
         self.text_indent.get_or_insert(indent);
+        lead
+    }
+}
+
+/// A `ruby:` body, as `collect_text` joins it.
+struct RubyBody {
+    /// The line the code starts on: the inline text's, else the first line of the block.
+    line: Option<usize>,
+    text: String,
+}
+
+impl RubyBody {
+    fn push_line(&mut self, number: usize, lead: &str, line: &str) {
+        self.line.get_or_insert(number);
+        self.text.push_str(lead);
+        self.text.push_str(line);
     }
 
     fn finish(&self) -> String {
@@ -514,7 +523,7 @@ impl<'a> Parser<'a> {
             self.marker(2, Marker::HtmlComment);
             self.skip(2 + usize::from(after.starts_with(' ')));
             self.out.pieces.push(Piece::Static("<!--".to_string()));
-            self.text_block(Body::Interpolated, false);
+            self.text_block(Body::Interpolated, false, self.base_indent() + usize::from(after.starts_with(' ')) + 2);
             self.out.pieces.push(Piece::Static("-->".to_string()));
         } else if r.len() > 2 && r.starts_with("/[") && r.trim_end_matches(is_space).ends_with(']') {
             self.marker(r.trim_end_matches(is_space).len(), Marker::ConditionalComment);
@@ -529,7 +538,8 @@ impl<'a> Parser<'a> {
             let modifiers = text_modifiers(&r[1..]);
             self.marker(1 + modifiers.trim_end().len(), Marker::Text);
             self.skip(1 + modifiers.len());
-            self.text_block(Body::Interpolated, false);
+            let text_indent = self.base_indent() + modifiers.matches(' ').count() + 1;
+            self.text_block(Body::Interpolated, false, text_indent);
         } else if r.starts_with('<') {
             self.interpolate(self.pos, self.end);
             self.out.lines[self.i].keeps_trailing = true;
@@ -611,7 +621,9 @@ impl<'a> Parser<'a> {
             name if INTERPOLATING_ENGINES.contains(&name) => Body::Interpolated,
             _ => Body::Opaque,
         };
-        self.text_block(body, true);
+        let attributes = self.lines[line][engine.attrs.clone()].chars().count();
+        let text_indent = self.lines[line][..engine.body].chars().count() + attributes;
+        self.text_block(body, true, text_indent);
     }
 
     fn parse_tag(&mut self, name: &str) {
@@ -703,7 +715,8 @@ impl<'a> Parser<'a> {
             self.expecting = true;
         } else {
             self.skip(usize::from(r.starts_with(' ')));
-            self.text_block(Body::Interpolated, true);
+            let text_indent = self.lines[self.i][..self.pos].chars().count();
+            self.text_block(Body::Interpolated, true, text_indent);
         }
         !void
     }
@@ -881,12 +894,12 @@ impl<'a> Parser<'a> {
     }
 
     /// `parse_text_block`: the rest of this line and the following lines indented deeper than this one.
-    fn text_block(&mut self, body: Body, raw_column: bool) {
+    fn text_block(&mut self, body: Body, raw_column: bool, text_indent: usize) {
         let first = self.i;
         let has_first = self.pos < self.end;
-        // The `ruby:` engine takes the block as one piece of code; its lines keep their indentation relative to the first.
-        let mut ruby = matches!(body, Body::Ruby)
-            .then(|| RubyBody::new(first, has_first.then(|| (self.lines[first][..self.pos].chars().count(), self.rest()))));
+        let mut layout = Layout { text_indent: has_first.then_some(text_indent), blank: 0 };
+        // The `ruby:` engine takes the block as one piece of code.
+        let mut ruby = matches!(body, Body::Ruby).then(|| RubyBody { line: has_first.then_some(first), text: self.rest().to_string() });
         if ruby.is_some() {
             self.out.pieces.push(Piece::Newline);
         }
@@ -899,9 +912,8 @@ impl<'a> Parser<'a> {
         while let Some(&next) = self.lines.get(self.i + 1) {
             if is_blank(next) {
                 self.i += 1;
-                if let Some(code) = &mut ruby {
-                    code.push_blank();
-                } else {
+                layout.push_blank();
+                if ruby.is_none() {
                     self.out.pieces.push(Piece::Newline);
                 }
                 continue;
@@ -912,11 +924,12 @@ impl<'a> Parser<'a> {
             self.enter(self.i + 1);
             self.pos = next.len() - trim_start(next).len();
             self.out.lines[self.i].keeps_trailing = true;
+            let lead = layout.lead(indent_width(next));
             if let Some(code) = &mut ruby {
-                code.push_line(self.i, indent_width(next), self.rest());
+                code.push_line(self.i, &lead, self.rest());
             } else {
                 self.out.pieces.push(Piece::Newline);
-                self.out.pieces.push(Piece::Static("\n".to_string()));
+                self.out.pieces.push(Piece::Static(lead));
             }
             self.body_segment(body);
             continued = true;

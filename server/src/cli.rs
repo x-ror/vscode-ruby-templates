@@ -225,7 +225,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
         (Some(uri), Some(lang)) => {
             let resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()), lang);
             if args.verbose {
-                eprintln!("{shown}: {:?}", resolved.settings);
+                eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
                 resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
             }
             format::format(&uri, lang, text, &resolved.settings, &[])

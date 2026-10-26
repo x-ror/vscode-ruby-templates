@@ -11,9 +11,15 @@
 - Slim's Ruby is checked with Prism (Ruby's own parser) as Slim compiles it, under the new code `ruby-syntax`, with Ruby's messages.
 - **Breaking:** Slim's `inconsistent-indent` and `silent-output-helper` are gone (Slim accepts what they reported), and `unclosed-ruby` and `unmatched-branch` are folded into `ruby-syntax`; their entries in `rubyTemplates.slim.disabledDiagnostics` are ignored. Smart text (`> text`, `slim/smart`) is reported as an unknown line indicator, as Slim's default parser does.
 
+### Formatter
+
+- Slim formatting never changes what Slim compiles: before writing, the formatter compares the Ruby Slim::Engine would generate for the text before and after, and leaves the file as it is if they differ. A file with any Slim error is left unchanged too.
+- Empty lines at the end of a Slim file collapse into the final newline (Slim drops them); whitespace-only lines there stay, as Slim compiles them.
+- **Breaking:** Slim takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, also in editors that indent with tabs, keeps each line's ending, and ignores `end_of_line`, `insert_final_newline` and `trim_trailing_whitespace`.
+
 ### Development
 
-- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
+- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter (also on perturbed copies of each file) with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
 
 ## 0.1.0
 
