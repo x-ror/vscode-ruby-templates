@@ -525,6 +525,49 @@ mod tests {
     }
 
     #[test]
+    fn removed_syntax_is_what_slim_5_2_2_makes_of_it() {
+        // `=' x` and `-' x` start a Ruby string now; the tag forms (`p=' x`, `p' text`, `p<' x`) still mean trailing space,
+        // and `|'`, `''`, `!!!` and the backtick are text or unknown indicators. Checked against Slim 5.2.2.
+        for (text, first) in [
+            ("=' x\n", "unterminated string meets end of file"),
+            ("==' x\n", "unterminated string meets end of file"),
+            ("-' x\n", "unterminated string meets end of file"),
+            ("p\n  =' y\n", "unterminated string meets end of file"),
+            ("`text`\n", "Unknown line indicator"),
+            ("! html5\n", "Unknown line indicator"),
+            ("!!! html\n", "Unknown line indicator"),
+            (":javascript\n  x\n", "Unknown line indicator"),
+            ("p x=1' text\n", "unterminated string meets end of file"),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.first().map(|d| d.message.as_str()), Some(first), "{text:?}");
+        }
+        for text in ["p=' x\n", "p==' x\n", "p' text\n", "p'\n  | x\n", "p<' x\n", "|' x\n", "'' x\n", "=> x\n", "a href=\"x\"' text\n"] {
+            assert_eq!(diagnostics(text, &[]), vec![], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn removed_engines_are_tags_without_a_tag_after_the_colon() {
+        // Builder, Creole, Erb, Nokogiri, Opal, Org-Ruby, Styl, Wikicloth (4.0.0), Less (5.2.2), Haml, Liquid, Radius, Markaby.
+        for name in
+            ["builder", "creole", "erb", "nokogiri", "opal", "org", "styl", "wikicloth", "less", "haml", "liquid", "radius", "markaby"]
+        {
+            let found = diagnostics(&format!("{name}:\n  x\n"), &[]);
+            assert_eq!(found.len(), 1, "{name}");
+            assert_eq!(found[0].message, "Expected tag", "{name}");
+            assert_eq!(found[0].range.start.character as usize, name.len() + 1, "{name}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::UNKNOWN_ENGINE.into())), "{name}");
+        }
+        let found = diagnostics("erb(x=\"y\"):\n  x\n", &[]);
+        assert_eq!((found[0].message.as_str(), found[0].range.start.character), ("Expected tag", 11));
+        // The engines 5.2.2 still has.
+        for name in ["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"] {
+            assert_eq!(diagnostics(&format!("{name}:\n  x\n"), &[]).iter().filter(|d| d.message == "Expected tag").count(), 0, "{name}");
+        }
+    }
+
+    #[test]
     fn top_level_indent() {
         assert_eq!(slim("  p a\n  p b\n"), vec![]);
     }

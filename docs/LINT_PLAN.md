@@ -96,6 +96,21 @@ format:  1,203 files, compiled output identical in 1,203, idempotent in 1,203
 
 **Removed syntax** (`CHANGES`): the 5.0.0 entries "Remove deprecated whitespace syntax =' etc" and "Remove deprecated syntax", and engines removed in 4.0.0 (except `asciidoc`, registered again in 5.2.2) and 5.2.2 (`less`); each is reported as Slim 5.2.2 reports it (an error above, or rendered as text, whichever the official parser does: checked against the oracle, not guessed).
 
+Checked against the oracle (Slim 5.2.2), nothing differs from ours:
+
+| Form                                                                                                                              | Slim 5.2.2                                                   | Ours                    |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | ----------------------- |
+| `=' x`, `==' x`, `-' x` (5.0.0, 5.1.0), also nested                                                                               | Ruby string `' x` left open: Prism's `unterminated string…`  | same (`ruby-syntax`)    |
+| `p=' x`, `p==' x`, `p<' x`, `p' text`, `a href="x"' text` (tag forms)                                                             | still accepted: trailing space, `' text` kept as text        | no diagnostic           |
+| `p x=1' text`, `- x = 1'`                                                                                                         | Prism's `unexpected string literal…`, `unterminated string…` | same (`ruby-syntax`)    |
+| `\|' x`, `'' x`, `=> x`                                                                                                           | text `' x`; text with trailing space; `=` with `>`           | no diagnostic           |
+| `` `text` `` (0.8.1), `! html5`, `!!! html`, `:javascript` (old syntaxes)                                                         | parser error `Unknown line indicator`                        | same (`syntax-error`)   |
+| `builder:`, `creole:`, `erb:`, `nokogiri:`, `opal:`, `org:`, `styl:`, `wikicloth:` (4.0.0)                                        | not engines: a tag, then `Expected tag` after the colon      | same (`unknown-engine`) |
+| `less:` (5.2.2), `haml:`, `liquid:`, `radius:`, `markaby:` (1.0.3), `erb(x="y"):`                                                 | `Expected tag`, at the end of the line                       | same                    |
+| `asciidoc:` (4.0.0, back in 5.2.2), `ruby:`, `javascript:`, `css:`, `sass:`, `scss:`, `coffee:`, `markdown:`, `textile:`, `rdoc:` | engines                                                      | no diagnostic           |
+
+Not from this list: a bare `doctype` makes Temple raise `Invalid doctype` (no line); not checked yet.
+
 **Ruby:** the Ruby of `-`, `=`, `==` lines and Ruby attributes, as `Slim::Engine` compiles it, must be valid Ruby; Prism 2.0.0's error message is reported at the template line it comes from.
 
 **HTML:** the HTML `Slim::Engine` compiles to, per WHATWG. Content nested under a void element (13.1.2) compiles to an end tag the standard rejects: `br\n  p x` gives `<br><p>x</p></br>`, and an end tag `br` is a parse error (13.2.6.4.7, "An end tag whose tag name is "br""), as is `</img>` and the other void end tags ("Any other end tag"). Reported on the nested line; the message is ours (the standard names no error code for these) and cites the section.
