@@ -1,0 +1,9 @@
+"/ Smart text is not Slim 5 syntax (the language server rejects it); this file only covers the grammar."
+   "/"                         comment.block > punctuation.definition.comment
+   " Smart text is not Slim 5 syntax (the language server rejects it); this file only covers the grammar."comment.block > comment.line
+"p"
+   "p"                         meta.tag > entity.name.tag
+"  > Smart text line"
+   ">"                         meta.text.block > punctuation.definition.text
+   "Smart text line"           meta.text.block > string.unquoted.text
+""

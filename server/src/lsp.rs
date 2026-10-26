@@ -1480,8 +1480,10 @@ mod tests {
     fn skim_skips_ruby_checks() {
         let uri = Url::parse("untitled:Untitled-1").unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
-        let text = "- else\n= alert(\"hi\"\n- form_with do |f|\n- end = start + 10\n  p\n    a\n   span\n";
-        let codes = |lang| -> Vec<String> {
+        let ruby = "- else\n= alert(\"hi\"\n";
+        let explicit_end = "- end = start + 10\n";
+        let dedent = "  p\n    a\n   span\n";
+        let codes = |lang, text: &str| -> Vec<String> {
             diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &Options::default())
                 .into_iter()
                 .filter_map(|d| match d.code {
@@ -1490,9 +1492,11 @@ mod tests {
                 })
                 .collect()
         };
-        let slim = codes(TemplateLang::Slim);
+        let slim = [codes(TemplateLang::Slim, ruby), codes(TemplateLang::Slim, explicit_end)].concat();
         assert!(slim_indent::code::RUBY.iter().all(|c| slim.iter().any(|s| s == c)), "{slim:?}");
-        assert_eq!(codes(TemplateLang::Skim), [slim_indent::code::BAD_DEDENT]);
+        assert_eq!(codes(TemplateLang::Skim, ruby), Vec::<String>::new());
+        assert_eq!(codes(TemplateLang::Skim, explicit_end), Vec::<String>::new());
+        assert_eq!(codes(TemplateLang::Skim, dedent), [slim_indent::code::BAD_DEDENT]);
     }
 
     const GEM_LOCK: &str = "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n";

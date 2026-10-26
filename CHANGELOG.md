@@ -7,6 +7,9 @@
 - Rails checks follow the project: the framework and gem versions come from the nearest `Gemfile.lock`. `unresolved-render` runs only when it lists `actionview`, `strict-locals` only with `actionview` 7.1 or newer; Sinatra projects and folders without a lockfile get neither. Diagnostics refresh when `Gemfile.lock` changes.
 - Both messages are Rails' own: `Missing partial users/_card` / `Missing template users/show`, and one strict locals error per render (`missing local: :b`, `unknown keywords: :c, :d`, `no locals accepted`, with ` for app/views/…` from Rails 7.2).
 - Formats an app registers in `config/initializers` (`Mime::Type.register`, `register_alias`) count as formats in template names, so `_card.mobile.erb` is the partial `card`.
+- Slim errors are Slim 5.2.2's own: the first error its parser raises (`Malformed indentation`, `Unexpected indentation`, `Expected closing delimiter )`, `Unknown line indicator`, `Illegal shortcut`, `Expected tag`, …) at Slim's line and column, Temple's `Multiple id attributes specified` and `Invalid doctype`, and `Explicit end statements are forbidden`. `action_path('[')` in an attribute is no longer an unclosed bracket.
+- Slim's Ruby is checked with Prism (Ruby's own parser) as Slim compiles it, under the new code `ruby-syntax`, with Ruby's messages.
+- **Breaking:** Slim's `inconsistent-indent` and `silent-output-helper` are gone (Slim accepts what they reported), and `unclosed-ruby` and `unmatched-branch` are folded into `ruby-syntax`; their entries in `rubyTemplates.slim.disabledDiagnostics` are ignored. Smart text (`> text`, `slim/smart`) is reported as an unknown line indicator, as Slim's default parser does.
 
 ### Development
 

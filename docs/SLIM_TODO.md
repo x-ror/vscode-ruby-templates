@@ -38,7 +38,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Custom shortcuts (`:shortcut`): per-app runtime config, documented as unsupported (`README.md` Tips)
 - [x] Custom `attr_list_delims` / `code_attr_delims`: per-app runtime config, documented as unsupported (`README.md` Tips)
 - [x] `include` directive (`slim/include`) highlighted as a keyword with its path (`syntaxes/slim.tmLanguage.json` `include`, `test/sample.html.slim`)
-- [x] Smart text (`slim/smart`): explicit `>` lines are text blocks (`syntaxes/slim.tmLanguage.json` `text-block`, `test/sample.html.slim`; without the plugin Slim rejects them, so this is safe). Implicit text depends on `implicit_text` and is documented as unsupported (`README.md` Tips)
+- [x] Smart text (`slim/smart`): explicit `>` lines are text blocks (`syntaxes/slim.tmLanguage.json` `text-block`, `test/smart_text.slim`; without the plugin Slim rejects them, and so does the server: `Unknown line indicator`). Implicit text depends on `implicit_text` and is documented as unsupported (`README.md` Tips)
 - [x] Logic-less mode (`slim/logic_less`): enabled per app, documented as unsupported (`README.md` Tips)
 - [x] Translator plugin (`slim/translator`) translates static text at compile time and adds no syntax; noted in `README.md` Tips
 - [x] `.skim` files: own `skim` language and `text.skim` grammar, the Slim grammar with `source.coffee` outside engine blocks (`syntaxes/skim.tmLanguage.json`, generated and kept in sync by `test/tokenize.js`; `package.json`; `test/sample.skim`). Slim snippets are not registered for `skim`: they insert Ruby helpers
@@ -57,7 +57,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 3. File types and language configuration
 
 - [x] `.slim`, `.html.slim` map to the `slim` language id, `.skim` to `skim` (`package.json` `contributes.languages`)
-- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`, `silent-output-helper`), and no Ruby context for helper completion or render warnings (`server/src/lang.rs` `TemplateLang::from_uri_or_id`; `server/src/lsp.rs` `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
+- [x] Server picks Slim from the `slim` id or `.slim`, Skim from the `skim` id or `.skim`; Skim gets the structure checks but not the Ruby ones (`unclosed-ruby`, `explicit-end`, `unmatched-branch`), and no Ruby context for helper completion or render warnings (`server/src/lang.rs` `TemplateLang::from_uri_or_id`; `server/src/lsp.rs` `diagnostics`, `in_ruby_context`, tests `skim_skips_ruby_checks`, `unresolved_render_warnings`; `server/src/slim_indent.rs` `code::RUBY`)
 - [x] Line comment toggle with `/` (`language-configuration/slim.json` `comments.lineComment`)
 - [x] Brackets, auto-closing and surrounding pairs (`language-configuration/slim.json`)
 - [x] Indentation-based folding (`language-configuration/slim.json` `folding.offSide`; server returns `None` so VS Code's fallback applies: `server/src/lsp.rs` `folding_range`)
@@ -115,7 +115,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today) (`server/src/slim_indent.rs` `unmatched-branch`)
 - [x] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported): bracket/quote balance only, as a warning; no Ruby parser (`server/src/slim_indent.rs` `unclosed-ruby`)
 - [x] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block: void elements and `tag/` (warning, HTML hosts only: `server/src/slim_indent.rs` `void-children`, `server/src/lang.rs` `slim_html_host`); inline-output tags with children are valid Slim (DoInserter adds `do`), so not reported
-- [x] `=` with a block helper but missing `do`, and `-` on an output block helper (`- form_with do` renders nothing): `- helper do` warns (`server/src/slim_indent.rs` `silent-output-helper`); `= helper` without `do` is valid
+- [x] `- form_with … do` renders nothing but is valid Slim and Ruby, so it isn't reported (`silent-output-helper` removed, `docs/LINT_PLAN.md` 1a)
 - [x] Unknown engine check accepts engines registered by the app (setting for extra engine names) (`rubyTemplates.slim.extraEngines`, `src/client.js` `initializationOptions.slim`)
 - [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/slim_indent.rs`): trimmed to Slim 5's list (`server/src/slim_indent.rs` `SLIM_ENGINES`)
 - [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)

@@ -130,7 +130,7 @@ fs.writeFileSync(hamlFile, hamlText);
 const hamlUri = fileUri(hamlFile);
 const slimFile = path.join(views, "users", "show.html.slim");
 const slimText =
-  'mjml:\n  x\nmarkdown2:\n  y\n- else\n- end\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
+  'mjml:\n  x\n- else\nbr\n  p\n- form_with model: @u do |f|\n  = f.text_field :x\n= link_to("x"\n';
 fs.writeFileSync(slimFile, slimText);
 const slimUri = fileUri(slimFile);
 const outlineFile = path.join(views, "users", "outline.html.slim");
@@ -548,11 +548,11 @@ const check = (label, actual, expected) => {
         )
       : [],
     [
-      "3:1 unknown-engine",
-      "5:1 unmatched-branch",
-      "8:3 void-children",
-      "9:3 silent-output-helper",
-      "11:1 unclosed-ruby",
+      "3:3 ruby-syntax",
+      "4:1 ruby-syntax",
+      "5:3 void-children",
+      "8:1 ruby-syntax",
+      "8:1 ruby-syntax",
     ],
   );
 

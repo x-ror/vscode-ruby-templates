@@ -772,16 +772,14 @@
           "items": {
             "type": "string",
             "enum": [
-              "inconsistent-indent",
               "bad-dedent",
               "doctype-children",
               "void-children",
               "unknown-engine",
+              "syntax-error",
               "unclosed-attribute",
-              "unclosed-ruby",
+              "ruby-syntax",
               "explicit-end",
-              "unmatched-branch",
-              "silent-output-helper",
               "unresolved-render",
               "strict-locals"
             ]

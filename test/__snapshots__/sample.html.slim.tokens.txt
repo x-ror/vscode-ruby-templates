@@ -375,9 +375,6 @@
 "    include partials/header"
    "include"                   meta.include > keyword.control.import.include
    "partials/header"           meta.include > string.unquoted.include
-"    > Smart text line"
-   ">"                         meta.text.block > punctuation.definition.text
-   "Smart text line"           meta.text.block > string.unquoted.text
 "    scss class=\"theme\":"
    "scss"                      meta.embedded.block > entity.name.function.embedded
    "class"                     meta.embedded.block > entity.other.attribute-name
@@ -505,7 +502,7 @@
    "to_json"                   meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > source.ruby > meta.function-call.ruby > entity.name.function.ruby
    "}}"                        meta.tag > string.unquoted.text > meta.embedded.interpolation.unescaped > punctuation.section.embedded.end
    " raw"                      meta.tag > string.unquoted.text
-"    div *{data: {x: 1}}= splat code then text"
+"    div *{data: {x: 1}} text after the splat"
    "div"                       meta.tag > entity.name.tag
    "*"                         meta.tag > meta.attributes.splat > keyword.operator.splat
    "{"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.begin
@@ -517,8 +514,7 @@
    "1"                         meta.tag > meta.attributes.splat > source.ruby > constant.numeric.ruby
    "}"                         meta.tag > meta.attributes.splat > source.ruby
    "}"                         meta.tag > meta.attributes.splat > source.ruby > punctuation.section.hash.end
-   "="                         meta.tag > meta.attributes.splat > source.ruby > keyword.operator.assignment.ruby
-   "splat code then text"      meta.tag > string.unquoted.text
+   "text after the splat"      meta.tag > string.unquoted.text
 "    p title='it''= text after a quote"
    "p"                         meta.tag > entity.name.tag
    "title"                     meta.tag > entity.other.attribute-name

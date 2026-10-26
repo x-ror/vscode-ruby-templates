@@ -85,7 +85,8 @@ class TestSlim < Minitest::Test
 
   def assert_ruby_error(_error, _from, source, options = {}) = render(source, options)
 
-  def assert_ruby_syntax_error(_from, source, options = {}) = render(source, options, :ruby_syntax_error)
+  # `from` is "(__TEMPLATE__):3", the template line Ruby blames.
+  def assert_ruby_syntax_error(from, source, options = {}) = render(source, options, { ruby_line: from[/:(\d+)\z/, 1].to_i })
 
   def assert_runtime_error(_message, source, options = {}) = render(source, options)
 
@@ -113,11 +114,7 @@ def skipped_case(file, test, reason) = { file: file, test: test, source: nil, sk
 
 def recorded_case(file, test, source, options, expected)
   entry = { file: file, test: test, source: source }
-  if expected == :ruby_syntax_error
-    entry[:skipped] = "expects a Ruby syntax error, outside Slim's parser"
-  elsif expected
-    entry[:expected_error] = expected
-  end
+  entry[:expected_error] = expected if expected
   unless source.encoding == Encoding::UTF_8 && source.valid_encoding?
     entry[:source] = source.dup.force_encoding(Encoding::UTF_8).scrub
     entry[:skipped] = "source is not valid UTF-8"

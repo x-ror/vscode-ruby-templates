@@ -159,7 +159,7 @@ Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O error
 - Rails generator templates (`lib/templates/{erb,haml,slim}/**/*.tt`, `lib/generators/**/templates/**/*.{erb,haml,slim}.tt`) open in their template language; diagnostics, formatting and linters skip them because the generator's own ERB is mixed in.
 - Ruby LSP (Shopify) and this extension both register the `erb` language id, so they work together.
 - If you also have another Slim or Haml extension installed, VS Code picks one grammar; disable the other to avoid surprises.
-- Slim options set per app are not reflected in highlighting: custom `:shortcut`s (`&text`, `@role`), custom `attr_list_delims` / `code_attr_delims`, smart text's implicit text lines (only explicit `>` lines are recognized) and logic-less mode (`- section` / `= var` still show as Ruby). The translator plugin (`slim/translator`) changes nothing in the syntax, so it needs no support.
+- Slim options set per app are not reflected in highlighting: custom `:shortcut`s (`&text`, `@role`), custom `attr_list_delims` / `code_attr_delims`, smart text's implicit text lines (only explicit `>` lines are recognized; the checks report them as `Unknown line indicator`, as Slim's default parser does without `slim/smart`) and logic-less mode (`- section` / `= var` still show as Ruby). The translator plugin (`slim/translator`) changes nothing in the syntax, so it needs no support.
 
 ## Development
 

@@ -1,5 +1,7 @@
 # Compiles the Slim template on stdin with Slim 5.2.2's defaults and prints the outcome as JSON.
 # --rails compiles as Rails does (lib/slim/railtie.rb), for comparing the code before and after formatting.
+# Without it, the compiled Ruby is also parsed with Prism 2.0.0 (docs/LINT_PLAN.md 1a "Ruby"): its errors come back as
+# {"errors": [{message, line, column: null}]}, at the template's line (Slim keeps one compiled line per template line).
 require "json"
 require "slim"
 
@@ -21,12 +23,26 @@ def utf16_column(template, line, column)
   prefix.encode("UTF-16LE").bytesize / 2
 end
 
+# Prism's column is in the compiled line, which doesn't map back to the template, so only lines are reported. Slim
+# adds a last line of its own, so lines past the template are clamped to its last line.
+# Tilt evals the source inside a method, where `yield` is valid; parsed on its own Prism calls it invalid.
+IGNORED_RUBY_ERRORS = %i[invalid_yield].freeze
+
+def ruby_errors(compiled, template)
+  gem "prism", "2.0.0"
+  require "prism"
+  last_line = [template.lines.size, 1].max
+  Prism.parse(compiled).errors.reject { |e| IGNORED_RUBY_ERRORS.include?(e.type) }.map { |e| { message: e.message, line: [e.location.start_line, last_line].min, column: nil } }
+end
+
 def error(message, line: nil, column: nil, slim_column: nil) = { error: { message:, line:, column:, slim_column: } }
 
 template = $stdin.read
 result =
   begin
-    { source: Slim::Engine.new(file: "(__TEMPLATE__)", **options).call(template) }
+    compiled = Slim::Engine.new(file: "(__TEMPLATE__)", **options).call(template)
+    ruby = rails ? [] : ruby_errors(compiled, template)
+    ruby.empty? ? { source: compiled } : { errors: ruby }
   rescue Slim::Parser::SyntaxError => e
     error(e.error, line: e.lineno, column: utf16_column(template, e.lineno, e.column), slim_column: e.column)
   rescue LoadError => e

@@ -1,33 +1,28 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::ruby::{analyze, ends_with_block};
-use crate::slim_parser;
+use crate::slim_parser::{self, Piece, BOM, VOID_ELEMENTS};
+use crate::slim_ruby;
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
 use tower_lsp::lsp_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
 pub mod code {
-    pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
     pub const BAD_DEDENT: &str = "bad-dedent";
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const VOID_CHILDREN: &str = "void-children";
     pub const UNKNOWN_ENGINE: &str = "unknown-engine";
+    /// Slim parser errors that belong to no other code.
+    pub const SYNTAX_ERROR: &str = "syntax-error";
     pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
-    pub const UNCLOSED_RUBY: &str = "unclosed-ruby";
+    pub const RUBY_SYNTAX: &str = "ruby-syntax";
     pub const EXPLICIT_END: &str = "explicit-end";
-    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
-    pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
     /// Checks that parse the `-`/`=` code as Ruby.
-    pub const RUBY: &[&str] = &[UNCLOSED_RUBY, EXPLICIT_END, UNMATCHED_BRANCH, SILENT_OUTPUT_HELPER];
+    pub const RUBY: &[&str] = &[RUBY_SYNTAX, EXPLICIT_END];
 }
 
 // Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
 pub(crate) const SLIM_ENGINES: &[&str] =
     &["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"];
-const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
-/// Helpers whose block form returns the HTML, so `-` discards it.
-const OUTPUT_BLOCK_HELPERS: &[&str] =
-    &["form_with", "form_for", "form_tag", "fields_for", "fields", "link_to", "button_to", "content_tag", "turbo_frame_tag", "render"];
 /// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
 const SLIM_TABSIZE: usize = 4;
 
@@ -35,16 +30,13 @@ const SLIM_TABSIZE: usize = 4;
 enum LineKind {
     /// Children are free-form text (filters, comments, text blocks).
     Verbatim,
-    /// Ruby control line `- ...`; `keyword` is its leading branch keyword, or `do` for a trailing block.
-    Control {
-        keyword: Option<&'static str>,
-    },
-    /// Ruby output `= ...`.
-    Output,
     Tag {
         void: bool,
+        /// Ends in `/`: Slim accepts no children at all.
+        closed: bool,
     },
-    Text,
+    /// Ruby lines and text.
+    Other,
     Doctype,
 }
 
@@ -52,19 +44,50 @@ struct Frame {
     indent: usize,
     kind: LineKind,
     line: usize,
-    /// Keyword that opened the `if`/`case`/`begin`… chain this control line belongs to.
-    chain: Option<&'static str>,
     has_child: bool,
 }
 
 pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+    let Some(body) = text.strip_prefix(BOM) else {
+        return check_structure(text, extra_engines);
+    };
+    // Slim drops the byte order mark, but the editor still counts it on the first line.
+    let mut out = check_structure(body, extra_engines);
+    let bom_units = BOM.encode_utf16().count() as u32;
+    for position in out.iter_mut().flat_map(|d| [&mut d.range.start, &mut d.range.end]).filter(|p| p.line == 0) {
+        position.character += bom_units;
+    }
+    out
+}
+
+fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
     let parsed = slim_parser::parse(text, extra_engines);
+    if let Some(syntax) = &parsed.syntax_error {
+        out.push(syntax_diagnostic(text, &lines, syntax));
+    }
+    if let Some((line, name)) = parsed.repeated_attribute.as_ref().filter(|_| parsed.valid) {
+        let raw = lines[*line];
+        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        // Temple raises this while compiling, so it carries no line; the tag's line stands in.
+        out.push(coded(error(range, format!("Multiple {name} attributes specified")), code::SYNTAX_ERROR));
+    }
+    // Temple raises this after `EndInserter` and the attribute merger, so it only shows when they stay quiet.
+    let explicit_end = parsed.pieces.iter().any(|p| matches!(p, Piece::Control { code, .. } if is_explicit_end(code)));
+    let invalid_doctype = parsed.invalid_doctype.as_ref().filter(|_| parsed.valid && parsed.repeated_attribute.is_none() && !explicit_end);
+    if let Some((line, kind)) = invalid_doctype {
+        let raw = lines[*line];
+        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        out.push(coded(error(range, format!("Invalid doctype {kind}")), code::SYNTAX_ERROR));
+    }
+    // Slim compiles only a template it parsed, and stops at the errors its filters raise.
+    if parsed.valid && parsed.repeated_attribute.is_none() && invalid_doctype.is_none() && !explicit_end {
+        out.extend(slim_ruby::diagnostics(text, &parsed));
+    }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
-    let unit: Option<usize> = detect_unit(&lines, &roles);
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -76,7 +99,7 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             continue;
         }
         let ws = leading_ws(raw);
-        let ws_range = line_range(text, line_no, 0, ws.len()); // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
+        // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
         let indent = indent_width(ws);
 
         // Inside a verbatim block? Everything deeper is skipped.
@@ -87,34 +110,20 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             }
         }
 
-        // Dedent to a level that never existed (checked before popping).
+        // Slim's "Malformed indentation": a dedent to a level that never existed, below the first line's too (checked before popping).
         let deepest = stack.last().map_or(0, |f| f.indent);
-        let bad_dedent = indent < deepest && indent != 0 && !stack.iter().any(|f| f.indent == indent);
+        let bad_dedent =
+            parsed.stop_line.is_none_or(|stop| line_no < stop) && indent < deepest && !stack.iter().any(|f| f.indent == indent);
         if bad_dedent {
-            out.push(coded(error(ws_range, "Indentation does not match any outer level"), code::BAD_DEDENT));
+            out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
         }
 
-        // Pop to the parent level; the last frame popped at this indent is the previous sibling.
-        let mut prev_sibling = None;
-        while let Some(top) = stack.last() {
-            if top.indent < indent {
-                break;
-            }
-            let top = stack.pop();
-            if top.as_ref().is_some_and(|f| f.indent == indent) {
-                prev_sibling = top;
-            }
+        // Pop to the parent level.
+        while stack.last().is_some_and(|top| top.indent >= indent) {
+            stack.pop();
         }
         let parent_indent = stack.last().map_or(0, |f| f.indent);
         let is_child = !stack.is_empty() && indent > parent_indent;
-
-        if is_child && !bad_dedent {
-            let step = indent - parent_indent;
-            if let Some(u) = unit.filter(|&u| u != step) {
-                let message = format!("Inconsistent indentation: expected {} spaces, found {}", u, step);
-                out.push(coded(warning(ws_range, message), code::INCONSISTENT_INDENT));
-            }
-        }
 
         // Illegal nesting checks against the parent.
         // `/` is a Slim code comment (renders nothing); `/!` is an HTML comment.
@@ -126,15 +135,14 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             parent.has_child |= !code_comment;
             match parent.kind {
                 LineKind::Doctype => {
-                    out.push(coded(error(line_content, "Nothing can be nested under a doctype"), code::DOCTYPE_CHILDREN));
+                    out.push(coded(error(line_content, "Unexpected indentation"), code::DOCTYPE_CHILDREN));
+                }
+                LineKind::Tag { closed: true, .. } => {
+                    out.push(coded(error(line_content, "Unexpected indentation"), code::VOID_CHILDREN));
                 }
                 LineKind::Tag { void: true, .. } if first_child => {
                     let name = tag_name(lines[parent.line]);
-                    let message = if VOID_ELEMENTS.contains(&name) {
-                        format!("`{name}` is a void element and can't have children")
-                    } else {
-                        format!("`{name}` is explicitly closed with `/` and can't have children")
-                    };
+                    let message = format!("`{name}` is a void element and can't have children");
                     out.push(coded(warning(line_content, message), code::VOID_CHILDREN));
                 }
                 _ => {}
@@ -142,88 +150,38 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         }
 
         // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(&lines, i, text, extra_engines, &mut out);
-        // A code comment between branches is transparent: `- if` / `/ note` / `- else`.
-        let mut chain = prev_sibling.as_ref().filter(|_| code_comment).and_then(|f| f.chain);
-        if let LineKind::Control { keyword: Some(keyword) } = kind {
-            chain = Some(keyword);
-            if let Some(openers) = branch_openers(keyword) {
-                chain = match &prev_sibling {
-                    Some(f) => f.chain.filter(|c| openers.contains(c)),
-                    // `- case x` with its `- when`s nested one level deeper.
-                    None => stack.last().filter(|_| is_child).and_then(|f| f.chain).filter(|c| nested_branch_openers(keyword).contains(c)),
-                };
-                if chain.is_none() {
-                    let named: Vec<&str> = openers.iter().copied().filter(|o| *o != "do").collect();
-                    let block = if openers.contains(&"do") { " or a block (`do`)" } else { "" };
-                    let message =
-                        format!("`- {}` without a matching `- {}`{} at the same indentation", keyword, named.join("`/`- "), block);
-                    out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), message), code::UNMATCHED_BRANCH));
-                }
-            }
-        }
-        stack.push(Frame { indent, kind, line: line_no, chain, has_child: false });
+        let (kind, consumed) = classify(&lines, i, text, &mut out);
+        stack.push(Frame { indent, kind, line: line_no, has_child: false });
         i += consumed.max(1);
     }
+    out.sort_by_key(|d| (d.range.start.line, d.range.start.character));
     out
+}
+
+fn is_lone_word_with_colon(content: &str) -> bool {
+    content.strip_suffix(':').is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
+/// Slim's first syntax error, filed under the code of the construct it is about.
+fn syntax_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
+    let raw = lines[syntax.line];
+    let start = raw.char_indices().nth(syntax.column).map_or(raw.len(), |(at, _)| at);
+    let code = match syntax.message.as_str() {
+        "Unexpected end of file" => code::UNCLOSED_ATTRIBUTE,
+        message if message.starts_with("Expected closing delimiter") => code::UNCLOSED_ATTRIBUTE,
+        // A lone `name:` is an unregistered engine; `ul: ` or `html: body:` is a block expansion missing its tag.
+        "Expected tag" if is_lone_word_with_colon(raw.trim_start()) => code::UNKNOWN_ENGINE,
+        _ => code::SYNTAX_ERROR,
+    };
+    coded(error(line_range(text, syntax.line, start, raw.len()), syntax.message.clone()), code)
 }
 
 fn indent_width(ws: &str) -> usize {
     ws.chars().fold(0, |col, c| if c == '\t' { (col / SLIM_TABSIZE + 1) * SLIM_TABSIZE } else { col + 1 })
 }
 
-/// Keywords a branch line (`else`, `when`, …) may continue; `None` when `keyword` opens a chain.
-fn branch_openers(keyword: &str) -> Option<&'static [&'static str]> {
-    match keyword {
-        "else" => Some(&["if", "unless", "case", "begin", "do"]),
-        "elsif" => Some(&["if"]),
-        "when" | "in" => Some(&["case"]),
-        "rescue" | "ensure" => Some(&["begin", "do"]),
-        _ => None,
-    }
-}
-
-/// Openers a branch line may also continue from one level up, as the opener's first child.
-fn nested_branch_openers(keyword: &str) -> &'static [&'static str] {
-    match keyword {
-        "when" | "in" => &["case"],
-        "rescue" | "ensure" => &["begin"],
-        _ => &[],
-    }
-}
-
-/// The most common indentation step between Slim lines; text, engine bodies and continuations don't count, as
-/// their indentation is free.
-fn detect_unit(lines: &[&str], roles: &[slim_parser::LineInfo]) -> Option<usize> {
-    let mut levels: Vec<usize> = vec![0];
-    let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
-    for (i, raw) in lines.iter().enumerate() {
-        if raw.trim().is_empty() || roles.get(i).is_some_and(|l| !matches!(l.role, slim_parser::Role::Structural { .. })) {
-            continue;
-        }
-        let indent = indent_width(leading_ws(raw));
-        while levels.last().is_some_and(|l| *l > indent) {
-            levels.pop();
-        }
-        let parent = *levels.last().unwrap_or(&0);
-        if indent > parent {
-            let step = indent - parent;
-            *counts.entry(step).or_insert(0) += 1;
-            levels.push(indent);
-        }
-    }
-    // Highest count wins; on a tie the smaller step (BTreeMap iterates ascending, so `>` keeps the first).
-    counts
-        .into_iter()
-        .fold(None, |best: Option<(usize, usize)>, (step, n)| match best {
-            Some((_, bn)) if bn >= n => best,
-            _ => Some((step, n)),
-        })
-        .map(|(step, _)| step)
-}
-
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
     let content_range = line_range(text, i, ws_len, raw.len());
@@ -234,15 +192,15 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
         return (LineKind::Doctype, 1);
     }
     // Comments
+    if is_conditional_comment(c) {
+        return (LineKind::Tag { void: false, closed: false }, 1);
+    }
     if c.starts_with('/') {
         return (LineKind::Verbatim, 1);
     }
     // Embedded engines
     if let Some(name) = c.strip_suffix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-            if !SLIM_ENGINES.contains(&name) && !extra_engines.iter().any(|e| e == name) {
-                out.push(coded(warning(content_range, format!("Unknown embedded engine `{}:`", name)), code::UNKNOWN_ENGINE));
-            }
             return (LineKind::Verbatim, 1);
         }
     }
@@ -253,33 +211,31 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
     let ruby_prefix: Option<(&str, bool)> =
         if let Some(rest) = c.strip_prefix('-') { Some((rest, true)) } else { strip_output_prefix(c).map(|rest| (rest, false)) };
     if let Some((code, is_control)) = ruby_prefix {
-        let (joined, consumed) = join_continuation(lines, i, code);
-        check_explicit_end(&joined, content_range, out);
-        check_ruby_balance(&joined, content_range, out);
-        if !is_control {
-            return (LineKind::Output, consumed);
+        let (_, consumed) = join_continuation(lines, i, code);
+        if is_control {
+            check_explicit_end(code, content_range, out);
         }
-        check_silent_output_helper(&joined, text, i, ws_len + 1 + (code.len() - code.trim_start().len()), out);
-        return (LineKind::Control { keyword: control_keyword(&joined) }, consumed);
+        return (LineKind::Other, consumed);
     }
     // Tags
     let is_tag = c.starts_with('.') || c.starts_with('#') || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic());
     if is_tag {
-        let (rest, consumed) = skip_tag_head(lines, i, text, out);
+        let (rest, consumed) = skip_tag_head(lines, i);
         let rest_t = rest.trim();
-        let void = rest_t == "/" || VOID_ELEMENTS.contains(&tag_name(raw));
-        if let Some(code) = strip_output_prefix(rest_t) {
-            let (joined, _) = join_continuation(lines, i, code);
-            check_explicit_end(&joined, content_range, out);
-            check_ruby_balance(&joined, content_range, out);
-        }
+        let closed = rest_t == "/";
+        let void = closed || VOID_ELEMENTS.contains(&tag_name(raw));
         // Slim's parse_text_block takes every deeper line after inline text as text.
         if !void && !rest_t.is_empty() && !rest_t.starts_with(['=', '/', ':']) {
             return (LineKind::Verbatim, consumed);
         }
-        return (LineKind::Tag { void }, consumed);
+        return (LineKind::Tag { void, closed }, consumed);
     }
-    (LineKind::Text, 1)
+    (LineKind::Other, 1)
+}
+
+/// `/[if IE]`: Slim nests its children like a tag's.
+fn is_conditional_comment(content: &str) -> bool {
+    content.len() > 2 && content.starts_with("/[") && content.trim_end().ends_with(']')
 }
 
 /// Slim tag name at the start of the line (`img.photo src=x` → `img`); empty for `.class`/`#id` shortcuts.
@@ -287,118 +243,6 @@ fn tag_name(raw: &str) -> &str {
     let c = raw.trim_start();
     let end = c.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '_' | '-' | ':'))).unwrap_or(c.len());
     c[..end].trim_end_matches(':')
-}
-
-/// Leading branch keyword of a control line (`if`, `else`, …), or `do` when it ends with a block.
-fn control_keyword(code: &str) -> Option<&'static str> {
-    const KEYWORDS: &[&str] = &["if", "unless", "case", "begin", "else", "elsif", "when", "in", "rescue", "ensure"];
-    let first = strip_assignment(code).trim_start().split(|ch: char| !(ch.is_alphanumeric() || ch == '_')).next().unwrap_or("");
-    KEYWORDS.iter().copied().find(|k| *k == first).or_else(|| ends_with_block(code).then_some("do"))
-}
-
-/// The right-hand side of `x = …`, `@x ||= …`, `x &&= …`; otherwise `code` itself.
-fn strip_assignment(code: &str) -> &str {
-    let t = code.trim_start();
-    let name_len = t.find(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '@')).unwrap_or(t.len());
-    if name_len == 0 {
-        return t;
-    }
-    let rest = t[name_len..].trim_start();
-    ["||=", "&&=", "="].iter().find_map(|op| rest.strip_prefix(op)).filter(|rhs| !rhs.starts_with(['=', '~', '>'])).unwrap_or(t)
-}
-
-/// `- form_with … do` builds HTML and returns it; with `-` that result is thrown away.
-fn check_silent_output_helper(code: &str, text: &str, line: usize, code_col: usize, out: &mut Vec<Diagnostic>) {
-    if !ends_with_block(code) {
-        return;
-    }
-    let trimmed = code.trim_start();
-    let call = trimmed.strip_prefix("tag.").map_or(trimmed, |_| "tag");
-    let name_len = call.find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(call.len());
-    let name = &call[..name_len];
-    if name != "tag" && !OUTPUT_BLOCK_HELPERS.contains(&name) {
-        return;
-    }
-    let range = line_range(text, line, code_col, code_col + name_len);
-    out.push(coded(warning(range, format!("`- {name} … do` discards the HTML it builds; use `= {name}`")), code::SILENT_OUTPUT_HELPER));
-}
-
-fn check_ruby_balance(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
-    let Some(open) = unclosed_delimiter(code) else {
-        return;
-    };
-    let what = if matches!(open, '"' | '\'' | '`') { "string" } else { "bracket" };
-    // A warning: the scan is a heuristic, not a Ruby parser.
-    out.push(coded(warning(range, format!("Unclosed {what} `{open}` in Ruby code")), code::UNCLOSED_RUBY));
-}
-
-/// Innermost bracket or string quote left open in a line of Ruby, ignoring a trailing `#` comment.
-/// Returns `None` on a closer that doesn't match, or on a regex, `%` literal or `?x` character
-/// literal: their contents aren't balanced, and telling them from operators needs a real parser.
-fn unclosed_delimiter(code: &str) -> Option<char> {
-    // Interpolation `#{` inside a string is pushed as `#` so its `}` returns to the string.
-    let mut stack: Vec<char> = Vec::new();
-    let mut chars = code.chars().peekable();
-    let mut prev = ' ';
-    let mut prev_solid = ' ';
-    while let Some(ch) = chars.next() {
-        let next = chars.peek().copied().unwrap_or(' ');
-        let after_operand = prev_solid.is_alphanumeric() || matches!(prev_solid, '_' | ')' | ']' | '}');
-        let in_code = !matches!(stack.last(), Some('"' | '\'' | '`'));
-        if in_code {
-            match ch {
-                // `/re/` where an operand is expected; `foo /re/` too, but not `a / b`.
-                '/' if !after_operand || (prev == ' ' && next != ' ') => return None,
-                '%' if !after_operand || (prev == ' ' && next != ' ') => return None,
-                '?' if !after_operand && next != ' ' => return None,
-                // `$'`, `$"`, `$(`…: special globals.
-                '$' => {
-                    chars.next();
-                    prev = ch;
-                    prev_solid = 'x';
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        if !ch.is_whitespace() {
-            prev_solid = ch;
-        }
-        prev = ch;
-        if let Some(&quote @ ('"' | '\'' | '`')) = stack.last() {
-            match ch {
-                '\\' => {
-                    chars.next();
-                }
-                '#' if quote != '\'' && chars.peek() == Some(&'{') => {
-                    chars.next();
-                    stack.push('#');
-                }
-                c if c == quote => {
-                    stack.pop();
-                }
-                _ => {}
-            }
-            continue;
-        }
-        match ch {
-            '"' | '\'' | '`' | '(' | '[' | '{' => stack.push(ch),
-            ')' | ']' | '}' => {
-                let expected = match ch {
-                    ')' => '(',
-                    ']' => '[',
-                    _ if stack.last() == Some(&'#') => '#',
-                    _ => '{',
-                };
-                if stack.pop() != Some(expected) {
-                    return None;
-                }
-            }
-            '#' => break,
-            _ => {}
-        }
-    }
-    stack.last().map(|&open| if open == '#' { '{' } else { open })
 }
 
 fn strip_output_prefix(s: &str) -> Option<&str> {
@@ -425,18 +269,22 @@ fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
     (code, consumed)
 }
 
+/// Slim::EndInserter's `/\Aend\b/` on a `-` line.
+fn is_explicit_end(code: &str) -> bool {
+    code.trim_start().strip_prefix("end").is_some_and(|after| after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_')))
+}
+
+/// Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
 fn check_explicit_end(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
-    let (_, _, closes) = analyze(code);
-    if closes > 0 {
-        out.push(coded(error(range, "`end` is not allowed: Slim closes blocks by indentation"), code::EXPLICIT_END));
+    if is_explicit_end(code) {
+        out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
     }
 }
 
 /// Skip over `tag.class#id attr=val (...)`, validating bracket balance (possibly across lines).
 /// Returns the remainder and lines consumed.
-fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
+fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let raw = lines[i];
-    let head_range = line_range(text, i, leading_ws(raw).len(), raw.len());
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
@@ -466,10 +314,7 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
                 pos += rest.len() - trimmed.len();
                 match consume_attr(&s[pos..]) {
                     Ok(n) => pos += n,
-                    Err(open_ch) => {
-                        out.push(coded(error(head_range, format!("Unclosed `{}` in attribute value", open_ch)), code::UNCLOSED_ATTRIBUTE));
-                        return (String::new(), consumed);
-                    }
+                    Err(_) => return (String::new(), consumed),
                 }
                 continue;
             }
@@ -514,7 +359,6 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
             }
         }
         let Some(len) = balanced else {
-            out.push(coded(error(head_range, format!("Unclosed `{}` in tag attributes", ch)), code::UNCLOSED_ATTRIBUTE));
             return (String::new(), consumed);
         };
         pos += len;
@@ -632,19 +476,142 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_indent() {
-        assert_eq!(slim("div\n  p\n  p\n    a\n  ul\n   li\n"), one(code::INCONSISTENT_INDENT, 5, 0, WARNING));
-        // Engine bodies and continuations don't set the unit: this file is indented by 4.
+    fn indentation_depth_is_free() {
+        // README: "the indentation depth can be chosen as you like"; Slim compiles the first input.
+        assert!(slim("div\n  p\n   span\n  x\n").is_empty());
+        assert!(slim("div\n  p\n  p\n    a\n  ul\n   li\n").is_empty());
         assert!(slim("ruby:\n  a =\n    b ||\n      c\n= f x,\n  y\ndiv\n    p\n    span\n        b\n").is_empty());
-        assert!(slim("head\n    link [rel=\"a\"\n      href=\"b\"]\n    meta\n").is_empty(), "a bracket continuation is no child");
-        // An unclosed construct doesn't hide what follows it.
-        assert!(slim("div\n  a [href=\"x\"\n  p\n    - else\n  div\n   span\n").len() >= 2);
-        assert!(slim("div\n  a href=\"x\n  p\n    - else\n").len() >= 2);
     }
 
     #[test]
     fn bad_dedent() {
-        assert_eq!(slim("div\n  p\n    a\n   span\n"), one(code::BAD_DEDENT, 3, 0, ERROR));
+        assert_eq!(slim("div\n  p\n    a\n   span\n"), one(code::BAD_DEDENT, 3, 3, ERROR));
+    }
+
+    #[test]
+    fn malformed_indentation_uses_slim_message() {
+        // Slim's test_malformed_indentation, test_malformed_indentation2, and a dedent below the first line's level.
+        for (text, line, column) in [
+            ("\np\n  div Valid\n div Invalid\n", 3, 1),
+            ("\n  div Valid\n div Invalid\n", 2, 1),
+            ("  p\nb\n", 1, 0),
+            ("\u{feff}  p\nb\n", 1, 0),
+            ("div\n  /[if IE]\n      p\n    a\n", 3, 4),
+        ] {
+            let found: Vec<_> = diagnostics(text, &[]).into_iter().filter(|d| d.severity == Some(ERROR)).collect();
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].message, "Malformed indentation", "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn dedent_check_stops_at_slim_syntax_error() {
+        let found = diagnostics("  a href=(foo\n) t\n", &[]);
+        assert!(found.iter().all(|d| d.message != "Malformed indentation"), "{found:?}");
+    }
+
+    #[test]
+    fn bom_counts_in_columns_of_the_first_line() {
+        let found = diagnostics("\u{feff}?x\n", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].range.start.line, found[0].range.start.character), (0, 1));
+    }
+
+    #[test]
+    fn ruby_is_checked_only_when_slim_would_compile_it() {
+        // A parser error, an explicit `end` and a repeated attribute come before Slim generates any Ruby.
+        for text in ["?bad\n= foo(\n", "- end\n= foo(\n", "a id=1 id=2\n= foo(\n"] {
+            let found = diagnostics(text, &[]);
+            assert!(found.iter().all(|d| d.code != Some(NumberOrString::String(code::RUBY_SYNTAX.into()))), "{text:?}: {found:?}");
+        }
+        let found = diagnostics("= foo(\n", &[]);
+        assert!(found.iter().all(|d| d.code == Some(NumberOrString::String(code::RUBY_SYNTAX.into()))) && found.len() == 2, "{found:?}");
+    }
+
+    #[test]
+    fn removed_syntax_is_what_slim_5_2_2_makes_of_it() {
+        // `=' x` and `-' x` start a Ruby string now; the tag forms (`p=' x`, `p' text`, `p<' x`) still mean trailing space,
+        // and `|'`, `''`, `!!!` and the backtick are text or unknown indicators. Checked against Slim 5.2.2.
+        for (text, first) in [
+            ("=' x\n", "unterminated string meets end of file"),
+            ("==' x\n", "unterminated string meets end of file"),
+            ("-' x\n", "unterminated string meets end of file"),
+            ("p\n  =' y\n", "unterminated string meets end of file"),
+            ("`text`\n", "Unknown line indicator"),
+            ("! html5\n", "Unknown line indicator"),
+            ("!!! html\n", "Unknown line indicator"),
+            (":javascript\n  x\n", "Unknown line indicator"),
+            ("p x=1' text\n", "unterminated string meets end of file"),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.first().map(|d| d.message.as_str()), Some(first), "{text:?}");
+        }
+        for text in ["p=' x\n", "p==' x\n", "p' text\n", "p'\n  | x\n", "p<' x\n", "|' x\n", "'' x\n", "=> x\n", "a href=\"x\"' text\n"] {
+            assert_eq!(diagnostics(text, &[]), vec![], "{text:?}");
+        }
+    }
+
+    #[test]
+    fn removed_engines_are_tags_without_a_tag_after_the_colon() {
+        // Builder, Creole, Erb, Nokogiri, Opal, Org-Ruby, Styl, Wikicloth (4.0.0), Less (5.2.2), Haml, Liquid, Radius, Markaby.
+        for name in
+            ["builder", "creole", "erb", "nokogiri", "opal", "org", "styl", "wikicloth", "less", "haml", "liquid", "radius", "markaby"]
+        {
+            let found = diagnostics(&format!("{name}:\n  x\n"), &[]);
+            assert_eq!(found.len(), 1, "{name}");
+            assert_eq!(found[0].message, "Expected tag", "{name}");
+            assert_eq!(found[0].range.start.character as usize, name.len() + 1, "{name}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::UNKNOWN_ENGINE.into())), "{name}");
+        }
+        let found = diagnostics("erb(x=\"y\"):\n  x\n", &[]);
+        assert_eq!((found[0].message.as_str(), found[0].range.start.character), ("Expected tag", 11));
+        // The engines 5.2.2 still has.
+        for name in ["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"] {
+            assert_eq!(diagnostics(&format!("{name}:\n  x\n"), &[]).iter().filter(|d| d.message == "Expected tag").count(), 0, "{name}");
+        }
+    }
+
+    #[test]
+    fn doctypes_temple_does_not_know() {
+        // Temple::HTML::Fast, format xhtml: the table's keys and `xml [encoding]`, any case.
+        for (text, kind, line) in [
+            ("doctype\n", "", 0),
+            ("p\ndoctype foo\n", "foo", 1),
+            ("doctype html5\n", "html5", 0),
+            ("doctype  HTML Extra \n", "html extra", 0),
+            ("doctype xmlfoo\n", "xmlfoo", 0),
+            ("doctype foo\n= bar(\n", "foo", 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, format!("Invalid doctype {kind}"), "{text:?}");
+            assert_eq!(found[0].range.start.line, line, "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::SYNTAX_ERROR.into())), "{text:?}");
+        }
+        for kind in [
+            "html",
+            "HTML",
+            "5",
+            "1.1",
+            "Strict",
+            "frameset",
+            "mobile",
+            "basic",
+            "transitional",
+            "svg",
+            "xml",
+            "xml ISO-8859-1",
+            "XML utf-8",
+        ] {
+            assert_eq!(diagnostics(&format!("doctype {kind}\n"), &[]), vec![], "{kind}");
+        }
+        assert_eq!(diagnostics("p\n  doctype foo\n", &[]).len(), 1);
+        // Slim stops at its parser, `EndInserter` and the attribute merger first.
+        for text in ["doctype foo\n?bad\n", "doctype foo\n- end\n", "doctype foo\na id=1 id=2\n"] {
+            let found = diagnostics(text, &[]);
+            assert!(found.iter().all(|d| !d.message.starts_with("Invalid doctype")), "{text:?}");
+        }
     }
 
     #[test]
@@ -673,7 +640,7 @@ mod tests {
         // Slim 5 raises "Malformed indentation" for the `   b` line after each of these heads.
         for head in ["p(class=\"x\")", "p class=\"x\"", "p= x", "p x=1", "div"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -681,7 +648,7 @@ mod tests {
     fn whitespace_modifier_tag_keeps_structure_checks() {
         for head in ["p<", "p>", "p<>", "p.a.b<"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -689,7 +656,7 @@ mod tests {
     fn splat_attributes_tag_keeps_structure_checks() {
         for head in ["div *attrs", "p.a *{a: 1}"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -699,8 +666,83 @@ mod tests {
     }
 
     #[test]
+    fn doctype_children_use_slim_message() {
+        // Slim's test_unexpected_indentation (and test_correct_filename), plus a nested doctype and a bare one.
+        for (text, line, column) in
+            [("\ndoctype 5\n  div Invalid\n", 2, 2), ("html\n  doctype 5\n    p\n", 2, 4), ("doctype\n    x\n", 1, 4)]
+        {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].message, "Unexpected indentation", "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
     fn unclosed_attribute() {
-        assert_eq!(slim("div\n  a href=(foo\n"), one(code::UNCLOSED_ATTRIBUTE, 1, 2, ERROR));
+        assert_eq!(slim("div\n  a href=(foo\n"), one(code::UNCLOSED_ATTRIBUTE, 1, 13, ERROR));
+    }
+
+    #[test]
+    fn attribute_errors_use_slim_messages() {
+        // Slim's test_expected_closing_attribute_delimiter, test_expected_closing_delimiter, test_missing_quote_unexpected_end,
+        // then wrappers across lines, a trailing blank line, and a non-ASCII prefix.
+        for (text, message, line, column) in [
+            ("\np\n  img src=[hash[1] + hash[2]\n", "Expected closing delimiter ]", 2, 28),
+            ("\np\n  img(src=\"img.jpg\" title={title}\n", "Expected closing delimiter )", 2, 33),
+            ("\np\n  img(src=\"img.jpg\n", "Unexpected end of file", 2, 0),
+            ("a href=(foo\n", "Expected closing delimiter )", 0, 11),
+            ("a(href=\"x\"\n  class=\"y\"\n", "Expected closing delimiter )", 1, 11),
+            ("a(href=\"x\"\n\n\n", "Expected closing delimiter )", 0, 10),
+            ("a href=x(\"é\" y=[1\n", "Expected closing delimiter )", 0, 17),
+            ("a href=[1,\n", "Unexpected end of file", 0, 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn parser_errors_use_slim_messages() {
+        // Slim's test_parser_errors.rb and probes: (template, message, 0-based line, character, code).
+        for (text, message, line, column, code) in [
+            ("\n.#test\n", "Illegal shortcut", 1, 0, code::SYNTAX_ERROR),
+            ("\ndiv.#test\n", "Illegal shortcut", 1, 3, code::SYNTAX_ERROR),
+            ("\np\n  img{src= }\n", "Invalid empty attribute", 2, 11, code::SYNTAX_ERROR),
+            ("\np\n  img{src=}\n", "Invalid empty attribute", 2, 10, code::SYNTAX_ERROR),
+            ("\np\n  img src=\n", "Invalid empty attribute", 2, 10, code::SYNTAX_ERROR),
+            ("\nhtml: body: /comment\n", "Expected tag", 1, 12, code::SYNTAX_ERROR),
+            ("\nhtml: body:/comment\n", "Expected tag", 1, 11, code::SYNTAX_ERROR),
+            ("\nhtml: body:\n", "Expected tag", 1, 11, code::SYNTAX_ERROR),
+            ("ul: \n", "Expected tag", 0, 4, code::SYNTAX_ERROR),
+            ("p:\n", "Expected tag", 0, 2, code::UNKNOWN_ENGINE),
+            ("mjml:\n  x\n", "Expected tag", 0, 5, code::UNKNOWN_ENGINE),
+            ("\nimg / text\n", "Unexpected text after closed tag", 1, 6, code::SYNTAX_ERROR),
+            ("\np\n  div Valid\n  .valid\n  #valid\n  ?invalid\n", "Unknown line indicator", 5, 2, code::SYNTAX_ERROR),
+            ("a(=x)\n", "Expected attribute", 0, 2, code::SYNTAX_ERROR),
+            ("a(\"x\")\n", "Expected attribute", 0, 2, code::SYNTAX_ERROR),
+            // Slim stops at its first error.
+            ("p\n  ?bad\na href=(foo\n", "Unknown line indicator", 1, 2, code::SYNTAX_ERROR),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code.to_string())), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn registered_engines_are_not_expected_tag_errors() {
+        assert!(slim_with("mjml:\n  x\n", &["mjml".into()]).is_empty());
+    }
+
+    #[test]
+    fn brackets_inside_ruby_strings_in_attributes_are_not_unclosed() {
+        // Slim counts only the delimiter that opened the value, so the `[` in the string is plain text.
+        assert!(slim("\ndiv crazy=action_path('[') id=\"crazy_delimiters\"\n").is_empty());
     }
 
     #[test]
@@ -708,52 +750,61 @@ mod tests {
         assert_eq!(slim("- items.each do\n  p\n- end\n"), one(code::EXPLICIT_END, 2, 0, ERROR));
     }
 
+    fn explicit_end_lines(text: &str) -> Vec<u32> {
+        let found = diagnostics(text, &[]);
+        found.iter().filter(|d| d.message == "Explicit end statements are forbidden").map(|d| d.range.start.line).collect()
+    }
+
+    #[test]
+    fn explicit_end_uses_slim_message_and_condition() {
+        // Slim's test_explicit_end; EndInserter rejects a `-` line whose code starts with `end\b`.
+        assert_eq!(explicit_end_lines("\ndiv\n  - if show_first?\n      p The first paragraph\n  - end\n"), [4]);
+        for text in ["-end\n", "- end # note\n", "- end.foo\n", "-   end\n"] {
+            assert_eq!(explicit_end_lines(text), [0], "{text:?}");
+        }
+        for text in ["- endx\n", "= end\n", "p= end\n", "- foo; end\n", "- ensure\n", "p end\n"] {
+            assert!(explicit_end_lines(text).is_empty(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_attributes_use_temple_message() {
+        // Temple's AttributeMerger merges only `class`; any other repeated name in a tag fails, on the tag's line.
+        for (text, message, line) in [
+            ("\n#alpha id=\"beta\" Test it\n", "Multiple id attributes specified", 1),
+            ("a href=\"x\" href=\"y\"\n", "Multiple href attributes specified", 0),
+            ("p\n  a href=x href=y\n", "Multiple href attributes specified", 1),
+            ("a(href=\"x\" href)\n", "Multiple href attributes specified", 0),
+            ("#a#b\n", "Multiple id attributes specified", 0),
+            ("a data-x=1 data-x=2\n", "Multiple data-x attributes specified", 0),
+            ("a id=\"x\" class=\"y\" id=\"z\"\n", "Multiple id attributes specified", 0),
+            ("a(href=\"x\"\n  href=\"y\")\n", "Multiple href attributes specified", 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!(found[0].range.start.line, line, "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::SYNTAX_ERROR.to_string())), "{text:?}");
+        }
+        for text in [".a class=\"b\"\n", "a href=1\n  b href=2\n", "a X=1 x=2\n", "#alpha *{id: \"beta\"} t\n", "a b c b\n"] {
+            let found: Vec<_> = diagnostics(text, &[]).into_iter().filter(|d| d.message.starts_with("Multiple")).collect();
+            assert!(found.is_empty(), "{text:?}: {found:?}");
+        }
+        // A parser error comes first: Slim never reaches the compile step.
+        let found = diagnostics("a id=1 id=2\n?x\n", &[]);
+        assert_eq!(found.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["Unknown line indicator"]);
+    }
+
     #[test]
     fn unknown_engine_and_extra_engines() {
-        assert_eq!(slim("mjml:\n  x\n"), one(code::UNKNOWN_ENGINE, 0, 0, WARNING));
+        assert_eq!(slim("mjml:\n  x\n"), one(code::UNKNOWN_ENGINE, 0, 5, ERROR));
         assert!(slim_with("mjml:\n  x\n", &["mjml".into()]).is_empty());
         assert!(slim("javascript:\n  x\n").is_empty());
     }
 
     #[test]
-    fn unmatched_branch() {
-        assert!(slim("- if a\n  p\n- elsif b\n  p\n- else\n  p\n").is_empty());
-        assert!(slim("- case x\n- when 1\n  p\n- else\n  p\n").is_empty());
-        assert!(slim("- begin\n  p\n- rescue => e\n  p\n- ensure\n  p\n").is_empty());
-        assert_eq!(slim("p\n- else\n  p\n"), one(code::UNMATCHED_BRANCH, 1, 0, ERROR));
-        assert_eq!(slim("- if a\n  p\n  - else\n    q\n"), one(code::UNMATCHED_BRANCH, 2, 2, ERROR));
-        assert_eq!(slim("- if a\n  p\n- when 1\n"), one(code::UNMATCHED_BRANCH, 2, 0, ERROR));
-        assert_eq!(slim("- unless a\n  p\n- elsif b\n"), one(code::UNMATCHED_BRANCH, 2, 0, ERROR));
-        let message = &diagnostics("p\n- else\n", &[])[0].message;
-        assert!(message.contains("or a block (`do`)"), "{message}");
-    }
-
-    #[test]
-    fn code_comment_between_branches() {
-        assert!(slim("- if x\n  p a\n/ note\n- else\n  p b\n").is_empty());
-        assert!(slim("- case x\n- when 1\n  p 1\n/ two\n- when 2\n  p 2\n").is_empty());
-        // `/!` renders an HTML comment, which ends the `if` in Slim's output.
-        assert_eq!(slim("- if x\n  p a\n/! note\n- else\n"), one(code::UNMATCHED_BRANCH, 3, 0, ERROR));
-    }
-
-    #[test]
-    fn branches_nested_under_opener() {
-        assert!(slim("- case x\n  - when 1\n    p one\n  - else\n    p other\n").is_empty());
-        assert!(slim("- begin\n  - rescue\n    p\n").is_empty());
-        assert_eq!(slim("- if a\n  - elsif b\n"), one(code::UNMATCHED_BRANCH, 1, 2, ERROR));
-    }
-
-    #[test]
-    fn branch_opener_after_assignment() {
-        assert!(slim("- r = case x\n- when 1\n  p 1\n").is_empty());
-        assert!(slim("- @r ||= case x\n- when 1\n").is_empty());
-        assert_eq!(slim("- x == case y\n- when 1\n"), one(code::UNMATCHED_BRANCH, 1, 0, ERROR));
-    }
-
-    #[test]
     fn void_children() {
         assert_eq!(slim("br\n  p x\n  p y\n"), one(code::VOID_CHILDREN, 1, 2, WARNING));
-        assert_eq!(slim("div\n  img/\n    p\n"), one(code::VOID_CHILDREN, 2, 4, WARNING));
         assert_eq!(slim("input.big type=\"x\"\n  p\n"), one(code::VOID_CHILDREN, 1, 2, WARNING));
         assert!(slim("br\n  / old stuff\n").is_empty());
         assert!(slim("p = x\n  span y\n").is_empty());
@@ -761,10 +812,21 @@ mod tests {
 
     #[test]
     fn closed_tag_children() {
-        let d = diagnostics("div/\n  p x\n", &[]);
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].message, "`div` is explicitly closed with `/` and can't have children");
-        assert_eq!(d[0].severity, Some(WARNING));
+        // Slim rejects a child under a tag closed with `/`, void element or not.
+        for (text, line, column) in [
+            ("div/\n  p x\n", 1, 2),
+            ("br/ \n  p\n", 1, 2),
+            ("img/\n  p\n", 1, 2),
+            ("img src=\"x\"/\n  p\n", 1, 2),
+            ("br /\n  p\n", 1, 2),
+            ("div\n  a.b#c(href=\"x\")/\n\n    p\n      q\n", 3, 4),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, "Unexpected indentation", "{text:?}");
+            assert_eq!(found[0].severity, Some(ERROR), "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
     }
 
     #[test]
@@ -773,37 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn silent_output_helper() {
-        assert_eq!(slim("- form_with model: @u do |f|\n  p\n"), one(code::SILENT_OUTPUT_HELPER, 0, 2, WARNING));
-        assert_eq!(slim("-  tag.div do\n  p\n"), one(code::SILENT_OUTPUT_HELPER, 0, 3, WARNING));
+    fn block_helpers_under_a_control_line_are_valid() {
+        // Valid Slim and Ruby: `-` just discards the helper's HTML.
+        assert!(slim("- form_with model: @u do |f|\n  p\n").is_empty());
+        assert!(slim("-  tag.div do\n  p\n").is_empty());
         assert!(slim("= form_with model: @u do |f|\n  p\n").is_empty());
-        assert!(slim("- content_for :x do\n  p\n").is_empty());
-    }
-
-    #[test]
-    fn unclosed_ruby() {
-        assert_eq!(slim("= foo(\n"), one(code::UNCLOSED_RUBY, 0, 0, WARNING));
-        assert_eq!(slim("p = link_to \"x, y\n"), one(code::UNCLOSED_RUBY, 0, 0, WARNING));
-        assert_eq!(slim("- x = [1,\n  2\n"), one(code::UNCLOSED_RUBY, 0, 0, WARNING));
-        assert!(slim("- x = [1,\n  2]\n= \"#{a ? \"(\" : '['}\" # (\n= t('.x') if ok?\n").is_empty());
-        assert_eq!(unclosed_delimiter("foo(\"#{bar"), Some('{'));
-        assert_eq!(unclosed_delimiter("a)"), None);
-        assert_eq!(unclosed_delimiter("total / count + (x"), Some('('));
-        assert_eq!(unclosed_delimiter("a % b + (x"), Some('('));
-    }
-
-    #[test]
-    fn unclosed_ruby_skips_literals_it_cannot_scan() {
-        for code in [
-            "= name.gsub(/'/, \"\")\n",
-            "- if path =~ /\\(/\n  p x\n",
-            "= t(\"x\", default: %q(it's))\n",
-            "= foo(?()\n",
-            "= $'\n",
-            "= foo /(/\n",
-        ] {
-            assert!(slim(code).is_empty(), "{code}");
-        }
     }
 
     #[test]
@@ -813,12 +849,8 @@ mod tests {
             slim(text),
             vec![
                 (code::DOCTYPE_CHILDREN.to_string(), 1, 2, ERROR),
-                (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
-                (code::BAD_DEDENT.to_string(), 4, 0, ERROR),
-                (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 2, ERROR),
+                (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 23, ERROR),
                 (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
-                (code::UNKNOWN_ENGINE.to_string(), 8, 2, WARNING),
-                (code::BAD_DEDENT.to_string(), 10, 0, ERROR),
             ]
         );
     }
