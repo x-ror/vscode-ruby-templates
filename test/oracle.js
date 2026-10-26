@@ -81,6 +81,7 @@ const languages = {
     casesScript: "slim_cases.rb",
     officialScript: "slim.rb",
     expectationAgrees: slimExpectation,
+    perturb: (source) => slimPerturbations(source),
   },
   haml: {
     name: "haml",
@@ -299,7 +300,105 @@ const formatText = (file, text) => {
   if (r.status !== 0 && r.status !== 1) {
     return { text: r.stdout, failure: `exit ${r.status}: ${r.stderr.trim()}` };
   }
-  return { text: r.stdout, declined: r.stderr.includes("left unchanged") };
+  return {
+    text: r.stdout,
+    declined: r.stderr.includes("left unchanged"),
+    reason: r.stderr.match(/left unchanged: (.*)/)?.[1],
+  };
+};
+
+// Other spellings of the same Slim template: its indentation is relative, a tab counts as tabsize 4, and a line
+// ending or a space at the end of a bare tag line is nothing. Each is checked to compile to the same source before
+// it is used, so a variant that changes the template (text lines, embedded code) is dropped, not formatted.
+const slimPerturbations = (source) => {
+  const lines = source.split("\n");
+  const scaled = (factor) =>
+    lines
+      .map((line) =>
+        line.replace(/^ +/, (spaces) => " ".repeat(spaces.length * factor)),
+      )
+      .join("\n");
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  const unit = lines.map((line) => line.match(/^ */)[0].length).reduce(gcd, 0);
+  const toTabs = (text) =>
+    text.replace(/^( {4})+/gm, (spaces) => "\t".repeat(spaces.length / 4));
+  const bareTagLine = /^\s*([a-z][\w-]*|[.#][\w-]+)+$|^$/;
+  const variants = [
+    { name: "indent x2", text: scaled(2) },
+    { name: "indent x3", text: scaled(3) },
+    unit && 4 % unit === 0
+      ? { name: "tabs", text: toTabs(scaled(4 / unit)) }
+      : undefined,
+    { name: "CRLF", text: source.replace(/\r?\n/g, "\r\n") },
+    {
+      name: "trailing spaces",
+      text: lines
+        // (not the empty piece after the final newline, which is no line)
+        .map((line, index) =>
+          bareTagLine.test(line) && index < lines.length - 1
+            ? `${line}  `
+            : line,
+        )
+        .join("\n"),
+    },
+  ];
+  return variants.filter((v) => v && v.text !== source);
+};
+
+// Formats the variants of one file: each must compile to the original's source once formatted, and formatting
+// the result again must change nothing. A refusal (the formatter leaves the text alone) is counted apart.
+const perturbedRows = async (lang, item, flags, originalSource) => {
+  const rows = [];
+  for (const variant of lang.perturb(item.source)) {
+    const compiled = await officialResult(lang, variant.text, ...flags);
+    if (compiled.source !== originalSource) {
+      rows.push({ name: variant.name, outcome: "not equivalent" });
+      continue;
+    }
+    const once = formatText(item.path, variant.text);
+    if (once.failure) {
+      rows.push({
+        name: variant.name,
+        outcome: "failed",
+        failures: [`formatter failed, ${once.failure}`],
+      });
+      continue;
+    }
+    if (once.declined) {
+      rows.push({
+        name: variant.name,
+        outcome: "refused",
+        reason: once.reason ?? "no reason given",
+      });
+      continue;
+    }
+    const after = await officialResult(lang, once.text, ...flags);
+    const twice = formatText(item.path, once.text);
+    const failures = [];
+    if (after.source !== originalSource) {
+      failures.push(
+        after.source === undefined
+          ? `formatted text no longer compiles: ${JSON.stringify(after)}`
+          : `compiled output differs\n      ${firstDifference(originalSource, after.source)}`,
+      );
+    }
+    const idempotent = !twice.failure && twice.text === once.text;
+    if (!idempotent) {
+      failures.push(
+        `second format changes it\n      ${firstDifference(once.text, twice.text)}`,
+      );
+    }
+    rows.push({
+      name: variant.name,
+      outcome: "formatted",
+      identical: after.source === originalSource,
+      changed: once.text !== variant.text,
+      idempotent,
+      failures,
+      text: variant.text,
+    });
+  }
+  return rows;
 };
 
 // What kind of change separates two compiled sources, to group the failures.
@@ -323,6 +422,10 @@ const firstDifference = (before, after) => {
 };
 
 // Formats each item, then checks the compiled Rails code is unchanged and a second format changes nothing.
+// ORACLE_SAMPLE=n perturbs every n-th file only, to keep a run short.
+const PERTURB_SAMPLE = Number(process.env.ORACLE_SAMPLE) || 1;
+const sampled = (index) => index % PERTURB_SAMPLE === 0;
+
 const formatReport = (lang, items, indexes) =>
   mapParallel(indexes, PARALLEL_RUBY_PROCESSES, async (i) => {
     const { source, path: file, label } = items[i];
@@ -334,6 +437,10 @@ const formatReport = (lang, items, indexes) =>
     ];
     const before = await officialResult(lang, source, ...flags);
     const after = await officialResult(lang, once.text, ...flags);
+    const perturbed =
+      lang.perturb && before.source !== undefined && sampled(i)
+        ? await perturbedRows(lang, items[i], flags, before.source)
+        : [];
     const notCompared = Boolean(before.not_compared);
     if (before.source === undefined && !notCompared) {
       throw new Error(
@@ -366,6 +473,7 @@ const formatReport = (lang, items, indexes) =>
       idempotent,
       declined: once.declined,
       changed: !once.failure && once.text !== source,
+      perturbed,
       failures,
     };
   });
@@ -408,6 +516,32 @@ const report = async (lang, title, items, skipped) => {
     `format:  ${formatted.length.toLocaleString("en-US")} files, compiled output identical in ${count("identical")}, idempotent in ${count("idempotent")}` +
       `  (formatter declined ${count("declined")}; ${lang.reportsChanged ? `changed ${count("changed")}; not compared, whitespace-sensitive element built by Ruby ${count("notCompared")}; ` : ""}not formatted, our error: ${notFormatted.length})`,
   );
+  if (lang.perturb) {
+    const variants = formatted.flatMap((row) => row.perturbed);
+    const outcome = (name) => variants.filter((v) => v.outcome === name);
+    const run = variants.filter((v) => v.outcome !== "not equivalent");
+    const formattedVariants = outcome("formatted");
+    const refusals = new Map();
+    outcome("refused").forEach((v) =>
+      refusals.set(v.reason, (refusals.get(v.reason) ?? 0) + 1),
+    );
+    const reasons = [...refusals].map(([r, n]) => `${r} ${n}`).join("; ");
+    console.log(
+      `format perturbed: ${run.length} variants, formatter changed ${formattedVariants.filter((v) => v.changed).length}, compiled identical in ${formattedVariants.filter((v) => v.identical).length}, idempotent in ${formattedVariants.filter((v) => v.idempotent).length}, refused ${outcome("refused").length}${reasons ? ` (${reasons})` : ""}, failed ${outcome("failed").length}; not equivalent to the original ${outcome("not equivalent").length}`,
+    );
+  }
+  if (lang.perturb) {
+    const names = [
+      ...new Set(formatted.flatMap((row) => row.perturbed.map((v) => v.name))),
+    ];
+    const byName = names.map((name) => {
+      const all = formatted
+        .flatMap((row) => row.perturbed)
+        .filter((v) => v.name === name);
+      return `${name} ${all.filter((v) => v.outcome !== "not equivalent").length}/${all.length}`;
+    });
+    console.log(`  variants run/made: ${byName.join(", ")}`);
+  }
   const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
   const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
   console.log(`skipped: ${skippedTotal}${reasons ? ` (${reasons})` : ""}`);
@@ -422,6 +556,16 @@ const report = async (lang, title, items, skipped) => {
             failures.map((f) => `    ${f}`).join("\n"),
         ),
       );
+    formatted.forEach(({ i, perturbed }) =>
+      perturbed
+        .filter((v) => v.failures?.length)
+        .forEach((v) =>
+          console.log(
+            `format perturbed (${v.name}): ${items[i].label} ${JSON.stringify(v.text ?? "")}\n` +
+              v.failures.map((f) => `    ${f}`).join("\n"),
+          ),
+        ),
+    );
   }
 };
 
