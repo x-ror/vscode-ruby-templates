@@ -297,7 +297,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | 0. Harness               | done        |
 | 0b. Context              | done        |
 | 1a. Slim errors          | done        |
-| 1b. Slim format          | in review   |
+| 1b. Slim format          | done        |
 | 2a. Haml errors          | not started |
 | 2b. Haml format          | not started |
 | 3a. ERB errors           | not started |
