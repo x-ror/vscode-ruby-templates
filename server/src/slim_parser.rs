@@ -47,6 +47,14 @@ pub enum Marker {
     Engine,
 }
 
+/// A syntax error as Slim reports it.
+pub struct SyntaxError {
+    pub line: usize,
+    /// Characters, as Slim counts them.
+    pub column: usize,
+    pub message: String,
+}
+
 pub struct Parsed {
     pub lines: Vec<LineInfo>,
     /// Byte ranges of Ruby code.
@@ -62,6 +70,8 @@ pub struct Parsed {
     pub valid: bool,
     /// Line where Slim would have stopped for a reason other than indentation.
     pub stop_line: Option<usize>,
+    /// The first error in an attribute list that Slim words: the closing delimiter or the end of the file.
+    pub attribute_error: Option<SyntaxError>,
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +136,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             text: Vec::new(),
             valid: true,
             stop_line: None,
+            attribute_error: None,
         },
         lines,
         starts,
@@ -279,6 +290,18 @@ impl<'a> Parser<'a> {
         self.out.stop_line.get_or_insert(self.i);
     }
 
+    fn fail_attribute(&mut self, message: String, column: usize) {
+        if self.out.stop_line.is_none() {
+            self.out.attribute_error = Some(SyntaxError { line: self.i, column, message });
+        }
+        self.fail();
+    }
+
+    /// Slim's `@lines` is `split(/\r?\n/)`, which drops trailing empty lines.
+    fn has_next_line(&self) -> bool {
+        self.lines[self.i + 1..].iter().any(|l| !l.is_empty())
+    }
+
     fn marker(&mut self, len: usize, kind: Marker) {
         let at = self.at();
         self.out.markers.push((at..at + len, kind));
@@ -298,7 +321,7 @@ impl<'a> Parser<'a> {
 
     /// `next_line`: the following line, unstripped.
     fn next_line(&mut self) -> bool {
-        if self.i + 1 >= self.lines.len() {
+        if !self.has_next_line() {
             return false;
         }
         self.enter(self.i + 1);
@@ -312,10 +335,29 @@ impl<'a> Parser<'a> {
             self.fail();
             return false;
         }
+        self.strip_line();
+        true
+    }
+
+    /// `expect_next_line` inside an attribute list: Slim's `@line` is nil by then, so the column is 0.
+    fn expect_attribute_line(&mut self) -> bool {
+        if !self.next_line() {
+            self.fail_attribute("Unexpected end of file".to_string(), 0);
+            return false;
+        }
+        self.strip_line();
+        true
+    }
+
+    fn strip_line(&mut self) {
         let line = self.lines[self.i];
         self.end = line.trim_end_matches(is_space).len();
         self.pos = (line.len() - trim_start(line).len()).min(self.end);
-        true
+    }
+
+    /// Slim's `@orig_line.size - @line.size`.
+    fn column(&self) -> usize {
+        self.lines[self.i].chars().count() - self.rest().chars().count()
     }
 
     fn parse_line(&mut self) {
@@ -541,8 +583,12 @@ impl<'a> Parser<'a> {
             } else if t.starts_with(close) {
                 self.skip(ws + 1);
                 break;
-            } else if !t.is_empty() || !self.next_line() {
+            } else if !t.is_empty() {
                 self.fail();
+                break;
+            } else if !self.next_line() {
+                let column = self.lines[self.i].chars().count();
+                self.fail_attribute(format!("Expected closing delimiter {close}"), column);
                 break;
             }
         }
@@ -564,7 +610,7 @@ impl<'a> Parser<'a> {
             if r == "," || r == "\\" {
                 self.ruby(start, self.end);
                 taken += 1;
-                if !self.expect_next_line() {
+                if !self.expect_attribute_line() {
                     return taken;
                 }
                 start = self.pos;
@@ -585,7 +631,7 @@ impl<'a> Parser<'a> {
         }
         self.ruby(start, self.pos);
         if depth != 0 {
-            self.fail();
+            self.fail_attribute(format!("Expected closing delimiter {close}"), self.column());
         }
         taken
     }
@@ -602,7 +648,7 @@ impl<'a> Parser<'a> {
             if r.is_empty() || r == "\\" {
                 self.interpolate(segment, self.pos);
                 self.out.lines[self.i].keeps_trailing = true;
-                if !self.expect_next_line() {
+                if !self.expect_attribute_line() {
                     return;
                 }
                 segment = self.pos;

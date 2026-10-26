@@ -77,6 +77,9 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
     let parsed = slim_parser::parse(text, extra_engines);
+    if let Some(syntax) = &parsed.attribute_error {
+        out.push(attribute_diagnostic(text, &lines, syntax));
+    }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
     let unit: Option<usize> = detect_unit(&lines, &roles);
@@ -180,7 +183,14 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         stack.push(Frame { indent, kind, line: line_no, chain, has_child: false });
         i += consumed.max(1);
     }
+    out.sort_by_key(|d| (d.range.start.line, d.range.start.character));
     out
+}
+
+fn attribute_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
+    let raw = lines[syntax.line];
+    let start = raw.char_indices().nth(syntax.column).map_or(raw.len(), |(at, _)| at);
+    coded(error(line_range(text, syntax.line, start, raw.len()), syntax.message.clone()), code::UNCLOSED_ATTRIBUTE)
 }
 
 fn indent_width(ws: &str) -> usize {
@@ -283,7 +293,7 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
     // Tags
     let is_tag = c.starts_with('.') || c.starts_with('#') || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic());
     if is_tag {
-        let (rest, consumed) = skip_tag_head(lines, i, text, out);
+        let (rest, consumed) = skip_tag_head(lines, i);
         let rest_t = rest.trim();
         let closed = rest_t == "/";
         let void = closed || VOID_ELEMENTS.contains(&tag_name(raw));
@@ -458,9 +468,8 @@ fn check_explicit_end(code: &str, range: tower_lsp::lsp_types::Range, out: &mut 
 
 /// Skip over `tag.class#id attr=val (...)`, validating bracket balance (possibly across lines).
 /// Returns the remainder and lines consumed.
-fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
+fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let raw = lines[i];
-    let head_range = line_range(text, i, leading_ws(raw).len(), raw.len());
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
@@ -490,10 +499,7 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
                 pos += rest.len() - trimmed.len();
                 match consume_attr(&s[pos..]) {
                     Ok(n) => pos += n,
-                    Err(open_ch) => {
-                        out.push(coded(error(head_range, format!("Unclosed `{}` in attribute value", open_ch)), code::UNCLOSED_ATTRIBUTE));
-                        return (String::new(), consumed);
-                    }
+                    Err(_) => return (String::new(), consumed),
                 }
                 continue;
             }
@@ -538,7 +544,6 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
             }
         }
         let Some(len) = balanced else {
-            out.push(coded(error(head_range, format!("Unclosed `{}` in tag attributes", ch)), code::UNCLOSED_ATTRIBUTE));
             return (String::new(), consumed);
         };
         pos += len;
@@ -767,7 +772,34 @@ mod tests {
 
     #[test]
     fn unclosed_attribute() {
-        assert_eq!(slim("div\n  a href=(foo\n"), one(code::UNCLOSED_ATTRIBUTE, 1, 2, ERROR));
+        assert_eq!(slim("div\n  a href=(foo\n"), one(code::UNCLOSED_ATTRIBUTE, 1, 13, ERROR));
+    }
+
+    #[test]
+    fn attribute_errors_use_slim_messages() {
+        // Slim's test_expected_closing_attribute_delimiter, test_expected_closing_delimiter, test_missing_quote_unexpected_end,
+        // then wrappers across lines, a trailing blank line, and a non-ASCII prefix.
+        for (text, message, line, column) in [
+            ("\np\n  img src=[hash[1] + hash[2]\n", "Expected closing delimiter ]", 2, 28),
+            ("\np\n  img(src=\"img.jpg\" title={title}\n", "Expected closing delimiter )", 2, 33),
+            ("\np\n  img(src=\"img.jpg\n", "Unexpected end of file", 2, 0),
+            ("a href=(foo\n", "Expected closing delimiter )", 0, 11),
+            ("a(href=\"x\"\n  class=\"y\"\n", "Expected closing delimiter )", 1, 11),
+            ("a(href=\"x\"\n\n\n", "Expected closing delimiter )", 0, 10),
+            ("a href=x(\"é\" y=[1\n", "Expected closing delimiter )", 0, 17),
+            ("a href=[1,\n", "Unexpected end of file", 0, 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn brackets_inside_ruby_strings_in_attributes_are_not_unclosed() {
+        // Slim counts only the delimiter that opened the value, so the `[` in the string is plain text.
+        assert!(slim("\ndiv crazy=action_path('[') id=\"crazy_delimiters\"\n").is_empty());
     }
 
     #[test]
@@ -891,7 +923,7 @@ mod tests {
             vec![
                 (code::DOCTYPE_CHILDREN.to_string(), 1, 2, ERROR),
                 (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
-                (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 2, ERROR),
+                (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 23, ERROR),
                 (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
                 (code::UNKNOWN_ENGINE.to_string(), 8, 2, WARNING),
                 (code::INCONSISTENT_INDENT.to_string(), 10, 0, WARNING),
