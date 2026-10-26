@@ -1,7 +1,7 @@
 //! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
 use crate::haml_parser;
-use crate::ruby::{analyze, ends_with_block, BlockEffect};
+use crate::ruby::analyze;
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range, warning};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -51,20 +51,9 @@ static BLOCK_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"do\s*\
 enum LineKind {
     /// Children are free-form text (filters, comments, text blocks).
     Verbatim,
-    /// Ruby line `- ...` / `= ...`; children need it to open a block.
-    Ruby {
-        opens_block: bool,
-    },
-    /// `inline_content`: Haml content on the tag's line, which rules out children.
-    Tag {
-        inline_content: bool,
-    },
-    /// Haml `%br/`.
-    SelfClosing,
-    /// Haml `/ text`: an HTML comment with inline content.
-    TextComment,
-    Text,
-    Doctype,
+    /// Ruby line `- ...` / `= ...`.
+    Ruby,
+    Tag,
     Other,
 }
 
@@ -74,13 +63,6 @@ struct Visit {
     indent: usize,
     kind: LineKind,
     span: usize,
-}
-
-struct Frame {
-    indent: usize,
-    kind: LineKind,
-    line: usize,
-    has_children: bool,
 }
 
 /// An open Haml `if`/`case`/`unless`, for matching `else`/`elsif`/`when`.
@@ -150,8 +132,8 @@ pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
     for (n, v) in visits.iter().enumerate() {
         let content = lines[v.line].trim_start_matches([' ', '\t']);
         let continuation = match v.kind {
-            LineKind::Ruby { .. } => LineRole::Ruby,
-            LineKind::Tag { .. } if tag_head_len(content).is_none() || haml_code_start(lines[v.line]).is_some() => LineRole::Ruby,
+            LineKind::Ruby => LineRole::Ruby,
+            LineKind::Tag if tag_head_len(content).is_none() || haml_code_start(lines[v.line]).is_some() => LineRole::Ruby,
             _ => LineRole::Text,
         };
         roles[v.line + 1..v.line + v.span].fill(continuation);
@@ -173,73 +155,35 @@ fn indent_width(ws: &str) -> usize {
 
 /// Indentation consistency, dedents, illegal nesting and Haml's `else`/`when` placement.
 fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<Diagnostic>) {
-    let mut stack: Vec<Frame> = Vec::new();
+    let mut indents: Vec<usize> = Vec::new();
     let mut openers: Vec<Opener> = Vec::new();
-    for &Visit { line: line_no, indent, kind, .. } in visits {
+    for &Visit { line: line_no, indent, .. } in visits {
         let raw = lines[line_no];
         let ws = leading_ws(raw);
-
-        // Pop to the parent level.
-        while let Some(top) = stack.last() {
-            if top.indent >= indent {
-                stack.pop();
-            } else {
-                break;
-            }
+        while indents.last().is_some_and(|&top| top >= indent) {
+            indents.pop();
         }
-        let parent_indent = stack.last().map(|f| f.indent).unwrap_or(0);
-        let is_child = stack.last().is_some() && indent > parent_indent;
-
-        // Illegal nesting checks against the parent, reported once on the parent line.
-        if let Some(parent) = stack.last_mut().filter(|_| is_child) {
-            let parent_raw = lines[parent.line];
-            let nesting_error = match parent.kind {
-                _ if parent.has_children => None,
-                LineKind::Tag { inline_content: true } => Some(format!(
-                    "Illegal nesting: content can't be both given on the same line as %{} and nested within it.",
-                    haml_tag_name(&parent_raw[leading_ws(parent_raw).len()..])
-                )),
-                LineKind::Text => Some("Illegal nesting: nesting within plain text is illegal.".into()),
-                LineKind::Ruby { opens_block: false } => {
-                    Some("Nested content under Ruby code that doesn't open a block (`do`, `if`, ...).".into())
-                }
-                LineKind::SelfClosing => Some("Illegal nesting: nesting within a self-closing tag is illegal.".into()),
-                LineKind::TextComment => Some("Illegal nesting: nesting within a tag that already has content is illegal.".into()),
-                _ => None,
-            };
-            if let Some(message) = nesting_error {
-                out.push(coded(error(line_range(text, parent.line, 0, parent_raw.len()), message), code::ILLEGAL_NESTING));
-            }
-            if parent.kind == LineKind::Doctype {
-                let nested = error(line_range(text, line_no, 0, raw.len()), "Nothing can be nested under a doctype");
-                out.push(coded(nested, code::DOCTYPE_CHILDREN));
-            }
-            parent.has_children = true;
-        }
-
-        if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, stack.len()) {
+        if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, indents.len()) {
             out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), message), code::UNMATCHED_BRANCH));
         }
-
-        stack.push(Frame { indent, kind, line: line_no, has_children: false });
+        indents.push(indent);
     }
 }
 
-/// Haml's first indentation error, over the indentation of its line.
+/// The first error Haml's parser raises: indentation errors are shown over the indentation, the others over the line.
 fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagnostic {
     let raw = haml_parser::physical_lines(text).get(parse_error.line).copied().unwrap_or("");
     let body = raw.strip_prefix(haml_parser::BOM).filter(|_| parse_error.line == 0).unwrap_or(raw);
     let indent = leading_ws(body).len();
-    let end = raw.len() - body.len() + if indent > 0 { indent } else { body.len() };
-    let code =
-        if parse_error.message.starts_with("Indenting at the beginning") { code::TOP_LEVEL_INDENT } else { code::INCONSISTENT_INDENT };
-    coded(error(span_range(parse_error.line, raw, 0, end), parse_error.message.clone()), code)
-}
-
-/// Element name in Haml's messages: the `%name`, or `div` for `.class` / `#id`.
-fn haml_tag_name(content: &str) -> &str {
-    let Some(rest) = content.strip_prefix('%') else { return "div" };
-    &rest[..rest.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '-' | '_' | ':'))).unwrap_or(rest.len())]
+    let bom_len = raw.len() - body.len();
+    let (code, start, end) = match parse_error.message.as_str() {
+        "Indenting at the beginning of the document is illegal." => (code::TOP_LEVEL_INDENT, 0, bom_len + indent),
+        "Illegal nesting: nesting within a header command is illegal." => (code::DOCTYPE_CHILDREN, bom_len + indent, raw.len()),
+        "Illegal element: classes and ids must have values." => (code::ILLEGAL_ELEMENT, bom_len + indent, raw.len()),
+        message if message.starts_with("Illegal nesting") => (code::ILLEGAL_NESTING, bom_len + indent, raw.len()),
+        _ => (code::INCONSISTENT_INDENT, 0, bom_len + if indent > 0 { indent } else { body.len() }),
+    };
+    coded(error(span_range(parse_error.line, raw, start, end), parse_error.message.clone()), code)
 }
 
 /// Haml's `if`/`case`/`unless` stack: pops the blocks this line closes, pushes the one it opens,
@@ -282,25 +226,11 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     let ws_len = leading_ws(raw).len();
     let c = &raw[ws_len..];
 
-    // Doctype
-    if c.starts_with("!!!") {
-        return (LineKind::Doctype, 1);
-    }
     // Comments
     if c.starts_with("-#") {
         return (LineKind::Verbatim, 1);
     }
-    if let Some(comment) = c.strip_prefix('/') {
-        // Conditional comments `/[if IE]` and `/![if !IE]` may have text after the `]`.
-        let conditional = comment.strip_prefix('!').unwrap_or(comment).strip_prefix('[');
-        let text_after = conditional.map_or(comment, |cond| cond.split_once(']').map_or("", |(_, rest)| rest));
-        return (if text_after.trim().is_empty() { LineKind::Other } else { LineKind::TextComment }, 1);
-    }
-    if (c.starts_with('.') || (c.starts_with('#') && !c.starts_with("#{")))
-        && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_' | ':' | '@'))
-    {
-        let message = "Illegal element: classes and ids must have values.";
-        out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::ILLEGAL_ELEMENT));
+    if c.starts_with('/') {
         return (LineKind::Other, 1);
     }
     // Filters
@@ -317,7 +247,7 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
         let (joined, consumed) = join_continuation(lines, i, code);
         check_explicit_end(&joined, text, i, raw, out);
-        return (LineKind::Ruby { opens_block: opens_block(&joined) }, consumed);
+        return (LineKind::Ruby, consumed);
     }
     // Tags
     if is_haml_tag(c) {
@@ -327,13 +257,10 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
                 let message = "Self-closing tags can't have content.";
                 out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::SELF_CLOSING_CONTENT));
             }
-            return (LineKind::SelfClosing, head_lines);
+            return (LineKind::Tag, head_lines);
         }
         let rest_t = rest.trim();
         let last_head_line = i + head_lines - 1;
-        // Haml allows children after content only when the line's value ends in `,` (`is_ruby_multiline?`).
-        let value = rest.trim_start_matches(['<', '>']).trim();
-        let inline_content = !value.is_empty() && !is_ruby_multiline(value);
         let tail_lines = match strip_output_prefix(rest_t) {
             Some(code) => {
                 let (joined, code_lines) = join_continuation(lines, last_head_line, code);
@@ -342,9 +269,9 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
             }
             None => multiline_len(lines, last_head_line),
         };
-        return (LineKind::Tag { inline_content }, head_lines - 1 + tail_lines);
+        return (LineKind::Tag, head_lines - 1 + tail_lines);
     }
-    (LineKind::Text, multiline_len(lines, i))
+    (LineKind::Other, multiline_len(lines, i))
 }
 
 /// Haml's `is_ruby_multiline?`: ends in `,`, except the character literals `?,` and `?\,`.
@@ -357,11 +284,6 @@ pub(crate) fn is_ruby_multiline(text: &str) -> bool {
     let char_literal = n >= 3
         && ((b[n - 2] == b'?' && !(b[n - 3].is_ascii_alphanumeric() || b[n - 3] == b'_')) || (b[n - 3] == b'?' && b[n - 2] == b'\\'));
     !char_literal
-}
-
-/// Can nested template lines follow? Either the code opens a block or continues one (`else`, `when`, ...).
-fn opens_block(code: &str) -> bool {
-    ends_with_block(code) || matches!(analyze(code).0, BlockEffect::Open(_) | BlockEffect::Continue)
 }
 
 pub(crate) fn strip_output_prefix(s: &str) -> Option<&str> {
@@ -544,13 +466,11 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                at(3, 0, 12, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
+                at(4, 4, 31, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
                 at(7, 2, 7, "`end` is not allowed: Haml closes blocks by indentation"),
                 at(8, 2, 16, "Unknown Haml filter `:unknownfilter`"),
                 at(10, 2, 8, "Got \"else\" with no preceding \"if\""),
                 at(12, 2, 11, "Self-closing tags can't have content."),
-                at(13, 0, 8, "Illegal nesting: nesting within a tag that already has content is illegal."),
-                at(15, 0, 13, "Nested content under Ruby code that doesn't open a block (`do`, `if`, ...)."),
                 at(17, 2, 14, "Unclosed `{` in tag attributes"),
             ]
         );
@@ -605,27 +525,24 @@ mod tests {
                     "Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 4 spaces.",
                 ),
             ),
-            ("!!! 5\n  %p", (1, 0, 4, "Nothing can be nested under a doctype")),
-            ("hello\n  %b", (0, 0, 5, "Illegal nesting: nesting within plain text is illegal.")),
-            ("#{x} text\n  %b", (0, 0, 9, "Illegal nesting: nesting within plain text is illegal.")),
-            ("#{x}\n  %b", (0, 0, 4, "Illegal nesting: nesting within plain text is illegal.")),
-            ("== hi #{x}\n  %b", (0, 0, 10, "Illegal nesting: nesting within plain text is illegal.")),
-            ("%p== hi #{x}\n  %b", (0, 0, 12, "Illegal nesting: content can't be both given on the same line as %p and nested within it.")),
+            ("!!! 5\n  %p", (1, 2, 4, "Illegal nesting: nesting within a header command is illegal.")),
+            ("hello\n  %b", (1, 2, 4, "Illegal nesting: nesting within plain text is illegal.")),
+            ("#{x} text\n  %b", (1, 2, 4, "Illegal nesting: nesting within plain text is illegal.")),
+            ("#{x}\n  %b", (1, 2, 4, "Illegal nesting: nesting within plain text is illegal.")),
+            ("== hi #{x}\n  %b", (1, 2, 4, "Illegal nesting: nesting within plain text is illegal.")),
+            ("%p== hi #{x}\n  %b", (1, 2, 4, "Illegal nesting: content can't be both given on the same line as %p and nested within it.")),
             (
                 "%p= form_with model: @u do |f|\n  = f.text_field :name",
-                (0, 0, 30, "Illegal nesting: content can't be both given on the same line as %p and nested within it."),
+                (1, 2, 22, "Illegal nesting: content can't be both given on the same line as %p and nested within it."),
             ),
-            (".user= x\n  %p", (0, 0, 8, "Illegal nesting: content can't be both given on the same line as %div and nested within it.")),
-            ("%p= x ?,\n  %b", (0, 0, 8, "Illegal nesting: content can't be both given on the same line as %p and nested within it.")),
-            ("/[if IE] text\n  %p", (0, 0, 13, "Illegal nesting: nesting within a tag that already has content is illegal.")),
+            (".user= x\n  %p", (1, 2, 4, "Illegal nesting: content can't be both given on the same line as %div and nested within it.")),
+            ("%p= x ?,\n  %b", (1, 2, 4, "Illegal nesting: content can't be both given on the same line as %p and nested within it.")),
+            ("/[if IE] text\n  %p", (1, 2, 4, "Illegal nesting: nesting within a tag that already has content is illegal.")),
             ("# heading", (0, 0, 9, "Illegal element: classes and ids must have values.")),
             ("...and more", (0, 0, 11, "Illegal element: classes and ids must have values.")),
-            ("- x = 1\n  %p", (0, 0, 7, "Nested content under Ruby code that doesn't open a block (`do`, `if`, ...).")),
-            ("&~ x\n  %p", (0, 0, 4, "Nested content under Ruby code that doesn't open a block (`do`, `if`, ...).")),
-            ("~ x\n  %p", (0, 0, 3, "Nested content under Ruby code that doesn't open a block (`do`, `if`, ...).")),
             ("%br/ text", (0, 0, 9, "Self-closing tags can't have content.")),
-            ("%br/\n  %p", (0, 0, 4, "Illegal nesting: nesting within a self-closing tag is illegal.")),
-            ("/ note\n  %p", (0, 0, 6, "Illegal nesting: nesting within a tag that already has content is illegal.")),
+            ("%br/\n  %p", (1, 2, 4, "Illegal nesting: nesting within a self-closing tag is illegal.")),
+            ("/ note\n  %p", (1, 2, 4, "Illegal nesting: nesting within a tag that already has content is illegal.")),
             ("%div\n  - elsif x", (1, 2, 11, "Got \"elsif\" with no preceding \"if\"")),
             ("- when 1", (0, 0, 8, "Got \"when\" with no preceding \"if\"")),
             ("- if a\n  %p\n-# note\n- else", (3, 0, 6, "Got \"else\" with no preceding \"if\"")),
@@ -694,6 +611,12 @@ mod tests {
     fn no_false_positives() {
         for src in [
             "~ capture do\n  %p x",
+            "- x = 1\n  %p",
+            "&~ x\n  %p",
+            "~ x\n  %p",
+            "= x\n  %p",
+            "%p= link_to |\n    \"a\", |\n      root_path",
+            "/[[if IE]]\n  %span hello\n  world",
             "%p= link_to \"x\",\n  class: \"y\"\n%b ok",
             "%p= \"a\" + |\n  \"b\" + |\n  \"c\" |\n%hr",
             "%div\n  Plain text that |\n    spans lines |\n  %hr",
@@ -724,6 +647,8 @@ mod tests {
             "#{a} b",
             ".9a x",
             ".@container",
+            "#$x t",
+            "#@x t",
             "%div\n  .@container.flex= render \"card\",\n    item: x",
             "%div\n  %p x\n\u{3000}y",
             "%div\n  :javascript\n    if (a) {\n    \tb();\n    }\n  :plain\n    \t x",

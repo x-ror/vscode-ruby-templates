@@ -11,6 +11,8 @@
 - Slim's Ruby is checked with Prism (Ruby's own parser) as Slim compiles it, under the new code `ruby-syntax`, with Ruby's messages.
 - **Breaking:** Slim's `inconsistent-indent` and `silent-output-helper` are gone (Slim accepts what they reported), and `unclosed-ruby` and `unmatched-branch` are folded into `ruby-syntax`; their entries in `rubyTemplates.slim.disabledDiagnostics` are ignored. Smart text (`> text`, `slim/smart`) is reported as an unknown line indicator, as Slim's default parser does.
 - Haml indentation errors are Haml 7.5.1's own, at the line it reports: `Indentation can't use both tabs and spaces.`, `Inconsistent indentation: …`, `The line was indented 2 levels deeper than the previous line.`, `Indenting at the beginning of the document is illegal.`; only the first is reported.
+- Haml nesting errors are reported on the nested line, as Haml does, with its messages (`Illegal nesting: content can't be both given on the same line as %p and nested within it.`, `…nesting within plain text is illegal.`, `…a self-closing tag…`, `…a tag that already has content…`), and a doctype with children gets Haml's `…nesting within a header command is illegal.`; `Illegal element: classes and ids must have values.` follows Haml's rule (`.`/`#` followed by nothing, `.` or `#`), and `#$x`/`#@x` lines are plain text.
+- **Breaking:** Haml's "Nested content under Ruby code that doesn't open a block" is gone (Haml compiles `= x` with children); it was reported under `illegal-nesting`.
 - **Breaking:** Haml's `bad-dedent` is gone (Haml reports a dedent to a level that never existed as inconsistent indentation); its entry in `rubyTemplates.haml.disabledDiagnostics` is ignored.
 
 ### Formatter

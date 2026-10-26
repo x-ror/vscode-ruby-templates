@@ -292,18 +292,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| 0. Harness               | done                                                                                                                               |
-| 0b. Context              | done                                                                                                                               |
-| 1a. Slim errors          | done                                                                                                                               |
-| 1b. Slim format          | done                                                                                                                               |
-| 2a. Haml errors          | in progress: Haml::Parser port (haml_parser.rs) with the indentation errors; `bad-dedent` removed (suite same 23/58, Mastodon 0/0) |
-| 2b. Haml format          | not started                                                                                                                        |
-| 3a. ERB errors           | not started                                                                                                                        |
-| 3b. ERB format           | not started                                                                                                                        |
-| 4. Editor and CLI        | not started                                                                                                                        |
-| 5. Remove external tools | not started                                                                                                                        |
+| Stage                    | Status                                                                                                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Harness               | done                                                                                                                                                                    |
+| 0b. Context              | done                                                                                                                                                                    |
+| 1a. Slim errors          | done                                                                                                                                                                    |
+| 1b. Slim format          | done                                                                                                                                                                    |
+| 2a. Haml errors          | in progress: Haml::Parser port (haml_parser.rs) with the indentation, Illegal nesting and Illegal element errors; `bad-dedent` removed (suite same 35/58, Mastodon 0/0) |
+| 2b. Haml format          | not started                                                                                                                                                             |
+| 3a. ERB errors           | not started                                                                                                                                                             |
+| 3b. ERB format           | not started                                                                                                                                                             |
+| 4. Editor and CLI        | not started                                                                                                                                                             |
+| 5. Remove external tools | not started                                                                                                                                                             |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

@@ -7,6 +7,11 @@ use std::convert::Infallible;
 
 pub const BOM: char = '\u{feff}';
 const AT_START: &str = "Indenting at the beginning of the document is illegal.";
+const ILLEGAL_ELEMENT: &str = "Illegal element: classes and ids must have values.";
+const NESTING_PLAIN: &str = "Illegal nesting: nesting within plain text is illegal.";
+const NESTING_SELF_CLOSING: &str = "Illegal nesting: nesting within a self-closing tag is illegal.";
+const NESTING_CONTENT: &str = "Illegal nesting: nesting within a tag that already has content is illegal.";
+const NESTING_HEADER: &str = "Illegal nesting: nesting within a header command is illegal.";
 const MIXED_INDENTATION: &str = "Indentation can't use both tabs and spaces.";
 /// Ruby's `\s` and `rstrip` characters.
 const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
@@ -331,14 +336,45 @@ impl Parser {
             (Some('%' | '.'), _) => self.tag(text)?,
             (Some('#'), second) if !matches!(second, Some('{' | '@' | '$')) => self.tag(text)?,
             (Some('-'), Some('#')) | (Some(':'), _) => return Ok(self.start_flat_section()),
-            (Some('-' | '=' | '~' | '&' | '!'), _) if !text.starts_with("!!!") => {
-                if let Some(code) = text.strip_prefix('-').or_else(|| strip_output_prefix(text)) {
-                    self.script(text, code)?;
-                }
-            }
-            _ => {}
+            (Some('/'), _) => self.comment(&text[1..])?,
+            (Some('!'), _) if text.starts_with("!!!") => self.doctype()?,
+            (Some('-' | '=' | '~' | '&' | '!'), _) => match text.strip_prefix('-').or_else(|| strip_output_prefix(text)) {
+                Some(code) => self.script(text, code)?,
+                None => self.plain()?,
+            },
+            _ => self.plain()?,
         }
         Ok(false)
+    }
+
+    fn nested_line_error(&mut self, message: &str) -> Halt {
+        halt(message, self.next_line.index)
+    }
+
+    fn plain(&mut self) -> Result<(), Halt> {
+        if self.block_opened()? {
+            return Err(self.nested_line_error(NESTING_PLAIN));
+        }
+        Ok(())
+    }
+
+    fn doctype(&mut self) -> Result<(), Halt> {
+        if self.block_opened()? {
+            return Err(self.nested_line_error(NESTING_HEADER));
+        }
+        Ok(())
+    }
+
+    /// `comment`: `/ text` and `/[if IE] text` can't have nested lines.
+    fn comment(&mut self, text: &str) -> Result<(), Halt> {
+        let text = text.trim_start_matches(RUBY_WHITESPACE);
+        let text = if text.starts_with("![") { &text[1..] } else { text };
+        let text = if text.starts_with('[') { balance_brackets(text).unwrap_or("") } else { text };
+        let has_text = !text.trim_matches(RUBY_WHITESPACE).is_empty();
+        if self.block_opened()? && has_text {
+            return Err(self.nested_line_error(NESTING_CONTENT));
+        }
+        Ok(())
     }
 
     /// `check_push_script_stack` and `handle_ruby_multiline` for a line that starts with Ruby.
@@ -349,9 +385,13 @@ impl Parser {
         self.join_ruby_lines(text)
     }
 
-    /// `parse_tag`: attribute groups that run over several lines, then Ruby after the tag that continues after a comma.
+    /// `parse_tag` and `tag`: attribute groups that run over several lines, the nesting rules, then Ruby after the tag
+    /// that continues after a comma.
     fn tag(&mut self, text: &str) -> Result<(), Halt> {
-        let Some(head_len) = tag_head_len(text) else { return Ok(()) };
+        let Some((name, attributes_start, head_len)) = tag_head(text) else { return Ok(()) };
+        if has_empty_class_or_id(&text[attributes_start..head_len]) {
+            return Err(halt(ILLEGAL_ELEMENT, self.line.index));
+        }
         let mut rest = text[head_len..].to_string();
         let (mut hash, mut list, mut reference) = (false, false, false);
         loop {
@@ -366,17 +406,25 @@ impl Parser {
                 }
                 Some('[') if !reference => {
                     reference = true;
-                    rest = skip_object_reference(&rest);
+                    rest = balance_brackets(&rest).unwrap_or("").to_string();
                 }
                 _ => break,
             }
         }
-        // Haml checks for nesting here, which reads the next line's indentation before any Ruby lines are joined.
-        self.block_opened()?;
-        match tag_code(&rest) {
-            Some(code) => self.join_ruby_lines(code),
-            None => Ok(()),
+        let content = tag_content(&rest);
+        // This reads the next line's indentation before any Ruby lines are joined.
+        let block_opened = self.block_opened()?;
+        if block_opened && content.self_closing {
+            return Err(self.nested_line_error(NESTING_SELF_CLOSING));
         }
+        if block_opened && !content.value.is_empty() && !is_ruby_multiline(&content.value) {
+            let message = format!("Illegal nesting: content can't be both given on the same line as %{name} and nested within it.");
+            return Err(self.nested_line_error(&message));
+        }
+        if content.parse {
+            self.join_ruby_lines(&content.value)?;
+        }
+        Ok(())
     }
 
     /// `parse_old_attributes`: what follows the `{...}` that starts `text`, which may close on a later line.
@@ -429,21 +477,34 @@ fn is_word(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
-/// Length of `%name.class#id` (Haml's `%([-:\w]+)([-:\w.#\@]*)`), or of `.class#id` for the `%div` a leading `.` or `#` implies.
-fn tag_head_len(text: &str) -> Option<usize> {
-    let name_len = match text.strip_prefix('%') {
-        Some(after) => 1 + after.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':'))).unwrap_or(after.len()),
-        None => 0,
+/// The element name, where its `.class#id` part starts and where the head ends (Haml's `%([-:\w]+)([-:\w.#\@]*)`); a line
+/// that starts with `.` or `#` is a `div` and only has the `.class#id` part.
+fn tag_head(text: &str) -> Option<(&str, usize, usize)> {
+    let (name, name_len) = match text.strip_prefix('%') {
+        Some(after) => {
+            let name_len = after.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':'))).unwrap_or(after.len());
+            (&after[..name_len], 1 + name_len)
+        }
+        None => ("div", 0),
     };
-    if name_len == 1 {
+    if name.is_empty() {
         return None;
     }
     let attributes = &text[name_len..];
-    Some(name_len + attributes.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':' | '.' | '#' | '@'))).unwrap_or(attributes.len()))
+    let attributes_len =
+        attributes.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':' | '.' | '#' | '@'))).unwrap_or(attributes.len());
+    Some((name, name_len, name_len + attributes_len))
 }
 
-/// What follows `[...]` (Haml's `balance`, which counts only the brackets); the rest of the line when it never closes.
-fn skip_object_reference(text: &str) -> String {
+/// Haml's `/[.#](\.|#|\z)/` over `.class#id`: a `.` or `#` followed by another or by nothing.
+fn has_empty_class_or_id(attributes: &str) -> bool {
+    attributes
+        .char_indices()
+        .any(|(at, ch)| matches!(ch, '.' | '#') && attributes[at + 1..].chars().next().is_none_or(|next| matches!(next, '.' | '#')))
+}
+
+/// What follows the `[...]` that starts `text` (Haml's `balance`, which counts only the brackets).
+fn balance_brackets(text: &str) -> Option<&str> {
     let mut depth = 0;
     for (at, ch) in text.char_indices() {
         match ch {
@@ -452,26 +513,44 @@ fn skip_object_reference(text: &str) -> String {
             _ => continue,
         }
         if depth == 0 {
-            return text[at + 1..].to_string();
+            return Some(&text[at + 1..]);
         }
     }
-    String::new()
+    None
 }
 
-/// The Ruby Haml evaluates after a tag's attributes (`%p= x`, `%p~ x`, `%p& = x`); `None` for text, `/` and interpolation.
-fn tag_code(rest: &str) -> Option<&str> {
+/// What follows a tag's attributes, as `tag` reads it.
+struct TagContent {
+    self_closing: bool,
+    /// Haml evaluates `value` (`%p= x`, `%p~ x`, `%p& = x`).
+    parse: bool,
+    /// The text or code; text with `#{}` or `==` is a string literal in Haml, which stands as `""` here.
+    value: String,
+}
+
+fn tag_content(rest: &str) -> TagContent {
     let rest = rest.strip_prefix("<>").or_else(|| rest.strip_prefix("><")).or_else(|| rest.strip_prefix(['<', '>'])).unwrap_or(rest);
-    let action = rest.chars().next().filter(|ch| "=/~&!".contains(*ch))?;
-    let value = rest[1..].trim_matches(RUBY_WHITESPACE);
-    match action {
-        '=' => (!value.starts_with('=')).then_some(value),
-        '~' => Some(value),
-        '&' | '!' => {
-            let code = value.strip_prefix(['=', '~'])?;
-            (!code.starts_with('=')).then(|| code.trim_matches(RUBY_WHITESPACE))
+    let action = rest.chars().next().filter(|ch| "=/~&!".contains(*ch));
+    let value = rest[action.map_or(0, char::len_utf8)..].trim_matches(RUBY_WHITESPACE);
+    let interpolated = || "\"\"".to_string();
+    let has_interpolation = ["#{", "#$", "#@"].iter().any(|opener| value.contains(opener));
+    let (parse, value) = match action {
+        Some('/') => {
+            return TagContent { self_closing: true, parse: false, value: value.to_string() };
         }
-        _ => None,
-    }
+        Some('~') => (true, value.to_string()),
+        Some('=') if value.starts_with('=') => (true, interpolated()),
+        Some('=') => (true, value.to_string()),
+        Some('&' | '!') => match value.strip_prefix(['=', '~']) {
+            Some(code) if code.starts_with('=') => (true, interpolated()),
+            Some(code) => (true, code.trim_matches(RUBY_WHITESPACE).to_string()),
+            None if has_interpolation => (true, interpolated()),
+            None => (false, value.to_string()),
+        },
+        _ if has_interpolation => (true, interpolated()),
+        _ => (false, value.to_string()),
+    };
+    TagContent { self_closing: false, parse, value }
 }
 
 enum AttributeList {
@@ -753,9 +832,10 @@ mod tests {
         }
         assert_eq!(error_of("%p<>= foo(1,\n 2)\n%i\n     %b"), deeper(3, 5));
         assert_eq!(error_of("%p{a: 1}= foo(x,\n y,\n   z\n%i\n  %b"), deeper(4, 2));
-        assert_eq!(tag_code("{b: 2}= foo(x,"), None);
-        assert_eq!(tag_code("& = format(x,"), Some("format(x,"));
-        assert_eq!(tag_code("== x,"), None);
+        let joined = |rest: &str| Some(tag_content(rest)).filter(|c| c.parse && is_ruby_multiline(&c.value));
+        assert!(joined("{b: 2}= foo(x,").is_none());
+        assert!(joined("& = format(x,").is_some());
+        assert!(joined("== x,").is_none());
     }
 
     #[test]
@@ -790,5 +870,77 @@ mod tests {
     fn a_hash_left_open_over_many_lines_ends_at_the_end_of_the_document() {
         let text = format!("%a{{b: 1,\n{}%p", "  c: 1,\n".repeat(20_000));
         assert_eq!(error_of(&text), None);
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`): the error is at the nested line.
+    #[test]
+    fn illegal_nesting_at_the_nested_line() {
+        let line = |name: &str| format!("Illegal nesting: content can't be both given on the same line as %{name} and nested within it.");
+        let cases: Vec<(&str, usize, String)> = vec![
+            ("a\n  b", 1, NESTING_PLAIN.into()),
+            ("foo\n\n\n  bar", 3, NESTING_PLAIN.into()),
+            ("#{x} t\n  %b", 1, NESTING_PLAIN.into()),
+            ("== hi #{x}\n  %b", 1, NESTING_PLAIN.into()),
+            ("& x\n  %b", 1, NESTING_PLAIN.into()),
+            ("!== x\n  %b", 1, NESTING_PLAIN.into()),
+            ("%p a\n  b", 1, line("p")),
+            ("%p foo\n\n  bar", 2, line("p")),
+            ("%p= x\n  b", 1, line("p")),
+            ("%p== hi #{x}\n  %b", 1, line("p")),
+            ("%p= x ?,\n  %b", 1, line("p")),
+            (".user= x\n  %p", 1, line("div")),
+            ("%p& text\n  %b", 1, line("p")),
+            ("%p[@x] text\n  %b", 1, line("p")),
+            ("%p(a=1) text\n  %b", 1, line("p")),
+            ("%p/\n  a", 1, NESTING_SELF_CLOSING.into()),
+            ("%p/\n\n  bar", 2, NESTING_SELF_CLOSING.into()),
+            ("%a{b: 1}/\n  %c", 1, NESTING_SELF_CLOSING.into()),
+            ("/ a\n  b", 1, NESTING_CONTENT.into()),
+            ("/ foo\n\n  bar", 2, NESTING_CONTENT.into()),
+            ("/[if IE] text\n  %p", 1, NESTING_CONTENT.into()),
+            ("!!!\n  a", 1, NESTING_HEADER.into()),
+            ("!!!\n\n  bar", 2, NESTING_HEADER.into()),
+            ("!!! 5\n  %p", 1, NESTING_HEADER.into()),
+        ];
+        for (text, at, message) in cases {
+            assert_eq!(error_of(text), Some((at, message)), "{text:?}");
+        }
+        for text in [
+            "= x\n  %p",
+            "- x = 1\n  %p",
+            "~ x\n  %p",
+            "&~ x\n  %p",
+            "!= x\n  %b",
+            "%p Dear Sir,\n  %b x",
+            "%p= link_to |\n    \"a\", |\n      root_path",
+            "/[[if IE]]\n  %span hello\n  world",
+            "/[if IE]\n  %p",
+            "/![if !IE]\n  %p x",
+            "/\n  %p",
+            "%br\n  %p x",
+            "!!!\n",
+        ] {
+            assert_eq!(error_of(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn empty_classes_and_ids_stop_the_parse() {
+        let cases = [
+            (". foo\n  %b", 0),
+            ("# h\n  b", 0),
+            ("%p..a\n  b", 0),
+            ("%p.a.\n  b", 0),
+            ("%p#\n  b", 0),
+            (".#a", 0),
+            ("%div\n  .\n    %b x", 1),
+        ];
+        for (text, at) in cases {
+            assert_eq!(error_of(text), Some((at, ILLEGAL_ELEMENT.to_string())), "{text:?}");
+        }
+        assert_eq!(error_of("#$x\n  b"), Some((1, NESTING_PLAIN.to_string())));
+        for text in ["#@x t", ".a-b.c_d#e:f", ".@container.x", "%p.a#b"] {
+            assert_eq!(error_of(text), None, "{text:?}");
+        }
     }
 }
