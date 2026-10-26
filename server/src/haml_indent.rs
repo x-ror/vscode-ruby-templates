@@ -228,7 +228,10 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
                 }
             }
         } else if stack.is_empty() && indent > 0 {
-            out.push(coded(error(line_range(text, line_no, 0, ws.len()), "Unexpected indentation at top level"), code::TOP_LEVEL_INDENT));
+            out.push(coded(
+                error(line_range(text, line_no, 0, ws.len()), "Indenting at the beginning of the document is illegal."),
+                code::TOP_LEVEL_INDENT,
+            ));
         }
 
         // Illegal nesting checks against the parent, reported once on the parent line.
@@ -605,6 +608,7 @@ mod tests {
     #[test]
     fn messages_and_ranges() {
         type Expected<'a> = (u32, u32, u32, &'a str);
+        const TOP_INDENT: &str = "Indenting at the beginning of the document is illegal.";
         let cases: &[(&str, Expected)] = &[
             (
                 "%div\n  %p\n    %b\n   %i",
@@ -625,7 +629,12 @@ mod tests {
                 ),
             ),
             ("%div\n  %p\n      %b", (2, 0, 6, "The line was indented 2 levels deeper than the previous line.")),
-            (" %p", (0, 0, 1, "Unexpected indentation at top level")),
+            (" %p", (0, 0, 1, TOP_INDENT)),
+            ("  %p foo", (0, 0, 2, TOP_INDENT)),
+            (" \n\t\n %p foo", (2, 0, 1, TOP_INDENT)),
+            ("\n\n %p foo", (2, 0, 1, TOP_INDENT)),
+            ("  %a", (0, 0, 2, TOP_INDENT)),
+            ("\n\n  %a", (2, 0, 2, TOP_INDENT)),
             ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
             (
                 "%div\n\t%p x\n%div\n  %p y",

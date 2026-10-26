@@ -103,7 +103,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Mixed tabs and spaces within one line's indentation; filter and comment bodies aren't checked (`server/src/haml_indent.rs` `visit_lines`)
 - [x] Inconsistent indentation against the first indented line, with Haml's message (`server/src/haml_indent.rs` `check_structure`)
 - [x] Dedent to a level that never existed (`server/src/haml_indent.rs`; `test/broken/bad.html.haml`)
-- [x] Unexpected indentation at top level (`server/src/haml_indent.rs`)
+- [x] Indenting at the beginning of the document is illegal. (Haml's `indenting_at_start`, `server/src/haml_indent.rs`)
 - [x] Explicit `- end` rejected (`server/src/haml_indent.rs` `check_explicit_end`; `test/broken/bad.html.haml`)
 - [x] Unclosed `{` `(` `[` in tag attributes, across lines (`server/src/haml_indent.rs` `skip_tag_head`; `test/broken/bad.html.haml`)
 - [x] Unknown filter warning (`server/src/haml_indent.rs` `HAML_FILTERS`; `test/broken/bad.html.haml`)
