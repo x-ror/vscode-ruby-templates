@@ -32,7 +32,7 @@
 
 ### Development
 
-- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter (also on perturbed copies of each file) with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
+- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter (also on perturbed copies of each file) with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; the Haml oracle also runs on GitLab's views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
 
 ## 0.1.0
 
