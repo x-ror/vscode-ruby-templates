@@ -71,6 +71,8 @@ struct Parser {
     script_levels: Vec<ScriptLevel>,
     void_content: Vec<VoidContent>,
     roles: Vec<Role>,
+    /// The lines whose depth Haml read (`Line#tabs`).
+    tabs_read: Vec<bool>,
     compiled: Vec<Compiled>,
     /// The texts of the lines joined into the node being read.
     joined: Vec<String>,
@@ -114,8 +116,9 @@ pub enum Role {
     /// A line Haml reads as a node, `depth` levels deep (`Line#tabs`).
     Structural { depth: usize },
     /// A line joined into the one at `owner`: `|` multiline, Ruby after a comma, an attribute group that goes on.
-    /// Its indentation is stripped, so it can move freely.
-    Inner { owner: usize },
+    /// Its indentation is stripped, so it can move freely, except that Haml checks it against the indentation unit
+    /// when it read the line's depth (`counted`): then it has to be a multiple of the unit.
+    Inner { owner: usize, counted: bool },
     /// A line of the filter or `-#` comment body at `owner`, a content line: `prefix_len` bytes of its whitespace are
     /// the body's indentation (the flat prefix), the rest is text. Also the blank lines inside the body.
     FlatBody { owner: usize, prefix_len: usize },
@@ -134,7 +137,6 @@ pub struct Parsed {
     /// Only filled when the template compiles.
     pub void_content: Vec<VoidContent>,
     /// One per physical line of the template (without a BOM).
-    #[allow(dead_code)] // the formatter reads these next
     pub roles: Vec<Role>,
     compiled: Vec<Compiled>,
 }
@@ -146,20 +148,26 @@ pub fn parse(text: &str) -> Parsed {
         Err(Halt::Done) => parser.unknown_filter.take(),
     };
     let void_content = if error.is_some() { Vec::new() } else { parser.void_content };
-    Parsed { error, void_content, roles: parser.roles, compiled: parser.compiled }
+    let mut roles = parser.roles;
+    for (role, &counted) in roles.iter_mut().zip(&parser.tabs_read) {
+        if let Role::Inner { owner, .. } = *role {
+            *role = Role::Inner { owner, counted };
+        }
+    }
+    Parsed { error, void_content, roles, compiled: parser.compiled }
 }
 
 /// Whether Haml compiles `before` and `after` to the same source: both are free of errors and read the same nodes, at
 /// the same lines and depths, with the same texts. Indentation (other than the depth and a filter body's text past its
 /// prefix), line endings, trailing whitespace and the empty lines at the end don't matter to Haml.
-#[allow(dead_code)] // the formatter's guard
 pub fn same_compilation(before: &str, after: &str) -> bool {
     let (before, after) = (parse(before), parse(after));
     before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
 }
 
-/// The lines of `text` as Haml (and the LSP) split them: at `\r\n`, `\r` and `\n`.
-pub fn physical_lines(text: &str) -> Vec<&str> {
+/// The lines of `text` as Haml (and the LSP) split them, at `\r\n`, `\r` and `\n`, each with its line ending
+/// (empty on a last line without one).
+pub fn lines_with_endings(text: &str) -> Vec<(&str, &str)> {
     if text.is_empty() {
         return Vec::new();
     }
@@ -167,14 +175,18 @@ pub fn physical_lines(text: &str) -> Vec<&str> {
     let mut rest = text;
     loop {
         let end = rest.find(['\r', '\n']).unwrap_or(rest.len());
-        lines.push(&rest[..end]);
         let tail = &rest[end..];
-        let skip = if tail.starts_with("\r\n") { 2 } else { tail.len().min(1) };
-        if skip == 0 {
+        let ending = if tail.starts_with("\r\n") { 2 } else { tail.len().min(1) };
+        lines.push((&rest[..end], &tail[..ending]));
+        if ending == 0 {
             return lines;
         }
-        rest = &tail[skip..];
+        rest = &tail[ending..];
     }
+}
+
+pub fn physical_lines(text: &str) -> Vec<&str> {
+    lines_with_endings(text).into_iter().map(|(line, _)| line).collect()
 }
 
 fn split_lines(text: &str) -> Vec<Line> {
@@ -225,6 +237,7 @@ impl Parser {
             script_levels: Vec::new(),
             void_content: Vec::new(),
             roles: vec![Role::Blank; lines],
+            tabs_read: vec![false; lines],
             compiled: Vec::new(),
             joined: Vec::new(),
             flat_owner: 0,
@@ -304,7 +317,7 @@ impl Parser {
 
     /// A line that was read as part of the one at `owner`.
     fn join_line(&mut self, line_index: usize, owner: usize, text: &str) {
-        let role = if text.is_empty() { Role::Blank } else { Role::Inner { owner } };
+        let role = if text.is_empty() { Role::Blank } else { Role::Inner { owner, counted: false } };
         self.set_role(line_index, role);
         self.joined.push(text.to_string());
     }
@@ -321,6 +334,9 @@ impl Parser {
         }
         let line = std::mem::take(self.slot(which));
         let tabs = self.compute_tabs(&line);
+        if let Some(read) = self.tabs_read.get_mut(line.index) {
+            *read = true;
+        }
         *self.slot(which) = line;
         let tabs = tabs?;
         self.slot(which).tabs = Some(tabs);
@@ -407,7 +423,7 @@ impl Parser {
             line.text.push_str(text.strip_suffix('|').unwrap_or(text));
             let (index, owner) = (next.index, line.index);
             if !text.is_empty() {
-                self.set_role(index, Role::Inner { owner });
+                self.set_role(index, Role::Inner { owner, counted: false });
             }
             self.template.pop_front();
         }
@@ -1699,12 +1715,12 @@ mod tests {
             [
                 Structural { depth: 0 },
                 Structural { depth: 1 },
-                Inner { owner: 1 },
+                Inner { owner: 1, counted: false },
                 Blank,
                 Structural { depth: 1 },
-                Inner { owner: 4 },
+                Inner { owner: 4, counted: false },
                 Structural { depth: 1 },
-                Inner { owner: 6 },
+                Inner { owner: 6, counted: false },
                 Structural { depth: 1 },
                 FlatBody { owner: 8, prefix_len: 8 },
                 FlatBody { owner: 8, prefix_len: 0 },

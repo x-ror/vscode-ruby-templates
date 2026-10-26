@@ -89,11 +89,8 @@ const ERB_LINT: &[Mapped] = &[
     Mapped { name: "ExtraNewline", options: &[], set: |o, _| o.collapse_blank_lines = Some(true) },
     Mapped { name: "SpaceIndentation", options: &[], set: |o, _| o.indent_style = Some(IndentStyle::Space) },
 ];
-const HAML_LINT: &[Mapped] = &[
-    Mapped { name: "FinalNewline", options: &["present"], set: |o, l| o.final_newline = Some(l.flag("present").unwrap_or(true)) },
-    Mapped { name: "TrailingWhitespace", options: &[], set: |o, _| o.trim_trailing_whitespace = Some(true) },
-    Mapped { name: "TrailingEmptyLines", options: &[], set: |o, _| o.trim_trailing_blank_lines = Some(true) },
-];
+// Haml takes only the indentation width, so none of haml-lint's linters is ours.
+const HAML_LINT: &[Mapped] = &[];
 const SLIM_LINT: &[Mapped] = &[
     Mapped { name: "TrailingWhitespace", options: &[], set: |o, _| o.trim_trailing_whitespace = Some(true) },
     Mapped { name: "Tab", options: &[], set: |o, _| o.indent_style = Some(IndentStyle::Space) },
@@ -102,7 +99,6 @@ const SLIM_LINT: &[Mapped] = &[
 /// Linters that sound like ours but aren't, and why.
 const NOT_OURS: &[(&str, &str)] = &[
     ("SpaceAroundErbTag", "it changes what is inside ERB tags"),
-    ("Indentation", "Haml files keep their own indent unit"),
     ("EmptyLines", "Slim compiles every line, blank ones included"),
     ("TrailingBlankLines", "Slim compiles every line, blank ones included"),
 ];
@@ -493,19 +489,19 @@ mod tests {
     }
 
     #[test]
-    fn haml_and_slim_linters_are_on_by_default() {
+    fn slim_linters_are_on_by_default_and_haml_ones_dont_apply() {
         let project = Project::new(
             "hamlslim",
             &[
-                (".haml-lint.yml", "linters:\n  Indentation:\n    width: 4 # spaces\n"),
+                (".haml-lint.yml", "linters:\n  Indentation:\n    width: 4 # spaces\n  TrailingEmptyLines:\n    enabled: true\n"),
                 (".slim-lint.yml", "linters:\n  TrailingWhitespace:\n    enabled: false\n"),
                 ("a.haml", ""),
                 ("a.slim", ""),
             ],
         );
         let haml = project.settings("a.haml");
-        assert!(haml.settings.trim_trailing_blank_lines);
-        assert!(haml.notes.iter().any(|n| n.contains("ignored linters.Indentation: Haml files keep their own indent unit")));
+        assert_eq!(haml.settings, Settings::default(), "no haml-lint linter applies");
+        assert!(haml.notes.iter().any(|n| n.contains("ignored linters.TrailingEmptyLines")), "{:?}", haml.notes);
         let slim = project.settings("a.slim").settings;
         assert_eq!(slim.indent_style, IndentStyle::Space);
     }
@@ -525,11 +521,10 @@ mod tests {
 
     #[test]
     fn yaml_booleans_flow_maps_and_unreadable_linters() {
-        let haml = "linters:\n  TrailingEmptyLines: { enabled: false }\n  FinalNewline:\n    present: False\n  TrailingWhitespace: maybe\n";
-        let project = Project::new("bools", &[(".haml-lint.yml", haml), ("a.haml", "")]);
-        let resolved = project.settings("a.haml");
-        assert!(!resolved.settings.trim_trailing_blank_lines);
-        assert_eq!(resolved.settings.final_newline, Some(false));
+        let slim = "linters:\n  Tab: { enabled: false }\n  TrailingWhitespace: maybe\n";
+        let project = Project::new("bools", &[(".slim-lint.yml", slim), ("a.slim", "")]);
+        let resolved = project.settings("a.slim");
+        assert_eq!(resolved.settings.indent_style, IndentStyle::Space);
         assert!(resolved.notes.iter().any(|n| n.contains("ignored linters.TrailingWhitespace: can't read")), "{:?}", resolved.notes);
         let erb = "EnableDefaultLinters: yes\nlinters:\n  TrailingWhitespace:\n    enabled: no\n    exclude:\n      - legacy/**\n";
         let project = Project::new("bools-erb", &[(".erb_lint.yml", erb), ("a.html.erb", "")]);

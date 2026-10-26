@@ -94,8 +94,8 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 ## 8. Formatting
 
 - [x] Document formatting provider: built-in re-indenter (in the language server) or `haml-lint`, chosen by `rubyTemplates.haml.formatter` (`src/extension.js`, `server/src/haml_format.rs`)
-- [x] Re-indent a file or selection to the detected indent unit, trailing whitespace dropped on structural lines; files with errors other than indentation are left alone (`server/src/haml_format.rs`, range formatting in `server/src/lsp.rs`; compiled output checked in `bun run test:format`)
-- [x] Formatting from the command line and npm: `ruby-templates format`, settings from `.editorconfig` and `.haml-lint.yml` (`server/src/cli.rs`, `config.rs`)
+- [x] Re-indent a file or selection to the indentation width (spaces, default 2) over the parser's line roles, trailing whitespace dropped where Haml ignores it, empty lines at the end collapsed into one line ending; a file with any Haml error, or whose compiled source would change (`haml_parser::same_compilation`), is left alone (`server/src/haml_format.rs`, `format.rs`, range formatting in `server/src/lsp.rs`; compiled output checked in `bun run test:format`)
+- [x] Formatting from the command line and npm: `ruby-templates format`, width from `.editorconfig` (`server/src/cli.rs`, `config.rs`)
 - [x] Configurable formatter executable plus `bundle exec` (`package.json` `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`)
 
 ## 9. Diagnostics and linting

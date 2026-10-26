@@ -656,7 +656,7 @@ const check = (label, actual, expected) => {
     JSON.stringify(tabs.result?.[0]?.newText),
   );
 
-  // Haml through the same formatter: the file's own unit, the whole document or the lines of a range.
+  // Haml through the same formatter: the editor's width, the whole document or the lines of a range.
   const reindentUri = fileUri(path.join(views, "users", "reindent.html.haml"));
   await send(
     "textDocument/didOpen",
@@ -665,7 +665,7 @@ const check = (label, actual, expected) => {
         uri: reindentUri,
         languageId: "haml",
         version: 1,
-        text: "%div\n    %p\n      %b x\n  %i\n",
+        text: "%div\n    %p\n        %b x\n    %i\n",
       },
     },
     true,
@@ -680,7 +680,7 @@ const check = (label, actual, expected) => {
     ).result || [];
   expect(
     "haml formatting",
-    hamlEdits[0]?.newText === "%div\n    %p\n        %b x\n    %i\n",
+    hamlEdits[0]?.newText === "%div\n  %p\n    %b x\n  %i\n",
     JSON.stringify(hamlEdits[0]?.newText),
   );
   const rangeEdits =
@@ -698,7 +698,7 @@ const check = (label, actual, expected) => {
     "haml range formatting",
     rangeEdits.length === 1 &&
       rangeEdits[0].range.start.line === 3 &&
-      rangeEdits[0].newText === "    %i",
+      rangeEdits[0].newText === "  %i",
     JSON.stringify(rangeEdits),
   );
   // Without dynamic registration nothing is advertised: the client's own ERB and Haml providers decide when to ask.
