@@ -22,6 +22,9 @@ mod lsp;
 mod outline;
 mod partial_rename;
 mod partials;
+// Used by the Slim and ERB Ruby checks (docs/LINT_PLAN.md 1a, 3a).
+#[cfg_attr(not(test), allow(dead_code))]
+mod prism;
 mod project;
 mod routes;
 mod ruby;
