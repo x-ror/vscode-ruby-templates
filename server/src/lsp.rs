@@ -1413,7 +1413,7 @@ mod tests {
                 .collect()
         };
 
-        let haml = "%p hi\n  %b x\n- else\n";
+        let haml = "%p hi\n  %b x\n";
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
         // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.
@@ -1431,7 +1431,11 @@ mod tests {
         assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
         let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);
         assert!(!haml_codes.contains(&haml_indent::code::ILLEGAL_NESTING.to_string()), "{haml_codes:?}");
-        assert!(!haml_codes.is_empty());
+        // Turning one code off leaves the others.
+        let void = "%br\n  %p\n";
+        assert_eq!(codes(haml_path, TemplateLang::Haml, void, &all), [haml_indent::code::VOID_CHILDREN]);
+        let quiet = Options { disabled_haml: vec![haml_indent::code::VOID_CHILDREN.into()], ..Options::default() };
+        assert!(codes(haml_path, TemplateLang::Haml, void, &quiet).is_empty());
         // Every check carries a code, or the setting can't turn it off.
         assert!(!codes(erb_path, TemplateLang::Erb, include_str!("../../test/broken/bad.html.erb"), &all).is_empty());
         assert!(!codes(haml_path, TemplateLang::Haml, include_str!("../../test/broken/bad.html.haml"), &all).is_empty());

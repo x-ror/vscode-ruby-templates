@@ -1,7 +1,7 @@
-//! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
+//! Haml's diagnostics: the first error `haml_parser` finds, or the void elements that hold content.
 
 use crate::haml_parser;
-use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range};
+use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
@@ -13,6 +13,7 @@ pub mod code {
     pub const ILLEGAL_NESTING: &str = "illegal-nesting";
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
+    pub const VOID_CHILDREN: &str = "void-children";
     pub const EXPLICIT_END: &str = "explicit-end";
     /// Haml's parser errors that belong to no other code (`Invalid tag`, `There's no Ruby code…`).
     pub const SYNTAX_ERROR: &str = "syntax-error";
@@ -66,22 +67,10 @@ struct Visit {
     span: usize,
 }
 
-/// An open Haml `if`/`case`/`unless`, for matching `else`/`elsif`/`when`.
-struct Opener {
-    indent: usize,
-    level: usize,
-    seen_when: bool,
-}
-
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    let lines: Vec<&str> = text.lines().collect();
-    let visits = visit_lines(&lines);
-    check_structure(&lines, &visits, text, &mut out);
-    if let Some(parse_error) = haml_parser::first_error(text) {
-        out.push(parse_error_diagnostic(text, &parse_error));
-    }
-    out.sort_by_key(|d| (d.range.start.line, d.range.start.character));
+    let parsed = haml_parser::parse(text);
+    let mut out: Vec<Diagnostic> = parsed.error.iter().map(|parse_error| parse_error_diagnostic(text, parse_error)).collect();
+    out.extend(parsed.void_content.iter().map(|void| void_content_diagnostic(text, void)));
     out
 }
 
@@ -154,21 +143,13 @@ fn indent_width(ws: &str) -> usize {
     ws.chars().map(|c| if c == '\t' { 2 } else { 1 }).sum()
 }
 
-/// Indentation consistency, dedents, illegal nesting and Haml's `else`/`when` placement.
-fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<Diagnostic>) {
-    let mut indents: Vec<usize> = Vec::new();
-    let mut openers: Vec<Opener> = Vec::new();
-    for &Visit { line: line_no, indent, .. } in visits {
-        let raw = lines[line_no];
-        let ws = leading_ws(raw);
-        while indents.last().is_some_and(|&top| top >= indent) {
-            indents.pop();
-        }
-        if let Some(message) = track_block_keyword(&mut openers, &raw[ws.len()..], indent, indents.len()) {
-            out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), message), code::UNMATCHED_BRANCH));
-        }
-        indents.push(indent);
-    }
+/// `<br>x</br>`: the end tag of a void element is a parse error in HTML (WHATWG 13.2.6.4.7).
+fn void_content_diagnostic(text: &str, void: &haml_parser::VoidContent) -> Diagnostic {
+    let raw = haml_parser::physical_lines(text).get(void.line).copied().unwrap_or("");
+    let start = leading_ws(raw).len();
+    let what = if void.nested { "children" } else { "content" };
+    let message = format!("`{}` is a void element and can't have {what}", void.name);
+    coded(warning(span_range(void.line, raw, start, raw.len()), message), code::VOID_CHILDREN)
 }
 
 /// The first error Haml's parser raises: indentation errors are shown over the indentation, the others over the line.
@@ -181,6 +162,9 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
         "Indenting at the beginning of the document is illegal." => (code::TOP_LEVEL_INDENT, 0, bom_len + indent),
         "Illegal nesting: nesting within a header command is illegal." => (code::DOCTYPE_CHILDREN, bom_len + indent, raw.len()),
         message if message.starts_with("You don't need to use") => (code::EXPLICIT_END, bom_len + indent, raw.len()),
+        message if message.starts_with("Got \"") || message.contains("is indented at wrong level") => {
+            (code::UNMATCHED_BRANCH, bom_len + indent, raw.len())
+        }
         message if message.starts_with("FilterCompiler for") => (code::UNKNOWN_FILTER, bom_len + indent, raw.len()),
         message
             if message.starts_with("Invalid tag")
@@ -197,35 +181,6 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
         _ => (code::INCONSISTENT_INDENT, 0, bom_len + if indent > 0 { indent } else { body.len() }),
     };
     coded(error(span_range(parse_error.line, raw, start, end), parse_error.message.clone()), code)
-}
-
-/// Haml's `if`/`case`/`unless` stack: pops the blocks this line closes, pushes the one it opens,
-/// and returns Haml's error for an `else`/`elsif`/`when` with no opener at its level.
-fn track_block_keyword(openers: &mut Vec<Opener>, content: &str, indent: usize, level: usize) -> Option<String> {
-    let silent_code = content.strip_prefix('-').filter(|code| !code.starts_with('#'));
-    let keyword = silent_code.or_else(|| strip_output_prefix(content)).and_then(block_keyword);
-    let continues = silent_code.is_some() && keyword.is_some_and(|k| MID_BLOCK_KEYWORDS.contains(&k));
-    while openers.last().is_some_and(|o| o.indent > indent || (o.indent == indent && !continues)) {
-        openers.pop();
-    }
-    match keyword? {
-        "if" | "case" | "unless" => {
-            openers.push(Opener { indent, level, seen_when: false });
-            None
-        }
-        k @ ("else" | "elsif" | "when") if continues => {
-            let Some(top) = openers.last_mut() else { return Some(format!("Got \"{k}\" with no preceding \"if\"")) };
-            // Haml lets the first `when` sit one level deeper than its `case`.
-            if k == "when" && !top.seen_when {
-                if top.level + 1 == level {
-                    top.level = level;
-                }
-                top.seen_when = true;
-            }
-            (top.level != level).then(|| format!("\"{k}\" is indented at wrong level: expected {}, but was at {level}.", top.level))
-        }
-        _ => None,
-    }
 }
 
 pub(crate) fn block_keyword(code: &str) -> Option<&str> {
@@ -436,6 +391,7 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower_lsp::lsp_types::DiagnosticSeverity;
 
     /// (line, start char, end char, message) for each Haml diagnostic.
     fn haml(text: &str) -> Vec<(u32, u32, u32, String)> {
@@ -451,10 +407,7 @@ mod tests {
         let got = haml(include_str!("../../test/broken/bad.html.haml"));
         assert_eq!(
             got,
-            vec![
-                at(4, 4, 31, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
-                at(10, 2, 8, "Got \"else\" with no preceding \"if\""),
-            ]
+            vec![at(4, 4, 31, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),]
         );
     }
 
@@ -534,6 +487,22 @@ mod tests {
         for (src, (line, start, end, message)) in cases {
             assert_eq!(haml(src), vec![at(*line, *start, *end, message)], "{src:?}");
         }
+    }
+
+    #[test]
+    fn void_elements_with_content_warn_on_the_content() {
+        let diagnostics = diagnostics("%p\n  %br\n    x\n  %img{src: 1} y\n");
+        let got: Vec<_> =
+            diagnostics.iter().map(|d| (d.range.start.line, d.range.start.character, d.range.end.character, &d.message)).collect();
+        assert_eq!(
+            got,
+            [
+                (2, 4, 5, &"`br` is a void element and can't have children".to_string()),
+                (3, 2, 16, &"`img` is a void element and can't have content".to_string()),
+            ]
+        );
+        assert!(diagnostics.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
+        assert!(haml("%br\n  x\n% a").iter().all(|d| d.3 != "`br` is a void element and can't have children"));
     }
 
     #[test]
@@ -617,7 +586,6 @@ mod tests {
             "- [1].each do | x |\n  %p= x",
             "- f = lambda do\n  %p",
             "- while x\n  %p",
-            "%br\n  %p x",
             "/\n  %p x",
             "/[if IE]\n  %p x",
             "%p Dear Sir,\n  %b x",

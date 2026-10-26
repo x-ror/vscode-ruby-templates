@@ -2,6 +2,7 @@
 //! the first error Haml raises about indentation, at the line it names.
 
 use crate::haml_indent::{block_keyword, is_haml_multiline, is_ruby_multiline, strip_output_prefix, HAML_FILTERS, MID_BLOCK_KEYWORDS};
+use crate::slim_parser::VOID_ELEMENTS;
 use std::collections::VecDeque;
 use std::convert::Infallible;
 
@@ -63,20 +64,55 @@ struct Parser {
     flat: bool,
     flat_spaces: Option<String>,
     template_tabs: usize,
-    /// One entry per open block; `true` for a filter or `-#` comment, whose end closes the flat section.
-    open_blocks: Vec<bool>,
+    /// One entry per open block, which says what closing it undoes.
+    open_blocks: Vec<Node>,
     tab_up: bool,
+    /// The open `if`/`case`/`unless` lines, for `else`, `elsif` and `when` (`@script_level_stack`).
+    script_levels: Vec<ScriptLevel>,
+    void_content: Vec<VoidContent>,
     /// The first filter Haml has no compiler for; it fails at compile time, so any parser error comes first.
     unknown_filter: Option<Error>,
 }
 
-/// The first indentation error Haml raises for `text`.
-pub fn first_error(text: &str) -> Option<Error> {
+/// What a line opens, as far as closing it matters.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Node {
+    Other,
+    /// A filter or `-#` comment: its end closes the flat section.
+    FlatSection,
+    /// An `if`, `case` or `unless` line: its end closes its entry in `script_levels`.
+    Branch,
+}
+
+struct ScriptLevel {
+    tabs: usize,
+    seen_when: bool,
+}
+
+/// Content in a void element, which Haml compiles to an end tag (`<br>x</br>`): a WHATWG parse error.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VoidContent {
+    pub line: usize,
+    pub name: String,
+    /// Nested lines, rather than content on the tag's own line.
+    pub nested: bool,
+}
+
+pub struct Parsed {
+    /// The first error Haml raises for the template, at the line it reports.
+    pub error: Option<Error>,
+    /// Only filled when the template compiles.
+    pub void_content: Vec<VoidContent>,
+}
+
+pub fn parse(text: &str) -> Parsed {
     let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text));
-    match parser.run() {
+    let error = match parser.run() {
         Err(Halt::Error(error)) => Some(error),
-        Err(Halt::Done) => parser.unknown_filter,
-    }
+        Err(Halt::Done) => parser.unknown_filter.take(),
+    };
+    let void_content = if error.is_some() { Vec::new() } else { parser.void_content };
+    Parsed { error, void_content }
 }
 
 /// The lines of `text` as Haml (and the LSP) split them: at `\r\n`, `\r` and `\n`.
@@ -142,6 +178,8 @@ impl Parser {
             template_tabs: 0,
             open_blocks: Vec::new(),
             tab_up: false,
+            script_levels: Vec::new(),
+            void_content: Vec::new(),
             unknown_filter: None,
         }
     }
@@ -163,10 +201,10 @@ impl Parser {
                 continue;
             }
             self.tab_up = false;
-            let opens_flat_section = !self.line.text.is_empty() && self.process_line()?;
+            let node = if self.line.text.is_empty() { Node::Other } else { self.process_line()? };
             if self.block_opened()? || self.tab_up {
                 self.template_tabs += 1;
-                self.open_blocks.push(opens_flat_section);
+                self.open_blocks.push(node);
             }
             if !self.flat {
                 let (next, current) = (self.tabs(Which::Next)?, self.tabs(Which::Current)?);
@@ -301,9 +339,15 @@ impl Parser {
 
     fn close(&mut self) {
         self.template_tabs -= 1;
-        if self.open_blocks.pop() == Some(true) {
-            self.flat = false;
-            self.flat_spaces = None;
+        match self.open_blocks.pop() {
+            Some(Node::FlatSection) => {
+                self.flat = false;
+                self.flat_spaces = None;
+            }
+            Some(Node::Branch) => {
+                self.script_levels.pop();
+            }
+            _ => {}
         }
     }
 
@@ -318,25 +362,25 @@ impl Parser {
         }
     }
 
-    fn start_flat_section(&mut self) -> bool {
+    fn start_flat_section(&mut self) -> Node {
         if !self.filter_opened() {
-            return false;
+            return Node::Other;
         }
         self.flat = true;
         self.flat_spaces = self.indentation.as_ref().map(|indentation| indentation.repeat(self.template_tabs + 1));
-        true
+        Node::FlatSection
     }
 
-    /// What `process_line` does that later lines depend on: the lines a node consumes and the flat sections it opens.
-    /// Returns whether the line is a filter or `-#` comment whose block is flat.
-    fn process_line(&mut self) -> Result<bool, Halt> {
+    /// What `process_line` does that later lines depend on: the lines a node consumes, the flat sections and the
+    /// `if` levels it opens.
+    fn process_line(&mut self) -> Result<Node, Halt> {
         let text = std::mem::take(&mut self.line.text);
         let result = self.process_text(&text);
         self.line.text = text;
         result
     }
 
-    fn process_text(&mut self, text: &str) -> Result<bool, Halt> {
+    fn process_text(&mut self, text: &str) -> Result<Node, Halt> {
         let mut chars = text.chars();
         match (chars.next(), chars.next()) {
             (Some('%' | '.'), _) => self.tag(text)?,
@@ -349,12 +393,12 @@ impl Parser {
             (Some('/'), _) => self.comment(&text[1..])?,
             (Some('!'), _) if text.starts_with("!!!") => self.doctype()?,
             (Some('-' | '=' | '~' | '&' | '!'), _) => match text.strip_prefix('-').or_else(|| strip_output_prefix(text)) {
-                Some(code) => self.script(text, code)?,
+                Some(code) => return self.script(text, code),
                 None => self.plain()?,
             },
             _ => self.plain()?,
         }
-        Ok(false)
+        Ok(Node::Other)
     }
 
     /// `filter`: the name must be a word; whether a compiler exists for it is only found out when Haml compiles.
@@ -399,19 +443,46 @@ impl Parser {
         Ok(())
     }
 
-    /// `check_push_script_stack` and `handle_ruby_multiline` for a line that starts with Ruby.
-    fn script(&mut self, text: &str, code: &str) -> Result<(), Halt> {
-        if text.starts_with('-') && code.trim_matches(RUBY_WHITESPACE) == "end" {
+    /// `script`, `flat_script` and `silent_script`: the `if` levels, and where `else`, `elsif` and `when` may stand.
+    fn script(&mut self, text: &str, code: &str) -> Result<Node, Halt> {
+        let silent = text.starts_with('-');
+        if silent && code.trim_matches(RUBY_WHITESPACE) == "end" {
             return Err(halt(NO_END, self.line.index));
         }
-        if !text.starts_with('-') && code.trim_start_matches(REGEXP_SPACE).is_empty() {
+        if !silent && code.trim_start_matches(REGEXP_SPACE).is_empty() {
             let action = if text[..text.len() - code.len()].ends_with('~') { '~' } else { '=' };
             return Err(halt(no_ruby_code(action), self.line.index));
         }
-        if block_keyword(code).is_some_and(|keyword| matches!(keyword, "if" | "case" | "unless")) {
+        self.join_ruby_lines(text)?;
+        let keyword = block_keyword(code);
+        let tabs = self.tabs(Which::Current)?;
+        let opens_branch = matches!(keyword, Some("if" | "case" | "unless"));
+        if opens_branch {
+            self.script_levels.push(ScriptLevel { tabs, seen_when: false });
             self.tab_up = true;
         }
-        self.join_ruby_lines(text)
+        if let Some(keyword @ ("else" | "elsif" | "when")) = keyword.filter(|_| silent) {
+            self.check_branch_level(keyword, tabs)?;
+        }
+        Ok(if opens_branch { Node::Branch } else { Node::Other })
+    }
+
+    fn check_branch_level(&mut self, keyword: &str, tabs: usize) -> Result<(), Halt> {
+        let Some(level) = self.script_levels.last_mut() else {
+            return Err(halt(format!("Got \"{keyword}\" with no preceding \"if\""), self.line.index));
+        };
+        // The first `when` may stand one level deeper than its `case`.
+        if keyword == "when" && !level.seen_when {
+            if level.tabs + 1 == tabs {
+                level.tabs += 1;
+            }
+            level.seen_when = true;
+        }
+        if level.tabs != tabs {
+            let message = format!("\"{keyword}\" is indented at wrong level: expected {}, but was at {tabs}.", level.tabs);
+            return Err(halt(message, self.line.index));
+        }
+        Ok(())
     }
 
     /// `parse_tag` and `tag`: attribute groups that run over several lines, the nesting rules, then Ruby after the tag
@@ -459,6 +530,13 @@ impl Parser {
         if block_opened && !content.value.is_empty() && !is_ruby_multiline(&content.value) {
             let message = format!("Illegal nesting: content can't be both given on the same line as %{name} and nested within it.");
             return Err(self.nested_line_error(&message));
+        }
+        if VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) && !content.self_closing {
+            if !content.value.is_empty() {
+                self.void_content.push(VoidContent { line: self.line.index, name: name.to_string(), nested: false });
+            } else if block_opened {
+                self.void_content.push(VoidContent { line: self.next_line.index, name: name.to_string(), nested: true });
+            }
         }
         if content.parse {
             self.join_ruby_lines(&content.value)?;
@@ -959,7 +1037,7 @@ mod tests {
     use super::*;
 
     fn error_of(text: &str) -> Option<(usize, String)> {
-        first_error(text).map(|e| (e.line, e.message))
+        parse(text).error.map(|e| (e.line, e.message))
     }
 
     fn inconsistent(line: usize, used: &str, rest: &str) -> Option<(usize, String)> {
@@ -1355,5 +1433,72 @@ mod tests {
         ] {
             assert_eq!(error_of(text), None, "{text:?}");
         }
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`).
+    #[test]
+    fn branches_follow_their_opener() {
+        let missing = |keyword: &str| format!("Got \"{keyword}\" with no preceding \"if\"");
+        let level = |keyword: &str, expected: usize, was: usize| {
+            format!("\"{keyword}\" is indented at wrong level: expected {expected}, but was at {was}.")
+        };
+        let cases: Vec<(&str, usize, String)> = vec![
+            ("- else", 0, missing("else")),
+            ("%p\n- else", 1, missing("else")),
+            ("- elsif a", 0, missing("elsif")),
+            ("- when 1", 0, missing("when")),
+            ("- foo if a\n- else", 1, missing("else")),
+            ("- if a\n  - else", 1, level("else", 0, 1)),
+            ("- if a\n  %p\n  - else", 2, level("else", 0, 1)),
+            ("- case x\n  - when 1\n  - when 2\n    - else", 3, level("else", 1, 2)),
+            ("- case x\n- when 1\n- when 2\n  - when 3", 3, level("when", 0, 1)),
+            ("- if a\n  %b\n- elsif b\n  - else", 3, level("else", 0, 1)),
+            ("- if a\n  -# c\n  - else", 2, level("else", 0, 1)),
+        ];
+        for (text, at, message) in cases {
+            assert_eq!(error_of(text), Some((at, message)), "{text:?}");
+        }
+        for text in [
+            "- if a\n  %p\n- else\n  %p",
+            "- case x\n- when 1\n  %p\n- else\n  %p",
+            "- case x\n  - when 1\n    %p\n  - when 2\n    %p\n  - else\n    %p",
+            "- case x\n    - when 1",
+            "- begin\n  %p\n- rescue => e\n  %p\n- ensure\n  %p",
+            "- rescue",
+            "- ensure",
+            "- if a\n  %p\n\n- else\n  %p",
+            "%p= x,\n\n- else",
+            "- x = if a\n  - 1\n- else\n  - 2",
+            "= if a\n  %p\n- else\n  %p",
+            "~ if a\n  %p\n- else\n  %p",
+            "- unless a\n  %p\n- else\n  %p",
+            "- if a\n  - if b\n    %p\n  - else\n    %p\n- elsif c\n  %p",
+            "- if a\n  - if b\n    %p\n- else\n",
+            "- if a\n  %p\n-else\n  %p",
+            "- if a\n  :plain\n    x\n- else\n  y",
+        ] {
+            assert_eq!(error_of(text), None, "{text:?}");
+        }
+    }
+
+    /// Haml compiles content in a void element to an end tag (`%br\n  %p x` is `<br><p>x</p></br>`).
+    #[test]
+    fn void_elements_with_content() {
+        let void = |text: &str| {
+            let parsed = parse(text);
+            assert!(parsed.error.is_none(), "{text:?}");
+            parsed.void_content.into_iter().map(|v| (v.line, v.name, v.nested)).collect::<Vec<_>>()
+        };
+        assert_eq!(void("%br\n  %p x"), [(1, "br".into(), true)]);
+        assert_eq!(void("%img\n  x"), [(1, "img".into(), true)]);
+        assert_eq!(void(".a\n  %hr\n    %b"), [(2, "hr".into(), true)]);
+        assert_eq!(void("%br hello"), [(0, "br".into(), false)]);
+        assert_eq!(void("%img{src: 1} x"), [(0, "img".into(), false)]);
+        assert_eq!(void("%br= 1"), [(0, "br".into(), false)]);
+        assert_eq!(void("%BR\n  x"), [(1, "BR".into(), true)]);
+        assert!(void("%br").is_empty());
+        assert!(void("%br/").is_empty());
+        assert!(void("%p\n  %br\n  %img{src: 1}\n  %b x").is_empty());
+        assert!(parse("%br\n  %p x\n% a").void_content.is_empty());
     }
 }
