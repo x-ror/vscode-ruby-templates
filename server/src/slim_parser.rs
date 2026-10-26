@@ -72,6 +72,8 @@ pub struct Parsed {
     pub stop_line: Option<usize>,
     /// The first syntax error Slim words; Slim stops there.
     pub syntax_error: Option<SyntaxError>,
+    /// Line and name of the first attribute repeated in one tag; Temple rejects it after parsing (only `class` merges).
+    pub repeated_attribute: Option<(usize, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -137,6 +139,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             valid: true,
             stop_line: None,
             syntax_error: None,
+            repeated_attribute: None,
         },
         lines,
         starts,
@@ -457,7 +460,7 @@ impl<'a> Parser<'a> {
         let line = self.i;
         self.pos = engine.attrs.start;
         self.end = engine.attrs.end;
-        self.parse_attributes();
+        self.parse_attributes(&mut Vec::new());
         if self.i != line {
             // Wrapped attributes across lines put the body somewhere this port doesn't follow.
             self.fail();
@@ -474,6 +477,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tag(&mut self) {
+        let mut names = Vec::new();
         // `.class` / `#id` shortcuts, `((?:\p{Word}|-|\/\d+|:(\w|-)+)*)` after each.
         loop {
             let r = self.rest();
@@ -500,11 +504,12 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
+            self.note_attribute(&mut names, if r.starts_with('#') { "id" } else { "class" });
             self.skip(n);
         }
         let r = self.rest();
         self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
-        self.parse_attributes();
+        self.parse_attributes(&mut names);
 
         let r = self.rest();
         let t = trim_start(r);
@@ -543,7 +548,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_attributes(&mut self) {
+    fn note_attribute(&mut self, names: &mut Vec<&'a str>, name: &'a str) {
+        if name != "class" && names.contains(&name) {
+            self.out.repeated_attribute.get_or_insert((self.owner, name.to_string()));
+        }
+        names.push(name);
+    }
+
+    fn parse_attributes(&mut self, names: &mut Vec<&'a str>) {
         let mut close = None;
         let t = trim_start(self.rest());
         if let Some(c) = t.chars().next().and_then(closer) {
@@ -563,6 +575,7 @@ impl<'a> Parser<'a> {
             let name = attr_name_len(t);
             if name > 0 {
                 if let Some(value) = trim_start(&t[name..]).strip_prefix('=') {
+                    self.note_attribute(names, &t[..name]);
                     let value = trim_start(value.strip_prefix('=').unwrap_or(value));
                     self.skip(r.len() - value.len());
                     if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
@@ -576,6 +589,7 @@ impl<'a> Parser<'a> {
             }
             let Some(close) = close else { break };
             if name > 0 && t[name..].chars().next().is_none_or(|c| is_space(c) || c == close) {
+                self.note_attribute(names, &t[..name]);
                 self.skip(ws + name);
             } else if t.starts_with(close) {
                 self.skip(ws + 1);

@@ -1,6 +1,6 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::ruby::{analyze, ends_with_block};
+use crate::ruby::ends_with_block;
 use crate::slim_parser::{self, BOM};
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
 use tower_lsp::lsp_types::Diagnostic;
@@ -81,6 +81,12 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let parsed = slim_parser::parse(text, extra_engines);
     if let Some(syntax) = &parsed.syntax_error {
         out.push(syntax_diagnostic(text, &lines, syntax));
+    }
+    if let Some((line, name)) = parsed.repeated_attribute.as_ref().filter(|_| parsed.valid) {
+        let raw = lines[*line];
+        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        // Temple raises this while compiling, so it carries no line; the tag's line stands in.
+        out.push(coded(error(range, format!("Multiple {name} attributes specified")), code::SYNTAX_ERROR));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
@@ -293,7 +299,9 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         if let Some(rest) = c.strip_prefix('-') { Some((rest, true)) } else { strip_output_prefix(c).map(|rest| (rest, false)) };
     if let Some((code, is_control)) = ruby_prefix {
         let (joined, consumed) = join_continuation(lines, i, code);
-        check_explicit_end(&joined, content_range, out);
+        if is_control {
+            check_explicit_end(&joined, content_range, out);
+        }
         check_ruby_balance(&joined, content_range, out);
         if !is_control {
             return (LineKind::Output, consumed);
@@ -310,7 +318,6 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         let void = closed || VOID_ELEMENTS.contains(&tag_name(raw));
         if let Some(code) = strip_output_prefix(rest_t) {
             let (joined, _) = join_continuation(lines, i, code);
-            check_explicit_end(&joined, content_range, out);
             check_ruby_balance(&joined, content_range, out);
         }
         // Slim's parse_text_block takes every deeper line after inline text as text.
@@ -470,10 +477,13 @@ fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
     (code, consumed)
 }
 
+/// Slim::EndInserter's `/\Aend\b/` on a `-` line. Slim reports no line, so the diagnostic sits on the `end` line.
 fn check_explicit_end(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
-    let (_, _, closes) = analyze(code);
-    if closes > 0 {
-        out.push(coded(error(range, "`end` is not allowed: Slim closes blocks by indentation"), code::EXPLICIT_END));
+    let Some(after) = code.trim_start().strip_prefix("end") else {
+        return;
+    };
+    if after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_')) {
+        out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
     }
 }
 
@@ -851,6 +861,51 @@ mod tests {
     #[test]
     fn explicit_end() {
         assert_eq!(slim("- items.each do\n  p\n- end\n"), one(code::EXPLICIT_END, 2, 0, ERROR));
+    }
+
+    fn explicit_end_lines(text: &str) -> Vec<u32> {
+        let found = diagnostics(text, &[]);
+        found.iter().filter(|d| d.message == "Explicit end statements are forbidden").map(|d| d.range.start.line).collect()
+    }
+
+    #[test]
+    fn explicit_end_uses_slim_message_and_condition() {
+        // Slim's test_explicit_end; EndInserter rejects a `-` line whose code starts with `end\b`.
+        assert_eq!(explicit_end_lines("\ndiv\n  - if show_first?\n      p The first paragraph\n  - end\n"), [4]);
+        for text in ["-end\n", "- end # note\n", "- end.foo\n", "-   end\n"] {
+            assert_eq!(explicit_end_lines(text), [0], "{text:?}");
+        }
+        for text in ["- endx\n", "= end\n", "p= end\n", "- foo; end\n", "- ensure\n", "p end\n"] {
+            assert!(explicit_end_lines(text).is_empty(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_attributes_use_temple_message() {
+        // Temple's AttributeMerger merges only `class`; any other repeated name in a tag fails, on the tag's line.
+        for (text, message, line) in [
+            ("\n#alpha id=\"beta\" Test it\n", "Multiple id attributes specified", 1),
+            ("a href=\"x\" href=\"y\"\n", "Multiple href attributes specified", 0),
+            ("p\n  a href=x href=y\n", "Multiple href attributes specified", 1),
+            ("a(href=\"x\" href)\n", "Multiple href attributes specified", 0),
+            ("#a#b\n", "Multiple id attributes specified", 0),
+            ("a data-x=1 data-x=2\n", "Multiple data-x attributes specified", 0),
+            ("a id=\"x\" class=\"y\" id=\"z\"\n", "Multiple id attributes specified", 0),
+            ("a(href=\"x\"\n  href=\"y\")\n", "Multiple href attributes specified", 0),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!(found[0].range.start.line, line, "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::SYNTAX_ERROR.to_string())), "{text:?}");
+        }
+        for text in [".a class=\"b\"\n", "a href=1\n  b href=2\n", "a X=1 x=2\n", "#alpha *{id: \"beta\"} t\n", "a b c b\n"] {
+            let found: Vec<_> = diagnostics(text, &[]).into_iter().filter(|d| d.message.starts_with("Multiple")).collect();
+            assert!(found.is_empty(), "{text:?}: {found:?}");
+        }
+        // A parser error comes first: Slim never reaches the compile step.
+        let found = diagnostics("a id=1 id=2\n?x\n", &[]);
+        assert_eq!(found.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["Unknown line indicator"]);
     }
 
     #[test]
