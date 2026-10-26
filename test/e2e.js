@@ -551,7 +551,6 @@ const check = (label, actual, expected) => {
       "3:5 unknown-engine",
       "5:1 unmatched-branch",
       "8:3 void-children",
-      "9:3 silent-output-helper",
       "11:1 unclosed-ruby",
     ],
   );

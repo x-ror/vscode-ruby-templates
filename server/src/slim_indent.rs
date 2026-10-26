@@ -7,7 +7,6 @@ use tower_lsp::lsp_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
 pub mod code {
-    pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
     pub const BAD_DEDENT: &str = "bad-dedent";
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const VOID_CHILDREN: &str = "void-children";
@@ -18,18 +17,14 @@ pub mod code {
     pub const UNCLOSED_RUBY: &str = "unclosed-ruby";
     pub const EXPLICIT_END: &str = "explicit-end";
     pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
-    pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
     /// Checks that parse the `-`/`=` code as Ruby.
-    pub const RUBY: &[&str] = &[UNCLOSED_RUBY, EXPLICIT_END, UNMATCHED_BRANCH, SILENT_OUTPUT_HELPER];
+    pub const RUBY: &[&str] = &[UNCLOSED_RUBY, EXPLICIT_END, UNMATCHED_BRANCH];
 }
 
 // Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
 pub(crate) const SLIM_ENGINES: &[&str] =
     &["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"];
 const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
-/// Helpers whose block form returns the HTML, so `-` discards it.
-const OUTPUT_BLOCK_HELPERS: &[&str] =
-    &["form_with", "form_for", "form_tag", "fields_for", "fields", "link_to", "button_to", "content_tag", "turbo_frame_tag", "render"];
 /// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
 const SLIM_TABSIZE: usize = 4;
 
@@ -90,7 +85,6 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
-    let unit: Option<usize> = detect_unit(&lines, &roles);
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -102,7 +96,7 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             continue;
         }
         let ws = leading_ws(raw);
-        let ws_range = line_range(text, line_no, 0, ws.len()); // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
+        // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
         let indent = indent_width(ws);
 
         // Inside a verbatim block? Everything deeper is skipped.
@@ -134,14 +128,6 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         }
         let parent_indent = stack.last().map_or(0, |f| f.indent);
         let is_child = !stack.is_empty() && indent > parent_indent;
-
-        if is_child && !bad_dedent {
-            let step = indent - parent_indent;
-            if let Some(u) = unit.filter(|&u| u != step) {
-                let message = format!("Inconsistent indentation: expected {} spaces, found {}", u, step);
-                out.push(coded(warning(ws_range, message), code::INCONSISTENT_INDENT));
-            }
-        }
 
         // Illegal nesting checks against the parent.
         // `/` is a Slim code comment (renders nothing); `/!` is an HTML comment.
@@ -237,36 +223,6 @@ fn nested_branch_openers(keyword: &str) -> &'static [&'static str] {
     }
 }
 
-/// The most common indentation step between Slim lines; text, engine bodies and continuations don't count, as
-/// their indentation is free.
-fn detect_unit(lines: &[&str], roles: &[slim_parser::LineInfo]) -> Option<usize> {
-    let mut levels: Vec<usize> = vec![0];
-    let mut counts: std::collections::BTreeMap<usize, usize> = Default::default();
-    for (i, raw) in lines.iter().enumerate() {
-        if raw.trim().is_empty() || roles.get(i).is_some_and(|l| !matches!(l.role, slim_parser::Role::Structural { .. })) {
-            continue;
-        }
-        let indent = indent_width(leading_ws(raw));
-        while levels.last().is_some_and(|l| *l > indent) {
-            levels.pop();
-        }
-        let parent = *levels.last().unwrap_or(&0);
-        if indent > parent {
-            let step = indent - parent;
-            *counts.entry(step).or_insert(0) += 1;
-            levels.push(indent);
-        }
-    }
-    // Highest count wins; on a tie the smaller step (BTreeMap iterates ascending, so `>` keeps the first).
-    counts
-        .into_iter()
-        .fold(None, |best: Option<(usize, usize)>, (step, n)| match best {
-            Some((_, bn)) if bn >= n => best,
-            _ => Some((step, n)),
-        })
-        .map(|(step, _)| step)
-}
-
 /// Returns the line kind and how many physical lines it spans.
 fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
     let raw = lines[i];
@@ -306,7 +262,6 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         if !is_control {
             return (LineKind::Output, consumed);
         }
-        check_silent_output_helper(&joined, text, i, ws_len + 1 + (code.len() - code.trim_start().len()), out);
         return (LineKind::Control { keyword: control_keyword(&joined) }, consumed);
     }
     // Tags
@@ -357,22 +312,6 @@ fn strip_assignment(code: &str) -> &str {
     }
     let rest = t[name_len..].trim_start();
     ["||=", "&&=", "="].iter().find_map(|op| rest.strip_prefix(op)).filter(|rhs| !rhs.starts_with(['=', '~', '>'])).unwrap_or(t)
-}
-
-/// `- form_with … do` builds HTML and returns it; with `-` that result is thrown away.
-fn check_silent_output_helper(code: &str, text: &str, line: usize, code_col: usize, out: &mut Vec<Diagnostic>) {
-    if !ends_with_block(code) {
-        return;
-    }
-    let trimmed = code.trim_start();
-    let call = trimmed.strip_prefix("tag.").map_or(trimmed, |_| "tag");
-    let name_len = call.find(|ch: char| !(ch.is_alphanumeric() || ch == '_')).unwrap_or(call.len());
-    let name = &call[..name_len];
-    if name != "tag" && !OUTPUT_BLOCK_HELPERS.contains(&name) {
-        return;
-    }
-    let range = line_range(text, line, code_col, code_col + name_len);
-    out.push(coded(warning(range, format!("`- {name} … do` discards the HTML it builds; use `= {name}`")), code::SILENT_OUTPUT_HELPER));
 }
 
 fn check_ruby_balance(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
@@ -682,14 +621,11 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_indent() {
-        assert_eq!(slim("div\n  p\n  p\n    a\n  ul\n   li\n"), one(code::INCONSISTENT_INDENT, 5, 0, WARNING));
-        // Engine bodies and continuations don't set the unit: this file is indented by 4.
+    fn indentation_depth_is_free() {
+        // README: "the indentation depth can be chosen as you like"; Slim compiles the first input.
+        assert!(slim("div\n  p\n   span\n  x\n").is_empty());
+        assert!(slim("div\n  p\n  p\n    a\n  ul\n   li\n").is_empty());
         assert!(slim("ruby:\n  a =\n    b ||\n      c\n= f x,\n  y\ndiv\n    p\n    span\n        b\n").is_empty());
-        assert!(slim("head\n    link [rel=\"a\"\n      href=\"b\"]\n    meta\n").is_empty(), "a bracket continuation is no child");
-        // An unclosed construct doesn't hide what follows it.
-        assert!(slim("div\n  a [href=\"x\"\n  p\n    - else\n  div\n   span\n").len() >= 2);
-        assert!(slim("div\n  a href=\"x\n  p\n    - else\n").len() >= 2);
     }
 
     #[test]
@@ -983,11 +919,11 @@ mod tests {
     }
 
     #[test]
-    fn silent_output_helper() {
-        assert_eq!(slim("- form_with model: @u do |f|\n  p\n"), one(code::SILENT_OUTPUT_HELPER, 0, 2, WARNING));
-        assert_eq!(slim("-  tag.div do\n  p\n"), one(code::SILENT_OUTPUT_HELPER, 0, 3, WARNING));
+    fn block_helpers_under_a_control_line_are_valid() {
+        // Valid Slim and Ruby: `-` just discards the helper's HTML.
+        assert!(slim("- form_with model: @u do |f|\n  p\n").is_empty());
+        assert!(slim("-  tag.div do\n  p\n").is_empty());
         assert!(slim("= form_with model: @u do |f|\n  p\n").is_empty());
-        assert!(slim("- content_for :x do\n  p\n").is_empty());
     }
 
     #[test]
@@ -1023,10 +959,8 @@ mod tests {
             slim(text),
             vec![
                 (code::DOCTYPE_CHILDREN.to_string(), 1, 2, ERROR),
-                (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
                 (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 23, ERROR),
                 (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
-                (code::INCONSISTENT_INDENT.to_string(), 10, 0, WARNING),
             ]
         );
     }

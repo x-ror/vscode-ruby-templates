@@ -772,7 +772,6 @@
           "items": {
             "type": "string",
             "enum": [
-              "inconsistent-indent",
               "bad-dedent",
               "doctype-children",
               "void-children",
@@ -782,7 +781,6 @@
               "unclosed-ruby",
               "explicit-end",
               "unmatched-branch",
-              "silent-output-helper",
               "unresolved-render",
               "strict-locals"
             ]
