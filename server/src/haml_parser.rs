@@ -9,6 +9,7 @@ pub const BOM: char = '\u{feff}';
 const AT_START: &str = "Indenting at the beginning of the document is illegal.";
 const UNBALANCED: &str = "Unbalanced brackets.";
 const ILLEGAL_ELEMENT: &str = "Illegal element: classes and ids must have values.";
+const NO_END: &str = "You don't need to use \"- end\" in Haml. Un-indent to close a block:\n- if foo?\n  %strong Foo!\n- else\n  Not foo.\n%p This line is un-indented, so it isn't part of the \"if\" block";
 const SELF_CLOSING_CONTENT: &str = "Self-closing tags can't have content.";
 const NESTING_PLAIN: &str = "Illegal nesting: nesting within plain text is illegal.";
 const NESTING_SELF_CLOSING: &str = "Illegal nesting: nesting within a self-closing tag is illegal.";
@@ -381,6 +382,13 @@ impl Parser {
 
     /// `check_push_script_stack` and `handle_ruby_multiline` for a line that starts with Ruby.
     fn script(&mut self, text: &str, code: &str) -> Result<(), Halt> {
+        if text.starts_with('-') && code.trim_matches(RUBY_WHITESPACE) == "end" {
+            return Err(halt(NO_END, self.line.index));
+        }
+        if !text.starts_with('-') && code.trim_start_matches(REGEXP_SPACE).is_empty() {
+            let action = if text[..text.len() - code.len()].ends_with('~') { '~' } else { '=' };
+            return Err(halt(no_ruby_code(action), self.line.index));
+        }
         if block_keyword(code).is_some_and(|keyword| matches!(keyword, "if" | "case" | "unless")) {
             self.tab_up = true;
         }
@@ -390,7 +398,9 @@ impl Parser {
     /// `parse_tag` and `tag`: attribute groups that run over several lines, the nesting rules, then Ruby after the tag
     /// that continues after a comma.
     fn tag(&mut self, text: &str) -> Result<(), Halt> {
-        let Some((name, attributes_start, head_len)) = tag_head(text) else { return Ok(()) };
+        let Some((name, attributes_start, head_len)) = tag_head(text) else {
+            return Err(halt(format!("Invalid tag: \"{text}\"."), self.line.index));
+        };
         if has_empty_class_or_id(&text[attributes_start..head_len]) {
             return Err(halt(ILLEGAL_ELEMENT, self.line.index));
         }
@@ -420,6 +430,9 @@ impl Parser {
         let block_opened = self.block_opened()?;
         if block_opened && content.self_closing {
             return Err(self.nested_line_error(NESTING_SELF_CLOSING));
+        }
+        if let Some(action) = content.action.filter(|_| content.parse && content.value.is_empty()) {
+            return Err(halt(no_ruby_code(action), last_line));
         }
         if content.self_closing && !content.value.is_empty() {
             return Err(halt(SELF_CLOSING_CONTENT, last_line));
@@ -539,8 +552,13 @@ fn balance_brackets(text: &str) -> Option<&str> {
     None
 }
 
+fn no_ruby_code(action: char) -> String {
+    format!("There's no Ruby code for {action} to evaluate.")
+}
+
 /// What follows a tag's attributes, as `tag` reads it.
 struct TagContent {
+    action: Option<char>,
     self_closing: bool,
     /// Haml evaluates `value` (`%p= x`, `%p~ x`, `%p& = x`).
     parse: bool,
@@ -556,7 +574,7 @@ fn tag_content(rest: &str) -> TagContent {
     let has_interpolation = ["#{", "#$", "#@"].iter().any(|opener| value.contains(opener));
     let (parse, value) = match action {
         Some('/') => {
-            return TagContent { self_closing: true, parse: false, value: value.to_string() };
+            return TagContent { action, self_closing: true, parse: false, value: value.to_string() };
         }
         Some('~') => (true, value.to_string()),
         Some('=') if value.starts_with('=') => (true, interpolated()),
@@ -570,7 +588,7 @@ fn tag_content(rest: &str) -> TagContent {
         _ if has_interpolation => (true, interpolated()),
         _ => (false, value.to_string()),
     };
-    TagContent { self_closing: false, parse, value }
+    TagContent { action, self_closing: false, parse, value }
 }
 
 enum AttributeList {
@@ -1222,6 +1240,59 @@ mod tests {
         ];
         for (text, expected) in cases {
             assert_eq!(error_of(text), expected, "{text:?}");
+        }
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`).
+    #[test]
+    fn invalid_tags_missing_code_and_explicit_end() {
+        let code = |action: char| no_ruby_code(action);
+        let cases: Vec<(&str, usize, String)> = vec![
+            ("% a", 0, "Invalid tag: \"% a\".".into()),
+            ("%", 0, "Invalid tag: \"%\".".into()),
+            ("%%", 0, "Invalid tag: \"%%\".".into()),
+            ("=", 0, code('=')),
+            ("~", 0, code('~')),
+            ("&=", 0, code('=')),
+            ("!=", 0, code('=')),
+            ("&~", 0, code('~')),
+            ("!~", 0, code('~')),
+            ("%p=", 0, code('=')),
+            ("%p= ", 0, code('=')),
+            ("%p~", 0, code('~')),
+            ("%p<>=", 0, code('=')),
+            ("%p&=", 0, code('&')),
+            ("%p!~", 0, code('!')),
+            ("%p!=", 0, code('!')),
+            ("%p{:a => 'b',\n:c => 'd'}=", 1, code('=')),
+            ("%a(b=1)=", 0, code('=')),
+            ("%a[@x]~", 0, code('~')),
+            ("= x\n=\n", 1, code('=')),
+            ("%p\n  =\n", 1, code('=')),
+            ("- end", 0, NO_END.into()),
+            ("-end", 0, NO_END.into()),
+            ("-  end  ", 0, NO_END.into()),
+            ("- if x\n  - end", 1, NO_END.into()),
+        ];
+        for (text, at, message) in cases {
+            assert_eq!(error_of(text), Some((at, message)), "{text:?}");
+        }
+        for text in [
+            "% foo %bar",
+            "- end # x",
+            "- endx",
+            "- obj = Object.new; def obj.foo(a, b); a + b; end",
+            "%span\n  %div\n    - num = obj.foo(1,\n2)\n    = num",
+            "= obj.foo(1,\n2)",
+            "-",
+            "- ",
+            "%p==",
+            "%p&",
+            "%p&==",
+            "!!! 5",
+            "==",
+        ] {
+            assert_eq!(error_of(text), None, "{text:?}");
         }
     }
 }

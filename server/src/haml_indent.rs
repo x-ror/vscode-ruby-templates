@@ -1,7 +1,6 @@
 //! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
 use crate::haml_parser;
-use crate::ruby::analyze;
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range, warning};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -15,6 +14,8 @@ pub mod code {
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
     pub const EXPLICIT_END: &str = "explicit-end";
+    /// Haml's parser errors that belong to no other code (`Invalid tag`, `There's no Ruby code…`).
+    pub const SYNTAX_ERROR: &str = "syntax-error";
     pub const ILLEGAL_ELEMENT: &str = "illegal-element";
     pub const UNKNOWN_FILTER: &str = "unknown-filter";
     pub const SELF_CLOSING_CONTENT: &str = "self-closing-content";
@@ -179,6 +180,10 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
     let (code, start, end) = match parse_error.message.as_str() {
         "Indenting at the beginning of the document is illegal." => (code::TOP_LEVEL_INDENT, 0, bom_len + indent),
         "Illegal nesting: nesting within a header command is illegal." => (code::DOCTYPE_CHILDREN, bom_len + indent, raw.len()),
+        message if message.starts_with("You don't need to use") => (code::EXPLICIT_END, bom_len + indent, raw.len()),
+        message if message.starts_with("Invalid tag") || message.starts_with("There's no Ruby code") => {
+            (code::SYNTAX_ERROR, bom_len + indent, raw.len())
+        }
         "Self-closing tags can't have content." => (code::SELF_CLOSING_CONTENT, bom_len + indent, raw.len()),
         "Unbalanced brackets." => (code::UNCLOSED_ATTRIBUTE, bom_len + indent, raw.len()),
         message if message.starts_with("Invalid attribute list") => (code::UNCLOSED_ATTRIBUTE, bom_len + indent, raw.len()),
@@ -248,9 +253,7 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     }
     // Ruby lines
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
-        let (joined, consumed) = join_continuation(lines, i, code);
-        check_explicit_end(&joined, text, i, raw, out);
-        return (LineKind::Ruby, consumed);
+        return (LineKind::Ruby, continuation_len(lines, i, code));
     }
     // Tags
     if is_haml_tag(c) {
@@ -261,11 +264,7 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         let rest_t = rest.trim();
         let last_head_line = i + head_lines - 1;
         let tail_lines = match strip_output_prefix(rest_t) {
-            Some(code) => {
-                let (joined, code_lines) = join_continuation(lines, last_head_line, code);
-                check_explicit_end(&joined, text, i, raw, out);
-                code_lines
-            }
+            Some(code) => continuation_len(lines, last_head_line, code),
             None => multiline_len(lines, last_head_line),
         };
         return (LineKind::Tag, head_lines - 1 + tail_lines);
@@ -376,14 +375,11 @@ fn multiline_len(lines: &[&str], i: usize) -> usize {
     len
 }
 
-/// Join Ruby continuation lines (`,` or `\` at end, Haml `|` multiline).
-fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
+/// Physical lines of a Ruby line with its continuations (`,` or `\` at end, Haml `|` multiline).
+fn continuation_len(lines: &[&str], i: usize, first: &str) -> usize {
     let group = multiline_len(lines, i);
     if group > 1 {
-        let strip_pipe = |s: &str| s.trim().trim_end_matches('|').trim_end().to_string();
-        let rest = lines[i + 1..i + group].iter().map(|l| strip_pipe(l));
-        let code = std::iter::once(strip_pipe(first)).chain(rest).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
-        return (code, group);
+        return group;
     }
     let mut consumed = 1;
     let mut code = first.trim_end().to_string();
@@ -392,15 +388,7 @@ fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
         code = format!("{} {}", code.trim_end_matches('\\'), next.trim());
         consumed += 1;
     }
-    (code, consumed)
-}
-
-fn check_explicit_end(code: &str, text: &str, line: usize, raw: &str, out: &mut Vec<Diagnostic>) {
-    let (_, _, closes) = analyze(code);
-    if closes > 0 {
-        let message = "`end` is not allowed: Haml closes blocks by indentation";
-        out.push(coded(error(line_range(text, line, leading_ws(raw).len(), raw.len()), message), code::EXPLICIT_END));
-    }
+    consumed
 }
 
 /// Skip over `%tag.class#id{...}(...)[...]` (possibly across lines).
@@ -464,7 +452,6 @@ mod tests {
             got,
             vec![
                 at(4, 4, 31, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
-                at(7, 2, 7, "`end` is not allowed: Haml closes blocks by indentation"),
                 at(8, 2, 16, "Unknown Haml filter `:unknownfilter`"),
                 at(10, 2, 8, "Got \"else\" with no preceding \"if\""),
             ]
