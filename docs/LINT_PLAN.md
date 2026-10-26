@@ -137,7 +137,7 @@ We show it as a diagnostic at line 3, column 2, message `Malformed indentation`,
 - A nested line moves to its parent's indentation + 2.
 - Verbatim text (`|`, `'`): "each following line that is indented greater than the pipe is copied over" and the first line sets the left margin, so continuation lines move with the pipe line, keeping their offset from it.
 - Embedded engine bodies, multi-line Ruby (`,` or `\` continuation) and multi-line attribute wrappers move as a block with their first line.
-- Trailing whitespace is kept on every line whose output contains it: verbatim text (`|`, `'`, `|<`, `|>`, `|<>`) and its continuation lines, and inline tag text (`p foo   ` compiles to `<p>foo   </p>`); it is removed only on lines whose compiled output doesn't contain it. A single final newline.
+- Trailing whitespace is kept on every line whose output contains it: verbatim text (`|`, `'`, `|<`, `|>`, `|<>`) and its continuation lines, and inline tag text (`p foo   ` compiles to `<p>foo   </p>`); it is removed only on lines whose compiled output doesn't contain it. A single final newline: whitespace-only lines at the end stay, since Slim compiles them, and the empty lines after them collapse into it, since Slim drops them (checked with the oracle, also at the end of `|` text blocks and engine bodies).
 - Tabs: Slim reads a tab as `tabsize: 4`; a tab-indented file is converted to spaces only if the compiled output stays identical.
 - A file with an error (1a) is not formatted.
 
@@ -291,18 +291,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                |
-| ------------------------ | ----------------------------------------------------- |
-| 0. Harness               | done                                                  |
-| 0b. Context              | done                                                  |
-| 1a. Slim errors          | done                                                  |
-| 1b. Slim format          | in progress: files with a 1a error are left unchanged |
-| 2a. Haml errors          | not started                                           |
-| 2b. Haml format          | not started                                           |
-| 3a. ERB errors           | not started                                           |
-| 3b. ERB format           | not started                                           |
-| 4. Editor and CLI        | not started                                           |
-| 5. Remove external tools | not started                                           |
+| Stage                    | Status                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------ |
+| 0. Harness               | done                                                                                 |
+| 0b. Context              | done                                                                                 |
+| 1a. Slim errors          | done                                                                                 |
+| 1b. Slim format          | in progress: files with a 1a error are left unchanged; trailing empty lines collapse |
+| 2a. Haml errors          | not started                                                                          |
+| 2b. Haml format          | not started                                                                          |
+| 3a. ERB errors           | not started                                                                          |
+| 3b. ERB format           | not started                                                                          |
+| 4. Editor and CLI        | not started                                                                          |
+| 5. Remove external tools | not started                                                                          |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

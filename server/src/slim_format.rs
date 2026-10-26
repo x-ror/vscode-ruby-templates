@@ -1,6 +1,6 @@
 //! Slim formatting that can't change the compiled template: each Slim line is re-indented to
 //! `tab_size` spaces per nesting level, text and engine blocks and continuations move with their
-//! owner line, and trailing whitespace goes where Slim ignores it.
+//! owner line, trailing whitespace goes where Slim ignores it, and empty lines at the end become one line ending.
 
 use crate::slim_parser::{indent_width, parse, Role, BOM};
 
@@ -20,8 +20,9 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String], trim: bool)
     // Slim keeps whitespace-only lines at the end (as newlines in the compiled code) but drops empty ones.
     let lines: Vec<&str> = body.split('\n').collect();
     let tail = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
+    let end = lines.iter().rposition(|l| !l.trim_end_matches('\r').is_empty()).map_or(0, |i| i + 1);
     let mut shift = vec![0isize; parsed.lines.len()];
-    for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).enumerate() {
+    for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).take(end).enumerate() {
         if i > 0 {
             out.push('\n');
         }
@@ -57,6 +58,10 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String], trim: bool)
             out.push_str(content);
         }
         out.push_str(cr);
+    }
+    // The empty lines after the last one Slim compiles collapse into one line ending.
+    if end > 0 && lines.len() > end {
+        out.push('\n');
     }
     Some(out)
 }
@@ -114,6 +119,21 @@ mod tests {
         assert_eq!(fmt("\u{feff}div\n    p\n"), "\u{feff}div\n  p\n");
         assert_eq!(fmt("p  \n\n   \n \n"), "p\n\n   \n \n");
         assert_eq!(fmt("p\n   \nq"), "p\n\nq");
+    }
+
+    #[test]
+    fn empty_lines_at_the_end_collapse_into_the_final_newline() {
+        // Slim splits on newlines and drops trailing empty strings; a whitespace-only line is one it compiles.
+        assert_eq!(fmt("p\n\n\n"), "p\n");
+        assert_eq!(fmt("p\n  \n\n"), "p\n  \n");
+        assert_eq!(fmt("p\n\n  \n\n\n"), "p\n\n  \n");
+        assert_eq!(fmt("p\r\n\r\n"), "p\r\n");
+        assert_eq!(fmt("p"), "p");
+        assert_eq!(fmt("\n\n\n"), "");
+        assert_eq!(fmt("\u{feff}\n"), "\u{feff}");
+        assert_eq!(fmt("javascript:\n  x\n\n\n"), "javascript:\n  x\n");
+        assert_eq!(fmt("| a\n  b\n\n"), "| a\n  b\n");
+        assert_eq!(fmt("p\n\nq\n\n"), "p\n\nq\n");
     }
 
     #[test]
