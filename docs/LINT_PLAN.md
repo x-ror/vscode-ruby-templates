@@ -222,7 +222,7 @@ Decided (2026-10-25):
 
 ### Built-in diagnostic codes
 
-Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_lint.rs`, `haml_indent.rs`, `slim_indent.rs`, constants in `lsp.rs`), 18 for ERB, 13 for Haml, 10 for Slim, as `docs/lint/*.md` count them. "Checked" means run against the official implementation (Slim 5.2.2 and Haml 7.5.1 from the clones, with the Erubi 1.13.1 source) or read in its source. "Fold" means the official source reports it as a Ruby syntax error of the compiled template (the "Ruby" rule of 1a/3a), not as its own error.
+Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_lint.rs`, `haml_indent.rs`, `slim_indent.rs`, constants in `lsp.rs`), 18 for ERB, 12 for Haml, 10 for Slim, as `docs/lint/*.md` count them. "Checked" means run against the official implementation (Slim 5.2.2 and Haml 7.5.1 from the clones, with the Erubi 1.13.1 source) or read in its source. "Fold" means the official source reports it as a Ruby syntax error of the compiled template (the "Ruby" rule of 1a/3a), not as its own error.
 
 #### ERB
 
@@ -251,8 +251,8 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 | Code                                 | File             | Reports                                                                                             | Official source                                                                                                                                                           | Proposal                                                                                                                 |
 | ------------------------------------ | ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `inconsistent-indent`                | `haml_indent.rs` | mixed tabs/spaces, indent off the file's unit, a step of several levels                             | `error.rb` `cant_use_tabs_and_spaces`, `inconsistent_indentation`, `deeper_indenting` (parser.rb)                                                                         | report with Haml's messages (ours differ, e.g. "Mixed tabs and spaces in indentation")                                   |
-| `bad-dedent`                         | `haml_indent.rs` | dedent to a level that never existed                                                                | none: Haml reports `inconsistent_indentation` (checked on `%p\n  a\n   b`); "Indentation does not match any outer level" has no Haml message                              | remove, covered by `inconsistent-indent`                                                                                 |
+| `inconsistent-indent`                | `haml_indent.rs` | mixed tabs/spaces, indent off the file's unit, a step of several levels                             | `error.rb` `cant_use_tabs_and_spaces`, `inconsistent_indentation`, `deeper_indenting` (parser.rb)                                                                         | done (2a): Haml's messages, from `haml_parser.rs`                                                                        |
+| `bad-dedent`                         | `haml_indent.rs` | dedent to a level that never existed                                                                | none: Haml reports `inconsistent_indentation` (checked on `%p\n  a\n   b`); "Indentation does not match any outer level" has no Haml message                              | removed (2a), covered by `inconsistent-indent`                                                                           |
 | `top-level-indent`                   | `haml_indent.rs` | first line indented                                                                                 | `error.rb` `indenting_at_start` (checked on ` %p`)                                                                                                                        | report "Indenting at the beginning of the document is illegal."                                                          |
 | `illegal-nesting`                    | `haml_indent.rs` | content nested under a tag with inline content, plain text, a self-closing tag, a comment with text | `error.rb` `illegal_nesting_line`, `_plain`, `_self_closing`, `_content` (checked on `%p text\n  a`, `/ c\n  x`)                                                          | keep with Haml's messages; remove the "Ruby code that doesn't open a block" variant (Haml compiles `= x\n  %p`, checked) |
 | `doctype-children`                   | `haml_indent.rs` | anything under `!!!`                                                                                | `error.rb` `illegal_nesting_header` (checked on `!!!\n  p`)                                                                                                               | report "Illegal nesting: nesting within a header command is illegal."                                                    |
@@ -292,18 +292,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                   |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| 0. Harness               | done                                                                                     |
-| 0b. Context              | done                                                                                     |
-| 1a. Slim errors          | done                                                                                     |
-| 1b. Slim format          | done                                                                                     |
-| 2a. Haml errors          | in progress: `Indenting at the beginning of the document is illegal.` (suite same 21/58) |
-| 2b. Haml format          | not started                                                                              |
-| 3a. ERB errors           | not started                                                                              |
-| 3b. ERB format           | not started                                                                              |
-| 4. Editor and CLI        | not started                                                                              |
-| 5. Remove external tools | not started                                                                              |
+| Stage                    | Status                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 0. Harness               | done                                                                                                                               |
+| 0b. Context              | done                                                                                                                               |
+| 1a. Slim errors          | done                                                                                                                               |
+| 1b. Slim format          | done                                                                                                                               |
+| 2a. Haml errors          | in progress: Haml::Parser port (haml_parser.rs) with the indentation errors; `bad-dedent` removed (suite same 23/58, Mastodon 0/0) |
+| 2b. Haml format          | not started                                                                                                                        |
+| 3a. ERB errors           | not started                                                                                                                        |
+| 3b. ERB format           | not started                                                                                                                        |
+| 4. Editor and CLI        | not started                                                                                                                        |
+| 5. Remove external tools | not started                                                                                                                        |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

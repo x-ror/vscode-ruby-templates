@@ -1,7 +1,8 @@
 //! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
+use crate::haml_parser;
 use crate::ruby::{analyze, ends_with_block, BlockEffect};
-use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
+use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range, warning};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
@@ -9,7 +10,6 @@ use tower_lsp::lsp_types::Diagnostic;
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
 pub mod code {
     pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
-    pub const BAD_DEDENT: &str = "bad-dedent";
     pub const TOP_LEVEL_INDENT: &str = "top-level-indent";
     pub const ILLEGAL_NESTING: &str = "illegal-nesting";
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
@@ -39,7 +39,7 @@ pub const HAML_FILTERS: &[&str] = &[
     "coffeescript",
 ];
 /// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
-const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
+pub(crate) const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
 /// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
 static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless))\b").unwrap()
@@ -95,6 +95,9 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let lines: Vec<&str> = text.lines().collect();
     let visits = visit_lines(&lines, text, &mut out);
     check_structure(&lines, &visits, text, &mut out);
+    if let Some(parse_error) = haml_parser::first_error(text) {
+        out.push(parse_error_diagnostic(text, &parse_error));
+    }
     out.sort_by_key(|d| (d.range.start.line, d.range.start.character));
     out
 }
@@ -172,36 +175,9 @@ fn indent_width(ws: &str) -> usize {
 fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<Diagnostic>) {
     let mut stack: Vec<Frame> = Vec::new();
     let mut openers: Vec<Opener> = Vec::new();
-    // Haml measures every line against the first indented one.
-    let doc_indentation =
-        visits.iter().map(|v| leading_ws(lines[v.line])).find(|ws| !ws.is_empty()).filter(|ws| !(ws.contains('\t') && ws.contains(' ')));
-
     for &Visit { line: line_no, indent, kind, .. } in visits {
         let raw = lines[line_no];
         let ws = leading_ws(raw);
-        let mut tab_space_mismatch = false;
-        if ws.contains('\t') && ws.contains(' ') {
-            let mixed = error(line_range(text, line_no, 0, ws.len()), "Mixed tabs and spaces in indentation");
-            out.push(coded(mixed, code::INCONSISTENT_INDENT));
-        } else if let Some(doc_ws) = doc_indentation.filter(|d| !ws.is_empty() && ws.contains('\t') != d.contains('\t')) {
-            tab_space_mismatch = true;
-            out.push(coded(
-                error(line_range(text, line_no, 0, ws.len()), inconsistent_indentation_message(ws, doc_ws)),
-                code::INCONSISTENT_INDENT,
-            ));
-        }
-
-        // Dedent to a level that never existed (checked before popping).
-        let known_levels: Vec<usize> = std::iter::once(0).chain(stack.iter().map(|f| f.indent)).collect();
-        let bad_dedent = indent < *known_levels.last().unwrap_or(&0) && !known_levels.contains(&indent);
-        if bad_dedent {
-            // Off the indent unit, Haml reports it as inconsistent indentation; the code follows the message.
-            let (message, code) = match doc_indentation.filter(|d| indent % indent_width(d) != 0) {
-                Some(doc_ws) => (inconsistent_indentation_message(ws, doc_ws), code::INCONSISTENT_INDENT),
-                None => ("Indentation does not match any outer level".to_string(), code::BAD_DEDENT),
-            };
-            out.push(coded(error(line_range(text, line_no, 0, ws.len()), message), code));
-        }
 
         // Pop to the parent level.
         while let Some(top) = stack.last() {
@@ -213,26 +189,6 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
         }
         let parent_indent = stack.last().map(|f| f.indent).unwrap_or(0);
         let is_child = stack.last().is_some() && indent > parent_indent;
-
-        if is_child && !bad_dedent && !tab_space_mismatch {
-            let step = indent - parent_indent;
-            let range = line_range(text, line_no, 0, ws.len());
-            if let Some(doc_ws) = doc_indentation {
-                let unit = indent_width(doc_ws);
-                if indent % unit != 0 {
-                    out.push(coded(error(range, inconsistent_indentation_message(ws, doc_ws)), code::INCONSISTENT_INDENT));
-                } else if step != unit {
-                    // A multiple of the unit, so whole levels; Haml's `deeper_indenting` message.
-                    let message = format!("The line was indented {} levels deeper than the previous line.", step / unit);
-                    out.push(coded(error(range, message), code::INCONSISTENT_INDENT));
-                }
-            }
-        } else if stack.is_empty() && indent > 0 {
-            out.push(coded(
-                error(line_range(text, line_no, 0, ws.len()), "Indenting at the beginning of the document is illegal."),
-                code::TOP_LEVEL_INDENT,
-            ));
-        }
 
         // Illegal nesting checks against the parent, reported once on the parent line.
         if let Some(parent) = stack.last_mut().filter(|_| is_child) {
@@ -269,26 +225,21 @@ fn check_structure(lines: &[&str], visits: &[Visit], text: &str, out: &mut Vec<D
     }
 }
 
+/// Haml's first indentation error, over the indentation of its line.
+fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagnostic {
+    let raw = haml_parser::physical_lines(text).get(parse_error.line).copied().unwrap_or("");
+    let body = raw.strip_prefix(haml_parser::BOM).filter(|_| parse_error.line == 0).unwrap_or(raw);
+    let indent = leading_ws(body).len();
+    let end = raw.len() - body.len() + if indent > 0 { indent } else { body.len() };
+    let code =
+        if parse_error.message.starts_with("Indenting at the beginning") { code::TOP_LEVEL_INDENT } else { code::INCONSISTENT_INDENT };
+    coded(error(span_range(parse_error.line, raw, 0, end), parse_error.message.clone()), code)
+}
+
 /// Element name in Haml's messages: the `%name`, or `div` for `.class` / `#id`.
 fn haml_tag_name(content: &str) -> &str {
     let Some(rest) = content.strip_prefix('%') else { return "div" };
     &rest[..rest.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '-' | '_' | ':'))).unwrap_or(rest.len())]
-}
-
-/// Haml's error for a line indented unlike the first indented line.
-fn inconsistent_indentation_message(ws: &str, doc_ws: &str) -> String {
-    format!(
-        "Inconsistent indentation: {} used for indentation, but the rest of the document was indented using {}.",
-        human_indentation(ws),
-        human_indentation(doc_ws)
-    )
-}
-
-/// Haml's wording for an indentation string: "2 spaces", "1 tab".
-fn human_indentation(ws: &str) -> String {
-    let noun = if ws.contains('\t') { "tab" } else { "space" };
-    let plural = if ws.len() == 1 { "" } else { "s" };
-    format!("{} {noun}{plural}", ws.len())
 }
 
 /// Haml's `if`/`case`/`unless` stack: pops the blocks this line closes, pushes the one it opens,
@@ -320,7 +271,7 @@ fn track_block_keyword(openers: &mut Vec<Opener>, content: &str, indent: usize, 
     }
 }
 
-fn block_keyword(code: &str) -> Option<&str> {
+pub(crate) fn block_keyword(code: &str) -> Option<&str> {
     let caps = BLOCK_KEYWORD.captures(code)?;
     caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str())
 }
@@ -346,7 +297,7 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
         return (if text_after.trim().is_empty() { LineKind::Other } else { LineKind::TextComment }, 1);
     }
     if (c.starts_with('.') || (c.starts_with('#') && !c.starts_with("#{")))
-        && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_'))
+        && !c[1..].starts_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '-' | '_' | ':' | '@'))
     {
         let message = "Illegal element: classes and ids must have values.";
         out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::ILLEGAL_ELEMENT));
@@ -397,7 +348,7 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
 }
 
 /// Haml's `is_ruby_multiline?`: ends in `,`, except the character literals `?,` and `?\,`.
-fn is_ruby_multiline(text: &str) -> bool {
+pub(crate) fn is_ruby_multiline(text: &str) -> bool {
     let b = text.as_bytes();
     let n = b.len();
     if n < 2 || b[n - 1] != b',' {
@@ -413,7 +364,7 @@ fn opens_block(code: &str) -> bool {
     ends_with_block(code) || matches!(analyze(code).0, BlockEffect::Open(_) | BlockEffect::Continue)
 }
 
-fn strip_output_prefix(s: &str) -> Option<&str> {
+pub(crate) fn strip_output_prefix(s: &str) -> Option<&str> {
     // `==`, `&==`, `!==` are interpolated plain text, not Ruby.
     if ["==", "&==", "!=="].iter().any(|p| s.starts_with(p)) {
         return None;
@@ -477,11 +428,11 @@ pub fn tag_head_len(s: &str) -> Option<usize> {
 }
 
 fn is_tag_name_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':')
+    ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':' | '@')
 }
 
 /// Haml's `is_multiline?`: ends in ` |`, unless it's a block argument list (`do | x |`).
-fn is_haml_multiline(line: &str) -> bool {
+pub(crate) fn is_haml_multiline(line: &str) -> bool {
     let t = line.trim_end();
     t.ends_with(" |") && !BLOCK_WITH_SPACES.is_match(t)
 }
@@ -635,7 +586,7 @@ mod tests {
             ("\n\n %p foo", (2, 0, 1, TOP_INDENT)),
             ("  %a", (0, 0, 2, TOP_INDENT)),
             ("\n\n  %a", (2, 0, 2, TOP_INDENT)),
-            ("%p\n \t%b", (1, 0, 2, "Mixed tabs and spaces in indentation")),
+            ("%p\n \t%b", (1, 0, 2, "Indentation can't use both tabs and spaces.")),
             (
                 "%div\n\t%p x\n%div\n  %p y",
                 (
@@ -685,6 +636,15 @@ mod tests {
         for (src, (line, start, end, message)) in cases {
             assert_eq!(haml(src), vec![at(*line, *start, *end, message)], "{src:?}");
         }
+    }
+
+    #[test]
+    fn ranges_cover_the_indentation_on_the_parsers_lines() {
+        let top = "Indenting at the beginning of the document is illegal.";
+        assert_eq!(haml("\u{feff}  %p"), vec![at(0, 0, 3, top)]);
+        let inconsistent =
+            "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.";
+        assert_eq!(haml("%p\r  a\r   b"), vec![at(2, 0, 3, inconsistent)]);
     }
 
     #[test]
@@ -763,6 +723,8 @@ mod tests {
             "%p&~ \"x\"",
             "#{a} b",
             ".9a x",
+            ".@container",
+            "%div\n  .@container.flex= render \"card\",\n    item: x",
             "%div\n  %p x\n\u{3000}y",
             "%div\n  :javascript\n    if (a) {\n    \tb();\n    }\n  :plain\n    \t x",
             "%a{href: \"x\",\n   title: \"y\"} z\n%div\n\t%p x",
