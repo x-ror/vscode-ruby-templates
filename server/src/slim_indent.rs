@@ -12,6 +12,8 @@ pub mod code {
     pub const DOCTYPE_CHILDREN: &str = "doctype-children";
     pub const VOID_CHILDREN: &str = "void-children";
     pub const UNKNOWN_ENGINE: &str = "unknown-engine";
+    /// Slim parser errors that belong to no other code.
+    pub const SYNTAX_ERROR: &str = "syntax-error";
     pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
     pub const UNCLOSED_RUBY: &str = "unclosed-ruby";
     pub const EXPLICIT_END: &str = "explicit-end";
@@ -77,8 +79,8 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
     let parsed = slim_parser::parse(text, extra_engines);
-    if let Some(syntax) = &parsed.attribute_error {
-        out.push(attribute_diagnostic(text, &lines, syntax));
+    if let Some(syntax) = &parsed.syntax_error {
+        out.push(syntax_diagnostic(text, &lines, syntax));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
@@ -160,7 +162,7 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         }
 
         // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(&lines, i, text, extra_engines, &mut out);
+        let (kind, consumed) = classify(&lines, i, text, &mut out);
         // A code comment between branches is transparent: `- if` / `/ note` / `- else`.
         let mut chain = prev_sibling.as_ref().filter(|_| code_comment).and_then(|f| f.chain);
         if let LineKind::Control { keyword: Some(keyword) } = kind {
@@ -187,10 +189,22 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     out
 }
 
-fn attribute_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
+fn is_lone_word_with_colon(content: &str) -> bool {
+    content.strip_suffix(':').is_some_and(|name| !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+}
+
+/// Slim's first syntax error, filed under the code of the construct it is about.
+fn syntax_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
     let raw = lines[syntax.line];
     let start = raw.char_indices().nth(syntax.column).map_or(raw.len(), |(at, _)| at);
-    coded(error(line_range(text, syntax.line, start, raw.len()), syntax.message.clone()), code::UNCLOSED_ATTRIBUTE)
+    let code = match syntax.message.as_str() {
+        "Unexpected end of file" => code::UNCLOSED_ATTRIBUTE,
+        message if message.starts_with("Expected closing delimiter") => code::UNCLOSED_ATTRIBUTE,
+        // A lone `name:` is an unregistered engine; `ul: ` or `html: body:` is a block expansion missing its tag.
+        "Expected tag" if is_lone_word_with_colon(raw.trim_start()) => code::UNKNOWN_ENGINE,
+        _ => code::SYNTAX_ERROR,
+    };
+    coded(error(line_range(text, syntax.line, start, raw.len()), syntax.message.clone()), code)
 }
 
 fn indent_width(ws: &str) -> usize {
@@ -248,7 +262,7 @@ fn detect_unit(lines: &[&str], roles: &[slim_parser::LineInfo]) -> Option<usize>
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
     let content_range = line_range(text, i, ws_len, raw.len());
@@ -268,9 +282,6 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
     // Embedded engines
     if let Some(name) = c.strip_suffix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-            if !SLIM_ENGINES.contains(&name) && !extra_engines.iter().any(|e| e == name) {
-                out.push(coded(warning(content_range, format!("Unknown embedded engine `{}:`", name)), code::UNKNOWN_ENGINE));
-            }
             return (LineKind::Verbatim, 1);
         }
     }
@@ -701,7 +712,7 @@ mod tests {
 
     #[test]
     fn bom_counts_in_columns_of_the_first_line() {
-        let found = diagnostics("\u{feff}foo:\n  x\n", &[]);
+        let found = diagnostics("\u{feff}?x\n", &[]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!((found[0].range.start.line, found[0].range.start.character), (0, 1));
     }
@@ -797,6 +808,41 @@ mod tests {
     }
 
     #[test]
+    fn parser_errors_use_slim_messages() {
+        // Slim's test_parser_errors.rb and probes: (template, message, 0-based line, character, code).
+        for (text, message, line, column, code) in [
+            ("\n.#test\n", "Illegal shortcut", 1, 0, code::SYNTAX_ERROR),
+            ("\ndiv.#test\n", "Illegal shortcut", 1, 3, code::SYNTAX_ERROR),
+            ("\np\n  img{src= }\n", "Invalid empty attribute", 2, 11, code::SYNTAX_ERROR),
+            ("\np\n  img{src=}\n", "Invalid empty attribute", 2, 10, code::SYNTAX_ERROR),
+            ("\np\n  img src=\n", "Invalid empty attribute", 2, 10, code::SYNTAX_ERROR),
+            ("\nhtml: body: /comment\n", "Expected tag", 1, 12, code::SYNTAX_ERROR),
+            ("\nhtml: body:/comment\n", "Expected tag", 1, 11, code::SYNTAX_ERROR),
+            ("\nhtml: body:\n", "Expected tag", 1, 11, code::SYNTAX_ERROR),
+            ("ul: \n", "Expected tag", 0, 4, code::SYNTAX_ERROR),
+            ("p:\n", "Expected tag", 0, 2, code::UNKNOWN_ENGINE),
+            ("mjml:\n  x\n", "Expected tag", 0, 5, code::UNKNOWN_ENGINE),
+            ("\nimg / text\n", "Unexpected text after closed tag", 1, 6, code::SYNTAX_ERROR),
+            ("\np\n  div Valid\n  .valid\n  #valid\n  ?invalid\n", "Unknown line indicator", 5, 2, code::SYNTAX_ERROR),
+            ("a(=x)\n", "Expected attribute", 0, 2, code::SYNTAX_ERROR),
+            ("a(\"x\")\n", "Expected attribute", 0, 2, code::SYNTAX_ERROR),
+            // Slim stops at its first error.
+            ("p\n  ?bad\na href=(foo\n", "Unknown line indicator", 1, 2, code::SYNTAX_ERROR),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, message, "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code.to_string())), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn registered_engines_are_not_expected_tag_errors() {
+        assert!(slim_with("mjml:\n  x\n", &["mjml".into()]).is_empty());
+    }
+
+    #[test]
     fn brackets_inside_ruby_strings_in_attributes_are_not_unclosed() {
         // Slim counts only the delimiter that opened the value, so the `[` in the string is plain text.
         assert!(slim("\ndiv crazy=action_path('[') id=\"crazy_delimiters\"\n").is_empty());
@@ -809,7 +855,7 @@ mod tests {
 
     #[test]
     fn unknown_engine_and_extra_engines() {
-        assert_eq!(slim("mjml:\n  x\n"), one(code::UNKNOWN_ENGINE, 0, 0, WARNING));
+        assert_eq!(slim("mjml:\n  x\n"), one(code::UNKNOWN_ENGINE, 0, 5, ERROR));
         assert!(slim_with("mjml:\n  x\n", &["mjml".into()]).is_empty());
         assert!(slim("javascript:\n  x\n").is_empty());
     }
@@ -925,7 +971,6 @@ mod tests {
                 (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
                 (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 23, ERROR),
                 (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
-                (code::UNKNOWN_ENGINE.to_string(), 8, 2, WARNING),
                 (code::INCONSISTENT_INDENT.to_string(), 10, 0, WARNING),
             ]
         );

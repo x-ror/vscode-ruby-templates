@@ -70,8 +70,8 @@ pub struct Parsed {
     pub valid: bool,
     /// Line where Slim would have stopped for a reason other than indentation.
     pub stop_line: Option<usize>,
-    /// The first error in an attribute list that Slim words: the closing delimiter or the end of the file.
-    pub attribute_error: Option<SyntaxError>,
+    /// The first syntax error Slim words; Slim stops there.
+    pub syntax_error: Option<SyntaxError>,
 }
 
 #[derive(Clone, Copy)]
@@ -136,7 +136,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             text: Vec::new(),
             valid: true,
             stop_line: None,
-            attribute_error: None,
+            syntax_error: None,
         },
         lines,
         starts,
@@ -290,9 +290,9 @@ impl<'a> Parser<'a> {
         self.out.stop_line.get_or_insert(self.i);
     }
 
-    fn fail_attribute(&mut self, message: String, column: usize) {
+    fn fail_at(&mut self, message: String, column: usize) {
         if self.out.stop_line.is_none() {
-            self.out.attribute_error = Some(SyntaxError { line: self.i, column, message });
+            self.out.syntax_error = Some(SyntaxError { line: self.i, column, message });
         }
         self.fail();
     }
@@ -332,17 +332,8 @@ impl<'a> Parser<'a> {
     /// `expect_next_line`: the following line, stripped; a syntax error at the end of the file.
     fn expect_next_line(&mut self) -> bool {
         if !self.next_line() {
-            self.fail();
-            return false;
-        }
-        self.strip_line();
-        true
-    }
-
-    /// `expect_next_line` inside an attribute list: Slim's `@line` is nil by then, so the column is 0.
-    fn expect_attribute_line(&mut self) -> bool {
-        if !self.next_line() {
-            self.fail_attribute("Unexpected end of file".to_string(), 0);
+            // Slim's `@line` is nil by then, so the column is 0.
+            self.fail_at("Unexpected end of file".to_string(), 0);
             return false;
         }
         self.strip_line();
@@ -353,6 +344,11 @@ impl<'a> Parser<'a> {
         let line = self.lines[self.i];
         self.end = line.trim_end_matches(is_space).len();
         self.pos = (line.len() - trim_start(line).len()).min(self.end);
+    }
+
+    /// Characters of the current line before `tail`, a suffix of it.
+    fn chars_before(&self, tail: &str) -> usize {
+        self.lines[self.i].chars().count() - tail.chars().count()
     }
 
     /// Slim's `@orig_line.size - @line.size`.
@@ -429,7 +425,7 @@ impl<'a> Parser<'a> {
             }
             self.parse_tag();
         } else {
-            self.fail();
+            self.fail_at("Unknown line indicator".to_string(), self.column());
         }
     }
 
@@ -486,7 +482,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             if prefix > 1 {
-                self.fail();
+                self.fail_at("Illegal shortcut".to_string(), self.column());
             }
             let mut n = prefix;
             loop {
@@ -523,7 +519,7 @@ impl<'a> Parser<'a> {
             }
             self.out.tag_slots.push(self.at());
             let Some((len, named)) = match_tag(r) else {
-                self.fail();
+                self.fail_at("Expected tag".to_string(), self.column());
                 return;
             };
             if named {
@@ -534,8 +530,9 @@ impl<'a> Parser<'a> {
             self.skip(ws);
             self.output(true);
         } else if let Some(after) = t.strip_prefix('/') {
-            if !trim_start(after).is_empty() {
-                self.fail();
+            let text = trim_start(after);
+            if !text.is_empty() {
+                self.fail_at("Unexpected text after closed tag".to_string(), self.chars_before(text));
             }
             self.pos = self.end;
         } else if t.is_empty() {
@@ -572,7 +569,7 @@ impl<'a> Parser<'a> {
                         self.skip(1);
                         self.quoted_attribute(quote);
                     } else if self.ruby_code(close) == 0 {
-                        self.fail();
+                        self.fail_at("Invalid empty attribute".to_string(), self.column());
                     }
                     continue;
                 }
@@ -584,11 +581,11 @@ impl<'a> Parser<'a> {
                 self.skip(ws + 1);
                 break;
             } else if !t.is_empty() {
-                self.fail();
+                self.fail_at("Expected attribute".to_string(), self.chars_before(t));
                 break;
             } else if !self.next_line() {
                 let column = self.lines[self.i].chars().count();
-                self.fail_attribute(format!("Expected closing delimiter {close}"), column);
+                self.fail_at(format!("Expected closing delimiter {close}"), column);
                 break;
             }
         }
@@ -610,7 +607,7 @@ impl<'a> Parser<'a> {
             if r == "," || r == "\\" {
                 self.ruby(start, self.end);
                 taken += 1;
-                if !self.expect_attribute_line() {
+                if !self.expect_next_line() {
                     return taken;
                 }
                 start = self.pos;
@@ -631,7 +628,7 @@ impl<'a> Parser<'a> {
         }
         self.ruby(start, self.pos);
         if depth != 0 {
-            self.fail_attribute(format!("Expected closing delimiter {close}"), self.column());
+            self.fail_at(format!("Expected closing delimiter {close}"), self.column());
         }
         taken
     }
@@ -648,7 +645,7 @@ impl<'a> Parser<'a> {
             if r.is_empty() || r == "\\" {
                 self.interpolate(segment, self.pos);
                 self.out.lines[self.i].keeps_trailing = true;
-                if !self.expect_attribute_line() {
+                if !self.expect_next_line() {
                     return;
                 }
                 segment = self.pos;

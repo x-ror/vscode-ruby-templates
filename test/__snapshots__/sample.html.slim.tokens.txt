@@ -375,9 +375,6 @@
 "    include partials/header"
    "include"                   meta.include > keyword.control.import.include
    "partials/header"           meta.include > string.unquoted.include
-"    > Smart text line"
-   ">"                         meta.text.block > punctuation.definition.text
-   "Smart text line"           meta.text.block > string.unquoted.text
 "    scss class=\"theme\":"
    "scss"                      meta.embedded.block > entity.name.function.embedded
    "class"                     meta.embedded.block > entity.other.attribute-name

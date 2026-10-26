@@ -777,6 +777,7 @@
               "doctype-children",
               "void-children",
               "unknown-engine",
+              "syntax-error",
               "unclosed-attribute",
               "unclosed-ruby",
               "explicit-end",
