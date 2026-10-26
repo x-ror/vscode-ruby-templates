@@ -54,7 +54,7 @@ pub struct RenderRef {
 }
 
 /// Every `render "..."` reference on a line, in order.
-/// ActionView 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
+/// ActionView 7.0 to 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
     let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
@@ -640,6 +640,15 @@ mod tests {
         assert_eq!(path("users/show.html+phone.slim", r#"= render "shared/card""#), Some(views.join("shared/_card.html.slim")));
         assert_eq!(path("users/index.json.jbuilder", r#"json.partial! "users/user""#), Some(views.join("users/_user.json.jbuilder")));
         assert_eq!(path("users/show.de.erb", r#"render template: "a/b""#), Some(views.join("a/b.erb")));
+        assert_eq!(path("users/show.html.erb", r#"render template: "a/b", layout: "layouts/lt""#), Some(views.join("a/b.html.erb")));
+        assert_eq!(
+            new_template_path(
+                &Project::unknown(),
+                &views.join("users/show.html.erb"),
+                &render_refs(r#"render template: "a/b", layout: "layouts/lt""#)[1]
+            ),
+            Some(views.join("layouts/lt.html.erb"))
+        );
         assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "../../config/x""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "shared/""#), None);
@@ -686,7 +695,7 @@ mod tests {
         assert_eq!(refs(r#"<%= render partial: "row", layout: "box", locals: { a: 1 } %>"#), [p("row"), p("box")]);
         assert_eq!(
             refs(r#"<%= render template: "a/b", layout: "layouts/x" %>"#),
-            [(RenderKind::Template, "a/b".to_string()), (RenderKind::Template, "layouts/x".to_string()),]
+            [(RenderKind::Template, "a/b".to_string()), (RenderKind::Template, "layouts/x".to_string())]
         );
         assert_eq!(refs(r#"<%= render "row", layout: "box" %>"#), [p("row")]);
         assert_eq!(refs(r#"<%= render partial: "row", locals: { a: 1, layout: "gone" } %>"#), [p("row")]);

@@ -382,7 +382,7 @@ const check = (label, actual, expected) => {
   check("diagnostics", diagnostics(uri), [
     "4: Unclosed ERB tag: missing `%>` before the next `<%`",
     "13: Unclosed ERB tag: missing `%>` before the next `<%`",
-    "7: Partial `shared/missing` not found",
+    "7: Missing partial shared/_missing",
   ]);
 
   const strictUri = fileUri(path.join(views, "strict", "show.html.erb"));
@@ -491,7 +491,7 @@ const check = (label, actual, expected) => {
   check("haml diagnostics", diagnostics(hamlUri), [
     "10: Unknown Haml filter `:jav`",
     "13: Illegal nesting: content can't be both given on the same line as %p and nested within it.",
-    "12: Partial `shared/missing` not found",
+    "12: Missing partial shared/_missing",
   ]);
 
   await send(

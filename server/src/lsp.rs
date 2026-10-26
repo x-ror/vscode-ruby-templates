@@ -173,10 +173,18 @@ fn unresolved_renders(
         .into_iter()
         .filter(|(_, _, r)| partials::resolve(project, path, r).is_empty() && !is_gem_view(project, &r.name))
         .map(|(i, line, r)| {
-            let message = format!("{} `{}` not found", r.kind.name(), r.name);
+            let message = missing_message(&r);
             util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
         })
         .collect()
+}
+
+/// Rails' MissingTemplate message up to ` with {…}.`; the rest lists the request's formats and paths, which vary.
+fn missing_message(r: &partials::RenderRef) -> String {
+    let (dir, name) = r.name.rsplit_once('/').unwrap_or(("", &r.name));
+    let (kind, prefix) = if r.kind == partials::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
+    let dir = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+    format!("Missing {kind} {dir}{prefix}{name}")
 }
 
 /// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
@@ -1632,9 +1640,34 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("Partial `users/missing` not found".to_string(), at(0, 42, 55)),
-                ("Partial `users/nope` not found".to_string(), at(1, 13, 23)),
-                ("Partial `users/frame` not found".to_string(), at(4, 20, 31)),
+                ("Missing partial users/_missing".to_string(), at(0, 42, 55)),
+                ("Missing partial users/_nope".to_string(), at(1, 13, 23)),
+                ("Missing partial users/_frame".to_string(), at(4, 20, 31)),
+            ]
+        );
+        std::fs::create_dir_all(users.join("sub")).unwrap();
+        std::fs::create_dir_all(root.join("app/views/layouts")).unwrap();
+        std::fs::write(root.join("app/views/layouts/lt.html.erb"), "").unwrap();
+        let kinds = concat!(
+            "<%= render template: \"users/t\" %>\n",
+            "<%= render :template => \"users/t2\" %>\n",
+            "<%= render template: \"users/t\", layout: \"layouts/lt\" %>\n",
+            "<%= render template: \"users/t\", layout: \"layouts/gone\" %>\n",
+            "<%= render partial: \"users/sub/p\", layout: \"users/pl\" %>\n",
+            "<%= render :partial => \"users/p2\" %>\n",
+        );
+        let messages: Vec<String> = unresolved(TemplateLang::Erb, &file, kinds).into_iter().map(|d| d.message).collect();
+        assert_eq!(
+            messages,
+            [
+                "Missing template users/t",
+                "Missing template users/t2",
+                "Missing template users/t",
+                "Missing template users/t",
+                "Missing template layouts/gone",
+                "Missing partial users/sub/_p",
+                "Missing partial users/_pl",
+                "Missing partial users/_p2",
             ]
         );
         let card = partials::render_refs(r#"<%= render layout: "card" do %>"#);
@@ -1672,7 +1705,7 @@ mod tests {
         }
         let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"admin/x\" %>";
         let lines: Vec<String> = unresolved(TemplateLang::Erb, &file, gem_text).into_iter().map(|d| d.message).collect();
-        assert_eq!(lines, ["Partial `admin/x` not found"]);
+        assert_eq!(lines, ["Missing partial admin/_x"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
         std::fs::remove_dir_all(&root).unwrap();
@@ -1795,7 +1828,7 @@ mod tests {
         let lines = |d: Vec<Diagnostic>| d.iter().map(|d| (d.range.start.line, d.message.clone())).collect::<Vec<_>>();
         assert_eq!(
             lines(unresolved(TemplateLang::Ruby, &file, text)),
-            [(2, "Partial `posts/missing` not found".to_string()), (5, "Partial `posts/missing3` not found".to_string())]
+            [(2, "Missing partial posts/_missing".to_string()), (5, "Missing partial posts/_missing3".to_string())]
         );
         let mismatches = strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Ruby, text, &[]));
         assert_eq!(lines(mismatches), [(4, "unknown local: :extra".to_string())]);

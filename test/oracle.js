@@ -574,6 +574,8 @@ const contextFixtures = [
 const contextPartials = {
   "_card.html.erb": "<%# locals: (a:, b:) -%>\n<p><%= a %><%= b %></p>\n",
   "_none.html.erb": "<%# locals: () -%>\n<p>none</p>\n",
+  "t.html.erb": "T",
+  "../layouts/lt.html.erb": "LT[<%= yield %>]",
 };
 
 // Each render is its own template, so every error is attributable (Rails stops at the first per render).
@@ -590,11 +592,15 @@ const contextRenders = [
   'render partial: "users/none", locals: { x: 1 }',
   'render "users/none", x: 1',
   'render "users/none"',
+  'render template: "users/t", layout: "layouts/lt"',
+  'render template: "users/t", layout: "layouts/gone"',
+  'render partial: "users/card", layout: "users/missing_layout", locals: { a: 1, b: 2 }',
+  'render template: "users/gone"',
 ];
 
 // The diagnostics of ours that answer a render: the unresolved partial and the strict locals ones.
 const isRenderDiagnostic = (message) =>
-  /not found$|^(missing|unknown) (local|keywords?)\b|^no locals accepted/.test(
+  /^Missing (partial|template) |^(missing|unknown) (local|keywords?)\b|^no locals accepted/.test(
     message,
   );
 
@@ -639,6 +645,7 @@ const contextReport = async () => {
         fs.writeFileSync(path.join(root, "Gemfile.lock"), fixture.lock);
       }
       for (const [name, text] of Object.entries(contextPartials)) {
+        fs.mkdirSync(path.dirname(path.join(views, name)), { recursive: true });
         fs.writeFileSync(path.join(views, name), text);
       }
       const renders = contextRenders.map((call, i) => {
