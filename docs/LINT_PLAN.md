@@ -300,7 +300,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | 0b. Context              | done        |
 | 1a. Slim errors          | done        |
 | 1b. Slim format          | done        |
-| 2a. Haml errors          | in review   |
+| 2a. Haml errors          | done        |
 | 2b. Haml format          | not started |
 | 3a. ERB errors           | not started |
 | 3b. ERB format           | not started |
