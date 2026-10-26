@@ -119,6 +119,7 @@ pub fn format(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, ex
     if uri.path().to_ascii_lowercase().ends_with(".tt") {
         return skip(SkipKind::NotHandled, "generator template: the generator's ERB is mixed in");
     }
+    let settings = &effective_settings(lang, settings);
     let formatted = format_once(uri, lang, text, settings, extra_engines)?;
     if formatted.text == text {
         return Ok(formatted);
@@ -177,6 +178,23 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
     Ok(Formatted { text, notes: indented.notes })
 }
 
+/// The settings `format` works with: Slim takes only the indentation width: it always writes spaces, keeps each line's ending, and trims, ends the file
+/// and keeps blank lines by its own rules (a range, which can't add a line, leaves the final newline alone).
+pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
+    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim) {
+        return settings.clone();
+    }
+    Settings {
+        indent_style: IndentStyle::Space,
+        end_of_line: None,
+        final_newline: settings.final_newline.map(|_| true),
+        trim_trailing_whitespace: true,
+        collapse_blank_lines: false,
+        trim_trailing_blank_lines: false,
+        ..settings.clone()
+    }
+}
+
 fn indent_unit(settings: &Settings) -> String {
     match settings.indent_style {
         IndentStyle::Space => " ".repeat(settings.indent_size),
@@ -189,9 +207,6 @@ fn is_partial(uri: &Url) -> bool {
 }
 
 fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Result<Indented, Skipped> {
-    if settings.indent_style == IndentStyle::Tab {
-        return skip(SkipKind::NotHandled, "Slim is only indented with spaces");
-    }
     let rejected = slim_indent::diagnostics(text, extra_engines).iter().any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
     if rejected {
         return skip(SkipKind::Doubt, "Slim would reject the file");
@@ -353,9 +368,28 @@ mod tests {
         assert_eq!(fmt("a.html.slim", "div\n    p  \n", &Settings::default()).as_deref(), Ok("div\n  p\n"));
         let four = Settings { indent_size: 4, ..Settings::default() };
         assert_eq!(fmt("a.html.slim", "div\n  p\n", &four).as_deref(), Ok("div\n    p\n"));
-        let tabs = Settings { indent_style: IndentStyle::Tab, ..Settings::default() };
-        assert!(fmt("a.html.slim", "div\n  p\n", &tabs).is_err());
         assert!(fmt("a.html.slim", "p\n    a\n  b", &Settings::default()).is_err());
+    }
+
+    #[test]
+    fn slim_takes_only_the_indentation_width_from_the_settings() {
+        // A tab-indenting editor still gets spaces, and the width is the only setting that counts.
+        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..Settings::default() };
+        assert_eq!(fmt("a.html.slim", "div\n  p\n", &tabs).as_deref(), Ok("div\n   p\n"));
+        let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p\nq\n", &crlf).as_deref(), Ok("p\nq\n"));
+        let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p\r\nq\r\n", &lf).as_deref(), Ok("p\r\nq\r\n"));
+        assert_eq!(fmt("a.slim", "p\r\n  q\nr", &lf).as_deref(), Ok("p\r\n  q\nr\n"), "each line keeps its ending");
+        let drop = Settings { final_newline: Some(false), ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p\n", &drop).as_deref(), Ok("p\n"));
+        let keep_trailing = Settings { trim_trailing_whitespace: false, ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p  \nq\n", &keep_trailing).as_deref(), Ok("p\nq\n"));
+        let more_blank = Settings { collapse_blank_lines: true, trim_trailing_blank_lines: true, ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &more_blank).as_deref(), Ok("p\n\n\nq\n   \n"));
+        // A range leaves the final newline as it is.
+        let range = Settings { final_newline: None, ..Settings::default() };
+        assert_eq!(fmt("a.slim", "p", &range).as_deref(), Ok("p"));
     }
 
     #[test]
@@ -366,12 +400,12 @@ mod tests {
         let keep = Settings { final_newline: None, ..Settings::default() };
         assert_eq!(fmt("a.slim", "p", &keep).as_deref(), Ok("p"));
         let drop = Settings { final_newline: Some(false), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\n", &drop).as_deref(), Ok("p"));
+        assert_eq!(fmt("a.html.haml", "p\n", &drop).as_deref(), Ok("p"));
         assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>"));
         let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\r\nq\r\n", &lf).as_deref(), Ok("p\nq\n"));
+        assert_eq!(fmt("a.html.haml", "p\r\nq\r\n", &lf).as_deref(), Ok("p\nq\n"));
         let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\nq", &crlf).as_deref(), Ok("p\r\nq\r\n"));
+        assert_eq!(fmt("a.html.haml", "p\nq", &crlf).as_deref(), Ok("p\r\nq\r\n"));
     }
 
     #[test]

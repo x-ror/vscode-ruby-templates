@@ -218,6 +218,7 @@ Decided (2026-10-25):
 3. **Remove, real bugs without an official source:** `silent-output-helper` (ERB, Slim) and `unsafe-output`; no exception to principle 1. The first case of `unclosed-tag` stays: it has a source in WHATWG (3a).
 4. **HTML of Slim and Haml output** is in scope, citing WHATWG (1a, 2a); `void-children` stays with that source.
 5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
+6. **Editor and `.editorconfig` give the Slim formatter only the indentation width (default 2); it always writes spaces and keeps the file's line endings** (decided 2026-10-26).
 
 ### Built-in diagnostic codes
 
@@ -285,7 +286,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 | Item                                      | Where                        | Official sources say                                           | Proposal                                                             |
 | ----------------------------------------- | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `.editorconfig` and the editor's tab size | `config.rs`, language server | none of the languages reads them                               | use them only for the indentation width (default 2)                  |
+| `.editorconfig` and the editor's tab size | `config.rs`, language server | none of the languages reads them                               | decided: width only (6)                                              |
 | `ruby-templates.json`                     | not built                    | none                                                           | only our own settings (indent width, on/off per language), if wanted |
 | The `herb` crate as ERB parser            | not built                    | Herb is third-party; Erubi's regexp is the official tag syntax | don't add it                                                         |
 
