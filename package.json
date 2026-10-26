@@ -778,9 +778,8 @@
               "unknown-engine",
               "syntax-error",
               "unclosed-attribute",
-              "unclosed-ruby",
+              "ruby-syntax",
               "explicit-end",
-              "unmatched-branch",
               "unresolved-render",
               "strict-locals"
             ]

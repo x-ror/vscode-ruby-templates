@@ -5,6 +5,9 @@ pub(crate) struct RubyError {
     /// Prism's text, verbatim.
     pub message: String,
     pub range: Range,
+    /// Byte offsets into the parsed source.
+    pub start: usize,
+    pub end: usize,
 }
 
 pub(crate) fn syntax_errors(source: &str) -> Vec<RubyError> {
@@ -15,7 +18,12 @@ pub(crate) fn syntax_errors(source: &str) -> Vec<RubyError> {
             let location = error.location();
             let range =
                 Range::new(offset_to_position(source, location.start() as usize), offset_to_position(source, location.end() as usize));
-            RubyError { message: String::from_utf8_lossy(error.message()).into_owned(), range }
+            RubyError {
+                message: String::from_utf8_lossy(error.message()).into_owned(),
+                range,
+                start: location.start() as usize,
+                end: location.end() as usize,
+            }
         })
         .collect()
 }

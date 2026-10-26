@@ -9,6 +9,8 @@ use std::ops::Range;
 pub const BOM: &str = "\u{feff}";
 /// Slim::Parser default `tabsize`.
 const TABSIZE: usize = 4;
+const DEFAULT_TAG: &str = "div";
+pub const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Engines that run `#{}` through Slim's interpolation: TagEngine without a Tilt engine, and InterpolateTiltEngine.
 const INTERPOLATING_ENGINES: &[&str] = &["javascript", "css", "markdown", "textile", "rdoc", "asciidoc"];
 
@@ -47,6 +49,58 @@ pub enum Marker {
     Engine,
 }
 
+/// Where a piece of Ruby came from in the template.
+#[derive(Debug, Clone, Copy)]
+pub struct Origin {
+    pub line: usize,
+    /// Byte offset of the code in the text, when it is one verbatim run on that line.
+    pub offset: Option<usize>,
+}
+
+/// What `Slim::Parser` hands to the later filters that matters for the Ruby the engine generates, in source order.
+#[derive(Debug)]
+pub enum Piece {
+    /// A structural line starts, `depth` levels deep.
+    Line {
+        depth: usize,
+        line: usize,
+    },
+    /// Slim's `[:newline]`.
+    Newline,
+    /// Output with no Ruby in it: markup and text, as the template writes it (`Slim::Interpolation`'s unescaped `\#{`).
+    Static(String),
+    /// Closing markup that follows the content of the line, nested lines included.
+    Close(String),
+    /// A `-` line.
+    Control {
+        code: String,
+        at: Origin,
+    },
+    /// `=`, `==` and `#{}`; `block` when the deeper lines that follow are its content.
+    Output {
+        escape: bool,
+        code: String,
+        block: bool,
+        at: Origin,
+    },
+    /// An attribute whose value is Ruby; `splat` when its tag also has a `*` attribute.
+    Attribute {
+        name: String,
+        code: String,
+        splat: bool,
+        at: Origin,
+    },
+    Splat {
+        code: String,
+        at: Origin,
+    },
+    /// The body of a `ruby:` engine.
+    Code {
+        text: String,
+        at: Origin,
+    },
+}
+
 /// A syntax error as Slim reports it.
 pub struct SyntaxError {
     pub line: usize,
@@ -74,6 +128,7 @@ pub struct Parsed {
     pub syntax_error: Option<SyntaxError>,
     /// Line and name of the first attribute repeated in one tag; Temple rejects it after parsing (only `class` merges).
     pub repeated_attribute: Option<(usize, String)>,
+    pub pieces: Vec<Piece>,
 }
 
 #[derive(Clone, Copy)]
@@ -140,6 +195,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             stop_line: None,
             syntax_error: None,
             repeated_attribute: None,
+            pieces: Vec::new(),
         },
         lines,
         starts,
@@ -255,6 +311,53 @@ fn matching_braces(s: &str) -> Vec<Option<usize>> {
     closers
 }
 
+/// Slim's `parse_text_block` of a `ruby:` body, as `collect_text` joins it.
+struct RubyBody {
+    /// The line the code starts on: the inline text's, else the first line of the block.
+    line: Option<usize>,
+    text: String,
+    /// Column the lines are measured from; the first line's, lowered by any line indented less.
+    text_indent: Option<usize>,
+    blank: usize,
+}
+
+impl RubyBody {
+    fn new(first: usize, inline: Option<(usize, &str)>) -> Self {
+        let (text_indent, text) = inline.map_or((None, String::new()), |(column, text)| (Some(column), text.to_string()));
+        RubyBody { line: inline.map(|_| first), text, text_indent, blank: 0 }
+    }
+
+    fn push_blank(&mut self) {
+        if self.text_indent.is_some() {
+            self.blank += 1;
+        }
+    }
+
+    fn push_line(&mut self, number: usize, indent: usize, line: &str) {
+        self.line.get_or_insert(number);
+        let mut offset = 0;
+        if let Some(base) = self.text_indent {
+            if indent < base {
+                self.text_indent = Some(indent);
+            } else {
+                offset = indent - base;
+            }
+        }
+        self.text.push_str(&"\n".repeat(self.blank));
+        self.blank = 0;
+        if self.text_indent.is_some() {
+            self.text.push('\n');
+        }
+        self.text.push_str(&" ".repeat(offset));
+        self.text.push_str(line);
+        self.text_indent.get_or_insert(indent);
+    }
+
+    fn finish(&self) -> String {
+        format!("{}\n", self.text)
+    }
+}
+
 struct Parser<'a> {
     lines: Vec<&'a str>,
     starts: Vec<usize>,
@@ -362,6 +465,7 @@ impl<'a> Parser<'a> {
     fn parse_line(&mut self) {
         let line = self.lines[self.i];
         if is_blank(line) {
+            self.out.pieces.push(Piece::Newline);
             return;
         }
         let indent = indent_width(line);
@@ -384,10 +488,13 @@ impl<'a> Parser<'a> {
         }
         self.expecting = false;
         self.owner = self.i;
-        self.out.lines[self.i].role = Role::Structural { depth: self.indents.len() - 1 };
+        let depth = self.indents.len() - 1;
+        self.out.lines[self.i].role = Role::Structural { depth };
+        self.out.pieces.push(Piece::Line { depth, line: self.i });
         self.pos = line.len() - trim_start(line).len();
         self.end = line.len();
         self.parse_line_indicators();
+        self.out.pieces.push(Piece::Newline);
     }
 
     fn parse_line_indicators(&mut self) {
@@ -395,9 +502,14 @@ impl<'a> Parser<'a> {
         if let Some(after) = r.strip_prefix("/!") {
             self.marker(2, Marker::HtmlComment);
             self.skip(2 + usize::from(after.starts_with(' ')));
+            self.out.pieces.push(Piece::Static("<!--".to_string()));
             self.text_block(Body::Interpolated, false);
+            self.out.pieces.push(Piece::Static("-->".to_string()));
         } else if r.len() > 2 && r.starts_with("/[") && r.trim_end_matches(is_space).ends_with(']') {
             self.marker(r.trim_end_matches(is_space).len(), Marker::ConditionalComment);
+            let condition = r[2..].trim_end_matches(is_space).trim_end_matches(']').trim_matches(is_space);
+            self.out.pieces.push(Piece::Static(format!("<!--[{condition}]>")));
+            self.out.pieces.push(Piece::Close("<![endif]-->".to_string()));
             self.expecting = true;
         } else if r.starts_with('/') {
             self.marker(1, Marker::Comment);
@@ -414,19 +526,22 @@ impl<'a> Parser<'a> {
         } else if let Some(code) = r.strip_prefix('-') {
             self.marker(1, Marker::Control);
             self.skip(r.len() - code.len());
-            self.broken_line();
+            let (code, at) = self.broken_line();
+            self.out.pieces.push(Piece::Control { code, at });
             self.expecting = true;
         } else if r.starts_with('=') {
             self.output(false);
         } else if let Some(engine) = self.match_engine(r) {
             self.embedded(engine);
         } else if is_doctype(r) {
+            self.out.pieces.push(Piece::Static("<!DOCTYPE html>".to_string()));
         } else if let Some((len, named)) = match_tag(r) {
             self.out.tag_slots.push(self.at());
+            let name = if named { &r[..len] } else { DEFAULT_TAG };
             if named {
                 self.skip(len);
             }
-            self.parse_tag();
+            self.parse_tag(name);
         } else {
             self.fail_at("Unknown line indicator".to_string(), self.column());
         }
@@ -440,7 +555,8 @@ impl<'a> Parser<'a> {
         let modifiers = r[eq..].bytes().take_while(modifier).count();
         self.marker(eq + modifiers, Marker::Output);
         self.skip(eq + modifiers);
-        self.broken_line();
+        let (code, at) = self.broken_line();
+        self.out.pieces.push(Piece::Output { escape: eq == 1, code, block: true, at });
         self.expecting = true;
     }
 
@@ -460,7 +576,14 @@ impl<'a> Parser<'a> {
         let line = self.i;
         self.pos = engine.attrs.start;
         self.end = engine.attrs.end;
+        let first_piece = self.out.pieces.len();
         self.parse_attributes(&mut Vec::new());
+        if engine.name == "ruby" {
+            // `RubyEngine` drops the attributes.
+            self.out.pieces.truncate(first_piece);
+        } else {
+            self.out.pieces.push(Piece::Static(String::new()));
+        }
         if self.i != line {
             // Wrapped attributes across lines put the body somewhere this port doesn't follow.
             self.fail();
@@ -476,7 +599,15 @@ impl<'a> Parser<'a> {
         self.text_block(body, true);
     }
 
-    fn parse_tag(&mut self) {
+    fn parse_tag(&mut self, name: &str) {
+        self.out.pieces.push(Piece::Static(format!("<{name}")));
+        if self.parse_tag_rest(name) {
+            self.out.pieces.push(Piece::Close(format!("</{name}>")));
+        }
+    }
+
+    /// Everything after the tag name; whether the tag needs its closing tag.
+    fn parse_tag_rest(&mut self, name: &str) -> bool {
         let mut names = Vec::new();
         // `.class` / `#id` shortcuts, `((?:\p{Word}|-|\/\d+|:(\w|-)+)*)` after each.
         loop {
@@ -509,28 +640,41 @@ impl<'a> Parser<'a> {
         }
         let r = self.rest();
         self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
+        let first_attribute = self.out.pieces.len();
         self.parse_attributes(&mut names);
+        let attributes = &mut self.out.pieces[first_attribute..];
+        if attributes.iter().any(|p| matches!(p, Piece::Splat { .. })) {
+            for piece in attributes {
+                if let Piece::Attribute { splat, .. } = piece {
+                    *splat = true;
+                }
+            }
+        }
 
         let r = self.rest();
         let t = trim_start(r);
         let ws = r.len() - t.len();
+        let closed = t.starts_with('/');
+        let void = closed || VOID_ELEMENTS.contains(&name);
+        self.out.pieces.push(Piece::Static(if void { " />" } else { ">" }.to_string()));
         if let Some(after) = t.strip_prefix(':') {
             // Block expansion: `li: a`.
             self.skip(ws + 1 + after.len() - trim_start(after).len());
             let r = self.rest();
             if let Some(engine) = self.match_engine(r) {
                 self.embedded(engine);
-                return;
+                return true;
             }
             self.out.tag_slots.push(self.at());
             let Some((len, named)) = match_tag(r) else {
                 self.fail_at("Expected tag".to_string(), self.column());
-                return;
+                return true;
             };
+            let name = if named { &r[..len] } else { DEFAULT_TAG };
             if named {
                 self.skip(len);
             }
-            self.parse_tag();
+            self.parse_tag(name);
         } else if t.starts_with('=') {
             self.skip(ws);
             self.output(true);
@@ -546,6 +690,7 @@ impl<'a> Parser<'a> {
             self.skip(usize::from(r.starts_with(' ')));
             self.text_block(Body::Interpolated, true);
         }
+        !void
     }
 
     fn note_attribute(&mut self, names: &mut Vec<&'a str>, name: &'a str) {
@@ -569,7 +714,8 @@ impl<'a> Parser<'a> {
             self.out.attr_slots.push(self.at() + ws);
             if t.starts_with('*') && t[1..].starts_with(|c: char| !is_space(c)) {
                 self.skip(ws + 1);
-                self.ruby_code(close);
+                let (_, code, at) = self.ruby_code(close);
+                self.out.pieces.push(Piece::Splat { code, at });
                 continue;
             }
             let name = attr_name_len(t);
@@ -580,9 +726,15 @@ impl<'a> Parser<'a> {
                     self.skip(r.len() - value.len());
                     if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
                         self.skip(1);
+                        self.out.pieces.push(Piece::Static(format!(" {}=\"", &t[..name])));
                         self.quoted_attribute(quote);
-                    } else if self.ruby_code(close) == 0 {
-                        self.fail_at("Invalid empty attribute".to_string(), self.column());
+                        self.out.pieces.push(Piece::Static("\"".to_string()));
+                    } else {
+                        let (taken, code, at) = self.ruby_code(close);
+                        if taken == 0 {
+                            self.fail_at("Invalid empty attribute".to_string(), self.column());
+                        }
+                        self.out.pieces.push(Piece::Attribute { name: t[..name].to_string(), code, splat: false, at });
                     }
                     continue;
                 }
@@ -597,19 +749,24 @@ impl<'a> Parser<'a> {
             } else if !t.is_empty() {
                 self.fail_at("Expected attribute".to_string(), self.chars_before(t));
                 break;
-            } else if !self.next_line() {
-                let column = self.lines[self.i].chars().count();
-                self.fail_at(format!("Expected closing delimiter {close}"), column);
-                break;
+            } else {
+                self.out.pieces.push(Piece::Newline);
+                if !self.next_line() {
+                    let column = self.lines[self.i].chars().count();
+                    self.fail_at(format!("Expected closing delimiter {close}"), column);
+                    break;
+                }
             }
         }
     }
 
     /// `parse_ruby_code`: up to whitespace or `outer` outside brackets; a lone `,` or `\` continues it.
-    /// Returns the number of characters taken.
-    fn ruby_code(&mut self, outer: Option<char>) -> usize {
+    /// Returns the number of characters taken and the code, with a newline where a line continued.
+    fn ruby_code(&mut self, outer: Option<char>) -> (usize, String, Origin) {
         let mut start = self.pos;
         let mut taken = 0;
+        let mut code = String::new();
+        let mut at = Origin { line: self.i, offset: Some(self.starts[self.i] + self.pos) };
         let mut depth = 0;
         let (mut open, mut close) = (' ', ' ');
         loop {
@@ -621,8 +778,11 @@ impl<'a> Parser<'a> {
             if r == "," || r == "\\" {
                 self.ruby(start, self.end);
                 taken += 1;
+                code.push_str(r);
+                code.push('\n');
+                at.offset = None;
                 if !self.expect_next_line() {
-                    return taken;
+                    return (taken, code, at);
                 }
                 start = self.pos;
                 continue;
@@ -637,6 +797,7 @@ impl<'a> Parser<'a> {
                 depth = 1;
                 (open, close) = (c, cl);
             }
+            code.push(c);
             self.skip(c.len_utf8());
             taken += 1;
         }
@@ -644,7 +805,7 @@ impl<'a> Parser<'a> {
         if depth != 0 {
             self.fail_at(format!("Expected closing delimiter {close}"), self.column());
         }
-        taken
+        (taken, code, at)
     }
 
     /// `parse_quoted_attribute`: the value is text with `#{}`, and may run across lines.
@@ -678,30 +839,42 @@ impl<'a> Parser<'a> {
     }
 
     /// `parse_broken_line`: the stripped rest, plus following lines while it ends in `,` or `\`.
-    fn broken_line(&mut self) {
+    fn broken_line(&mut self) -> (String, Origin) {
         let r = self.rest();
-        let code = r.trim_matches(is_space);
+        let first = r.trim_matches(is_space);
         let start = self.pos + r.len() - trim_start(r).len();
-        self.ruby(start, start + code.len());
-        let mut continues = code.ends_with([',', '\\']);
-        let mut previous_empty = code.is_empty();
+        self.ruby(start, start + first.len());
+        let mut at = Origin { line: self.i, offset: Some(self.starts[self.i] + start) };
+        let mut code = first.to_string();
+        let mut continues = first.ends_with([',', '\\']);
+        let mut previous_empty = first.is_empty();
         while continues {
+            at.offset = None;
             if !self.expect_next_line() {
-                return;
+                return (code, at);
             }
-            let code = self.rest();
+            let line = self.rest();
             self.ruby(self.pos, self.end);
+            code.push('\n');
+            code.push_str(line);
             // An empty line still continues: Slim tests `/[,\\]\Z/` and `\Z` also matches before a final newline.
-            continues = if code.is_empty() { !previous_empty } else { code.ends_with([',', '\\']) };
-            previous_empty = code.is_empty();
+            continues = if line.is_empty() { !previous_empty } else { line.ends_with([',', '\\']) };
+            previous_empty = line.is_empty();
         }
         self.pos = self.end;
+        (code, at)
     }
 
     /// `parse_text_block`: the rest of this line and the following lines indented deeper than this one.
     fn text_block(&mut self, body: Body, raw_column: bool) {
         let first = self.i;
         let has_first = self.pos < self.end;
+        // The `ruby:` engine takes the block as one piece of code; its lines keep their indentation relative to the first.
+        let mut ruby = matches!(body, Body::Ruby)
+            .then(|| RubyBody::new(first, has_first.then(|| (self.lines[first][..self.pos].chars().count(), self.rest()))));
+        if ruby.is_some() {
+            self.out.pieces.push(Piece::Newline);
+        }
         if has_first {
             self.out.lines[first].keeps_trailing = true;
             self.body_segment(body);
@@ -711,6 +884,11 @@ impl<'a> Parser<'a> {
         while let Some(&next) = self.lines.get(self.i + 1) {
             if is_blank(next) {
                 self.i += 1;
+                if let Some(code) = &mut ruby {
+                    code.push_blank();
+                } else {
+                    self.out.pieces.push(Piece::Newline);
+                }
                 continue;
             }
             if indent_width(next) <= base {
@@ -719,8 +897,17 @@ impl<'a> Parser<'a> {
             self.enter(self.i + 1);
             self.pos = next.len() - trim_start(next).len();
             self.out.lines[self.i].keeps_trailing = true;
+            if let Some(code) = &mut ruby {
+                code.push_line(self.i, indent_width(next), self.rest());
+            } else {
+                self.out.pieces.push(Piece::Newline);
+                self.out.pieces.push(Piece::Static("\n".to_string()));
+            }
             self.body_segment(body);
             continued = true;
+        }
+        if let Some(code) = ruby {
+            self.out.pieces.push(Piece::Code { text: code.finish(), at: Origin { line: code.line.unwrap_or(first), offset: None } });
         }
         if raw_column && has_first && continued {
             self.out.lines[first].raw_column = true;
@@ -741,8 +928,10 @@ impl<'a> Parser<'a> {
         while let Some(&next) = self.lines.get(self.i + 1) {
             if is_blank(next) {
                 self.i += 1;
+                self.out.pieces.push(Piece::Newline);
             } else if indent_width(next) > base {
                 self.enter(self.i + 1);
+                self.out.pieces.push(Piece::Newline);
             } else {
                 break;
             }
@@ -755,10 +944,12 @@ impl<'a> Parser<'a> {
         let base = self.starts[self.i];
         self.out.text.push(base + from..base + to);
         let closers = matching_braces(s);
+        let mut text = String::new();
         let mut k = 0;
         while k < s.len() {
             let r = &s[k..];
             if r.starts_with("\\#{") {
+                text.push_str("#{");
                 k += 3;
                 continue;
             }
@@ -770,12 +961,18 @@ impl<'a> Parser<'a> {
                     let unescaped = inner.len() >= 2 && inner.starts_with('{') && inner.ends_with('}');
                     let (a, b) = if unescaped { (k + 3, k + len - 1) } else { (k + 2, k + len) };
                     self.ruby(from + a, from + b);
+                    let at = Origin { line: self.i, offset: Some(base + from + a) };
+                    self.out.pieces.push(Piece::Static(std::mem::take(&mut text)));
+                    self.out.pieces.push(Piece::Output { escape: !unescaped, code: s[a..b].to_string(), block: false, at });
                     k += 1 + len;
                     continue;
                 }
             }
-            k += r.chars().next().map_or(1, char::len_utf8);
+            let c = r.chars().next().unwrap_or(' ');
+            text.push(c);
+            k += c.len_utf8();
         }
+        self.out.pieces.push(Piece::Static(text));
     }
 }
 
