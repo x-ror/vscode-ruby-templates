@@ -1,7 +1,7 @@
 //! A port of the line and indentation handling of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`):
 //! the first error Haml raises about indentation, at the line it names.
 
-use crate::haml_indent::{block_keyword, is_haml_multiline, is_ruby_multiline, strip_output_prefix, MID_BLOCK_KEYWORDS};
+use crate::haml_indent::{block_keyword, is_haml_multiline, is_ruby_multiline, strip_output_prefix, HAML_FILTERS, MID_BLOCK_KEYWORDS};
 use std::collections::VecDeque;
 use std::convert::Infallible;
 
@@ -66,6 +66,8 @@ struct Parser {
     /// One entry per open block; `true` for a filter or `-#` comment, whose end closes the flat section.
     open_blocks: Vec<bool>,
     tab_up: bool,
+    /// The first filter Haml has no compiler for; it fails at compile time, so any parser error comes first.
+    unknown_filter: Option<Error>,
 }
 
 /// The first indentation error Haml raises for `text`.
@@ -73,7 +75,7 @@ pub fn first_error(text: &str) -> Option<Error> {
     let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text));
     match parser.run() {
         Err(Halt::Error(error)) => Some(error),
-        Err(Halt::Done) => None,
+        Err(Halt::Done) => parser.unknown_filter,
     }
 }
 
@@ -140,6 +142,7 @@ impl Parser {
             template_tabs: 0,
             open_blocks: Vec::new(),
             tab_up: false,
+            unknown_filter: None,
         }
     }
 
@@ -338,7 +341,11 @@ impl Parser {
         match (chars.next(), chars.next()) {
             (Some('%' | '.'), _) => self.tag(text)?,
             (Some('#'), second) if !matches!(second, Some('{' | '@' | '$')) => self.tag(text)?,
-            (Some('-'), Some('#')) | (Some(':'), _) => return Ok(self.start_flat_section()),
+            (Some('-'), Some('#')) => return Ok(self.start_flat_section()),
+            (Some(':'), _) => {
+                self.filter(&text[1..])?;
+                return Ok(self.start_flat_section());
+            }
             (Some('/'), _) => self.comment(&text[1..])?,
             (Some('!'), _) if text.starts_with("!!!") => self.doctype()?,
             (Some('-' | '=' | '~' | '&' | '!'), _) => match text.strip_prefix('-').or_else(|| strip_output_prefix(text)) {
@@ -348,6 +355,18 @@ impl Parser {
             _ => self.plain()?,
         }
         Ok(false)
+    }
+
+    /// `filter`: the name must be a word; whether a compiler exists for it is only found out when Haml compiles.
+    fn filter(&mut self, name: &str) -> Result<(), Halt> {
+        let name = name.to_lowercase();
+        if name.is_empty() || !name.chars().all(is_word) {
+            return Err(halt(format!("Invalid filter name \":{name}\"."), self.line.index));
+        }
+        if self.unknown_filter.is_none() && !HAML_FILTERS.contains(&name.as_str()) {
+            self.unknown_filter = Some(Error { message: format!("FilterCompiler for '{name}' was not found"), line: self.line.index });
+        }
+        Ok(())
     }
 
     fn nested_line_error(&mut self, message: &str) -> Halt {
@@ -1291,6 +1310,48 @@ mod tests {
             "%p&==",
             "!!! 5",
             "==",
+        ] {
+            assert_eq!(error_of(text), None, "{text:?}");
+        }
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`).
+    #[test]
+    fn filters() {
+        let not_found = |name: &str| format!("FilterCompiler for '{name}' was not found");
+        let invalid = |name: &str| format!("Invalid filter name \":{name}\".");
+        let cases: Vec<(&str, usize, String)> = vec![
+            (":nope", 0, not_found("nope")),
+            ("\n\n:k0kubun", 2, not_found("k0kubun")),
+            (":a1", 0, not_found("a1")),
+            (":maruku\n  x", 0, not_found("maruku")),
+            (":textile\n  x", 0, not_found("textile")),
+            ("%p\n  :nope\n    x", 1, not_found("nope")),
+            (":NOPE\n:nope2", 0, not_found("nope")),
+            (":nope2\n:nope", 0, not_found("nope2")),
+            (":nope\n  = \n", 0, not_found("nope")),
+            (":nope\n- end", 1, NO_END.into()),
+            (":nope\n% a", 1, "Invalid tag: \"% a\".".into()),
+            (":java-script", 0, invalid("java-script")),
+            (":", 0, invalid("")),
+            (": x", 0, invalid(" x")),
+            (":plain foo", 0, invalid("plain foo")),
+            (":a= b", 0, invalid("a= b")),
+            ("%div\n  :ÄB", 1, invalid("äb")),
+            ("%p{a: 1,\n:nope", 0, UNBALANCED.into()),
+        ];
+        for (text, at, message) in cases {
+            assert_eq!(error_of(text), Some((at, message)), "{text:?}");
+        }
+        for text in [
+            ":Javascript\n  x",
+            ":PLAIN\n  x",
+            ":plain\n  :nope",
+            ":ruby\n  x = 1",
+            ":cdata\n  x",
+            ":escaped\n  x",
+            ":css\n  a{}",
+            ":erb\n  <%= 1 %>",
         ] {
             assert_eq!(error_of(text), None, "{text:?}");
         }

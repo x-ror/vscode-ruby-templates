@@ -1,7 +1,7 @@
 //! Haml structure checks: indentation, illegal nesting, bracket balance, filters and misuse of explicit `end`.
 
 use crate::haml_parser;
-use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range, warning};
+use crate::util::{coded, error, find_balanced, leading_ws, line_range, span_range};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
@@ -76,7 +76,7 @@ struct Opener {
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
-    let visits = visit_lines(&lines, text, &mut out);
+    let visits = visit_lines(&lines);
     check_structure(&lines, &visits, text, &mut out);
     if let Some(parse_error) = haml_parser::first_error(text) {
         out.push(parse_error_diagnostic(text, &parse_error));
@@ -86,7 +86,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
 }
 
 /// Classifies each structural line, skipping verbatim bodies and the lines a continuation consumed.
-fn visit_lines(lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) -> Vec<Visit> {
+fn visit_lines(lines: &[&str]) -> Vec<Visit> {
     let mut visits: Vec<Visit> = Vec::new();
     let mut i = 0usize;
     while i < lines.len() {
@@ -100,7 +100,7 @@ fn visit_lines(lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) -> Vec<Vis
             i += 1;
             continue;
         }
-        let (kind, consumed) = classify(lines, i, text, out);
+        let (kind, consumed) = classify(lines, i);
         let span = consumed.max(1);
         visits.push(Visit { line: i, indent, kind, span });
         i += span;
@@ -111,7 +111,7 @@ fn visit_lines(lines: &[&str], text: &str, out: &mut Vec<Diagnostic>) -> Vec<Vis
 /// Haml lines outside filter and comment bodies, each with the physical lines it spans (`|`, `,`, multi-line `{}`).
 pub fn haml_structure(text: &str) -> Vec<(usize, usize)> {
     let lines: Vec<&str> = text.lines().collect();
-    visit_lines(&lines, text, &mut Vec::new()).into_iter().map(|v| (v.line, v.span)).collect()
+    visit_lines(&lines).into_iter().map(|v| (v.line, v.span)).collect()
 }
 
 /// What a Haml line is, for features that only make sense at a line's start or in Ruby.
@@ -129,7 +129,7 @@ pub enum LineRole {
 pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
     let lines: Vec<&str> = text.lines().collect();
     let mut roles = vec![LineRole::Start; lines.len()];
-    let visits = visit_lines(&lines, text, &mut Vec::new());
+    let visits = visit_lines(&lines);
     for (n, v) in visits.iter().enumerate() {
         let content = lines[v.line].trim_start_matches([' ', '\t']);
         let continuation = match v.kind {
@@ -181,7 +181,12 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
         "Indenting at the beginning of the document is illegal." => (code::TOP_LEVEL_INDENT, 0, bom_len + indent),
         "Illegal nesting: nesting within a header command is illegal." => (code::DOCTYPE_CHILDREN, bom_len + indent, raw.len()),
         message if message.starts_with("You don't need to use") => (code::EXPLICIT_END, bom_len + indent, raw.len()),
-        message if message.starts_with("Invalid tag") || message.starts_with("There's no Ruby code") => {
+        message if message.starts_with("FilterCompiler for") => (code::UNKNOWN_FILTER, bom_len + indent, raw.len()),
+        message
+            if message.starts_with("Invalid tag")
+                || message.starts_with("Invalid filter name")
+                || message.starts_with("There's no Ruby code") =>
+        {
             (code::SYNTAX_ERROR, bom_len + indent, raw.len())
         }
         "Self-closing tags can't have content." => (code::SELF_CLOSING_CONTENT, bom_len + indent, raw.len()),
@@ -229,7 +234,7 @@ pub(crate) fn block_keyword(code: &str) -> Option<&str> {
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
     let c = &raw[ws_len..];
@@ -244,10 +249,6 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     // Filters
     if let Some(name) = c.strip_prefix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
-            if !HAML_FILTERS.contains(&name) {
-                let unknown = warning(line_range(text, i, ws_len, raw.len()), format!("Unknown Haml filter `:{}`", name));
-                out.push(coded(unknown, code::UNKNOWN_FILTER));
-            }
             return (LineKind::Verbatim, 1);
         }
     }
@@ -452,7 +453,6 @@ mod tests {
             got,
             vec![
                 at(4, 4, 31, "Illegal nesting: content can't be both given on the same line as %span and nested within it."),
-                at(8, 2, 16, "Unknown Haml filter `:unknownfilter`"),
                 at(10, 2, 8, "Got \"else\" with no preceding \"if\""),
             ]
         );
@@ -530,7 +530,6 @@ mod tests {
             ("- if a\n  %p\n-# note\n- else", (3, 0, 6, "Got \"else\" with no preceding \"if\"")),
             ("%p= if a\n- else", (1, 0, 6, "Got \"else\" with no preceding \"if\"")),
             ("- if a\n  - else", (1, 2, 8, "\"else\" is indented at wrong level: expected 0, but was at 1.")),
-            (":textile\n  x", (0, 0, 8, "Unknown Haml filter `:textile`")),
         ];
         for (src, (line, start, end, message)) in cases {
             assert_eq!(haml(src), vec![at(*line, *start, *end, message)], "{src:?}");

@@ -1413,7 +1413,7 @@ mod tests {
                 .collect()
         };
 
-        let haml = "%p hi\n  %b x\n- end\n:nope\n%br/ x\n";
+        let haml = "%p hi\n  %b x\n- else\n";
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
         // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.

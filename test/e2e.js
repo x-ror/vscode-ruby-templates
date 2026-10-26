@@ -489,7 +489,6 @@ const check = (label, actual, expected) => {
   );
   await new Promise((r) => setTimeout(r, 200));
   check("haml diagnostics", diagnostics(hamlUri), [
-    "10: Unknown Haml filter `:jav`",
     "14: Illegal nesting: content can't be both given on the same line as %p and nested within it.",
     "12: Missing partial shared/_missing",
   ]);
