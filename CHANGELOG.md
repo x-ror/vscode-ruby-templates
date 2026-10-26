@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+### Language server
+
+- Rails checks follow the project: the framework and gem versions come from the nearest `Gemfile.lock`. `unresolved-render` runs only when it lists `actionview`, `strict-locals` only with `actionview` 7.1 or newer; Sinatra projects and folders without a lockfile get neither. Diagnostics refresh when `Gemfile.lock` changes.
+- Both messages are Rails' own: `Missing partial users/_card` / `Missing template users/show`, and one strict locals error per render (`missing local: :b`, `unknown keywords: :c, :d`, `no locals accepted`, with ` for app/views/…` from Rails 7.2).
+- Formats an app registers in `config/initializers` (`Mime::Type.register`, `register_alias`) count as formats in template names, so `_card.mobile.erb` is the partial `card`.
+
 ### Development
 
-- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views (`test/oracle/README.md`).
+- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
 
 ## 0.1.0
 
