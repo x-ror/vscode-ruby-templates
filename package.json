@@ -736,7 +736,6 @@
             "type": "string",
             "enum": [
               "inconsistent-indent",
-              "bad-dedent",
               "top-level-indent",
               "illegal-nesting",
               "doctype-children",
@@ -746,6 +745,8 @@
               "unknown-filter",
               "self-closing-content",
               "unclosed-attribute",
+              "syntax-error",
+              "void-children",
               "unresolved-render",
               "strict-locals"
             ]

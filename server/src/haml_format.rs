@@ -19,8 +19,7 @@ static CONTINUED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(,|\s\|)\s*$")
 static OUTPUT_AFTER_GROUPS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[<>&!]*=").unwrap());
 
 /// Haml's own errors this re-indenter is there to fix; any other error leaves the file alone.
-const INDENTATION_CODES: &[&str] =
-    &[haml_indent::code::INCONSISTENT_INDENT, haml_indent::code::BAD_DEDENT, haml_indent::code::TOP_LEVEL_INDENT];
+const INDENTATION_CODES: &[&str] = &[haml_indent::code::INCONSISTENT_INDENT, haml_indent::code::TOP_LEVEL_INDENT];
 
 /// `text` re-indented; `tab_width` measures tabs. Trailing whitespace is dropped (with `trim`) on structural lines
 /// only, where Haml strips it too.

@@ -103,7 +103,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Mixed tabs and spaces reported as an error for Slim, though Slim expands tabs and accepts it (downgrade or drop): now Haml-only (`server/src/haml_indent.rs`)
 - [x] Inconsistent indentation step (warning for Slim) (`server/src/slim_indent.rs` `detect_unit`; checked with `--check` on a probe file)
 - [x] Dedent to a level that never existed (`server/src/slim_indent.rs`; `test/broken/bad.html.slim` line 11)
-- [x] Unexpected indentation at top level: not an error for Slim, which accepts it (Haml rejects it)
+- [x] An indented first line: not an error for Slim, which accepts it (Haml rejects it)
 - [x] Nothing nested under `doctype` (`server/src/slim_indent.rs`; `test/broken/bad.html.slim` line 2)
 - [x] Unclosed `(`/`[`/`{` in attributes, across lines (`server/src/slim_indent.rs` `skip_tag_head`; `test/broken/bad.html.slim` line 5)
 - [x] Explicit `- end` is an error (`server/src/slim_indent.rs` `check_explicit_end`; `test/broken/bad.html.slim` line 8)

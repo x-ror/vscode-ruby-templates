@@ -11,6 +11,7 @@ mod format;
 mod haml;
 mod haml_format;
 mod haml_indent;
+mod haml_parser;
 mod helper_defs;
 mod helpers;
 mod html;

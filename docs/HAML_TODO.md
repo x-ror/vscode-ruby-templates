@@ -100,28 +100,13 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 ## 9. Diagnostics and linting
 
-- [x] Mixed tabs and spaces within one line's indentation; filter and comment bodies aren't checked (`server/src/haml_indent.rs` `visit_lines`)
-- [x] Inconsistent indentation against the first indented line, with Haml's message (`server/src/haml_indent.rs` `check_structure`)
-- [x] Dedent to a level that never existed (`server/src/haml_indent.rs`; `test/broken/bad.html.haml`)
-- [x] Unexpected indentation at top level (`server/src/haml_indent.rs`)
-- [x] Explicit `- end` rejected (`server/src/haml_indent.rs` `check_explicit_end`; `test/broken/bad.html.haml`)
-- [x] Unclosed `{` `(` `[` in tag attributes, across lines (`server/src/haml_indent.rs` `skip_tag_head`; `test/broken/bad.html.haml`)
-- [x] Unknown filter warning (`server/src/haml_indent.rs` `HAML_FILTERS`; `test/broken/bad.html.haml`)
-- [x] Nothing nested under a doctype (`server/src/haml_indent.rs`)
-- [x] Illegal nesting: content on a tag's line plus children, including `%p= form_with do |f|` (Haml 5–7 reject it); allowed only when the line's value ends in `,` (Haml's `is_ruby_multiline?`). Message names the tag as Haml does (`... as %p and nested within it.`) (`server/src/haml_indent.rs` `classify`, `is_ruby_multiline`; `test/broken/bad.html.haml`)
-- [x] Illegal nesting under plain text (`server/src/haml_indent.rs` `LineKind::Text`)
-- [x] Multiline `|` and trailing-`,` Ruby on line-start `-`/`=` lines joined before analysis (`server/src/haml_indent.rs` `join_continuation`)
-- [x] `,`/`|` continuation after a tag (`%p= link_to "x",` + `  class: "y"`), and `|` multiline plain text, are not reported as nesting (`server/src/haml_indent.rs` `classify`, `multiline_len`; unit test `no_false_positives`)
+- [x] Haml's own parse errors, the first one in a file, with Haml's message at the line Haml reports (`server/src/haml_parser.rs`, a port of `Haml::Parser`; `server/src/haml_indent.rs` gives each its code; `test/broken/bad.html.haml`, tests `indentation_errors_at_haml_lines`, `illegal_nesting_at_the_nested_line`, `attribute_errors`, `filters`, …): tabs and spaces mixed, inconsistent indentation, a step of several levels, indenting at the start; illegal nesting under plain text, a self-closing tag, a comment with text, a doctype, or a tag with content (allowed only when the value ends in `,`, Haml's `is_ruby_multiline?`); `Illegal element`; `Unbalanced brackets.` and `Invalid attribute list`; `Invalid tag`; `There's no Ruby code for = to evaluate.`; `Self-closing tags can't have content.`; explicit `- end` (not `def … end` in a line); `- else`/`elsif`/`when` with no opener or at the wrong level (Haml's `@script_level_stack`); `Invalid filter name`; and, after parsing, a filter Haml has no compiler for (`FilterCompiler for 'x' was not found`)
+- [x] Content in a void element (`%br` with children or text, which Haml compiles to `<br>x</br>`): warning `void-children` (WHATWG 13.2.6.4.7)
+- [x] Multiline `|` and trailing-`,` Ruby on line-start `-`/`=` lines, tag attributes over several lines, and `%p= link_to x,` continuations are consumed as Haml consumes them, so they are never reported as nesting (`server/src/haml_parser.rs` `next_line`, `join_ruby_lines`; unit test `no_false_positives`)
+- [x] Line-start `~ code` is Ruby, `#{x}` at line start is plain text; code with children but no block opener is fine (Haml compiles `= x` with children)
+- [x] Tabs: consistent tabs are accepted; a line indented with the other character than the first indented line gets Haml's `Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 2 spaces.`
 - [x] Unresolved `render "dir/partial"` warning on `=`/`-`/`!=`/`&=` lines (`server/src/lsp.rs` `unresolved_renders`, unit test `unresolved_render_warnings`)
-- [x] Line-start `~ code` is Ruby (`server/src/haml_indent.rs` `strip_output_prefix`)
-- [x] `#{x}` at line start is plain text: nesting under it is reported as within plain text (`server/src/haml_indent.rs` `classify`)
-- [x] Tabs: consistent tabs are accepted; a line indented with the other character than the first indented line gets Haml's `Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 2 spaces.` The reference is the first indented line the structure pass visits, so continuation lines (multi-line `{}`, `,`, `|`) don't count; indentation is spaces and tabs only, not other Unicode whitespace (`server/src/haml_indent.rs` `check_structure`, `human_indentation`; `server/src/util.rs` `leading_ws`)
-- [x] `- else` / `- elsif` / `- when` with no open `if`/`case`/`unless` (`Got "else" with no preceding "if"`) or at the wrong level (`"else" is indented at wrong level: expected 0, but was at 1.`), following Haml's `@script_level_stack` (`server/src/haml_indent.rs` `track_block_keyword`)
 - [ ] `- rescue` / `- ensure` / `- in` / a second `- else` out of place: Haml itself accepts them and only the generated Ruby fails to parse; belongs with the Ruby syntax check below
-- [x] `- code` / `= code` / `~ code` with nested children but no block opener (`do`, `if`, …); Haml appends `end`, so Ruby fails with `unexpected 'end'` (`server/src/haml_indent.rs` `opens_block`)
-- [x] Self-closing tag with content (`Self-closing tags can't have content.`) or children (`Illegal nesting: nesting within a self-closing tag is illegal.`) (`server/src/haml_indent.rs` `LineKind::SelfClosing`)
-- [x] `/ comment text` and `/[if IE] text` with nested content (`Illegal nesting: nesting within a tag that already has content is illegal.`); `/[if IE]` and `/![if !IE]` alone may have children (`server/src/haml_indent.rs` `LineKind::TextComment`)
-- [x] `#`/`.` with no name (`# heading`, `...more`): `Illegal element: classes and ids must have values.` (`server/src/haml_indent.rs` `classify`)
 - [x] Indentation of `,` continuation lines: nothing to report. Haml 7.5 compiles `%p= link_to x,\n\t  y` and spaces-in-a-tab-file continuations without error (checked with the gem), so a check would be a false positive
 - [x] Indentation inside filter bodies relative to the filter: nothing to report. Haml 7.5 accepts bodies that dedent below their first line or use spaces in a tab file (checked with the gem)
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/lsp.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
