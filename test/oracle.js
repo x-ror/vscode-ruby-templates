@@ -58,15 +58,15 @@ const mapParallel = async (items, limit, fn) => {
 
 // The test's own expectation (Slim: the message with "Line N, Column M"; Haml: {message, line}) against the oracle script's
 // answer for the same template.
-const slimExpectation = (expected, { error }) => {
-  const [, line, column] = expected.match(/Line (\d+), Column (\d+)/) ?? [];
-  return (
-    error &&
-    expected.split("\n")[0] === error.message &&
-    Number(line) === error.line &&
-    Number(column) === error.slim_column
-  );
-};
+const slimExpectation = (expected, { error, errors }) =>
+  typeof expected === "object"
+    ? // Ruby's syntax error at a template line: Prism's errors must include that line.
+      errors?.some((e) => e.line === expected.ruby_line)
+    : error &&
+      expected.split("\n")[0] === error.message &&
+      Number(expected.match(/Line (\d+), Column (\d+)/)?.[1]) === error.line &&
+      Number(expected.match(/Line (\d+), Column (\d+)/)?.[2]) ===
+        error.slim_column;
 const hamlExpectation = (expected, { error }) =>
   error && expected.message === error.message && expected.line === error.line;
 
