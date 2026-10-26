@@ -43,6 +43,8 @@ enum LineKind {
     Output,
     Tag {
         void: bool,
+        /// Ends in `/`: Slim accepts no children at all.
+        closed: bool,
     },
     Text,
     Doctype,
@@ -140,15 +142,14 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             parent.has_child |= !code_comment;
             match parent.kind {
                 LineKind::Doctype => {
-                    out.push(coded(error(line_content, "Nothing can be nested under a doctype"), code::DOCTYPE_CHILDREN));
+                    out.push(coded(error(line_content, "Unexpected indentation"), code::DOCTYPE_CHILDREN));
+                }
+                LineKind::Tag { closed: true, .. } => {
+                    out.push(coded(error(line_content, "Unexpected indentation"), code::VOID_CHILDREN));
                 }
                 LineKind::Tag { void: true, .. } if first_child => {
                     let name = tag_name(lines[parent.line]);
-                    let message = if VOID_ELEMENTS.contains(&name) {
-                        format!("`{name}` is a void element and can't have children")
-                    } else {
-                        format!("`{name}` is explicitly closed with `/` and can't have children")
-                    };
+                    let message = format!("`{name}` is a void element and can't have children");
                     out.push(coded(warning(line_content, message), code::VOID_CHILDREN));
                 }
                 _ => {}
@@ -249,7 +250,7 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
     }
     // Comments
     if is_conditional_comment(c) {
-        return (LineKind::Tag { void: false }, 1);
+        return (LineKind::Tag { void: false, closed: false }, 1);
     }
     if c.starts_with('/') {
         return (LineKind::Verbatim, 1);
@@ -284,7 +285,8 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
     if is_tag {
         let (rest, consumed) = skip_tag_head(lines, i, text, out);
         let rest_t = rest.trim();
-        let void = rest_t == "/" || VOID_ELEMENTS.contains(&tag_name(raw));
+        let closed = rest_t == "/";
+        let void = closed || VOID_ELEMENTS.contains(&tag_name(raw));
         if let Some(code) = strip_output_prefix(rest_t) {
             let (joined, _) = join_continuation(lines, i, code);
             check_explicit_end(&joined, content_range, out);
@@ -294,7 +296,7 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
         if !void && !rest_t.is_empty() && !rest_t.starts_with(['=', '/', ':']) {
             return (LineKind::Verbatim, consumed);
         }
-        return (LineKind::Tag { void }, consumed);
+        return (LineKind::Tag { void, closed }, consumed);
     }
     (LineKind::Text, 1)
 }
@@ -751,6 +753,19 @@ mod tests {
     }
 
     #[test]
+    fn doctype_children_use_slim_message() {
+        // Slim's test_unexpected_indentation (and test_correct_filename), plus a nested doctype and a bare one.
+        for (text, line, column) in
+            [("\ndoctype 5\n  div Invalid\n", 2, 2), ("html\n  doctype 5\n    p\n", 2, 4), ("doctype\n    x\n", 1, 4)]
+        {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].message, "Unexpected indentation", "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
     fn unclosed_attribute() {
         assert_eq!(slim("div\n  a href=(foo\n"), one(code::UNCLOSED_ATTRIBUTE, 1, 2, ERROR));
     }
@@ -805,7 +820,6 @@ mod tests {
     #[test]
     fn void_children() {
         assert_eq!(slim("br\n  p x\n  p y\n"), one(code::VOID_CHILDREN, 1, 2, WARNING));
-        assert_eq!(slim("div\n  img/\n    p\n"), one(code::VOID_CHILDREN, 2, 4, WARNING));
         assert_eq!(slim("input.big type=\"x\"\n  p\n"), one(code::VOID_CHILDREN, 1, 2, WARNING));
         assert!(slim("br\n  / old stuff\n").is_empty());
         assert!(slim("p = x\n  span y\n").is_empty());
@@ -813,10 +827,21 @@ mod tests {
 
     #[test]
     fn closed_tag_children() {
-        let d = diagnostics("div/\n  p x\n", &[]);
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].message, "`div` is explicitly closed with `/` and can't have children");
-        assert_eq!(d[0].severity, Some(WARNING));
+        // Slim rejects a child under a tag closed with `/`, void element or not.
+        for (text, line, column) in [
+            ("div/\n  p x\n", 1, 2),
+            ("br/ \n  p\n", 1, 2),
+            ("img/\n  p\n", 1, 2),
+            ("img src=\"x\"/\n  p\n", 1, 2),
+            ("br /\n  p\n", 1, 2),
+            ("div\n  a.b#c(href=\"x\")/\n\n    p\n      q\n", 3, 4),
+        ] {
+            let found = diagnostics(text, &[]);
+            assert_eq!(found.len(), 1, "{text:?}: {found:?}");
+            assert_eq!(found[0].message, "Unexpected indentation", "{text:?}");
+            assert_eq!(found[0].severity, Some(ERROR), "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
     }
 
     #[test]
