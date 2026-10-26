@@ -1,7 +1,7 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
 use crate::ruby::{analyze, ends_with_block};
-use crate::slim_parser;
+use crate::slim_parser::{self, BOM};
 use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
 use tower_lsp::lsp_types::Diagnostic;
 
@@ -58,6 +58,19 @@ struct Frame {
 }
 
 pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+    let Some(body) = text.strip_prefix(BOM) else {
+        return check_structure(text, extra_engines);
+    };
+    // Slim drops the byte order mark, but the editor still counts it on the first line.
+    let mut out = check_structure(body, extra_engines);
+    let bom_units = BOM.encode_utf16().count() as u32;
+    for position in out.iter_mut().flat_map(|d| [&mut d.range.start, &mut d.range.end]).filter(|p| p.line == 0) {
+        position.character += bom_units;
+    }
+    out
+}
+
+fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
@@ -87,11 +100,12 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
             }
         }
 
-        // Dedent to a level that never existed (checked before popping).
+        // Slim's "Malformed indentation": a dedent to a level that never existed, below the first line's too (checked before popping).
         let deepest = stack.last().map_or(0, |f| f.indent);
-        let bad_dedent = indent < deepest && indent != 0 && !stack.iter().any(|f| f.indent == indent);
+        let bad_dedent =
+            parsed.stop_line.is_none_or(|stop| line_no < stop) && indent < deepest && !stack.iter().any(|f| f.indent == indent);
         if bad_dedent {
-            out.push(coded(error(ws_range, "Indentation does not match any outer level"), code::BAD_DEDENT));
+            out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
         }
 
         // Pop to the parent level; the last frame popped at this indent is the previous sibling.
@@ -234,6 +248,9 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
         return (LineKind::Doctype, 1);
     }
     // Comments
+    if is_conditional_comment(c) {
+        return (LineKind::Tag { void: false }, 1);
+    }
     if c.starts_with('/') {
         return (LineKind::Verbatim, 1);
     }
@@ -280,6 +297,11 @@ fn classify(lines: &[&str], i: usize, text: &str, extra_engines: &[String], out:
         return (LineKind::Tag { void }, consumed);
     }
     (LineKind::Text, 1)
+}
+
+/// `/[if IE]`: Slim nests its children like a tag's.
+fn is_conditional_comment(content: &str) -> bool {
+    content.len() > 2 && content.starts_with("/[") && content.trim_end().ends_with(']')
 }
 
 /// Slim tag name at the start of the line (`img.photo src=x` → `img`); empty for `.class`/`#id` shortcuts.
@@ -644,7 +666,37 @@ mod tests {
 
     #[test]
     fn bad_dedent() {
-        assert_eq!(slim("div\n  p\n    a\n   span\n"), one(code::BAD_DEDENT, 3, 0, ERROR));
+        assert_eq!(slim("div\n  p\n    a\n   span\n"), one(code::BAD_DEDENT, 3, 3, ERROR));
+    }
+
+    #[test]
+    fn malformed_indentation_uses_slim_message() {
+        // Slim's test_malformed_indentation, test_malformed_indentation2, and a dedent below the first line's level.
+        for (text, line, column) in [
+            ("\np\n  div Valid\n div Invalid\n", 3, 1),
+            ("\n  div Valid\n div Invalid\n", 2, 1),
+            ("  p\nb\n", 1, 0),
+            ("\u{feff}  p\nb\n", 1, 0),
+            ("div\n  /[if IE]\n      p\n    a\n", 3, 4),
+        ] {
+            let found: Vec<_> = diagnostics(text, &[]).into_iter().filter(|d| d.severity == Some(ERROR)).collect();
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].message, "Malformed indentation", "{text:?}");
+            assert_eq!((found[0].range.start.line, found[0].range.start.character), (line, column), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn dedent_check_stops_at_slim_syntax_error() {
+        let found = diagnostics("  a href=(foo\n) t\n", &[]);
+        assert!(found.iter().all(|d| d.message != "Malformed indentation"), "{found:?}");
+    }
+
+    #[test]
+    fn bom_counts_in_columns_of_the_first_line() {
+        let found = diagnostics("\u{feff}foo:\n  x\n", &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].range.start.line, found[0].range.start.character), (0, 1));
     }
 
     #[test]
@@ -673,7 +725,7 @@ mod tests {
         // Slim 5 raises "Malformed indentation" for the `   b` line after each of these heads.
         for head in ["p(class=\"x\")", "p class=\"x\"", "p= x", "p x=1", "div"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -681,7 +733,7 @@ mod tests {
     fn whitespace_modifier_tag_keeps_structure_checks() {
         for head in ["p<", "p>", "p<>", "p.a.b<"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -689,7 +741,7 @@ mod tests {
     fn splat_attributes_tag_keeps_structure_checks() {
         for head in ["div *attrs", "p.a *{a: 1}"] {
             let text = format!("{head}\n  span\n    a\n   b\n");
-            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 0, ERROR), "{text:?}");
+            assert_eq!(slim(&text), one(code::BAD_DEDENT, 3, 3, ERROR), "{text:?}");
         }
     }
 
@@ -814,11 +866,10 @@ mod tests {
             vec![
                 (code::DOCTYPE_CHILDREN.to_string(), 1, 2, ERROR),
                 (code::INCONSISTENT_INDENT.to_string(), 3, 0, WARNING),
-                (code::BAD_DEDENT.to_string(), 4, 0, ERROR),
                 (code::UNCLOSED_ATTRIBUTE.to_string(), 4, 2, ERROR),
                 (code::EXPLICIT_END.to_string(), 7, 2, ERROR),
                 (code::UNKNOWN_ENGINE.to_string(), 8, 2, WARNING),
-                (code::BAD_DEDENT.to_string(), 10, 0, ERROR),
+                (code::INCONSISTENT_INDENT.to_string(), 10, 0, WARNING),
             ]
         );
     }

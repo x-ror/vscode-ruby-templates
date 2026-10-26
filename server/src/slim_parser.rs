@@ -60,6 +60,8 @@ pub struct Parsed {
     pub text: Vec<Range<usize>>,
     /// No Slim syntax error was found.
     pub valid: bool,
+    /// Line where Slim would have stopped for a reason other than indentation.
+    pub stop_line: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -123,6 +125,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             markers: Vec::new(),
             text: Vec::new(),
             valid: true,
+            stop_line: None,
         },
         lines,
         starts,
@@ -273,6 +276,7 @@ impl<'a> Parser<'a> {
 
     fn fail(&mut self) {
         self.out.valid = false;
+        self.out.stop_line.get_or_insert(self.i);
     }
 
     fn marker(&mut self, len: usize, kind: Marker) {
@@ -325,7 +329,7 @@ impl<'a> Parser<'a> {
         }
         if indent > self.base_indent() {
             if !self.expecting {
-                self.fail();
+                self.out.valid = false;
             }
             self.indents.push(indent);
         } else {
@@ -333,7 +337,7 @@ impl<'a> Parser<'a> {
                 self.indents.pop();
             }
             if indent != self.base_indent() {
-                self.fail();
+                self.out.valid = false;
                 self.indents.push(indent);
             }
         }
