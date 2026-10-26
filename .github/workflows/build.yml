@@ -194,6 +194,7 @@ jobs:
           publish npm-dist/main
 
   # Each registry gets its own job, so one failing doesn't block the other.
+  # A version already out is skipped, so a failed run can be re-run.
   publish-marketplace:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: extension
@@ -202,7 +203,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/download-artifact@v8
         with: { name: vsix }
-      - run: for vsix in *.vsix; do bunx @vscode/vsce publish --packagePath "$vsix"; done
+      - run: for vsix in *.vsix; do bunx @vscode/vsce publish --skip-duplicate --packagePath "$vsix"; done
         env: { VSCE_PAT: "${{ secrets.VSCE_PAT }}" }
 
   # Open VSX trusted publishing: no token, the registry trusts this repository and workflow file.
@@ -217,4 +218,4 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/download-artifact@v8
         with: { name: vsix }
-      - run: for vsix in *.vsix; do bunx ovsx publish --trusted-publishing "$vsix"; done
+      - run: for vsix in *.vsix; do bunx ovsx publish --trusted-publishing --skip-duplicate "$vsix"; done
