@@ -81,7 +81,7 @@ const languages = {
     casesScript: "slim_cases.rb",
     officialScript: "slim.rb",
     expectationAgrees: slimExpectation,
-    perturb: (source) => slimPerturbations(source),
+    perturb: async (source) => slimPerturbations(source),
   },
   haml: {
     name: "haml",
@@ -95,6 +95,8 @@ const languages = {
     casesScript: "haml_cases.rb",
     officialScript: "haml.rb",
     expectationAgrees: hamlExpectation,
+    perturb: (source) => hamlPerturbations(source),
+    reportsNormalForm: true,
   },
   // Corpora only: Erubi's own tests check output, not errors.
   erb: {
@@ -345,11 +347,106 @@ const slimPerturbations = (source) => {
   return variants.filter((v) => v && v.text !== source);
 };
 
+// The same for Haml. Indentation must be uniform, so it is rescaled as a whole, except the whitespace past the
+// structural prefix of filter and `-#` bodies, which is content (haml_perturb.rb finds those lines). Bare tag lines
+// and the bodies are told apart by the same helper, so trailing spaces never land in a body.
+const hamlPerturbations = async (source) => {
+  const helper = await runWithInput(
+    "ruby",
+    [path.join(oracleDir, "haml_perturb.rb")],
+    source,
+  );
+  if (helper.status !== 0) {
+    throw new Error(`haml_perturb.rb failed: ${helper.stderr}`);
+  }
+  const { unit, flat } = JSON.parse(helper.stdout);
+  const lines = source.split("\n");
+  // Rewrites the structural part of a line's leading whitespace; a flat line keeps what follows its prefix.
+  const restructured = (rewrite) => {
+    const rewritten = lines.map((line, index) => {
+      if (line.trim() === "") return line;
+      const whitespace = line.match(/^[ \t]*/)[0];
+      const prefix = flat[index] ?? whitespace.length;
+      const structure = rewrite(whitespace.slice(0, prefix));
+      return structure === undefined
+        ? undefined
+        : structure + line.slice(prefix);
+    });
+    return rewritten.includes(undefined) ? undefined : rewritten.join("\n");
+  };
+  const spaces = !unit.includes("\t") && unit.length > 0;
+  const levels = (structure) =>
+    /^ *$/.test(structure) && structure.length % unit.length === 0
+      ? structure.length / unit.length
+      : undefined;
+  const withUnit = (width, render) =>
+    spaces
+      ? restructured((structure) => {
+          const level = levels(structure);
+          return level === undefined ? undefined : render(level * width);
+        })
+      : undefined;
+  const bareTagLine = /^\s*((%[\w:-]+|[.#][\w-]+)([.#][\w-]+)*)?$/;
+  const variants = [
+    {
+      name: "indent x2",
+      text: spaces
+        ? withUnit(unit.length * 2, (n) => " ".repeat(n))
+        : undefined,
+    },
+    {
+      name: "indent x3",
+      text: spaces
+        ? withUnit(unit.length * 3, (n) => " ".repeat(n))
+        : undefined,
+    },
+    {
+      name: "tabs",
+      text:
+        spaces && 4 % unit.length === 0
+          ? withUnit(4, (n) => "\t".repeat(n / 4))
+          : undefined,
+    },
+    {
+      name: "unit 3",
+      text:
+        spaces && unit.length !== 3
+          ? withUnit(3, (n) => " ".repeat(n))
+          : undefined,
+    },
+    { name: "CRLF", text: source.replace(/\r?\n/g, "\r\n") },
+    { name: "BOM", text: `\uFEFF${source}` },
+    {
+      name: "trailing spaces",
+      text: lines
+        .map((line, index) =>
+          bareTagLine.test(line) && !(index in flat) && index < lines.length - 1
+            ? `${line}  `
+            : line,
+        )
+        .join("\n"),
+    },
+    { name: "extra blank lines", text: `${source.replace(/\n*$/, "\n")}\n\n` },
+    {
+      name: "whitespace-only last line",
+      text: `${source.replace(/\n*$/, "\n")}  \n`,
+    },
+    { name: "no final newline", text: source.replace(/\n+$/, "") },
+  ];
+  return variants.filter((v) => v.text !== undefined && v.text !== source);
+};
+
 // Formats the variants of one file: each must compile to the original's source once formatted, and formatting
 // the result again must change nothing. A refusal (the formatter leaves the text alone) is counted apart.
-const perturbedRows = async (lang, item, flags, originalSource) => {
+const perturbedRows = async (
+  lang,
+  item,
+  flags,
+  originalSource,
+  originalFormatted,
+) => {
   const rows = [];
-  for (const variant of lang.perturb(item.source)) {
+  for (const variant of await lang.perturb(item.source)) {
     const compiled = await officialResult(lang, variant.text, ...flags);
     if (compiled.source !== originalSource) {
       rows.push({ name: variant.name, outcome: "not equivalent" });
@@ -393,6 +490,7 @@ const perturbedRows = async (lang, item, flags, originalSource) => {
       outcome: "formatted",
       identical: after.source === originalSource,
       changed: once.text !== variant.text,
+      sameAsFormatted: once.text === originalFormatted,
       idempotent,
       failures,
       text: variant.text,
@@ -424,9 +522,8 @@ const firstDifference = (before, after) => {
 // Formats each item, then checks the compiled Rails code is unchanged and a second format changes nothing.
 // ORACLE_SAMPLE=n perturbs every n-th file only, to keep a run short.
 const PERTURB_SAMPLE = Number(process.env.ORACLE_SAMPLE) || 1;
-const sampled = (index) => index % PERTURB_SAMPLE === 0;
 
-const formatReport = (lang, items, indexes) =>
+const formatReport = (lang, items, indexes, sample) =>
   mapParallel(indexes, PARALLEL_RUBY_PROCESSES, async (i) => {
     const { source, path: file, label } = items[i];
     const once = formatText(file, source);
@@ -438,8 +535,8 @@ const formatReport = (lang, items, indexes) =>
     const before = await officialResult(lang, source, ...flags);
     const after = await officialResult(lang, once.text, ...flags);
     const perturbed =
-      lang.perturb && before.source !== undefined && sampled(i)
-        ? await perturbedRows(lang, items[i], flags, before.source)
+      lang.perturb && before.source !== undefined && i % sample === 0
+        ? await perturbedRows(lang, items[i], flags, before.source, once.text)
         : [];
     const notCompared = Boolean(before.not_compared);
     if (before.source === undefined && !notCompared) {
@@ -479,7 +576,8 @@ const formatReport = (lang, items, indexes) =>
   });
 
 // Prints the report block for `items` under `title`.
-const report = async (lang, title, items, skipped) => {
+// `perturbSample` n: only every n-th file of a big corpus is perturbed.
+const report = async (lang, title, items, skipped, perturbSample = 1) => {
   const skip = (reason) => skipped.set(reason, (skipped.get(reason) ?? 0) + 1);
   const files = items.map((item) => item.path);
   const official = await mapParallel(items, PARALLEL_RUBY_PROCESSES, (item) =>
@@ -500,7 +598,12 @@ const report = async (lang, title, items, skipped) => {
     formattable,
     notFormatted,
   } = compare(lang, items, official, oursByPath(lang, files), skip);
-  const formatted = await formatReport(lang, items, formattable);
+  const formatted = await formatReport(
+    lang,
+    items,
+    formattable,
+    perturbSample * PERTURB_SAMPLE,
+  );
   const count = (key) => formatted.filter((row) => row[key]).length;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
@@ -527,7 +630,7 @@ const report = async (lang, title, items, skipped) => {
     );
     const reasons = [...refusals].map(([r, n]) => `${r} ${n}`).join("; ");
     console.log(
-      `format perturbed: ${run.length} variants, formatter changed ${formattedVariants.filter((v) => v.changed).length}, compiled identical in ${formattedVariants.filter((v) => v.identical).length}, idempotent in ${formattedVariants.filter((v) => v.idempotent).length}, refused ${outcome("refused").length}${reasons ? ` (${reasons})` : ""}, failed ${outcome("failed").length}; not equivalent to the original ${outcome("not equivalent").length}`,
+      `format perturbed: ${run.length} variants, formatter changed ${formattedVariants.filter((v) => v.changed).length}, compiled identical in ${formattedVariants.filter((v) => v.identical).length}, idempotent in ${formattedVariants.filter((v) => v.idempotent).length}, refused ${outcome("refused").length}${reasons ? ` (${reasons})` : ""}, failed ${outcome("failed").length}; not equivalent to the original ${outcome("not equivalent").length}${lang.reportsNormalForm ? `; same text as the formatted original in ${formattedVariants.filter((v) => v.sameAsFormatted).length}` : ""}${perturbSample * PERTURB_SAMPLE > 1 ? ` (every ${perturbSample * PERTURB_SAMPLE}th file)` : ""}`,
     );
   }
   if (lang.perturb) {
@@ -605,6 +708,15 @@ const corpora = {
       url: "https://github.com/mastodon/mastodon.git",
       commit: "f045f6b43fa813564ddeaeffd8d7736e0ef19835",
       paths: ["app/views"],
+    },
+    {
+      // gitlab.com answers `git ls-remote`; the GitHub mirror needs credentials here. 2,314 .haml files, so only
+      // every 10th is perturbed.
+      name: "gitlab",
+      url: "https://gitlab.com/gitlab-org/gitlab.git",
+      commit: "8cc12b9bfed2884db0f85805d6abe3659bb9ad59",
+      paths: ["app/views", "ee/app/views"],
+      perturbSample: 10,
     },
   ],
 };
@@ -689,6 +801,7 @@ const languageReport = async (lang) => {
       `${name}, corpus ${corpus.name}@${corpus.commit.slice(0, 7)}`,
       corpusItems(corpus, lang.extension),
       new Map(),
+      corpus.perturbSample,
     );
   }
 };
