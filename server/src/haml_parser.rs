@@ -7,7 +7,9 @@ use std::convert::Infallible;
 
 pub const BOM: char = '\u{feff}';
 const AT_START: &str = "Indenting at the beginning of the document is illegal.";
+const UNBALANCED: &str = "Unbalanced brackets.";
 const ILLEGAL_ELEMENT: &str = "Illegal element: classes and ids must have values.";
+const SELF_CLOSING_CONTENT: &str = "Self-closing tags can't have content.";
 const NESTING_PLAIN: &str = "Illegal nesting: nesting within plain text is illegal.";
 const NESTING_SELF_CLOSING: &str = "Illegal nesting: nesting within a self-closing tag is illegal.";
 const NESTING_CONTENT: &str = "Illegal nesting: nesting within a tag that already has content is illegal.";
@@ -369,7 +371,7 @@ impl Parser {
     fn comment(&mut self, text: &str) -> Result<(), Halt> {
         let text = text.trim_start_matches(RUBY_WHITESPACE);
         let text = if text.starts_with("![") { &text[1..] } else { text };
-        let text = if text.starts_with('[') { balance_brackets(text).unwrap_or("") } else { text };
+        let text = if text.starts_with('[') { balance_brackets(text).ok_or_else(|| halt(UNBALANCED, self.line.index))? } else { text };
         let has_text = !text.trim_matches(RUBY_WHITESPACE).is_empty();
         if self.block_opened()? && has_text {
             return Err(self.nested_line_error(NESTING_CONTENT));
@@ -394,19 +396,21 @@ impl Parser {
         }
         let mut rest = text[head_len..].to_string();
         let (mut hash, mut list, mut reference) = (false, false, false);
+        // The line the last attribute group ends on, which Haml reports some errors at.
+        let mut last_line = self.line.index;
         loop {
             match rest.chars().next() {
                 Some('{') if !hash => {
                     hash = true;
-                    rest = self.skip_hash(&rest)?;
+                    (rest, last_line) = self.skip_hash(&rest)?;
                 }
                 Some('(') if !list => {
                     list = true;
-                    rest = self.skip_attribute_list(&rest)?;
+                    (rest, last_line) = self.skip_attribute_list(&rest)?;
                 }
                 Some('[') if !reference => {
                     reference = true;
-                    rest = balance_brackets(&rest).unwrap_or("").to_string();
+                    rest = balance_brackets(&rest).ok_or_else(|| halt(UNBALANCED, self.line.index))?.to_string();
                 }
                 _ => break,
             }
@@ -416,6 +420,9 @@ impl Parser {
         let block_opened = self.block_opened()?;
         if block_opened && content.self_closing {
             return Err(self.nested_line_error(NESTING_SELF_CLOSING));
+        }
+        if content.self_closing && !content.value.is_empty() {
+            return Err(halt(SELF_CLOSING_CONTENT, last_line));
         }
         if block_opened && !content.value.is_empty() && !is_ruby_multiline(&content.value) {
             let message = format!("Illegal nesting: content can't be both given on the same line as %{name} and nested within it.");
@@ -428,30 +435,41 @@ impl Parser {
     }
 
     /// `parse_old_attributes`: what follows the `{...}` that starts `text`, which may close on a later line.
-    fn skip_hash(&mut self, text: &str) -> Result<String, Halt> {
+    fn skip_hash(&mut self, text: &str) -> Result<(String, usize), Halt> {
         let mut scanner = BraceScanner::new();
         let mut segment = text[1..].to_string();
+        let mut last_line = self.line.index;
         loop {
             if let Some(end) = scanner.feed(&segment) {
-                return Ok(segment[end..].to_string());
+                return Ok((segment[end..].to_string(), last_line));
             }
             if self.next_line.end_of_document {
-                return Ok(String::new());
+                return Err(halt(UNBALANCED, self.line.index));
             }
             segment = self.next_line.text.clone();
+            last_line += 1;
             self.next_line()?;
         }
     }
 
     /// `parse_new_attributes`: what follows the `(...)` that starts `text`, whose attributes may continue on later lines.
-    fn skip_attribute_list(&mut self, text: &str) -> Result<String, Halt> {
+    fn skip_attribute_list(&mut self, text: &str) -> Result<(String, usize), Halt> {
+        let mut joined = text.to_string();
         let mut segment = text[1..].trim_start_matches(REGEXP_SPACE).to_string();
+        let mut continuations = 0;
         loop {
             match scan_attribute_list(&segment) {
-                AttributeList::Closed(end) => return Ok(segment[end..].to_string()),
-                AttributeList::Invalid => return Ok(String::new()),
+                AttributeList::Closed(end) => return Ok((segment[end..].to_string(), self.line.index + continuations)),
+                AttributeList::Unbalanced => return Err(halt(UNBALANCED, self.line.index)),
+                AttributeList::Invalid => {
+                    let fragment = balance_parentheses(&joined).unwrap_or(&joined);
+                    return Err(halt(format!("Invalid attribute list: {}.", ruby_inspect(fragment)), self.line.index + continuations));
+                }
                 AttributeList::Continues => {
+                    joined.push(' ');
+                    joined.push_str(&self.next_line.text);
                     segment = self.next_line.text.clone();
+                    continuations += 1;
                     self.next_line()?;
                 }
             }
@@ -480,20 +498,22 @@ fn is_word(ch: char) -> bool {
 /// The element name, where its `.class#id` part starts and where the head ends (Haml's `%([-:\w]+)([-:\w.#\@]*)`); a line
 /// that starts with `.` or `#` is a `div` and only has the `.class#id` part.
 fn tag_head(text: &str) -> Option<(&str, usize, usize)> {
-    let (name, name_len) = match text.strip_prefix('%') {
-        Some(after) => {
-            let name_len = after.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':'))).unwrap_or(after.len());
-            (&after[..name_len], 1 + name_len)
-        }
-        None => ("div", 0),
+    let (name, name_end) = if text.starts_with('%') {
+        // Haml's regexp is unanchored: `%%p` is the element `p`.
+        let start =
+            text.char_indices().find_map(|(at, ch)| (ch == '%' && text[at + 1..].starts_with(is_tag_name_char)).then_some(at + 1))?;
+        let name_len = text[start..].find(|ch: char| !is_tag_name_char(ch)).unwrap_or(text.len() - start);
+        (&text[start..start + name_len], start + name_len)
+    } else {
+        ("div", 0)
     };
-    if name.is_empty() {
-        return None;
-    }
-    let attributes = &text[name_len..];
-    let attributes_len =
-        attributes.find(|ch: char| !(is_word(ch) || matches!(ch, '-' | ':' | '.' | '#' | '@'))).unwrap_or(attributes.len());
-    Some((name, name_len, name_len + attributes_len))
+    let attributes = &text[name_end..];
+    let attributes_len = attributes.find(|ch: char| !(is_tag_name_char(ch) || matches!(ch, '.' | '#' | '@'))).unwrap_or(attributes.len());
+    Some((name, name_end, name_end + attributes_len))
+}
+
+fn is_tag_name_char(ch: char) -> bool {
+    is_word(ch) || matches!(ch, '-' | ':')
 }
 
 /// Haml's `/[.#](\.|#|\z)/` over `.class#id`: a `.` or `#` followed by another or by nothing.
@@ -560,6 +580,8 @@ enum AttributeList {
     Continues,
     /// Haml's "Invalid attribute list".
     Invalid,
+    /// An interpolation in a value never closes.
+    Unbalanced,
 }
 
 /// `parse_new_attribute` in a loop over one line of `(a=1 b="x#{y}" c)`, starting at an attribute.
@@ -575,8 +597,10 @@ fn scan_attribute_list(segment: &str) -> AttributeList {
         at = segment.len() - after_name.len();
         if let Some(after_equals) = after_name.strip_prefix('=') {
             let value = after_equals.trim_start_matches(REGEXP_SPACE);
-            let Some(value_len) = attribute_value_len(value) else { return AttributeList::Invalid };
-            at = segment.len() - value.len() + value_len;
+            match attribute_value_len(value) {
+                Ok(value_len) => at = segment.len() - value.len() + value_len,
+                Err(failure) => return failure,
+            }
         }
         at = segment.len() - segment[at..].trim_start_matches(REGEXP_SPACE).len();
         if at == segment.len() {
@@ -585,63 +609,177 @@ fn scan_attribute_list(segment: &str) -> AttributeList {
     }
 }
 
-/// Length of a quoted string (with `#{}` interpolation) or a variable at the start of `value`.
-fn attribute_value_len(value: &str) -> Option<usize> {
+/// Length of a quoted string (with `#{}` interpolation) or a variable at the start of `value`; the failure otherwise.
+fn attribute_value_len(value: &str) -> Result<usize, AttributeList> {
     let Some(quote @ ('"' | '\'')) = value.chars().next() else {
-        let variable = value.trim_start_matches(['@', '$']);
+        let variable = ["@@", "@", "$"].iter().find_map(|prefix| value.strip_prefix(prefix)).unwrap_or(value);
         let name_len = variable.find(|ch: char| !is_word(ch)).unwrap_or(variable.len());
-        return (name_len > 0).then_some(value.len() - variable.len() + name_len);
+        return if name_len > 0 { Ok(value.len() - variable.len() + name_len) } else { Err(AttributeList::Invalid) };
     };
-    let mut chars = value.char_indices().skip(1).peekable();
-    while let Some((at, ch)) = chars.next() {
+    let mut at = 1;
+    while let Some(ch) = value[at..].chars().next() {
+        let after = &value[at + ch.len_utf8()..];
         match ch {
-            '\\' => {
-                chars.next();
+            '\\' => match after.chars().next() {
+                Some(escaped) => at += 1 + escaped.len_utf8(),
+                None => break,
+            },
+            '#' if after.starts_with('{') => {
+                // Haml's `balance`, which counts only the braces.
+                let mut depth = 1;
+                let close = after[1..].char_indices().find_map(|(offset, brace)| {
+                    depth += match brace {
+                        '{' => 1,
+                        '}' => -1,
+                        _ => 0,
+                    };
+                    (depth == 0).then_some(offset)
+                });
+                let Some(close) = close else { return Err(AttributeList::Unbalanced) };
+                at += 2 + close + 1;
             }
-            '#' if chars.peek().is_some_and(|&(_, next)| next == '{') => {
-                let interpolation = &value[at + 2..];
-                let mut scanner = BraceScanner::new();
-                let end = scanner.feed(interpolation)?;
-                let resume = at + 2 + end;
-                while chars.peek().is_some_and(|&(next, _)| next < resume) {
-                    chars.next();
-                }
+            ch if ch == quote => return Ok(at + 1),
+            _ => at += ch.len_utf8(),
+        }
+    }
+    Err(AttributeList::Invalid)
+}
+
+/// What Haml prints for a string in an error: Ruby's `String#inspect`.
+fn ruby_inspect(text: &str) -> String {
+    let mut out = String::from("\"");
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(ch);
             }
-            ch if ch == quote => return Some(at + 1),
-            _ => {}
+            '#' if matches!(chars.peek(), Some('{' | '$' | '@')) => out.push_str("\\#"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\x1b' => out.push_str("\\e"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04X}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Haml's `balance` over `(` and `)`: the text up to the parenthesis that closes the first one, stripped.
+fn balance_parentheses(text: &str) -> Option<&str> {
+    let mut depth = 0;
+    for (at, ch) in text.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => continue,
+        }
+        if depth == 0 {
+            return Some(text[..at + 1].trim_matches(RUBY_WHITESPACE));
         }
     }
     None
 }
 
+/// `<<~ID`, `<<-ID`, `<<ID` and the quoted forms at `chars[at]`: the terminator, whether the body interpolates and the
+/// index after the opener.
+fn heredoc_start(chars: &[(usize, char)], at: usize) -> Option<(String, bool, usize)> {
+    let mut i = at + 2;
+    if matches!(chars.get(i), Some((_, '~' | '-'))) {
+        i += 1;
+    }
+    let &(_, first) = chars.get(i)?;
+    if matches!(first, '\'' | '"' | '`') {
+        let length = chars[i + 1..].iter().position(|&(_, ch)| ch == first)?;
+        let id: String = chars[i + 1..i + 1 + length].iter().map(|&(_, ch)| ch).collect();
+        return Some((id, first != '\'', i + length + 2));
+    }
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    let length = chars[i..].iter().take_while(|&&(_, ch)| is_word(ch)).count();
+    Some((chars[i..i + length].iter().map(|&(_, ch)| ch).collect(), true, i + length))
+}
+
 #[derive(Clone, Copy)]
 enum Mode {
-    Code { braces: usize },
-    Text { closer: char, opener: Option<char>, nested: usize, interpolates: bool },
+    Code {
+        braces: usize,
+    },
+    Text {
+        closer: char,
+        opener: Option<char>,
+        nested: usize,
+        interpolates: bool,
+    },
+    /// The body of a heredoc: the lines up to one that is just its terminator (`heredoc_ids[id]`).
+    Heredoc {
+        id: usize,
+        interpolates: bool,
+    },
 }
 
 /// Finds the `}` that closes a Ruby `{` over several lines, as Haml does by lexing the text with Prism: a `}` inside a
 /// string, comment, `%w()` literal, regexp or `?}` doesn't count. Lines are fed once each.
 struct BraceScanner {
     modes: Vec<Mode>,
+    /// The last character of code that isn't whitespace.
     previous: Option<char>,
+    /// The last word of code, and whether the character just read continues it.
+    word: String,
+    in_word: bool,
+    heredoc_ids: Vec<String>,
+    /// Heredocs started on this line, whose bodies begin on the next.
+    pending_heredocs: Vec<Mode>,
 }
+
+/// After these a value starts, so `/` and `%` begin a literal.
+const KEYWORDS_BEFORE_VALUE: [&str; 15] =
+    ["if", "unless", "while", "until", "and", "or", "not", "return", "when", "then", "do", "else", "elsif", "in", "begin"];
 
 impl BraceScanner {
     /// Starts just after the opening `{`.
     fn new() -> BraceScanner {
-        BraceScanner { modes: vec![Mode::Code { braces: 0 }], previous: Some('{') }
+        BraceScanner {
+            modes: vec![Mode::Code { braces: 0 }],
+            previous: Some('{'),
+            word: String::new(),
+            in_word: false,
+            heredoc_ids: Vec::new(),
+            pending_heredocs: Vec::new(),
+        }
     }
 
     /// A value (string, regexp, literal) can start here, rather than an operator.
     fn value_expected(&self) -> bool {
         self.previous.is_none_or(|ch| "([{,;=:|&!<>?+-*/%^~".contains(ch))
+            || self.previous.is_some_and(is_word) && KEYWORDS_BEFORE_VALUE.contains(&self.word.as_str())
     }
 
     /// The offset just past the closing `}` when this line holds it.
     fn feed(&mut self, line: &str) -> Option<usize> {
         let chars: Vec<(usize, char)> = line.char_indices().collect();
+        // A line break ends a statement, so what follows starts a value.
+        if matches!(self.modes.last(), Some(Mode::Code { .. })) && self.previous.is_some_and(|ch| is_word(ch) || ")]}\"".contains(ch)) {
+            self.previous = Some(';');
+        }
         let mut i = 0;
+        if let Some(&Mode::Heredoc { id, .. }) = self.modes.last() {
+            if line == self.heredoc_ids[id] {
+                self.modes.pop();
+                self.previous = Some('"');
+                return None;
+            }
+        }
+        if matches!(self.modes.last(), Some(Mode::Text { closer: '\n', .. })) {
+            self.modes.pop();
+            self.previous = Some('"');
+            return None;
+        }
+        let mut spaced = false;
         while i < chars.len() {
             let (at, ch) = chars[i];
             let next = chars.get(i + 1).map(|&(_, next)| next);
@@ -663,19 +801,47 @@ impl BraceScanner {
                         self.set_nested(nested + 1);
                     }
                 }
+                Mode::Heredoc { interpolates, .. } => {
+                    i += 1;
+                    if ch == '\\' {
+                        i += 1;
+                    } else if interpolates && ch == '#' && next == Some('{') {
+                        self.modes.push(Mode::Code { braces: 0 });
+                        self.previous = Some('{');
+                        i += 1;
+                    }
+                }
                 Mode::Code { braces } => {
                     i += 1;
+                    // `puts /x/` and `link_to %w(a)`: after a word and a space, a `/` or `%` that isn't followed by a space starts a literal.
+                    let after_word_and_space = spaced
+                        && self.previous.is_some_and(is_word)
+                        && !self.word.starts_with(|digit: char| digit.is_ascii_digit())
+                        && next.is_some_and(|following| !following.is_whitespace() && following != '=');
+                    let expected = self.value_expected();
+                    let literal_expected = expected || after_word_and_space;
                     match ch {
                         ' ' | '\t' => {}
-                        '#' => return None,
+                        '#' => break,
                         '"' | '`' | '\'' => {
                             self.modes.push(Mode::Text { closer: ch, opener: None, nested: 0, interpolates: ch != '\'' });
                         }
-                        '/' if self.value_expected() => {
+                        '/' if literal_expected => {
                             self.modes.push(Mode::Text { closer: '/', opener: None, nested: 0, interpolates: true });
                         }
-                        '%' if self.value_expected() => i = self.percent_literal(&chars, i - 1),
-                        '?' if self.value_expected() && next.is_some_and(|c| !c.is_whitespace()) => {
+                        '%' if literal_expected => i = self.percent_literal(&chars, i - 1),
+                        '<' if next == Some('<') => match heredoc_start(&chars, i - 1) {
+                            Some((id, interpolates, end))
+                                if literal_expected || chars[i + 1..end].iter().any(|&(_, c)| c == '~' || c == '-') =>
+                            {
+                                self.heredoc_ids.push(id);
+                                self.pending_heredocs.push(Mode::Heredoc { id: self.heredoc_ids.len() - 1, interpolates });
+                                self.previous = Some('"');
+                                i = end;
+                            }
+                            _ => self.previous = Some(ch),
+                        },
+                        '?' if expected && next.is_some_and(|c| !c.is_whitespace()) => {
                             i += if next == Some('\\') { 2 } else { 1 };
                             self.previous = Some('"');
                         }
@@ -693,11 +859,22 @@ impl BraceScanner {
                                 return Some(at + 1);
                             }
                         }
-                        _ => self.previous = Some(ch),
+                        _ => {
+                            self.previous = Some(ch);
+                            if is_word(ch) && !self.in_word {
+                                self.word.clear();
+                            }
+                            if is_word(ch) {
+                                self.word.push(ch);
+                            }
+                        }
                     }
+                    self.in_word = is_word(ch);
+                    spaced = ch == ' ' || ch == '\t';
                 }
             }
         }
+        self.modes.extend(self.pending_heredocs.drain(..).rev());
         None
     }
 
@@ -705,7 +882,13 @@ impl BraceScanner {
     fn percent_literal(&mut self, chars: &[(usize, char)], percent: usize) -> usize {
         let kind = chars.get(percent + 1).map(|&(_, ch)| ch).filter(|ch| "wWiIqQrsx".contains(*ch));
         let delimiter_at = percent + 1 + usize::from(kind.is_some());
-        let Some(&(_, delimiter)) = chars.get(delimiter_at).filter(|(_, ch)| !ch.is_alphanumeric() && !ch.is_whitespace()) else {
+        if delimiter_at == chars.len() {
+            // `%` at the end of a line: the next line is the string, but a word list with a newline delimiter never ends.
+            let closer = if matches!(kind, Some('w' | 'W' | 'i' | 'I')) { '\0' } else { '\n' };
+            self.modes.push(Mode::Text { closer, opener: None, nested: 0, interpolates: false });
+            return delimiter_at;
+        }
+        let Some(&(_, delimiter)) = chars.get(delimiter_at).filter(|(_, ch)| !ch.is_alphanumeric()) else {
             self.previous = Some('%');
             return percent + 1;
         };
@@ -869,7 +1052,7 @@ mod tests {
     #[test]
     fn a_hash_left_open_over_many_lines_ends_at_the_end_of_the_document() {
         let text = format!("%a{{b: 1,\n{}%p", "  c: 1,\n".repeat(20_000));
-        assert_eq!(error_of(&text), None);
+        assert_eq!(error_of(&text), Some((0, UNBALANCED.to_string())));
     }
 
     /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`): the error is at the nested line.
@@ -941,6 +1124,104 @@ mod tests {
         assert_eq!(error_of("#$x\n  b"), Some((1, NESTING_PLAIN.to_string())));
         for text in ["#@x t", ".a-b.c_d#e:f", ".@container.x", "%p.a#b"] {
             assert_eq!(error_of(text), None, "{text:?}");
+        }
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`).
+    #[test]
+    fn attribute_errors() {
+        let unbalanced = |at: usize| Some((at, UNBALANCED.to_string()));
+        let invalid = |at: usize, fragment: &str| Some((at, format!("Invalid attribute list: {fragment}.")));
+        let cases: Vec<(&str, Option<(usize, String)>)> = vec![
+            ("%p{'foo => 'bar'}", unbalanced(0)),
+            ("%p{:foo => 'bar}", unbalanced(0)),
+            ("%p{:foo => 'bar\"}", unbalanced(0)),
+            ("%p{a: 1", unbalanced(0)),
+            ("%p{", unbalanced(0)),
+            ("%p{a: 1,\n  b: 2", unbalanced(0)),
+            ("%p{a: 1\n%b", unbalanced(0)),
+            ("x\n%p{a: 1,\n", unbalanced(1)),
+            ("%p[@a", unbalanced(0)),
+            ("%p[@a\n%b", unbalanced(0)),
+            ("%p(a='x#{y' b=1)", unbalanced(0)),
+            ("%p(a=\"#{x\")", unbalanced(0)),
+            ("/[if IE", unbalanced(0)),
+            ("%p\n/![if IE", unbalanced(1)),
+            ("%p{a: 1,\nunless z\n/x}\n}", unbalanced(0)),
+            ("%p{a: (b /2),\n c: 3}\n    %b", unbalanced(0)),
+            ("%p{a: 1,\nbegin /\n}\n", unbalanced(0)),
+            ("%a{a: <<~H.strip\nbody }\nH}", unbalanced(0)),
+            ("%p{% }", unbalanced(0)),
+            ("%p{%\n}", unbalanced(0)),
+            ("%%p[", unbalanced(0)),
+            ("%p{a: 1,\n%i\nx\n}\n%b\n", unbalanced(0)),
+            ("%p{a: 1,\n%w\n}\n}\n", unbalanced(0)),
+            ("%p(", invalid(0, "\"(\"")),
+            ("%p(foo 'bar')", invalid(0, "\"(foo 'bar')\"")),
+            ("%p(foo 'bar'\nbaz='bang')", invalid(0, "\"(foo 'bar'\"")),
+            ("%p(foo='bar'\nbaz 'bang'\nbip='bop')", invalid(1, "\"(foo='bar' baz 'bang'\"")),
+            ("%p(foo=)", invalid(0, "\"(foo=)\"")),
+            ("%p(foo=\nbar)", invalid(0, "\"(foo=\"")),
+            ("%p(a=1\n%b", invalid(1, "\"(a=1 %b\"")),
+            ("%p{a: 1}(b=", invalid(0, "\"(b=\"")),
+            ("%p(a=\"x)", invalid(0, "\"(a=\\\"x)\"")),
+            ("%p(a=1,b=2)", invalid(0, "\"(a=1,b=2)\"")),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(error_of(text), expected, "{text:?}");
+        }
+        for text in [
+            "%p{a: 1,\n  b: z\n/}/}\n%i",
+            "%p{a: 1 if x,\n  b: 2}\n  %b",
+            "%p{a: (x if y /2/),\n b: 1}\n%b",
+            "%p{a: x\n%w(}) }",
+            "%a{a: <<~H,\n  body }\nH\n  b: 1}\n%p",
+            "%a{a: <<-H,\n  }\n  H\n  b: 1}\n%p",
+            "%a{a: <<H,\n}\nH\n  b: 1}\n%p",
+            "%a{a: <<~'H',\n  #{ }\nH\n  b: 1}\n%p",
+            "%a{a: <<~\"H\",\n  #{ {a: 1}[:a] } }\nH\n  b: 1}\n%p",
+            "%a{a: <<~H, b: <<~J,\n x }\nH\n y }\nJ\n  c: 1}\n%p",
+            "%a{a: 1 << 2,\n b: 3}\n%b",
+            "%p{a: %\nx\n}",
+            "%p{a: 1,\n%q\nx\n}\n%b",
+            "%p{a: (1 /2),\n b: 1 / 2}",
+            "%p(a=1",
+            "%p{a: 1}(b=2",
+            "%p{a: (1}",
+            "%p{a: 1))}",
+            "%p(a b)",
+            "%p()",
+            "%p( )",
+            "%p{}",
+            "%p(a=@@b c=$d e.f=g)",
+            "%p{a: ->{ 1 }}",
+            "%p(a=\"#{x}\")",
+            "%p{a: \"}\"}x",
+            "%p{a: 1}}",
+            ":plain\n  %p{",
+            "-# %p{\n",
+        ] {
+            assert_eq!(error_of(text), None, "{text:?}");
+        }
+    }
+
+    /// Each case was checked against Haml 7.5.1 (`test/oracle/haml.rb`): the error is at the line the attributes end on.
+    #[test]
+    fn self_closing_tags_with_content() {
+        let content = |at: usize| Some((at, SELF_CLOSING_CONTENT.to_string()));
+        let cases = [
+            ("%br/ text", content(0)),
+            ("%p{:a => 'b',\n:c => 'd'}/ e", content(1)),
+            ("%p(a=1\n b=2)/ x", content(1)),
+            ("%p<>/ x", content(0)),
+            ("%p[@x]/ x", content(0)),
+            ("%br/ x,", content(0)),
+            ("%br/ x\n  y", Some((1, NESTING_SELF_CLOSING.to_string()))),
+            ("%a{b: /\\}/}\n%br/", None),
+            ("%p/ \n%b", None),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(error_of(text), expected, "{text:?}");
         }
     }
 }

@@ -179,6 +179,9 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
     let (code, start, end) = match parse_error.message.as_str() {
         "Indenting at the beginning of the document is illegal." => (code::TOP_LEVEL_INDENT, 0, bom_len + indent),
         "Illegal nesting: nesting within a header command is illegal." => (code::DOCTYPE_CHILDREN, bom_len + indent, raw.len()),
+        "Self-closing tags can't have content." => (code::SELF_CLOSING_CONTENT, bom_len + indent, raw.len()),
+        "Unbalanced brackets." => (code::UNCLOSED_ATTRIBUTE, bom_len + indent, raw.len()),
+        message if message.starts_with("Invalid attribute list") => (code::UNCLOSED_ATTRIBUTE, bom_len + indent, raw.len()),
         "Illegal element: classes and ids must have values." => (code::ILLEGAL_ELEMENT, bom_len + indent, raw.len()),
         message if message.starts_with("Illegal nesting") => (code::ILLEGAL_NESTING, bom_len + indent, raw.len()),
         _ => (code::INCONSISTENT_INDENT, 0, bom_len + if indent > 0 { indent } else { body.len() }),
@@ -251,12 +254,8 @@ fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> 
     }
     // Tags
     if is_haml_tag(c) {
-        let (rest, head_lines) = skip_tag_head(lines, i, text, out);
-        if let Some(content) = rest.trim_start_matches(['<', '>']).strip_prefix('/') {
-            if !content.trim().is_empty() {
-                let message = "Self-closing tags can't have content.";
-                out.push(coded(error(line_range(text, i, ws_len, raw.len()), message), code::SELF_CLOSING_CONTENT));
-            }
+        let (rest, head_lines) = skip_tag_head(lines, i);
+        if rest.trim_start_matches(['<', '>']).starts_with('/') {
             return (LineKind::Tag, head_lines);
         }
         let rest_t = rest.trim();
@@ -404,9 +403,9 @@ fn check_explicit_end(code: &str, text: &str, line: usize, raw: &str, out: &mut 
     }
 }
 
-/// Skip over `%tag.class#id{...}(...)[...]`, validating bracket balance (possibly across lines).
+/// Skip over `%tag.class#id{...}(...)[...]` (possibly across lines).
 /// Returns the remainder and lines consumed.
-fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (String, usize) {
+fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let raw = lines[i];
     let mut consumed = 1;
     let mut s: String = raw[leading_ws(raw).len()..].to_string();
@@ -437,8 +436,6 @@ fn skip_tag_head(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>
                 if extended {
                     pos += find_balanced(&s[pos..], ch, close).unwrap();
                 } else {
-                    let message = format!("Unclosed `{}` in tag attributes", ch);
-                    out.push(coded(error(line_range(text, i, leading_ws(raw).len(), raw.len()), message), code::UNCLOSED_ATTRIBUTE));
                     return (String::new(), consumed);
                 }
             }
@@ -470,8 +467,6 @@ mod tests {
                 at(7, 2, 7, "`end` is not allowed: Haml closes blocks by indentation"),
                 at(8, 2, 16, "Unknown Haml filter `:unknownfilter`"),
                 at(10, 2, 8, "Got \"else\" with no preceding \"if\""),
-                at(12, 2, 11, "Self-closing tags can't have content."),
-                at(17, 2, 14, "Unclosed `{` in tag attributes"),
             ]
         );
     }
