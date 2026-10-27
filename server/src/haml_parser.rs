@@ -70,6 +70,16 @@ struct Parser {
     /// The open `if`/`case`/`unless` lines, for `else`, `elsif` and `when` (`@script_level_stack`).
     script_levels: Vec<ScriptLevel>,
     void_content: Vec<VoidContent>,
+    roles: Vec<Role>,
+    /// The lines whose depth Haml read (`Line#tabs`).
+    tabs_read: Vec<bool>,
+    compiled: Vec<Compiled>,
+    /// The texts of the lines joined into the node being read.
+    joined: Vec<String>,
+    /// The line of the filter or `-#` comment whose body is being read.
+    flat_owner: usize,
+    /// The flat section is a `-#` comment, which Haml compiles to nothing.
+    flat_comment: bool,
     /// The first filter Haml has no compiler for; it fails at compile time, so any parser error comes first.
     unknown_filter: Option<Error>,
 }
@@ -98,11 +108,37 @@ pub struct VoidContent {
     pub nested: bool,
 }
 
+/// What a physical line is to Haml. Reliable when the template has no error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// An empty or whitespace-only line Haml skips, and any line past the last one it reads.
+    Blank,
+    /// A line Haml reads as a node, `depth` levels deep (`Line#tabs`).
+    Structural { depth: usize },
+    /// A line joined into the one at `owner`: `|` multiline, Ruby after a comma, an attribute group that goes on.
+    /// Its indentation is stripped, so it can move freely, except that Haml checks it against the indentation unit
+    /// when it read the line's depth (`counted`): then it has to be a multiple of the unit.
+    Inner { owner: usize, counted: bool },
+    /// A line of the filter or `-#` comment body at `owner`, a content line: `prefix_len` bytes of its whitespace are
+    /// the body's indentation (the flat prefix), the rest is text. Also the blank lines inside the body.
+    FlatBody { owner: usize, prefix_len: usize },
+}
+
+/// What Haml makes of one node, as far as the compiled source depends on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Compiled {
+    Node { index: usize, tabs: usize, text: String, joined: Vec<String> },
+    Flat { index: usize, text: String },
+}
+
 pub struct Parsed {
     /// The first error Haml raises for the template, at the line it reports.
     pub error: Option<Error>,
     /// Only filled when the template compiles.
     pub void_content: Vec<VoidContent>,
+    /// One per physical line of the template (without a BOM).
+    pub roles: Vec<Role>,
+    compiled: Vec<Compiled>,
 }
 
 pub fn parse(text: &str) -> Parsed {
@@ -112,11 +148,26 @@ pub fn parse(text: &str) -> Parsed {
         Err(Halt::Done) => parser.unknown_filter.take(),
     };
     let void_content = if error.is_some() { Vec::new() } else { parser.void_content };
-    Parsed { error, void_content }
+    let mut roles = parser.roles;
+    for (role, &counted) in roles.iter_mut().zip(&parser.tabs_read) {
+        if let Role::Inner { owner, .. } = *role {
+            *role = Role::Inner { owner, counted };
+        }
+    }
+    Parsed { error, void_content, roles, compiled: parser.compiled }
 }
 
-/// The lines of `text` as Haml (and the LSP) split them: at `\r\n`, `\r` and `\n`.
-pub fn physical_lines(text: &str) -> Vec<&str> {
+/// Whether Haml compiles `before` and `after` to the same source: both are free of errors and read the same nodes, at
+/// the same lines and depths, with the same texts. Indentation (other than the depth and a filter body's text past its
+/// prefix), line endings, trailing whitespace and the empty lines at the end don't matter to Haml.
+pub fn same_compilation(before: &str, after: &str) -> bool {
+    let (before, after) = (parse(before), parse(after));
+    before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
+}
+
+/// The lines of `text` as Haml (and the LSP) split them, at `\r\n`, `\r` and `\n`, each with its line ending
+/// (empty on a last line without one).
+pub fn lines_with_endings(text: &str) -> Vec<(&str, &str)> {
     if text.is_empty() {
         return Vec::new();
     }
@@ -124,14 +175,18 @@ pub fn physical_lines(text: &str) -> Vec<&str> {
     let mut rest = text;
     loop {
         let end = rest.find(['\r', '\n']).unwrap_or(rest.len());
-        lines.push(&rest[..end]);
         let tail = &rest[end..];
-        let skip = if tail.starts_with("\r\n") { 2 } else { tail.len().min(1) };
-        if skip == 0 {
+        let ending = if tail.starts_with("\r\n") { 2 } else { tail.len().min(1) };
+        lines.push((&rest[..end], &tail[..ending]));
+        if ending == 0 {
             return lines;
         }
-        rest = &tail[skip..];
+        rest = &tail[ending..];
     }
+}
+
+pub fn physical_lines(text: &str) -> Vec<&str> {
+    lines_with_endings(text).into_iter().map(|(line, _)| line).collect()
 }
 
 fn split_lines(text: &str) -> Vec<Line> {
@@ -166,6 +221,7 @@ impl Parser {
     fn new(text: &str) -> Parser {
         let mut template: VecDeque<Line> = split_lines(text).into();
         let index = template.len();
+        let lines = index;
         template.push_back(Line { text: "-#".into(), full: "-#".into(), index, end_of_document: true, ..Line::default() });
         Parser {
             template,
@@ -180,6 +236,12 @@ impl Parser {
             tab_up: false,
             script_levels: Vec::new(),
             void_content: Vec::new(),
+            roles: vec![Role::Blank; lines],
+            tabs_read: vec![false; lines],
+            compiled: Vec::new(),
+            joined: Vec::new(),
+            flat_owner: 0,
+            flat_comment: false,
             unknown_filter: None,
         }
     }
@@ -197,11 +259,16 @@ impl Parser {
                 self.process_indent()?;
             }
             if self.flat {
+                self.read_flat_line();
                 self.advance();
                 continue;
             }
             self.tab_up = false;
-            let node = if self.line.text.is_empty() { Node::Other } else { self.process_line()? };
+            self.joined.clear();
+            let read = if self.line.text.is_empty() { Ok(Node::Other) } else { self.process_line() };
+            // The last node counts even when the document ends in the middle of it.
+            self.record_node();
+            let node = read?;
             if self.block_opened()? || self.tab_up {
                 self.template_tabs += 1;
                 self.open_blocks.push(node);
@@ -217,6 +284,44 @@ impl Parser {
         }
     }
 
+    fn set_role(&mut self, index: usize, role: Role) {
+        if let Some(slot) = self.roles.get_mut(index) {
+            *slot = role;
+        }
+    }
+
+    /// A line of a filter or `-#` comment body, whose text is what follows the flat prefix.
+    fn read_flat_line(&mut self) {
+        let prefix = self.flat_spaces.as_deref().unwrap_or("");
+        let (text, prefix_len) = match self.line.full.strip_prefix(prefix) {
+            Some(text) if !self.flat_comment => (text.to_string(), prefix.len()),
+            Some(_) => (String::new(), prefix.len()),
+            None => (String::new(), 0),
+        };
+        let index = self.line.index;
+        self.set_role(index, Role::FlatBody { owner: self.flat_owner, prefix_len });
+        self.compiled.push(Compiled::Flat { index, text });
+    }
+
+    fn record_node(&mut self) {
+        if self.line.text.is_empty() {
+            return;
+        }
+        let (index, tabs) = (self.line.index, self.line.tabs.unwrap_or(0));
+        self.set_role(index, Role::Structural { depth: tabs });
+        let comment = self.line.text.starts_with("-#");
+        let text = if comment { String::new() } else { self.line.text.clone() };
+        let node = Compiled::Node { index, tabs, text, joined: std::mem::take(&mut self.joined) };
+        self.compiled.push(node);
+    }
+
+    /// A line that was read as part of the one at `owner`.
+    fn join_line(&mut self, line_index: usize, owner: usize, text: &str) {
+        let role = if text.is_empty() { Role::Blank } else { Role::Inner { owner, counted: false } };
+        self.set_role(line_index, role);
+        self.joined.push(text.to_string());
+    }
+
     fn advance(&mut self) {
         self.line = std::mem::take(&mut self.next_line);
         self.line_defined = true;
@@ -229,6 +334,9 @@ impl Parser {
         }
         let line = std::mem::take(self.slot(which));
         let tabs = self.compute_tabs(&line);
+        if let Some(read) = self.tabs_read.get_mut(line.index) {
+            *read = true;
+        }
         *self.slot(which) = line;
         let tabs = tabs?;
         self.slot(which).tabs = Some(tabs);
@@ -313,6 +421,10 @@ impl Parser {
                 break;
             }
             line.text.push_str(text.strip_suffix('|').unwrap_or(text));
+            let (index, owner) = (next.index, line.index);
+            if !text.is_empty() {
+                self.set_role(index, Role::Inner { owner, counted: false });
+            }
             self.template.pop_front();
         }
     }
@@ -362,11 +474,13 @@ impl Parser {
         }
     }
 
-    fn start_flat_section(&mut self) -> Node {
+    fn start_flat_section(&mut self, comment: bool) -> Node {
         if !self.filter_opened() {
             return Node::Other;
         }
         self.flat = true;
+        self.flat_owner = self.line.index;
+        self.flat_comment = comment;
         self.flat_spaces = self.indentation.as_ref().map(|indentation| indentation.repeat(self.template_tabs + 1));
         Node::FlatSection
     }
@@ -385,10 +499,10 @@ impl Parser {
         match (chars.next(), chars.next()) {
             (Some('%' | '.'), _) => self.tag(text)?,
             (Some('#'), second) if !matches!(second, Some('{' | '@' | '$')) => self.tag(text)?,
-            (Some('-'), Some('#')) => return Ok(self.start_flat_section()),
+            (Some('-'), Some('#')) => return Ok(self.start_flat_section(true)),
             (Some(':'), _) => {
                 self.filter(&text[1..])?;
-                return Ok(self.start_flat_section());
+                return Ok(self.start_flat_section(false));
             }
             (Some('/'), _) => self.comment(&text[1..])?,
             (Some('!'), _) if text.starts_with("!!!") => self.doctype()?,
@@ -557,6 +671,7 @@ impl Parser {
                 return Err(halt(UNBALANCED, self.line.index));
             }
             segment = self.next_line.text.clone();
+            self.join_line(self.next_line.index, self.line.index, &segment);
             last_line += 1;
             self.next_line()?;
         }
@@ -579,6 +694,7 @@ impl Parser {
                     joined.push(' ');
                     joined.push_str(&self.next_line.text);
                     segment = self.next_line.text.clone();
+                    self.join_line(self.next_line.index, self.line.index, &segment);
                     continuations += 1;
                     self.next_line()?;
                 }
@@ -592,9 +708,17 @@ impl Parser {
             return Ok(());
         }
         let continues = |line: &Line| !line.end_of_document && is_ruby_multiline(&line.text);
+        let owner = self.line.index;
+        if !self.next_line.end_of_document {
+            let (index, text) = (self.next_line.index, self.next_line.text.clone());
+            self.join_line(index, owner, &text);
+        }
         let mut joined_continues = continues(&self.next_line);
         while joined_continues {
             let Some(next) = self.template.pop_front() else { break };
+            if !next.end_of_document {
+                self.join_line(next.index, owner, &next.text);
+            }
             joined_continues = continues(&next);
         }
         self.next_line()
@@ -1500,5 +1624,156 @@ mod tests {
         assert!(void("%br/").is_empty());
         assert!(void("%p\n  %br\n  %img{src: 1}\n  %b x").is_empty());
         assert!(parse("%br\n  %p x\n% a").void_content.is_empty());
+    }
+
+    /// Pairs of templates and whether `Haml::Engine` (`test/oracle/haml.rb --rails`) compiles them to the same source.
+    #[test]
+    fn same_compilation_agrees_with_haml() {
+        let pairs: &[(&str, &str, &str, bool)] = &[
+            ("indent x2", "%div\n  %p x\n  %b\n    text\n", "%div\n    %p x\n    %b\n        text\n", true),
+            ("tabs", "%div\n  %p x\n  %b\n    text\n", "%div\n\t%p x\n\t%b\n\t\ttext\n", true),
+            ("one space", "%div\n  %p x\n  %b\n    text\n", "%div\n %p x\n %b\n  text\n", true),
+            ("crlf", "%div\n  %p x\n  %b\n    text\n", "%div\r\n  %p x\r\n  %b\r\n    text\r\n", true),
+            ("lone cr", "%div\n  %p x\n  %b\n    text\n", "%div\r  %p x\r  %b\r    text\r", true),
+            ("bom", "%div\n  %p x\n  %b\n    text\n", "\u{feff}%div\n  %p x\n  %b\n    text\n", true),
+            ("no final newline", "%div\n  %p x\n  %b\n    text\n", "%div\n  %p x\n  %b\n    text", true),
+            ("trailing blank lines", "%div\n  %p x\n  %b\n    text\n", "%div\n  %p x\n  %b\n    text\n\n\n", true),
+            ("trailing ws-only lines", "%div\n  %p x\n  %b\n    text\n", "%div\n  %p x\n  %b\n    text\n   \n \n", true),
+            ("trailing ws", "%div\n  %p x\n  %b\n    text\n", "%div  \n  %p x  \n  %b \n    text  \n", true),
+            ("blank line added", "%div\n  %p x\n  %b\n    text\n", "%div\n\n  %p x\n  %b\n    text\n", false),
+            ("ws-only line added", "%div\n  %p x\n  %b\n    text\n", "%div\n   \n  %p x\n  %b\n    text\n", false),
+            ("leading blank line", "%div\n  %p x\n  %b\n    text\n", "\n%div\n  %p x\n  %b\n    text\n", false),
+            ("blank removed", "%div\n\n  %p\n", "%div\n  %p\n", false),
+            ("ws-only vs empty line", "%div\n\n  %p\n", "%div\n   \n  %p\n", true),
+            ("text changed", "%div\n  %p x\n  %b\n    text\n", "%div\n  %p y\n  %b\n    text\n", false),
+            ("depth changed", "%div\n  %p x\n  %b\n    text\n", "%div\n  %p x\n    %b\n    text\n", false),
+            ("filter 2 vs 4", "%div\n  :javascript\n    a\n      b\n", "%div\n    :javascript\n        a\n          b\n", true),
+            ("filter body relative changed", "%div\n  :javascript\n    a\n      b\n", "%div\n  :javascript\n    a\n        b\n", false),
+            ("filter tab vs spaces body", "%div\n\t:plain\n\t\ta\n\t\t\tb\n", "%div\n  :plain\n    a\n    \tb\n", true),
+            ("filter tab all spaces (content changes)", "%div\n\t:plain\n\t\ta\n\t\t\tb\n", "%div\n  :plain\n    a\n      b\n", false),
+            ("filter ws-only line short", "%div\n  :plain\n    a\n  \n    b\n", "%div\n  :plain\n    a\n\n    b\n", true),
+            (
+                "filter ws-only line longer",
+                "%div\n    :plain\n        a\n          \n        b\n",
+                "%div\n  :plain\n    a\n      \n    b\n",
+                true,
+            ),
+            (
+                "filter ws-only line longer lost",
+                "%div\n    :plain\n        a\n          \n        b\n",
+                "%div\n  :plain\n    a\n\n    b\n",
+                false,
+            ),
+            ("filter body trailing ws", "%div\n  :javascript\n    a\n", "%div\n  :javascript\n    a  \n", true),
+            ("filter blank removed", "%div\n  :javascript\n    a\n\n    b\n", "%div\n  :javascript\n    a\n    b\n", false),
+            ("filter trailing blank then dedent", "%div\n  :javascript\n    a\n%p\n", "%div\n  :javascript\n    a\n\n%p\n", false),
+            ("filter trailing ws-only vs empty", "%div\n  :plain\n    a\n\n%p\n", "%div\n  :plain\n    a\n  \n%p\n", true),
+            ("filter head trailing ws", ":plain\n  a\n", ":plain  \n  a\n", true),
+            ("haml comment body", "%div\n  -# a\n    b\n      c\n", "%div\n    -# a\n        b\n          c\n", true),
+            ("pipe 2 vs 4 cont", "%p a |\n  b |\n%i\n", "%p a |\n      b |\n%i\n", true),
+            ("pipe cont at 0", "%p a |\n  b |\n%i\n", "%p a |\nb |\n%i\n", true),
+            ("pipe joined text differs", "%p a |\n  b |\n%i\n", "%p a |\n  c |\n%i\n", false),
+            ("pipe blank inside", "%p a |\n  b |\n%i\n", "%p a |\n\n  b |\n%i\n", false),
+            ("ruby comma cont", "= foo(1,\n  2)\n%p\n", "= foo(1,\n        2)\n%p\n", true),
+            ("ruby comma cont text differs", "= foo(1,\n  2)\n%p\n", "= foo(1,\n  3)\n%p\n", false),
+            ("attr hash cont", "%a{b: 1,\n  c: 2} t\n", "%a{b: 1,\n        c: 2} t\n", true),
+            ("attr hash cont at 0", "%a{b: 1,\n  c: 2} t\n", "%a{b: 1,\nc: 2} t\n", true),
+            ("attr list cont", "%a(b=1\n  c=2) t\n", "%a(b=1\n         c=2) t\n", true),
+            ("tag script comma cont", "%p= foo(1,\n  2)\n%i\n", "%p= foo(1,\n 2)\n%i\n", true),
+            ("pre children", "%div\n  %pre\n    %b x\n    %i y\n", "%div\n    %pre\n        %b x\n        %i y\n", true),
+            ("tilde", "%div\n  ~ \"a\"\n", "%div\n    ~ \"a\"\n", true),
+            ("else dedent", "- if a\n  %p\n- else\n  %b\n", "- if a\n    %p\n- else\n    %b\n", true),
+            ("case when", "- case x\n- when 1\n  %p\n", "- case x\n  - when 1\n    %p\n", true),
+            ("plain text trailing ws", "%p\n  text\n", "%p\n  text   \n", true),
+            ("plain text tab inside", "%p\n  a\tb\n", "%p\n  a b\n", false),
+            ("error before", "%p a\n  b\n", "%p a\n    b\n", false),
+            ("error vs fine", "%div\n  %p\n   %b\n", "%div\n  %p\n    %b\n", false),
+            ("empty", "", "\n\n", true),
+            ("only filter", ":plain\n  a\n", ":plain\n    a\n", true),
+            ("filter first line blank body", ":plain\n    \n  a\n", ":plain\n\n  a\n", false),
+            ("nested tab filter", "%a\n\t%b\n\t\t:plain\n\t\t\tx\n\t\t\t\ty\n", "%a\n  %b\n    :plain\n      x\n      \ty\n", true),
+            ("unknown filter", ":nope\n  a\n", ":nope\n    a\n", false),
+        ];
+        let disagreements: Vec<_> =
+            pairs.iter().filter(|(_, before, after, equal)| same_compilation(before, after) != *equal).map(|p| p.0).collect();
+        // Haml reads a `when` one level under its `case` like a sibling; the trace keeps depths, so it only refuses.
+        assert_eq!(disagreements, ["case when"]);
+    }
+
+    fn roles(text: &str) -> Vec<Role> {
+        let parsed = parse(text);
+        assert_eq!(parsed.error, None, "{text:?}");
+        parsed.roles
+    }
+
+    #[test]
+    fn roles_of_each_kind_of_line() {
+        use Role::*;
+        let text = "%div\n    %p a |\n         b |\n\n    %a{href: x,\n  title: y}\n    = link_to 1,\n 2\n    :plain\n        text\n\n          more\n      \n    %i\n";
+        assert_eq!(
+            roles(text),
+            [
+                Structural { depth: 0 },
+                Structural { depth: 1 },
+                Inner { owner: 1, counted: false },
+                Blank,
+                Structural { depth: 1 },
+                Inner { owner: 4, counted: false },
+                Structural { depth: 1 },
+                Inner { owner: 6, counted: false },
+                Structural { depth: 1 },
+                FlatBody { owner: 8, prefix_len: 8 },
+                FlatBody { owner: 8, prefix_len: 0 },
+                FlatBody { owner: 8, prefix_len: 8 },
+                FlatBody { owner: 8, prefix_len: 0 },
+                Structural { depth: 1 },
+            ]
+        );
+        assert_eq!(
+            roles("-# note\n    body\n\n%p"),
+            [Structural { depth: 0 }, FlatBody { owner: 0, prefix_len: 4 }, FlatBody { owner: 0, prefix_len: 0 }, Structural { depth: 0 }]
+        );
+        assert_eq!(roles("%p\n\n\n"), [Structural { depth: 0 }]);
+        assert_eq!(roles("\n\n%p"), [Blank, Blank, Structural { depth: 0 }]);
+    }
+
+    /// `HAML_PAIRS=dir cargo test --release pairs -- --ignored`: `dir` holds `N.a`, `N.b` and `N.eq` (`1` when Haml
+    /// compiles the two to the same source); prints how many `same_compilation` agrees with.
+    #[test]
+    #[ignore]
+    fn pairs() {
+        let dir = std::env::var("HAML_PAIRS").expect("HAML_PAIRS");
+        let (mut agree, mut conservative, mut unsafe_) = (0, 0, Vec::new());
+        let mut by_change = std::collections::BTreeMap::<String, (usize, usize)>::new();
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "a") {
+                continue;
+            }
+            let read = |ext: &str| String::from_utf8_lossy(&std::fs::read(path.with_extension(ext)).unwrap()).into_owned();
+            let (before, after, equal) = (read("a"), read("b"), read("eq").trim() == "1");
+            let tally = by_change.entry(read("name")).or_default();
+            match (same_compilation(&before, &after), equal) {
+                (ours, haml) if ours == haml => agree += 1,
+                (false, true) => {
+                    conservative += 1;
+                    tally.0 += 1;
+                    if tally.0 <= 2 {
+                        println!("conservative {}: {path:?}", read("name"));
+                    }
+                }
+                (true, false) => {
+                    tally.1 += 1;
+                    unsafe_.push(path);
+                }
+                _ => unreachable!(),
+            }
+        }
+        println!("conservative and unsafe by change: {by_change:?}");
+        println!(
+            "agree {agree}, conservative (Haml equal, trace different) {conservative}, unsafe (trace equal, Haml different) {}",
+            unsafe_.len()
+        );
+        assert!(unsafe_.is_empty(), "{unsafe_:?}");
     }
 }

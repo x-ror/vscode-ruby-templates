@@ -672,7 +672,7 @@
             "haml-lint"
           ],
           "enumDescriptions": [
-            "Built-in, through the language server: re-indent every nesting level to the file's indent unit and trim trailing whitespace on Haml lines; settings from .editorconfig and .haml-lint.yml. Files with errors other than indentation are left alone.",
+            "Built-in, through the language server: re-indent every nesting level to the indentation width (2 by default, spaces) and trim trailing whitespace where Haml ignores it; only the width from the editor or .editorconfig applies. Files Haml would reject are left alone.",
             "haml-lint --auto-correct-only: applies the safe corrections of your haml-lint/RuboCop config, which can rewrite Ruby code."
           ],
           "default": "reindent",

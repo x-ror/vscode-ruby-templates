@@ -25,9 +25,14 @@
 - Empty lines at the end of a Slim file collapse into the final newline (Slim drops them); whitespace-only lines there stay, as Slim compiles them.
 - **Breaking:** Slim takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, also in editors that indent with tabs, keeps each line's ending, and ignores `end_of_line`, `insert_final_newline` and `trim_trailing_whitespace`.
 
+- Haml formatting never changes what Haml compiles: before writing, the formatter compares the nodes, depths and filter bodies Haml reads from the text before and after, and leaves the file as it is if they differ. A file with any Haml error is left unchanged.
+- Empty and whitespace-only lines at the end of a Haml file collapse into the final line ending (Haml strips the template).
+- **Breaking:** Haml takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, so tab-indented Haml is now written with spaces, keeps each line's ending, and ignores `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace` and the `.haml-lint.yml` formatting keys (`FinalNewline`, `TrailingWhitespace`, `TrailingEmptyLines`).
+- **Breaking:** files with Haml indentation errors are no longer re-indented; fix the error first.
+
 ### Development
 
-- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter (also on perturbed copies of each file) with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
+- `bun test/oracle.js slim|haml|erb` compares our diagnostics and formatter (also on perturbed copies of each file) with the official Slim 5.2.2, Haml 7.5.1 and Rails 8.1.4 ERB implementations, on their test suites and on public apps' views; the Haml oracle also runs on GitLab's views; `bun test/oracle.js context` compares the render checks with actionview 7.0 to 8.0 (`test/oracle/README.md`).
 
 ## 0.1.0
 

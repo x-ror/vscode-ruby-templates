@@ -3,7 +3,7 @@
 //! with the reason.
 
 use crate::lang::{html_host, slim_html_host, TemplateLang};
-use crate::{erb, erb_format, haml_format, haml_indent, slim_format, slim_indent, slim_ruby, tags, util};
+use crate::{erb, erb_format, haml_format, haml_indent, haml_parser, slim_format, slim_indent, slim_ruby, tags, util};
 use std::fmt;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
 
@@ -157,7 +157,7 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines)?,
         TemplateLang::Erb if !html_host(uri) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
         TemplateLang::Erb => erb_format::indent(text, &indent_unit(settings), settings.trim_trailing_whitespace, is_partial(uri))?,
-        TemplateLang::Haml => haml_format::indent(text, settings.indent_size, settings.trim_trailing_whitespace)?,
+        TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
     };
     let mut lines = split_lines(&indented.text, &indented.fixed);
@@ -178,10 +178,10 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
     Ok(Formatted { text, notes: indented.notes })
 }
 
-/// The settings `format` works with: Slim takes only the indentation width: it always writes spaces, keeps each line's ending, and trims, ends the file
-/// and keeps blank lines by its own rules (a range, which can't add a line, leaves the final newline alone).
+/// The settings `format` works with: Slim and Haml take only the indentation width: they always write spaces, keep each line's ending, and trim,
+/// end the file and keep blank lines by their own rules (a range, which can't add a line, leaves the final newline alone).
 pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
-    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim) {
+    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml) {
         return settings.clone();
     }
     Settings {
@@ -221,6 +221,17 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Res
     // Slim compiles every line, blank ones included, so line counts stay as they are.
     let fixed = vec![true; text.split('\n').count()];
     Ok(Indented { text, fixed, notes: vec![] })
+}
+
+fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
+    let Some(formatted) = haml_format::format(text, settings.indent_size) else {
+        return skip(SkipKind::Doubt, "Haml would reject the file");
+    };
+    if !haml_parser::same_compilation(text, &formatted) {
+        return skip(SkipKind::Doubt, "the compiled output would change");
+    }
+    let fixed = vec![true; formatted.split('\n').count()];
+    Ok(Indented { text: formatted, fixed, notes: vec![] })
 }
 
 struct Line<'a> {
@@ -393,6 +404,36 @@ mod tests {
     }
 
     #[test]
+    fn haml_takes_only_the_indentation_width_from_the_settings() {
+        let d = Settings::default;
+        assert_eq!(fmt("a.html.haml", "%div\n\t%p  \n", &d()).as_deref(), Ok("%div\n  %p\n"));
+        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..d() };
+        assert_eq!(fmt("a.haml", "%div\n  %p\n", &tabs).as_deref(), Ok("%div\n   %p\n"));
+        let crlf = Settings { end_of_line: Some(LineEnding::CrLf), trim_trailing_whitespace: false, ..d() };
+        assert_eq!(fmt("a.haml", "%p \n%i\n\n  \n", &crlf).as_deref(), Ok("%p\n%i\n"), "ending kept, trailing lines collapse");
+        let more_blank = Settings { collapse_blank_lines: true, ..d() };
+        assert_eq!(fmt("a.haml", "%p\n\n\n%i\n", &more_blank).as_deref(), Ok("%p\n\n\n%i\n"));
+        let range = Settings { final_newline: None, ..d() };
+        assert_eq!(fmt("a.haml", "%p", &range).as_deref(), Ok("%p"));
+    }
+
+    #[test]
+    fn haml_continuation_lines_follow_a_width_of_four() {
+        let four = Settings { indent_size: 4, ..Settings::default() };
+        let text = "%div\n  %p= link_to \"Home\",\n    root_path\n";
+        assert_eq!(fmt("a.html.haml", text, &four).as_deref(), Ok("%div\n    %p= link_to \"Home\",\n        root_path\n"));
+    }
+
+    #[test]
+    fn haml_files_with_an_error_are_left_alone() {
+        // Misindented, so formatting would change them; the inconsistent indentation is an error, not something to repair.
+        for text in ["%div\n    %p\n  %i\n", "%div\n    %p= x\n        %b\n", "  %p\n", "%div\n    :nope\n        a\n"] {
+            let skipped = fmt("a.html.haml", text, &Settings::default()).expect_err(text);
+            assert_eq!((skipped.kind, skipped.reason.as_str()), (SkipKind::Doubt, "Haml would reject the file"), "{text:?}");
+        }
+    }
+
+    #[test]
     fn final_newline_and_line_endings() {
         let s = Settings::default();
         assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
@@ -400,12 +441,12 @@ mod tests {
         let keep = Settings { final_newline: None, ..Settings::default() };
         assert_eq!(fmt("a.slim", "p", &keep).as_deref(), Ok("p"));
         let drop = Settings { final_newline: Some(false), ..Settings::default() };
-        assert_eq!(fmt("a.html.haml", "p\n", &drop).as_deref(), Ok("p"));
+        assert_eq!(fmt("a.html.haml", "p", &drop).as_deref(), Ok("p\n"), "Haml ends the file by its own rules");
         assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>"));
         let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
-        assert_eq!(fmt("a.html.haml", "p\r\nq\r\n", &lf).as_deref(), Ok("p\nq\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &lf).as_deref(), Ok("<p>\n<br>\n"));
         let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.html.haml", "p\nq", &crlf).as_deref(), Ok("p\r\nq\r\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\r\n<br>\r\n"));
     }
 
     #[test]

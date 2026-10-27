@@ -363,12 +363,15 @@ const checks = {
   },
 
   async "reindent Haml command"() {
-    const text = await runOnSelection(
-      "app/views/users/reindent.html.haml",
-      [0, 0, 0, 0],
-      "rubyTemplates.reindentHaml",
-    );
-    assert.strictEqual(text, "%div\n    %p\n        %b x\n");
+    const editor = await open("app/views/users/reindent.html.haml");
+    try {
+      editor.options = { tabSize: 2, insertSpaces: true };
+      select(editor, 0, 0, 0, 0);
+      await vscode.commands.executeCommand("rubyTemplates.reindentHaml");
+      assert.strictEqual(editor.document.getText(), "%div\n  %p\n    %b x\n");
+    } finally {
+      await revert(editor);
+    }
   },
 
   async "Haml Format Document reindents"() {

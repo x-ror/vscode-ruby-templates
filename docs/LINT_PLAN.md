@@ -218,7 +218,7 @@ Decided (2026-10-25):
 3. **Remove, real bugs without an official source:** `silent-output-helper` (ERB, Slim) and `unsafe-output`; no exception to principle 1. The first case of `unclosed-tag` stays: it has a source in WHATWG (3a).
 4. **HTML of Slim and Haml output** is in scope, citing WHATWG (1a, 2a); `void-children` stays with that source.
 5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
-6. **Editor and `.editorconfig` give the Slim formatter only the indentation width (default 2); it always writes spaces and keeps the file's line endings** (decided 2026-10-26).
+6. **Editor and `.editorconfig` give the Slim and Haml formatters only the indentation width (default 2); they always write spaces and keep the file's line endings** (Slim decided 2026-10-26, Haml 2026-10-27). For Haml, empty and whitespace-only lines at the end collapse into one final line ending (Haml strips the template), and the `.haml-lint.yml` formatting keys stop applying.
 
 ### Built-in diagnostic codes
 
@@ -300,8 +300,8 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | 0b. Context              | done        |
 | 1a. Slim errors          | done        |
 | 1b. Slim format          | done        |
-| 2a. Haml errors          | in review   |
-| 2b. Haml format          | not started |
+| 2a. Haml errors          | done        |
+| 2b. Haml format          | in review   |
 | 3a. ERB errors           | not started |
 | 3b. ERB format           | not started |
 | 4. Editor and CLI        | not started |
