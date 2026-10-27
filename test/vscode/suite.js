@@ -136,7 +136,7 @@ const checks = {
       return d.length && d.map((x) => x.message);
     });
     assert.ok(
-      messages.some((m) => m.includes("never closed")),
+      messages.some((m) => m.includes("unexpected end-of-input")),
       messages.join("\n"),
     );
   },

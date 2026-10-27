@@ -1,10 +1,11 @@
-//! ERB diagnostics via tree-sitter-embedded-template + Ruby block balancing.
+//! ERB diagnostics via tree-sitter-embedded-template, plus the Ruby syntax errors of `erb_ruby`.
 
-use crate::ruby::{analyze, code_end, ends_with_block, BlockEffect, CodeEnd};
+use crate::erb_ruby;
+use crate::ruby::ends_with_block;
 use crate::util::{coded, error, offset_to_position, warning};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 use tree_sitter::{Node, Parser, Tree};
 
 // Helpers whose block content only reaches the page through their return value.
@@ -17,12 +18,7 @@ static OUTPUT_BLOCK_HELPER: LazyLock<Regex> = LazyLock::new(|| {
 pub mod code {
     pub const UNCLOSED_TAG: &str = "unclosed-tag";
     pub const MALFORMED_TAG: &str = "malformed-tag";
-    pub const STRAY_END: &str = "stray-end";
-    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
-    pub const UNCLOSED_BLOCK: &str = "unclosed-block";
-    pub const OUTPUT_CONTROL_FLOW: &str = "output-control-flow";
     pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
-    pub const UNTERMINATED_STRING: &str = "unterminated-string";
     pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
@@ -84,82 +80,21 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         }
     }
 
-    // Ruby block balance across all code tags.
-    struct Opener {
-        range: Range,
-        snippet: String,
-    }
-    let mut openers: Vec<Opener> = Vec::new();
     let mut cursor = root.walk();
     for node in root.children(&mut cursor) {
         let kind = node.kind();
-        if kind != "directive" && kind != "output_directive" {
+        if (kind != "directive" && kind != "output_directive") || text[node.start_byte()..].starts_with("<%=") {
             continue;
         }
         let mut c2 = node.walk();
         let Some(code) = node.children(&mut c2).find(|n| n.kind() == "code") else { continue };
-        let snippet = &text[code.byte_range()];
-        let range = node_range(text, node);
-        // A tag left open runs on to the next one's `%>`, swallowing the tags between.
-        // One that starts a line counts even inside a string, which an unfinished `"…` usually is.
-        let line_start = |at: usize| snippet[..at].rsplit('\n').next().is_some_and(|l| l.trim().is_empty() && snippet[..at].contains('\n'));
-        let swallowed = snippet.match_indices("<%").find(|&(at, _)| line_start(at) || code_end(&snippet[..at]) == CodeEnd::Code);
-        if swallowed.is_some() {
-            let opener = Range::new(range.start, Position::new(range.start.line, u32::MAX));
-            out.push(coded(error(opener, "Unclosed ERB tag: missing `%>` before the next `<%`"), code::UNCLOSED_TAG));
-            continue;
-        }
-        let (effect, _, _) = analyze(snippet);
-        match effect {
-            BlockEffect::Open(n) => {
-                for _ in 0..n {
-                    openers.push(Opener { range, snippet: snippet.trim().to_string() });
-                }
-            }
-            BlockEffect::Close(n) => {
-                for _ in 0..n {
-                    if openers.pop().is_none() {
-                        out.push(coded(error(range, "Unexpected `end`: no open block"), code::STRAY_END));
-                    }
-                }
-            }
-            BlockEffect::Continue => {
-                if openers.is_empty() {
-                    out.push(coded(error(range, format!("`{}` without an open block", snippet.trim())), code::UNMATCHED_BRANCH));
-                }
-            }
-            BlockEffect::Neutral => {}
-        }
-        // ERB ends a tag at the first `%>`, even inside a string; the `%>` meant to close it follows on the line.
-        // A tag still being typed has no `%>` at all, and a heredoc body may hold lone quotes.
-        let rest_of_line = text[node.end_byte()..].split('\n').next().unwrap_or("");
-        let cut_short = text[..node.end_byte()].ends_with("%>") && rest_of_line.contains("%>");
-        if cut_short && code_end(snippet) == CodeEnd::String && !snippet.contains("<<") {
-            let message = "String is not closed before `%>`: ERB ends the tag at the first `%>`, even inside a string";
-            out.push(coded(warning(range, message), code::UNTERMINATED_STRING));
-        }
-        let is_output = text[node.start_byte()..].starts_with("<%=");
-        let t = snippet.trim();
-        if is_output {
-            // `<%= if a then b else c end %>` is one balanced expression.
-            let control_flow = t.starts_with("if ") || t.starts_with("unless ") || t == "end" || t.starts_with("end ");
-            if control_flow && effect != BlockEffect::Neutral {
-                let message = "Control flow in an output tag `<%= %>`; did you mean `<% %>`?";
-                out.push(coded(warning(range, message), code::OUTPUT_CONTROL_FLOW));
-            }
-        } else if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
+        let t = text[code.byte_range()].trim();
+        if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
             let message = format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1]);
-            out.push(coded(warning(range, message), code::SILENT_OUTPUT_HELPER));
+            out.push(coded(warning(node_range(text, node), message), code::SILENT_OUTPUT_HELPER));
         }
     }
-    for o in openers {
-        let message = format!("Block `{}` is never closed: missing `<% end %>`", truncate(&o.snippet, 40));
-        out.push(coded(error(o.range, message), code::UNCLOSED_BLOCK));
-    }
-    // Ruby parse errors would only repeat a broken tag or block structure, so they wait until it is sound.
-    if out.iter().all(|d| d.severity != Some(DiagnosticSeverity::ERROR)) {
-        out.extend(crate::ruby_syntax::diagnostics(text, &tree).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
-    }
+    out.extend(erb_ruby::diagnostics(text).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     out
 }
 
@@ -230,7 +165,7 @@ pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+    use tower_lsp::lsp_types::DiagnosticSeverity;
 
     fn only(text: &str) -> Diagnostic {
         let diags = diagnostics(text);
@@ -240,13 +175,6 @@ mod tests {
 
     fn span(line: u32, start: u32, end: u32) -> Range {
         Range::new(Position::new(line, start), Position::new(line, end))
-    }
-
-    #[test]
-    fn tag_left_open_before_the_next_one() {
-        let d = only("<p>é</p><%= render \"sh\n<%= link_to x %>\n");
-        assert_eq!((d.range.start, d.code), (Position::new(0, 8), Some(NumberOrString::String(code::UNCLOSED_TAG.into()))));
-        assert!(diagnostics(r#"<%= "<%" + x %>"#).is_empty());
     }
 
     #[test]
@@ -263,33 +191,9 @@ mod tests {
             .map(|d| (d.range.start.line, crate::util::code(&d).unwrap_or_default().to_string()))
             .collect();
         got.sort();
-        let want = [(5, code::OUTPUT_CONTROL_FLOW), (8, code::STRAY_END), (9, code::UNCLOSED_TAG)];
+        let want =
+            [(0, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (9, code::UNCLOSED_TAG)];
         assert_eq!(got, want.map(|(line, code)| (line, code.to_string())));
-    }
-
-    #[test]
-    fn balanced_if_expression_in_output_tag_is_fine() {
-        assert!(diagnostics("<%= if a\n  b\nelse\n  c\nend %>").is_empty());
-        assert_eq!(only("<%= if a %>x<% end %>").code, Some(NumberOrString::String(code::OUTPUT_CONTROL_FLOW.into())));
-    }
-
-    #[test]
-    fn percent_gt_inside_a_string_ends_the_tag() {
-        let codes = |t: &str| diagnostics(t).into_iter().filter_map(|d| d.code).collect::<Vec<_>>();
-        let unterminated = NumberOrString::String(code::UNTERMINATED_STRING.into());
-        let ruby_syntax = NumberOrString::String(code::RUBY_SYNTAX.into());
-        assert_eq!(codes(r#"<%= "50%>" %>"#), [unterminated.clone(), ruby_syntax.clone()]);
-        assert_eq!(codes("<% x = 'a%>' %>"), [unterminated.clone(), ruby_syntax]);
-        for clean in [
-            r#"<%= render "sh"#,
-            "<%= link_to 'x\n<p>%></p>",
-            r#"<%= "50%" %>"#,
-            "<%= x # don't %>",
-            "<% x = <<~T\n  don't\nT\n%>",
-            r#"<%= "a\"b" %>"#,
-        ] {
-            assert!(!codes(clean).contains(&unterminated), "{clean}");
-        }
     }
 
     #[test]
@@ -320,28 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_end_uses_utf16_columns() {
-        // 😀 is 2 UTF-16 units, é is 1: tag starts at column 4.
-        let d = only("😀é <% end %>");
-        assert_eq!(d.message, "Unexpected `end`: no open block");
-        assert_eq!(d.severity, Some(DiagnosticSeverity::ERROR));
-        assert_eq!(d.range, span(0, 4, 13));
-    }
-
-    #[test]
-    fn continuation_without_block() {
-        assert_eq!(only("<% elsif y %>").message, "`elsif y` without an open block");
-    }
-
-    #[test]
-    fn control_flow_in_output_tag_warns() {
-        let d = only("<% if x %><%= end %>");
-        assert_eq!(d.message, "Control flow in an output tag `<%= %>`; did you mean `<% %>`?");
-        assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
-        assert_eq!(d.range, span(0, 10, 20));
-    }
-
-    #[test]
     fn block_helper_in_non_output_tag_warns() {
         let d = only("<% form_with model: @u do |f| %><% end %>");
         assert_eq!(d.message, "Block helper `form_with` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?");
@@ -367,13 +249,6 @@ mod tests {
         ] {
             assert!(diagnostics(ok).is_empty(), "{ok}: {:?}", diagnostics(ok));
         }
-    }
-
-    #[test]
-    fn never_closed_block_truncates_long_snippet() {
-        let d = only("é\n  😀<% items_with_a_very_long_name.each_with_index do |item, i| %>");
-        assert_eq!(d.message, "Block `items_with_a_very_long_name.each_with_in…` is never closed: missing `<% end %>`");
-        assert_eq!(d.range.start, Position::new(1, 4));
     }
 
     #[test]
@@ -407,12 +282,5 @@ mod tests {
         assert_eq!(doc("f %>", 2), Some("`%>`"));
         assert_eq!(doc("<% f", 2), None);
         assert_eq!(doc("a -%>", 0), None);
-    }
-
-    #[test]
-    fn return_modifier_does_not_open_a_block() {
-        assert!(diagnostics("<% return unless current_user %>\n<p>hi</p>").is_empty());
-        assert!(diagnostics("<% return if x %>").is_empty());
-        assert!(only("<% if x %>\n<p>hi</p>").message.starts_with("Block `if x` is never closed"));
     }
 }

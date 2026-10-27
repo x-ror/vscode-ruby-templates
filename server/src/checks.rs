@@ -290,13 +290,13 @@ mod tests {
         let haml = "%p hi\n  %b x\n";
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
-        // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.
-        let erb_cases = [("<% end %>\n", erb::code::STRAY_END), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
+        // Each code gets its own text, so one check does not hide another.
+        let erb_cases = [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
         let options = Options {
-            disabled_erb: vec![erb::code::STRAY_END.into(), tags::code::UNCLOSED_ELEMENT.into()],
+            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into()],
             disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
             ..Options::default()
         };
@@ -339,7 +339,6 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("tags.rs"),
             include_str!("html_lint.rs"),
-            include_str!("ruby_syntax.rs"),
             include_str!("haml_indent.rs"),
             include_str!("slim_indent.rs"),
         ] {

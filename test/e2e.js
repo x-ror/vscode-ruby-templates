@@ -378,10 +378,15 @@ const check = (label, actual, expected) => {
         )
       : "none";
   };
-  // Lines 4 and 13 are tags left open for the completion checks; each swallows the tags up to the next `%>`.
+  // Lines 4, 5, 6 and 13 are tags left open for the completion checks, each running on to the next `%>`: Prism's errors
+  // for the method Rails builds from the template (`test/oracle/erb.rb` prints the same ones).
   check("diagnostics", diagnostics(uri), [
-    "4: Unclosed ERB tag: missing `%>` before the next `<%`",
-    "13: Unclosed ERB tag: missing `%>` before the next `<%`",
+    "7: unexpected local variable or method, expecting end-of-input",
+    "7: unexpected string literal, expecting end-of-input",
+    "10: unexpected local variable or method, expecting end-of-input",
+    "13: unexpected local variable or method, expecting end-of-input",
+    "14: unexpected '<', ignoring it",
+    "14: expected a matching `)`",
     "7: Missing partial shared/_missing",
   ]);
 

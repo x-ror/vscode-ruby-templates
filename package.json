@@ -708,12 +708,7 @@
             "enum": [
               "unclosed-tag",
               "malformed-tag",
-              "stray-end",
-              "unmatched-branch",
-              "unclosed-block",
-              "output-control-flow",
               "silent-output-helper",
-              "unterminated-string",
               "ruby-syntax",
               "unexpected-close-tag",
               "mismatched-close-tag",
