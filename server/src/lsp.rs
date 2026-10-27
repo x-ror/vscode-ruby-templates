@@ -406,11 +406,12 @@ pub(crate) fn render_filter<'a>(
 }
 
 /// Edits replacing each line in `lines` that differs between `text` and `formatted`; `None` when formatting added or
-/// removed lines, which a line range can't express.
+/// removed lines, which a line range can't express, other than the empty lines at the end Haml and Slim drop.
 fn line_edits(text: &str, formatted: &str, lines: std::ops::RangeInclusive<usize>) -> Option<Vec<TextEdit>> {
     let old: Vec<&str> = text.lines().collect();
     let new: Vec<&str> = formatted.lines().collect();
-    if old.len() != new.len() {
+    let shared = old.len().min(new.len());
+    if old[shared..].iter().chain(&new[shared..]).any(|line| !line.trim().is_empty()) {
         return None;
     }
     let changed = old.iter().zip(&new).enumerate().filter(|(i, (a, b))| lines.contains(i) && a != b);
@@ -1383,6 +1384,9 @@ mod tests {
         let edits = line_edits("%div\r\n    %p\r\n  %i\r\n", "%div\r\n    %p\r\n    %i\r\n", 0..=2).unwrap();
         assert_eq!(edits, [TextEdit::new(Range::new(Position::new(2, 0), Position::new(2, 4)), "    %i".into())]);
         assert!(line_edits("a\nb", "a\nb\nc", 0..=1).is_none());
+        assert!(line_edits("a\n\nb\n", "a\nb\n", 0..=2).is_none());
+        let trailing = line_edits("%div\n    %p\n\n\n", "%div\n  %p\n", 0..=3).unwrap();
+        assert_eq!(trailing, [TextEdit::new(Range::new(Position::new(1, 0), Position::new(1, 6)), "  %p".into())]);
     }
 
     #[test]
