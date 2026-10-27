@@ -1,7 +1,6 @@
 //! Ruby syntax errors inside ERB tags, found by parsing the template's Ruby the way Erubi compiles it.
 
-use crate::erb::code::RUBY_SYNTAX;
-use crate::util::{coded, error, offset_to_position};
+use crate::util::{error, offset_to_position};
 use tower_lsp::lsp_types::{Diagnostic, Range};
 use tree_sitter::{Node, Parser, Tree};
 
@@ -59,7 +58,7 @@ pub fn diagnostics(text: &str, template: &Tree) -> Vec<Diagnostic> {
                 (false, "") => "Ruby syntax error".to_string(),
                 (false, near) => format!("Ruby syntax error near `{}`", near.chars().take(NEAR_CHARS).collect::<String>()),
             };
-            coded(error(range, message), RUBY_SYNTAX)
+            error(range, message)
         })
         .collect()
 }

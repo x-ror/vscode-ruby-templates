@@ -20,9 +20,6 @@ pub mod code {
     pub const RUBY: &[&str] = &[RUBY_SYNTAX, EXPLICIT_END];
 }
 
-// Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
-pub(crate) const SLIM_ENGINES: &[&str] =
-    &["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"];
 /// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
 const SLIM_TABSIZE: usize = 4;
 
@@ -85,7 +82,7 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
     if filters_pass && invalid_doctype.is_none() {
-        out.extend(slim_ruby::diagnostics(text, &parsed));
+        out.extend(slim_ruby::diagnostics(text, &parsed).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };

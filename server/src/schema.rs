@@ -1,6 +1,7 @@
 //! Model attributes from `db/schema.rb`, for `f.text_field :` completion inside a `form_with model:` block.
 
-use crate::partials::{app_root, pluralize, singularize, snake_case};
+use crate::partials::{pluralize, singularize, snake_case};
+use crate::rails_paths::app_root;
 use crate::util::leading_ws;
 use regex::Regex;
 use std::path::Path;

@@ -1,8 +1,9 @@
 //! Controllers → views: `layout "admin"`, an action's `def show`, and `render :edit` / `render "users/show"`.
 //! Controllers reach the server only for navigation; Ruby LSP owns everything else in them.
 
-use crate::partials::{app_root, matching_templates};
+use crate::partials::matching_templates;
 use crate::project::Project;
+use crate::rails_paths::app_root;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;

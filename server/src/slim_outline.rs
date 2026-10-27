@@ -2,7 +2,7 @@
 
 use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
 use crate::partials::render_refs;
-use crate::slim_indent::SLIM_ENGINES;
+use crate::slim_parser::SLIM_ENGINES;
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};

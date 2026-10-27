@@ -1,6 +1,6 @@
 //! Stimulus identifiers in `data-*` attributes → app/javascript/controllers files.
 
-use crate::partials::app_root;
+use crate::rails_paths::app_root;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;

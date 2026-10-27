@@ -1,6 +1,7 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
 use crate::project::Project;
+use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, views_root};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -116,84 +117,6 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
         .collect()
 }
 
-// `Mime::SET` of a fresh Rails app; the app's own formats come from `Project::is_format`.
-pub const KNOWN_FORMATS: [&str; 35] = [
-    "html",
-    "text",
-    "js",
-    "css",
-    "ics",
-    "csv",
-    "vcf",
-    "png",
-    "jpeg",
-    "gif",
-    "bmp",
-    "tiff",
-    "svg",
-    "webp",
-    "avif",
-    "mpeg",
-    "mp4",
-    "webm",
-    "ogg",
-    "mp3",
-    "wav",
-    "pdf",
-    "zip",
-    "gzip",
-    "json",
-    "xml",
-    "rss",
-    "atom",
-    "yaml",
-    "m4a",
-    "otf",
-    "ttf",
-    "woff",
-    "woff2",
-    "turbo_stream",
-];
-
-/// Rails locale shape: `en`, `pt-BR`, `de_AT`.
-pub fn is_locale(segment: &str) -> bool {
-    let b = segment.as_bytes();
-    let region = |r: &[u8]| matches!(r, [b'-' | b'_', x, y] if x.is_ascii_uppercase() && y.is_ascii_uppercase());
-    b.len() >= 2 && b[..2].iter().all(u8::is_ascii_lowercase) && (b.len() == 2 || region(&b[2..]))
-}
-
-/// Does `fname` name template `basename` (`name[.locale][.format][+variant][.handler]`)?
-/// `Some(format)` when it does (`None` inside: matches any format); `_user.v2.html.erb` is not `_user`.
-fn template_suffix<'a>(project: &Project, fname: &'a str, basename: &str) -> Option<Option<&'a str>> {
-    if fname == basename {
-        return Some(None);
-    }
-    let rest = fname.strip_prefix(basename)?.strip_prefix('.')?;
-    let (middle, _handler) = rest.rsplit_once('.').unwrap_or(("", rest));
-    let as_format = |segment: &'a str| match segment.split('+').next().unwrap_or("") {
-        "" => Some(None),
-        format if project.is_format(format) => Some(Some(format)),
-        _ => None,
-    };
-    match middle.split_once('.') {
-        Some((locale, format)) if is_locale(locale) => as_format(format),
-        Some(_) => None,
-        None if is_locale(middle) && !project.is_format(middle) => Some(None),
-        None => as_format(middle),
-    }
-}
-
-/// `user` of `user.en.html.erb`, `user.v2` of `user.v2.html.erb`.
-pub fn template_stem<'a>(project: &Project, fname: &'a str) -> &'a str {
-    fname.match_indices('.').map(|(i, _)| &fname[..i]).find(|stem| template_suffix(project, fname, stem).is_some()).unwrap_or(fname)
-}
-
-/// `html` of `show.html+phone.erb` (variant dropped); `None` for `show.erb` and locale-only `show.de.erb`.
-pub fn template_format<'a>(project: &Project, path: &'a Path) -> Option<&'a str> {
-    let fname = path.file_name()?.to_str()?;
-    template_suffix(project, fname, template_stem(project, fname))?
-}
-
 /// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>.<ext>` in the view's format
 /// (variant dropped) and template language, so the view finds it.
 pub fn new_template_path(project: &Project, current: &Path, r: &RenderRef) -> Option<PathBuf> {
@@ -203,7 +126,7 @@ pub fn new_template_path(project: &Project, current: &Path, r: &RenderRef) -> Op
     }
     let ext = current.extension()?.to_str()?;
     let prefix = if r.kind == RenderKind::Partial { "_" } else { "" };
-    let file = match template_format(project, current) {
+    let file = match template_format(|f| project.is_format(f), current) {
         Some(format) => format!("{prefix}{base}.{format}.{ext}"),
         None => format!("{prefix}{base}.{ext}"),
     };
@@ -222,7 +145,8 @@ pub fn first_folder_only(mut found: Vec<PathBuf>) -> Vec<PathBuf> {
 /// format-less files match any.
 // ponytail: turbo_stream gets the JS fallback too, so its HTML partials aren't flagged unresolved.
 fn renders_format(project: &Project, current: &Path, candidate: &Path) -> bool {
-    match (template_format(project, current), template_format(project, candidate)) {
+    let is_format = |f: &str| project.is_format(f);
+    match (template_format(is_format, current), template_format(is_format, candidate)) {
         (Some(view), Some(partial)) => view == partial || (partial == "html" && matches!(view, "js" | "turbo_stream")),
         _ => true,
     }
@@ -293,28 +217,6 @@ pub fn singularize(word: &str) -> String {
     }
 }
 
-/// Walk up from `file` to find the Rails `app/views` directory.
-pub fn views_root(file: &Path) -> Option<PathBuf> {
-    let mut dir = file.parent()?;
-    loop {
-        if dir.file_name().map(|n| n == "views").unwrap_or(false)
-            && dir.parent().and_then(|p| p.file_name()).map(|n| n == "app").unwrap_or(false)
-        {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
-    }
-}
-
-/// The Rails `app` folder of a file in app/views, app/components or any other app/ folder. Views come first:
-/// `app/views/app/x.html.erb` is in a views subfolder named `app`.
-pub fn app_root(file: &Path) -> Option<PathBuf> {
-    match views_root(file) {
-        Some(views) => views.parent().map(Path::to_path_buf),
-        None => file.ancestors().skip(1).find(|dir| dir.file_name().is_some_and(|n| n == "app")).map(Path::to_path_buf),
-    }
-}
-
 // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
 // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
 // neither is knowable without reading controllers or the bundle.
@@ -330,7 +232,7 @@ pub fn matching_templates(project: &Project, dir: &Path, basename: &str) -> Vec<
         .map(|e| e.path())
         .filter(|p| {
             let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
-            template_suffix(project, fname, basename).is_some()
+            template_suffix(|f| project.is_format(f), fname, basename).is_some()
         })
         .filter(|p| p.is_file())
         .collect();
@@ -434,19 +336,6 @@ pub fn snake_case(s: &str) -> String {
     out
 }
 
-/// Every file under `root`; the listing `render_candidates` names come from.
-pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
-    WalkDir::new(root)
-        .follow_links(true)
-        .min_depth(1)
-        .max_depth(max_depth)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-        .map(walkdir::DirEntry::into_path)
-        .collect()
-}
-
 /// Names `render` can complete for `kind`: partials (same-dir bare names, then `dir/name` under app/views)
 /// or non-partial templates as `dir/name`. `files` lists app/views, or the current directory outside one.
 pub fn render_candidates(project: &Project, current: &Path, kind: RenderKind, files: &[PathBuf]) -> Vec<(String, PathBuf)> {
@@ -495,7 +384,7 @@ fn template_name(project: &Project, p: &Path, partial: bool) -> Option<String> {
         None if !partial => fname,
         _ => return None,
     };
-    let name = template_stem(project, stem);
+    let name = template_stem(|f| project.is_format(f), stem);
     (!name.is_empty()).then(|| name.to_string())
 }
 
@@ -626,12 +515,7 @@ const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn feed_formats() {
-        assert_eq!(template_format(&Project::unknown(), Path::new("index.rss.builder")), Some("rss"));
-        assert_eq!(template_format(&Project::unknown(), Path::new("feed.atom.builder")), Some("atom"));
-        assert_eq!(template_stem(&Project::unknown(), "_entry.atom.builder"), "_entry");
-    }
+    use crate::rails_paths::files_under;
 
     #[test]
     fn new_template_paths() {
@@ -742,21 +626,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn files_under_follows_symlinked_dirs() {
-        let root = std::env::temp_dir().join(format!("rt-symlink-{}", std::process::id()));
-        let shared = root.join("shared/cards");
-        std::fs::create_dir_all(&shared).unwrap();
-        std::fs::write(shared.join("_card.html.erb"), "").unwrap();
-        let views = root.join("app/views");
-        std::fs::create_dir_all(&views).unwrap();
-        std::os::unix::fs::symlink(root.join("shared"), views.join("shared")).unwrap();
-        std::os::unix::fs::symlink(&views, views.join("loop")).unwrap();
-        assert_eq!(files_under(&views, usize::MAX), [views.join("shared/cards/_card.html.erb")]);
-        std::fs::remove_dir_all(&root).unwrap();
-    }
-
     #[test]
     fn model_render_partials() {
         let root = std::env::temp_dir().join(format!("rt-models-{}", std::process::id()));
@@ -787,34 +656,6 @@ mod tests {
             assert!(model_renders(query).is_empty(), "{query}");
         }
         std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn template_file_names() {
-        let cases = [
-            ("user.html.erb", "user", Some(Some("html"))),
-            ("user.html+phone.erb", "user", Some(Some("html"))),
-            ("user.+phone.erb", "user", Some(None)),
-            ("user.de.erb", "user", Some(None)),
-            ("user.pt-BR.html.erb", "user", Some(Some("html"))),
-            ("user.de_AT.erb", "user", Some(None)),
-            ("user.js.erb", "user", Some(Some("js"))),
-            ("user.erb", "user", Some(None)),
-            ("user", "user", Some(None)),
-            ("user.v2.html.erb", "user", None),
-            ("user.en.v2.erb", "user", None),
-            ("users.html.erb", "user", None),
-            ("user.v2.html.erb", "user.v2", Some(Some("html"))),
-        ];
-        for (fname, basename, suffix) in cases {
-            assert_eq!(template_suffix(&Project::unknown(), fname, basename), suffix, "{fname} as {basename}");
-        }
-        let stems = [("user.en.html.erb", "user"), ("user.v2.html.erb", "user.v2"), ("user", "user"), ("a.b.c.d", "a.b.c"), (".erb", "")];
-        for (fname, stem) in stems {
-            assert_eq!(template_stem(&Project::unknown(), fname), stem, "{fname}");
-        }
-        assert_eq!(template_format(&Project::unknown(), Path::new("show.de.erb")), None);
-        assert_eq!(template_format(&Project::unknown(), Path::new("show.en.html.erb")), Some("html"));
     }
 
     #[test]
@@ -867,8 +708,8 @@ mod tests {
         assert_eq!(found("show.html.erb"), ["_card.html.erb"]);
         assert_eq!(found("show.erb"), ["_card.html.erb", "_card.mobile.erb"]);
         let project = Project::for_template(&users.join("show.mobile.erb"));
-        assert_eq!(template_stem(&project, "_card.mobile.erb"), "_card");
-        assert_eq!(template_format(&project, &users.join("_card.mobile.erb")), Some("mobile"));
+        assert_eq!(template_stem(|f| project.is_format(f), "_card.mobile.erb"), "_card");
+        assert_eq!(template_format(|f| project.is_format(f), &users.join("_card.mobile.erb")), Some("mobile"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1057,20 +898,6 @@ mod tests {
         assert_eq!(names(RenderKind::Partial), ["card", "row", "user.v2", "users/card", "users/row", "users/user.v2"]);
         assert_eq!(names(RenderKind::Template), ["users/index"]);
         std::fs::remove_dir_all(&root).unwrap();
-    }
-
-    #[test]
-    fn suffix_edge_cases() {
-        for (fname, suffix) in [
-            ("user.ics.erb", Some(Some("ics"))),
-            ("user.en.+phone.erb", Some(None)),
-            ("user.html.ERB", Some(Some("html"))),
-            ("user.EN.erb", None),
-            ("user.en.xx.erb", None),
-            ("user.erb.erb", None),
-        ] {
-            assert_eq!(template_suffix(&Project::unknown(), fname, "user"), suffix, "{fname}");
-        }
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
     erb, haml_indent, html_lint, partials,
     project::{Framework, Project},
-    slim_indent, tags, util,
+    rails_paths, slim_indent, tags, util,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -145,7 +145,7 @@ fn unresolved_renders(
     if project.framework != Framework::Rails {
         return vec![];
     }
-    let Some(views) = partials::views_root(path) else { return vec![] };
+    let Some(views) = rails_paths::views_root(path) else { return vec![] };
     checked_renders(&views, text, in_code)
         .into_iter()
         .filter(|(_, _, r)| partials::resolve(project, path, r).is_empty() && !is_gem_view(project, &r.name))
@@ -185,7 +185,7 @@ fn strict_locals_mismatches(
     if !supports_strict_locals(project) {
         return vec![];
     }
-    let Some(views) = partials::views_root(path) else { return vec![] };
+    let Some(views) = rails_paths::views_root(path) else { return vec![] };
     let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.

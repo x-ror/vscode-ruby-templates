@@ -27,6 +27,7 @@ mod partial_rename;
 mod partials;
 mod prism;
 mod project;
+mod rails_paths;
 mod routes;
 mod ruby;
 mod ruby_syntax;

@@ -4,11 +4,9 @@
 
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
-use crate::partials::{
-    app_root, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind,
-    RenderRef,
-};
+use crate::partials::{first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, RenderKind, RenderRef};
 use crate::project::Project;
+use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::util::{lines_with_offsets, offset_to_position};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -30,7 +28,7 @@ pub struct Source {
 /// `app/views/users/_card.html.slim` → `users/card`; `None` for non-partials and files outside a views dir.
 fn qualified_name(project: &Project, views: &Path, file: &Path) -> Option<String> {
     let dir = file.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
-    let name = template_stem(project, file.file_name()?.to_str()?.strip_prefix('_')?);
+    let name = template_stem(|f| project.is_format(f), file.file_name()?.to_str()?.strip_prefix('_')?);
     (!dir.is_empty() && !name.is_empty()).then(|| format!("{dir}/{name}"))
 }
 
@@ -115,7 +113,10 @@ fn model_refs(line: &str) -> Vec<RenderRef> {
 
 /// `_card.html.slim` → `card` for each partial among `files`.
 fn partial_stems<'a>(project: &Project, files: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a str> {
-    files.into_iter().filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(|stem| template_stem(project, stem))).collect()
+    files
+        .into_iter()
+        .filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(|stem| template_stem(|f| project.is_format(f), stem)))
+        .collect()
 }
 
 /// Whether a reference to `name` can name a partial with one of `stems`; lets callers skip `resolve`, a directory listing.
