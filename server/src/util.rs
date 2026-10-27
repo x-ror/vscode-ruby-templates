@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
-    let offset = offset.min(text.len());
+    let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
     let before = &text[..offset];
     let line = before.matches('\n').count();
     let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
@@ -181,6 +181,13 @@ mod tests {
     fn edit(range: Option<((u32, u32), (u32, u32))>, text: &str) -> TextDocumentContentChangeEvent {
         let range = range.map(|((sl, sc), (el, ec))| Range::new(Position::new(sl, sc), Position::new(el, ec)));
         TextDocumentContentChangeEvent { range, range_length: None, text: text.into() }
+    }
+
+    #[test]
+    fn positions_count_utf16_and_stay_on_char_boundaries() {
+        assert_eq!(offset_to_position("a\n😀x", 6), Position::new(1, 2));
+        assert_eq!(offset_to_position("a\n😀x", 4), Position::new(1, 0));
+        assert_eq!(offset_to_position("é", 99), Position::new(0, 1));
     }
 
     #[test]
