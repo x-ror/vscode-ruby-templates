@@ -10,6 +10,8 @@ use tower_lsp::lsp_types::{Diagnostic, Range};
 
 /// Ruby's `\s`, which the regexps below are written in.
 const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
+/// `local_assigns` and `output_buffer`, which every template method takes first.
+const WRAPPER_PARAMETERS: usize = 2;
 const OUTPUT_BUFFER: &str = " @output_buffer";
 /// Prism's message for the wrapper's own `def`, which the template's code never gets to close.
 const UNCLOSED_DEF: &str = "expected an `end` to close the `def` statement";
@@ -234,9 +236,9 @@ impl Cut {
     }
 }
 
-/// `Template#compiled_source` for `text`.
-fn compile(text: &str) -> Compiled {
-    let strict = strict_locals(text);
+/// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
+fn compile(text: &str, strict_locals_exist: bool) -> Compiled {
+    let strict = strict_locals_exist.then(|| strict_locals(text)).flatten();
     let mut template = text.to_string();
     if let Some(strict) = &strict {
         template.replace_range(strict.comment.clone(), "");
@@ -261,14 +263,41 @@ fn compile(text: &str) -> Compiled {
     }
 }
 
-/// Prism's errors for the method source of `text`, at the template lines they come from.
-pub fn diagnostics(text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
-    let compiled = compile(text);
+/// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
+/// `locals:` parameters are keywords. `strict_locals_identifier`, the template's name in that message, is given only
+/// where strict locals exist.
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version, strict_locals_identifier: Option<&str>) -> Vec<Diagnostic> {
+    let compiled = compile(text, strict_locals_identifier.is_some());
     let lines: Vec<&str> = text.lines().collect();
-    prism::syntax_errors(&compiled.source, ruby)
-        .into_iter()
-        .filter_map(|e| Some(error(template_range(text, &lines, &compiled, &e)?, e.message)))
-        .collect()
+    let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
+    let found: Vec<Diagnostic> =
+        errors.into_iter().filter_map(|e| Some(error(template_range(text, &lines, &compiled, &e)?, e.message))).collect();
+    if !found.is_empty() {
+        return found;
+    }
+    let (Some(line), Some(identifier)) = (compiled.signature_line, strict_locals_identifier) else { return Vec::new() };
+    // The wrapper's own `&_` is no one's mistake.
+    let non_keyword: Vec<String> = positional.into_iter().skip(WRAPPER_PARAMETERS).chain(block.filter(|name| name != "_")).collect();
+    if non_keyword.is_empty() {
+        return Vec::new();
+    }
+    let message = format!(
+        "{} set as non-keyword {} for {identifier}. Locals can only be set as keyword arguments.",
+        to_sentence(&non_keyword),
+        if non_keyword.len() == 1 { "argument" } else { "arguments" }
+    );
+    vec![error(line_text_range(text, &lines, line), message)]
+}
+
+/// ActiveSupport's `Array#to_sentence` of the names in backticks.
+fn to_sentence(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+    match quoted.as_slice() {
+        [only] => only.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
+        [] => String::new(),
+    }
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
@@ -287,9 +316,14 @@ fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::Ru
         // Past the template are the lines Erubi and the wrapper add after it.
         (generated_line - compiled.code_line).min(lines.len().saturating_sub(1))
     };
+    Some(line_text_range(text, lines, line))
+}
+
+/// The trimmed text of `line`.
+fn line_text_range(text: &str, lines: &[&str], line: usize) -> Range {
     let raw = lines.get(line).copied().unwrap_or("");
     let start = leading_ws(raw).len();
-    Some(line_range(text, line, start, raw.trim_end().len().max(start)))
+    line_range(text, line, start, raw.trim_end().len().max(start))
 }
 
 #[cfg(test)]
@@ -297,8 +331,10 @@ mod tests {
     use super::*;
     use tower_lsp::lsp_types::Position;
 
+    const IDENTIFIER: &str = "template.html.erb";
+
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, ruby_prism::Version::Latest)
+        super::diagnostics(text, ruby_prism::Version::Latest, Some(IDENTIFIER))
     }
 
     /// (0-based line, message) of each error.
@@ -307,7 +343,7 @@ mod tests {
     }
 
     fn errors_in(text: &str, ruby: ruby_prism::Version) -> Vec<(u32, String)> {
-        super::diagnostics(text, ruby).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        super::diagnostics(text, ruby, Some(IDENTIFIER)).into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
     fn messages(text: &str) -> Vec<String> {
@@ -341,7 +377,7 @@ mod tests {
         ("<%# locals: (a:, &block) -%>\n<%= a %>", "          def _template(local_assigns, output_buffer, a:, &block)\n            @virtual_path = \"template\";; \n @output_buffer.append=( a );\n@output_buffer\n          end\n"),
         ];
         for (template, rails) in cases {
-            assert_eq!(compile(template).source, rails, "{template:?}");
+            assert_eq!(compile(template, true).source, rails, "{template:?}");
         }
     }
 
@@ -428,6 +464,59 @@ mod tests {
         assert_eq!(errors(text), []);
     }
 
+    fn locals_messages(signature: &str) -> Vec<(u32, String)> {
+        let text = format!("<p>\n<%# locals: {signature} -%>\nx\n");
+        let found = super::diagnostics(&text, ruby_prism::Version::Latest, Some("app/views/a.html.erb"));
+        found.into_iter().map(|d| (d.range.start.line, d.message)).collect()
+    }
+
+    // Each message is what `ruby test/oracle/erb.rb --file app/views/a.html.erb` gives (Rails 8.1.4 `Template#compile`).
+    #[test]
+    fn strict_locals_must_be_keywords() {
+        let tail = "for app/views/a.html.erb. Locals can only be set as keyword arguments.";
+        for (signature, names, noun) in [
+            ("(a, b:)", "`a`", "argument"),
+            ("(a, b, c:)", "`a` and `b`", "arguments"),
+            ("(a, b, c, d:)", "`a`, `b`, and `c`", "arguments"),
+            ("(*, **)", "`*`", "argument"),
+            ("(*)", "`*`", "argument"),
+            ("(&)", "`&`", "argument"),
+            ("(&blk)", "`blk`", "argument"),
+            ("(a, &blk)", "`a` and `blk`", "arguments"),
+            ("(a, *rest, b:)", "`a` and `rest`", "arguments"),
+            ("(*, a)", "`*` and `a`", "arguments"),
+            ("(a = 1, b:)", "`a`", "argument"),
+            ("((a, b), c:)", "``", "argument"),
+            ("(a, a2 = 1, *r, z, k: 1, **o, &b)", "`a`, `a2`, `r`, `z`, and `b`", "arguments"),
+        ] {
+            assert_eq!(locals_messages(signature), [(1, format!("{names} set as non-keyword {noun} {tail}"))], "{signature}");
+        }
+    }
+
+    #[test]
+    fn keyword_only_strict_locals_are_accepted() {
+        for signature in ["(a:, b: 1)", "()", "(a:, **rest)", "(**nil)", "(a:, &_)", "(**)"] {
+            assert_eq!(locals_messages(signature), [], "{signature}");
+        }
+    }
+
+    #[test]
+    fn strict_locals_check_needs_a_project_and_no_syntax_error() {
+        let text = "<%# locals: (a) -%>\nx";
+        assert!(super::diagnostics(text, ruby_prism::Version::Latest, None).is_empty());
+        let syntax = messages("<%# locals: (a, b: ] ) -%>\nx");
+        assert!(!syntax.is_empty());
+        assert!(syntax.iter().all(|message| !message.contains("non-keyword")), "{syntax:?}");
+    }
+
+    #[test]
+    fn locals_line_is_a_plain_comment_without_strict_locals() {
+        let text = "<%# locals: (a: ] ) %>\n<p>\n";
+        assert!(super::diagnostics(text, ruby_prism::Version::Latest, None).is_empty());
+        assert!(compile(text, false).source.contains("(local_assigns, output_buffer, &_)"));
+        assert_eq!(errors(text)[0].1, "unexpected ']'; expected a `)` to close the parameters");
+    }
+
     #[test]
     fn valid_templates_are_clean() {
         for template in [
@@ -452,7 +541,7 @@ mod tests {
     fn blank_signature_is_nil_keywords() {
         for blank in ["", " ", "\u{a0}"] {
             let template = format!("<%# locals: ({blank}) -%>\n<p>x</p>");
-            assert!(compile(&template).source.contains("output_buffer, **nil, &_)"), "{template:?}");
+            assert!(compile(&template, true).source.contains("output_buffer, **nil, &_)"), "{template:?}");
             assert!(errors(&template).is_empty());
         }
     }

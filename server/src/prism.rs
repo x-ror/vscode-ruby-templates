@@ -11,9 +11,14 @@ pub(crate) struct RubyError {
 }
 
 pub(crate) fn syntax_errors(source: &str, version: ruby_prism::Version) -> Vec<RubyError> {
+    errors_and_def_parameters(source, version).0
+}
+
+/// The errors of one parse of `source` and its first `def`'s parameters.
+pub(crate) fn errors_and_def_parameters(source: &str, version: ruby_prism::Version) -> (Vec<RubyError>, DefParameters) {
     let options = ruby_prism::Options::default().version(version).build();
     let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
-    result
+    let errors = result
         .errors()
         .map(|error| {
             let location = error.location();
@@ -26,7 +31,46 @@ pub(crate) fn syntax_errors(source: &str, version: ruby_prism::Version) -> Vec<R
                 end: location.end() as usize,
             }
         })
-        .collect()
+        .collect();
+    (errors, def_positional_parameters(&result))
+}
+
+/// The positional parameters of a `def`, in Ruby's order, and its block parameter apart.
+pub(crate) type DefParameters = (Vec<String>, Option<String>);
+
+/// The non-keyword parameters of the first `def`, named as Ruby's `Method#parameters` does (`*` and `&` when
+/// anonymous, empty for a destructured one).
+fn def_positional_parameters(result: &ruby_prism::ParseResult) -> DefParameters {
+    let parameters = result
+        .node()
+        .as_program_node()
+        .and_then(|program| program.statements().body().iter().next())
+        .and_then(|statement| statement.as_def_node())
+        .and_then(|def| def.parameters());
+    let Some(parameters) = parameters else { return (vec![], None) };
+    let positional = parameters
+        .requireds()
+        .iter()
+        .chain(parameters.optionals().iter())
+        .chain(parameters.rest())
+        .chain(parameters.posts().iter())
+        .map(|node| parameter_name(&node, "*"))
+        .collect();
+    (positional, parameters.block().map(|node| parameter_name(&node, "&")))
+}
+
+fn parameter_name(node: &ruby_prism::Node, anonymous: &str) -> String {
+    let name = node
+        .as_required_parameter_node()
+        .map(|n| n.name())
+        .or_else(|| node.as_optional_parameter_node().map(|n| n.name()))
+        .or_else(|| node.as_rest_parameter_node().and_then(|n| n.name()))
+        .or_else(|| node.as_block_parameter_node().and_then(|n| n.name()));
+    match name {
+        Some(name) => String::from_utf8_lossy(name.as_slice()).into_owned(),
+        None if node.as_multi_target_node().is_some() => String::new(),
+        None => anonymous.to_string(),
+    }
 }
 
 #[cfg(test)]

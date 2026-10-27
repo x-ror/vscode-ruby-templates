@@ -1,5 +1,6 @@
 //! ERB diagnostics via tree-sitter-embedded-template, plus the Ruby syntax errors of `erb_ruby`.
 
+use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::ruby::ends_with_block;
 use crate::util::{coded, error, offset_to_position, warning};
@@ -55,7 +56,7 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
-pub fn diagnostics(text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let Some(tree) = parse(text) else { return out };
     let root = tree.root_node();
@@ -94,7 +95,11 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
             out.push(coded(warning(node_range(text, node), message), code::SILENT_OUTPUT_HELPER));
         }
     }
-    out.extend(erb_ruby::diagnostics(text, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+    out.extend(
+        erb_ruby::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
+            .into_iter()
+            .map(|d| coded(d, code::RUBY_SYNTAX)),
+    );
     out
 }
 
@@ -168,7 +173,7 @@ mod tests {
     use tower_lsp::lsp_types::DiagnosticSeverity;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, ruby_prism::Version::Latest)
+        super::diagnostics(text, &RubyContext::outside_project())
     }
 
     fn only(text: &str) -> Diagnostic {

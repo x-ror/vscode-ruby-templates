@@ -79,6 +79,14 @@ const nearestFile = (file, name) => {
   }
 };
 
+// The path Rails names a template by (`short_identifier`): from the nearest Gemfile.lock's folder, else the file name.
+const projectRelativePath = (file) => {
+  const lockfile = nearestFile(file, "Gemfile.lock");
+  return lockfile
+    ? path.relative(path.dirname(lockfile), file)
+    : path.basename(file);
+};
+
 const RELEASE = /(\d+\.\d+)(?:\.\d+)*/;
 
 // The Ruby our server parses `file` with: the nearest .ruby-version, else the nearest Gemfile.lock's RUBY VERSION.
@@ -170,7 +178,7 @@ const languages = {
     // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
     officialArguments: (item) => [
       "--file",
-      path.basename(item.path),
+      projectRelativePath(item.path),
       ...rubyVersionArguments(item.path),
     ],
     // 3b: compared with the leading whitespace of text lines removed; the formatter must also change something.
@@ -499,6 +507,8 @@ const erbTags = (source) => [
   ...source.matchAll(/<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?/gs),
 ];
 
+const STRICT_LOCALS_HEAD = /#\s+locals:\s+\(/;
+
 // Broken spellings of an ERB template, each a few characters from a compiling one (3a "Ruby"); a name is absent when
 // the file has nothing to break that way.
 const erbBreakVariants = (source) => {
@@ -533,6 +543,13 @@ const erbBreakVariants = (source) => {
         splice(conditional.index + 2, codeStart(conditional), "="),
     },
     { name: "stray end", text: `<% end %>\n${source}` },
+    {
+      // Rails refuses positional strict locals (7.1+) once the Ruby is valid.
+      name: "positional locals",
+      text: STRICT_LOCALS_HEAD.test(source)
+        ? undefined
+        : `<%# locals: (a, b:) -%>\n${source}`,
+    },
     {
       name: "delete )",
       text:
@@ -690,6 +707,11 @@ const formatReport = (lang, items, indexes, sample) =>
 const breakReport = async (lang, items, indexes, sample) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-break-"));
   try {
+    // A Rails 8.1.4 project, so the variants get the Rails checks and are named by their path from `dir`.
+    fs.writeFileSync(
+      path.join(dir, "Gemfile.lock"),
+      "GEM\n  specs:\n    actionview (8.1.4)\n",
+    );
     const variants = indexes
       .filter((_, n) => n % sample === 0)
       .flatMap((i) =>

@@ -20,11 +20,13 @@ pub struct Project {
     ruby: Option<Version>,
     /// Format names the app registers in `config/initializers/**/*.rb`, beyond Rails' own.
     formats: Vec<String>,
+    /// The folder of the `Gemfile.lock`, which Rails.root is.
+    root: Option<PathBuf>,
 }
 
 impl Project {
     pub fn unknown() -> Self {
-        Project { framework: Framework::Unknown, gems: HashMap::new(), ruby: None, formats: Vec::new() }
+        Project { framework: Framework::Unknown, gems: HashMap::new(), ruby: None, formats: Vec::new(), root: None }
     }
 
     /// The project of the nearest `Gemfile.lock` above `template`, unknown when there is none, with the formats
@@ -46,7 +48,7 @@ impl Project {
         formats.dedup();
         let ruby_version_file = template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file());
         let ruby = ruby_version_file.and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
-        Project { formats, ruby: ruby.or(project.ruby), ..project }
+        Project { formats, ruby: ruby.or(project.ruby), root: lock_dir.map(Path::to_path_buf), ..project }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
@@ -78,11 +80,17 @@ impl Project {
         } else {
             Framework::Unknown
         };
-        Project { framework, gems, ruby, formats: Vec::new() }
+        Project { framework, gems, ruby, formats: Vec::new(), root: None }
     }
 
     pub fn gem_version(&self, name: &str) -> Option<Version> {
         Version::parse(self.gems.get(name)?)
+    }
+
+    /// Rails' `short_identifier` of `template`: its path from the project root, with `/`.
+    pub fn short_identifier(&self, template: &Path) -> Option<String> {
+        let relative = template.strip_prefix(self.root.as_deref()?).ok()?;
+        Some(relative.iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join("/"))
     }
 
     /// The Prism grammar of the project's Ruby, the latest when it names none.

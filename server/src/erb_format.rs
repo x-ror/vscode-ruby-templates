@@ -3,6 +3,7 @@
 //! moves with the line its owner starts on, keeping its relative indentation; a `<pre>`, `<textarea>` or `<title>`
 //! body, a quoted attribute value and Ruby holding a heredoc or a multi-line string keep every byte.
 
+use crate::checks::RubyContext;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::ruby::BlockEffect;
 use crate::tags::{self, Block, Tag, Token, OPTIONAL_END, VOID};
@@ -55,7 +56,7 @@ struct Line<'a> {
 type Ranges = Vec<(usize, usize)>;
 
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped when `trim` is set.
-pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: ruby_prism::Version) -> Result<Indented, Skipped> {
+pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
     if let Some(d) = crate::erb::diagnostics(text, ruby).into_iter().find(|d| d.severity == Some(DiagnosticSeverity::ERROR)) {
         return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
     }
@@ -452,7 +453,7 @@ mod tests {
     use super::*;
 
     fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
-        super::indent(text, unit, trim, partial, ruby_prism::Version::Latest)
+        super::indent(text, unit, trim, partial, &RubyContext::outside_project())
     }
 
     fn fmt(text: &str) -> String {
