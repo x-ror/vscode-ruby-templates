@@ -405,6 +405,11 @@ pub(crate) fn render_filter<'a>(
     }
 }
 
+/// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
+async fn off_server_task<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
+}
+
 /// Edits replacing each line in `lines` that differs between `text` and `formatted`; `None` when formatting added or
 /// removed lines, which a line range can't express, other than the empty lines at the end Haml and Slim drop.
 fn line_edits(text: &str, formatted: &str, lines: std::ops::RangeInclusive<usize>) -> Option<Vec<TextEdit>> {
@@ -541,7 +546,7 @@ impl Backend {
 
     /// Where the `@ivar` or partial local under `col` comes from: its assignments in the controller, or the
     /// `render` calls passing the local (else the strict-locals comment declaring it).
-    fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Vec<Location> {
+    async fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Result<Vec<Location>> {
         let at_line = |file: &Path, line: usize| {
             let start = Position::new(line as u32, 0);
             Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
@@ -549,25 +554,30 @@ impl Backend {
         let word = util::word_at(line, col);
         let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
         if before.ends_with('@') && !before.ends_with("@@") {
-            return ivars::for_view(&Project::for_template(path), path)
+            return Ok(ivars::for_view(&Project::for_template(path), path)
                 .into_iter()
                 .filter(|a| a.name == word)
                 .filter_map(|a| at_line(&a.file, a.line))
-                .collect();
+                .collect());
         }
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
         // `link_to` or `t` is never a local; the scan below reads every view.
         let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
-        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return vec![] };
-        let Some(views) = partials::views_root(path) else { return vec![] };
-        let sources = partial_rename::sources(&views, &self.open_texts());
-        let passes = partial_rename::local_passes(&Project::for_template(path), path, name, &sources, &self.options().extra_engines);
+        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return Ok(vec![]) };
+        let Some(views) = partials::views_root(path) else { return Ok(vec![]) };
+        let (open, project, partial, local) = (self.open_texts(), Project::for_template(path), path.to_path_buf(), name.to_string());
+        let extra_engines = self.options().extra_engines.clone();
+        let passes = off_server_task(move || {
+            let sources = partial_rename::sources(&views, &open);
+            partial_rename::local_passes(&project, &partial, &local, &sources, &extra_engines)
+        })
+        .await?;
         if !passes.is_empty() {
-            return passes;
+            return Ok(passes);
         }
         let declared = partials::strict_locals(text).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
-        comment.filter(|_| declared).and_then(|line| at_line(path, line)).into_iter().collect()
+        Ok(comment.filter(|_| declared).and_then(|line| at_line(path, line)).into_iter().collect())
     }
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
@@ -752,7 +762,9 @@ impl LanguageServer for Backend {
             }
         }
         if locs.is_empty() {
-            locs.extend(self.variable_definitions(&doc.text, &path, line, col));
+            let (text, line) = (doc.text.clone(), line.to_string());
+            drop(doc);
+            locs.extend(self.variable_definitions(&text, &path, &line, col).await?);
         }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
@@ -902,11 +914,14 @@ impl LanguageServer for Backend {
             i18n_key_at(&project, &doc, &path, line_start, line, col, &extra_engines)
         };
         if let Some((key, app)) = i18n_key.zip(partials::app_root(&path)) {
-            let sources = partial_rename::i18n_sources(&app, &self.open_texts());
-            let mut locations = partial_rename::i18n_references(&project, &key, &sources, &extra_engines);
-            if p.context.include_declaration {
-                locations.extend(translation_locations(&self.locale_files(&path), &key));
-            }
+            let declarations = if p.context.include_declaration { translation_locations(&self.locale_files(&path), &key) } else { vec![] };
+            let open = self.open_texts();
+            let mut locations = off_server_task(move || {
+                let sources = partial_rename::i18n_sources(&app, &open);
+                partial_rename::i18n_references(&project, &key, &sources, &extra_engines)
+            })
+            .await?;
+            locations.extend(declarations);
             return Ok(Some(locations));
         }
         let Some(views) = partials::views_root(&path) else { return Ok(None) };
@@ -923,11 +938,15 @@ impl LanguageServer for Backend {
                 (None, None) => return Ok(None),
             }
         };
-        let sources = partial_rename::sources(&views, &self.open_texts());
-        let mut locations = partial_rename::references(&project, &files, &sources, &extra_engines);
-        if p.context.include_declaration {
-            locations.extend(files.iter().filter_map(file_location));
-        }
+        let declarations: Vec<Location> =
+            if p.context.include_declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
+        let open = self.open_texts();
+        let mut locations = off_server_task(move || {
+            let sources = partial_rename::sources(&views, &open);
+            partial_rename::references(&project, &files, &sources, &extra_engines)
+        })
+        .await?;
+        locations.extend(declarations);
         Ok(Some(locations))
     }
 
@@ -979,12 +998,17 @@ impl LanguageServer for Backend {
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
-        let mut changes = HashMap::new();
-        for views in roots {
-            let sources = partial_rename::sources(&views, &open);
-            let project = Project::for_template(&views.join("_"));
-            changes.extend(partial_rename::render_edits(&project, &renames, &sources, &self.options().extra_engines));
-        }
+        let extra_engines = self.options().extra_engines.clone();
+        let changes = off_server_task(move || {
+            let mut changes = HashMap::new();
+            for views in roots {
+                let sources = partial_rename::sources(&views, &open);
+                let project = Project::for_template(&views.join("_"));
+                changes.extend(partial_rename::render_edits(&project, &renames, &sources, &extra_engines));
+            }
+            changes
+        })
+        .await?;
         Ok((!changes.is_empty()).then(|| WorkspaceEdit { changes: Some(changes), ..Default::default() }))
     }
 
