@@ -190,20 +190,6 @@ fn endless_def(tokens: &[&str], matches: &[regex::Match], def: usize) -> bool {
     has_params || eq.start() > name_match.end()
 }
 
-/// Does the snippet end with a block that expects nested template content (`do`, `do |x|`)?
-pub fn ends_with_block(code: &str) -> bool {
-    let stripped = strip(code);
-    let t = stripped.trim_end();
-    t.ends_with(" do") || t == "do" || {
-        // `do |a, b|`
-        if let Some(idx) = t.rfind(" do |") {
-            t[idx..].trim_end().ends_with('|')
-        } else {
-            false
-        }
-    }
-}
-
 /// Lines of `text` with a trailing `,` or `(` joined to the next, so a call's arguments read as one line.
 pub fn logical_lines(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -273,8 +259,6 @@ mod tests {
         assert_eq!(analyze("render partial: 'x', locals: { class: foo.class }").0, BlockEffect::Neutral);
         assert_eq!(analyze("form_with model: @u do |f|").0, BlockEffect::Open(1));
         assert_eq!(analyze("puts \"if\" # if end").0, BlockEffect::Neutral);
-        assert!(ends_with_block("form_with model: @u do |f|"));
-        assert!(!ends_with_block("link_to 'x', y"));
     }
 
     #[test]

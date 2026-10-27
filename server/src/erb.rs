@@ -2,24 +2,13 @@
 
 use crate::checks::RubyContext;
 use crate::erb_ruby;
-use crate::ruby::ends_with_block;
-use crate::util::{coded, error, offset_to_position, warning};
-use regex::Regex;
-use std::sync::LazyLock;
+use crate::util::{coded, error, offset_to_position};
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 use tree_sitter::{Node, Parser, Tree};
-
-// Helpers whose block content only reaches the page through their return value.
-// `cache`, `content_for`, `capture` are deliberately absent: `<% … do %>` is correct for them.
-static OUTPUT_BLOCK_HELPER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(form_with|form_for|form_tag|fields_for|fields|link_to|button_to|button_tag|label_tag|content_tag|turbo_frame_tag|tag\.\w+)(?:\(|\s+[^=\s])").unwrap()
-});
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
     pub const UNCLOSED_TAG: &str = "unclosed-tag";
-    pub const MALFORMED_TAG: &str = "malformed-tag";
-    pub const SILENT_OUTPUT_HELPER: &str = "silent-output-helper";
     pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
@@ -61,40 +50,25 @@ pub fn diagnostics(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
     let Some(tree) = parse(text) else { return out };
     let root = tree.root_node();
 
-    // Syntax errors reported by the grammar (unclosed `<%`, stray `%>`).
+    // The grammar marks a `<%` without `%>` with a MISSING `%>`, or with an ERROR node at the document start.
     let mut cursor = root.walk();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {
-        if node.is_error() || node.is_missing() {
-            let (msg, target, code) = if node.is_missing() {
-                (format!("Unclosed ERB tag: missing `{}`", node.kind()), node.parent().unwrap_or(node), code::UNCLOSED_TAG)
-            } else {
-                ("Malformed ERB tag".to_string(), node, code::MALFORMED_TAG)
-            };
-            let r = node_range(text, target);
+        let unclosed = if node.is_missing() {
+            Some(node.parent().unwrap_or(node))
+        } else {
+            let source = &text[node.byte_range()];
+            (node.is_error() && source.starts_with("<%") && !source.contains("%>")).then_some(node)
+        };
+        if let Some(tag) = unclosed {
+            let r = node_range(text, tag);
             // Point at the opening line only, not the whole rest of the file.
             let r = Range::new(r.start, Position::new(r.start.line, u32::MAX));
-            out.push(coded(error(r, msg), code));
+            out.push(coded(error(r, "Unclosed ERB tag: missing `%>`"), code::UNCLOSED_TAG));
         }
-        for child in node.children(&mut cursor) {
-            stack.push(child);
-        }
+        stack.extend(node.children(&mut cursor));
     }
 
-    let mut cursor = root.walk();
-    for node in root.children(&mut cursor) {
-        let kind = node.kind();
-        if (kind != "directive" && kind != "output_directive") || text[node.start_byte()..].starts_with("<%=") {
-            continue;
-        }
-        let mut c2 = node.walk();
-        let Some(code) = node.children(&mut c2).find(|n| n.kind() == "code") else { continue };
-        let t = text[code.byte_range()].trim();
-        if let Some(m) = OUTPUT_BLOCK_HELPER.captures(t).filter(|_| ends_with_block(t)) {
-            let message = format!("Block helper `{}` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?", &m[1]);
-            out.push(coded(warning(node_range(text, node), message), code::SILENT_OUTPUT_HELPER));
-        }
-    }
     out.extend(
         erb_ruby::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
             .into_iter()
@@ -170,7 +144,6 @@ pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::DiagnosticSeverity;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
         super::diagnostics(text, &RubyContext::outside_project())
@@ -225,38 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn malformed_tag() {
-        // The grammar only yields an ERROR node (vs. a MISSING `%>`) for an unclosed tag at document start.
-        let d = only("<%# 😀");
-        assert_eq!(d.message, "Malformed ERB tag");
-        assert_eq!(d.range, span(0, 0, u32::MAX));
-    }
-
-    #[test]
-    fn block_helper_in_non_output_tag_warns() {
-        let d = only("<% form_with model: @u do |f| %><% end %>");
-        assert_eq!(d.message, "Block helper `form_with` in a non-output tag `<% %>` renders nothing; did you mean `<%= %>`?");
-        assert_eq!(d.severity, Some(DiagnosticSeverity::WARNING));
-        assert_eq!(d.range, span(0, 0, 32));
-        assert!(only("<%- tag.div(class: 'x') do %><% end %>").message.contains("`tag.div`"));
-        assert!(only("<% link_to path do %><% end %>").message.contains("`link_to`"));
-    }
-
-    #[test]
-    fn block_helper_false_positives() {
-        for ok in [
-            "<%= form_with model: @u do |f| %><% end %>",
-            "<% @items.each do |i| %><% end %>",
-            "<% cache @u do %><% end %>",
-            "<% content_for :title do %><% end %>",
-            "<% if link_to %><% end %>",
-            "<% fields.each do |f| %><% end %>",
-            "<% fields = list.map do |f| %><% end %>",
-            "<% link_to_thing do %><% end %>",
-            "<% link_to 'a', b %>",
-            "<%# form_with do %>",
-        ] {
-            assert!(diagnostics(ok).is_empty(), "{ok}: {:?}", diagnostics(ok));
+    fn unclosed_tag_at_document_start() {
+        for text in ["<% foo", "<%", "<%= foo", "<%- foo", "<%# x", "<%== x", "<%# 😀"] {
+            let d = only(text);
+            assert_eq!(d.message, "Unclosed ERB tag: missing `%>`", "{text}");
+            assert_eq!(d.range, span(0, 0, u32::MAX), "{text}");
         }
     }
 
