@@ -84,10 +84,10 @@ pub fn same_compilation(before: &str, after: &str, extra_engines: &[String]) -> 
     generated(before, extra_engines) == generated(after, extra_engines)
 }
 
-pub fn diagnostics(text: &str, parsed: &Parsed) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
     let lines: Vec<&str> = text.lines().collect();
     let compiled = compile(&parsed.pieces);
-    prism::syntax_errors(&compiled.source)
+    prism::syntax_errors(&compiled.source, ruby)
         .into_iter()
         .filter(|e| e.message != IGNORED_ERROR)
         .map(|e| {
@@ -325,10 +325,13 @@ mod tests {
     use super::*;
     use crate::slim_parser::parse;
 
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        super::diagnostics(text, &parse(text, &[]), ruby_prism::Version::Latest)
+    }
+
     /// (0-based line, Prism's message) of each error.
     fn errors(text: &str) -> Vec<(u32, String)> {
-        let found = diagnostics(text, &parse(text, &[]));
-        found.into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        diagnostics(text).into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
     fn at(line: u32, message: &str) -> (u32, String) {
@@ -405,12 +408,12 @@ mod tests {
     fn errors_inside_one_verbatim_line_are_exact() {
         // Prism puts this one on the space before the `2`.
         let text = "é = 1\np\n  - @a = [1 2]\n";
-        let found = diagnostics(text, &parse(text, &[]));
+        let found = diagnostics(text);
         assert_eq!(found[0].message, "unexpected integer; expected a `,` separator for the array elements");
         assert_eq!((found[0].range.start.line, found[0].range.start.character), (2, 11));
         // Continued code isn't one run of the template: the whole line stands in.
         let text = "p= foo(1,\n  2))\n";
-        let found = diagnostics(text, &parse(text, &[]));
+        let found = diagnostics(text);
         assert_eq!((found[0].range.start.line, found[0].range.start.character), (1, 2));
     }
 

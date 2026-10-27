@@ -1,5 +1,6 @@
 # Compiles the ERB template on stdin the way Rails 8.1.4 does and parses the Ruby it would eval with Prism 2.0.0.
-# Usage: erb.rb [--file name.html.erb] [--normalize]; the name picks the format and appears in Rails' messages.
+# Usage: erb.rb [--file name.html.erb] [--normalize] [--ruby-version X.Y|latest]; the name picks the format and appears in Rails' messages.
+# --ruby-version picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
 # --normalize compiles the template with the leading whitespace of its text lines removed (see below).
 # Prints {"errors": [{message, line, column}]} for every error, else {"source": the method source Rails evals}.
 require "json"
@@ -15,6 +16,8 @@ require "active_support/core_ext/string/inflections"
 
 file_flag = ARGV.index("--file")
 name = file_flag ? ARGV[file_flag + 1] : "template.html.erb"
+version_flag = ARGV.index("--ruby-version")
+PRISM_OPTIONS = version_flag ? { version: ARGV[version_flag + 1] }.freeze : {}.freeze
 format = File.basename(name, ".erb")[/\.([^.]+)\z/, 1]&.to_sym
 # A name without a known format (`mailer/x.erb`) renders as html.
 format = :html unless ActionView::Template::Types.symbols.include?(format)
@@ -169,7 +172,7 @@ def error(message, line = nil) = { message:, line:, column: nil }
 # Prism's column is in the generated line, which doesn't map back to the template, so only lines are reported.
 def prism_errors(compiled, template_lines, signature_line)
   code_line = compiled.lines.index { |line| line.include?(VIRTUAL_PATH_ASSIGNMENT) } + 1
-  Prism.parse(compiled).errors.filter_map do |e|
+  Prism.parse(compiled, **PRISM_OPTIONS).errors.filter_map do |e|
     line = e.location.start_line
     if line < code_line
       # The `def` line: its own "unclosed def" is the wrapper's, but a bad `locals:` signature is the template's.
@@ -205,7 +208,11 @@ errors =
       rescue ArgumentError => e
         found << error(e.message, signature_line)
       rescue ::SyntaxError, ActionView::Template::Error => e
-        found << error("Ruby rejected what Prism accepted: #{e.message.lines.first.to_s.chomp}")
+        # Ruby parses with its own grammar: a rejection Prism shares under that grammar is a version difference, and
+        # for the requested version Prism's list is the answer.
+        if Prism.parse(compiled, version: "current").errors.empty?
+          found << error("Ruby rejected what Prism accepted: #{e.message.lines.first.to_s.chomp}")
+        end
       end
     end
     found

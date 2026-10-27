@@ -77,26 +77,39 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
     if uri.path().to_ascii_lowercase().ends_with(".tt") {
         return vec![];
     }
-    let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines);
-    if let Ok(path) = uri.to_file_path() {
+    let path = uri.to_file_path().ok();
+    let project = path.as_deref().map(Project::for_template);
+    let ruby = project.as_ref().map_or(ruby_prism::Version::Latest, Project::prism_version);
+    let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines, ruby);
+    if let (Some(path), Some(project)) = (&path, &project) {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
-        let project = Project::for_template(&path);
-        out.extend(unresolved_renders(&path, &project, &doc.text, &in_code));
-        out.extend(strict_locals_mismatches(&path, &project, &doc.text, &in_code));
+        out.extend(unresolved_renders(path, project, &doc.text, &in_code));
+        out.extend(strict_locals_mismatches(path, project, &doc.text, &in_code));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
     out
 }
 
+/// The Prism grammar of the Ruby that evals the template at `uri`: its project's, the latest outside any.
+pub(crate) fn ruby_grammar(uri: &Url) -> ruby_prism::Version {
+    uri.to_file_path().map_or(ruby_prism::Version::Latest, |path| Project::for_template(&path).prism_version())
+}
+
 /// The template language's own checks, without the render checks that need app/views.
-pub(crate) fn language_diagnostics(uri: &Url, lang: TemplateLang, text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+pub(crate) fn language_diagnostics(
+    uri: &Url,
+    lang: TemplateLang,
+    text: &str,
+    extra_engines: &[String],
+    ruby: ruby_prism::Version,
+) -> Vec<Diagnostic> {
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text),
+        TemplateLang::Erb => erb::diagnostics(text, ruby),
         TemplateLang::Haml => haml_indent::diagnostics(text),
-        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines),
+        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines, ruby),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
-        TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines)
+        TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines, ruby)
             .into_iter()
             .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
             .collect(),

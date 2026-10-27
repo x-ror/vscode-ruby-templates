@@ -10,8 +10,9 @@ pub(crate) struct RubyError {
     pub end: usize,
 }
 
-pub(crate) fn syntax_errors(source: &str) -> Vec<RubyError> {
-    let result = ruby_prism::parse(source.as_bytes());
+pub(crate) fn syntax_errors(source: &str, version: ruby_prism::Version) -> Vec<RubyError> {
+    let options = ruby_prism::Options::default().version(version).build();
+    let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
     result
         .errors()
         .map(|error| {
@@ -33,7 +34,7 @@ mod tests {
     use super::*;
 
     fn summary(source: &str) -> Vec<(String, u32, u32, u32, u32)> {
-        syntax_errors(source)
+        syntax_errors(source, ruby_prism::Version::Latest)
             .into_iter()
             .map(|e| (e.message, e.range.start.line, e.range.start.character, e.range.end.line, e.range.end.character))
             .collect()
@@ -41,7 +42,7 @@ mod tests {
 
     #[test]
     fn valid_ruby_has_no_errors() {
-        assert!(syntax_errors("x = [1, 2].map { |n| n * 2 }\n").is_empty());
+        assert!(summary("x = [1, 2].map { |n| n * 2 }\n").is_empty());
     }
 
     // Messages and positions as the prism 2.0.0 gem reports them (0-based line here, 1-based there).

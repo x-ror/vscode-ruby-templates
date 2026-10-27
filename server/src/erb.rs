@@ -55,7 +55,7 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
-pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let Some(tree) = parse(text) else { return out };
     let root = tree.root_node();
@@ -94,7 +94,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
             out.push(coded(warning(node_range(text, node), message), code::SILENT_OUTPUT_HELPER));
         }
     }
-    out.extend(erb_ruby::diagnostics(text).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+    out.extend(erb_ruby::diagnostics(text, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     out
 }
 
@@ -166,6 +166,10 @@ pub fn tag_doc(line: &str, col: usize) -> Option<&'static str> {
 mod tests {
     use super::*;
     use tower_lsp::lsp_types::DiagnosticSeverity;
+
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        super::diagnostics(text, ruby_prism::Version::Latest)
+    }
 
     fn only(text: &str) -> Diagnostic {
         let diags = diagnostics(text);

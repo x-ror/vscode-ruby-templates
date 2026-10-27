@@ -262,10 +262,10 @@ fn compile(text: &str) -> Compiled {
 }
 
 /// Prism's errors for the method source of `text`, at the template lines they come from.
-pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
     let compiled = compile(text);
     let lines: Vec<&str> = text.lines().collect();
-    prism::syntax_errors(&compiled.source)
+    prism::syntax_errors(&compiled.source, ruby)
         .into_iter()
         .filter_map(|e| Some(error(template_range(text, &lines, &compiled, &e)?, e.message)))
         .collect()
@@ -297,9 +297,17 @@ mod tests {
     use super::*;
     use tower_lsp::lsp_types::Position;
 
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        super::diagnostics(text, ruby_prism::Version::Latest)
+    }
+
     /// (0-based line, message) of each error.
     fn errors(text: &str) -> Vec<(u32, String)> {
-        diagnostics(text).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        errors_in(text, ruby_prism::Version::Latest)
+    }
+
+    fn errors_in(text: &str, ruby: ruby_prism::Version) -> Vec<(u32, String)> {
+        super::diagnostics(text, ruby).into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
     fn messages(text: &str) -> Vec<String> {
@@ -408,6 +416,16 @@ mod tests {
         assert!(errors("<%# locals: (a:, b: 1) -%>\n<%= a %>").is_empty());
         // Without `)` before a tag end or a line end it is a plain comment.
         assert!(errors("<%# locals: (a:, b: 1 %>\n<p>").is_empty());
+    }
+
+    // Ruby 3.3 and 3.4 reject a line starting with `&&` after an expression; the latest grammar takes it.
+    #[test]
+    fn errors_depend_on_the_ruby_version() {
+        let text = "<% x = a\n  && b %>\n";
+        let rejected = [(1, "unexpected '&&', ignoring it".to_string())];
+        assert_eq!(errors_in(text, ruby_prism::Version::CRuby3_3), rejected);
+        assert_eq!(errors_in(text, ruby_prism::Version::CRuby3_4), rejected);
+        assert_eq!(errors(text), []);
     }
 
     #[test]

@@ -52,6 +52,8 @@ This replaces today's guess "a file under `app/views` is Rails" (`partials.rs` `
 
 **Template language versions:** `slim`, `haml`, `erubi` versions come from the lockfile too. The plan pins the latest (Slim 5.2.2, Haml 7.5.1, Erubi 1.13.1) and starts there. An older major (Slim 4, Haml 5 and 6) is supported once the oracle runs that major's gem: until then, a project on it gets only the checks the oracle shows behave the same in both majors, and formatting only where the compiled output is unchanged under that major. No lockfile, or a gem missing from it: the pinned version.
 
+**Ruby version:** Rails evals a template with the app's Ruby, whose Prism grammar is that Ruby's own (`<% x = a\n  && b %>` is a syntax error on 3.3 and 3.4, valid on 4.1). The Ruby checks of ERB and Slim therefore parse with the project's Ruby, from the nearest `.ruby-version` (`3.3.6` or `ruby-3.3.6`, first line that is not blank or a comment) from the template up, else the nearest `Gemfile.lock`'s `RUBY VERSION` section (`ruby 3.3.6p108`). Prism 2.0.0 has these grammars: 3.3.x → 3.3 (also older Rubies, which it has no grammar for), 3.4.x → 3.4, 3.5.x and 4.0.x → 3.5, 4.1.x → 4.1, anything newer → latest. A `.ruby-version` that names no CRuby `major.minor` (`jruby-9.4`, `system`, a bare `3`) is skipped for the lockfile's; with no version at all: the latest grammar. The formatter checks with the same version, so it refuses on the errors the server shows.
+
 ## How we compare (oracle harness, stage 0)
 
 `bun test/oracle.js <language>` on the developer machine; skips with a message when the gem isn't installed. Isolated install: `GEM_HOME=<tmp> gem install slim:5.2.2 haml:7.5.1 erubi:1.13.1`, plus the engine and filter gems the official docs list (Slim README "Embedded engines" table, the Haml filters' gems), since both compilers load them at compile time. A `LoadError` for a missing engine gem is reported as "dependency missing", never as a template error.
@@ -219,6 +221,7 @@ Decided (2026-10-25):
 4. **HTML of Slim and Haml output** is in scope, citing WHATWG (1a, 2a); `void-children` stays with that source.
 5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
 6. **Editor and `.editorconfig` give the Slim and Haml formatters only the indentation width (default 2); they always write spaces and keep the file's line endings** (Slim decided 2026-10-26, Haml 2026-10-27). For Haml, empty and whitespace-only lines at the end collapse into one final line ending (Haml strips the template), and the `.haml-lint.yml` formatting keys stop applying.
+7. **Ruby checks parse with the project's Ruby version** (`.ruby-version`, else `Gemfile.lock` `RUBY VERSION`), the latest grammar when none (decided 2026-10-27).
 
 ### Built-in diagnostic codes
 
@@ -294,18 +297,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                            |
-| ------------------------ | ----------------------------------------------------------------- |
-| 0. Harness               | done                                                              |
-| 0b. Context              | done                                                              |
-| 1a. Slim errors          | done                                                              |
-| 1b. Slim format          | done                                                              |
-| 2a. Haml errors          | done                                                              |
-| 2b. Haml format          | done                                                              |
-| 3a. ERB errors           | in progress: Ruby (Prism on Rails' compiled source), folded codes |
-| 3b. ERB format           | not started                                                       |
-| 4. Editor and CLI        | not started                                                       |
-| 5. Remove external tools | not started                                                       |
+| Stage                    | Status                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| 0. Harness               | done                                                                                      |
+| 0b. Context              | done                                                                                      |
+| 1a. Slim errors          | done                                                                                      |
+| 1b. Slim format          | done                                                                                      |
+| 2a. Haml errors          | done                                                                                      |
+| 2b. Haml format          | done                                                                                      |
+| 3a. ERB errors           | in progress: Ruby (Prism on Rails' compiled source, project's Ruby version), folded codes |
+| 3b. ERB format           | not started                                                                               |
+| 4. Editor and CLI        | not started                                                                               |
+| 5. Remove external tools | not started                                                                               |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

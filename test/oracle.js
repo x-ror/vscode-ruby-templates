@@ -70,6 +70,56 @@ const slimExpectation = (expected, { error, errors }) =>
 const hamlExpectation = (expected, { error }) =>
   error && expected.message === error.message && expected.line === error.line;
 
+const nearestFile = (file, name) => {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, name);
+    if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile())
+      return candidate;
+    if (path.dirname(dir) === dir) return undefined;
+  }
+};
+
+const RELEASE = /(\d+\.\d+)(?:\.\d+)*/;
+
+// The Ruby our server parses `file` with: the nearest .ruby-version, else the nearest Gemfile.lock's RUBY VERSION.
+const projectRubyRelease = (file) => {
+  const versionFile = nearestFile(file, ".ruby-version");
+  const fromFile = versionFile
+    ? fs
+        .readFileSync(versionFile, "utf8")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line && !line.startsWith("#"))
+        ?.match(new RegExp(`^(?:ruby-)?${RELEASE.source}`))?.[1]
+    : undefined;
+  if (fromFile) return fromFile;
+  const lockfile = nearestFile(file, "Gemfile.lock");
+  return lockfile
+    ? fs
+        .readFileSync(lockfile, "utf8")
+        .match(
+          new RegExp(`^RUBY VERSION\\r?\\n\\s+ruby ${RELEASE.source}`, "m"),
+        )?.[1]
+    : undefined;
+};
+
+// Prism 2.0.0's grammars: 3.3 (also for older Rubies), 3.4, 3.5 (also 4.0), 4.1; newer is the latest.
+const prismVersion = (release) => {
+  if (!release) return "latest";
+  const [major, minor] = release.split(".").map(Number);
+  const number = major * 100 + minor;
+  if (number >= 402) return "latest";
+  if (number >= 401) return "4.1";
+  if (number >= 305) return "3.5";
+  return number >= 304 ? "3.4" : "3.3";
+};
+
+// Both sides must parse with one grammar: ours reads the project, so the official script is told what ours finds.
+const rubyVersionArguments = (file) => [
+  "--ruby-version",
+  prismVersion(projectRubyRelease(file)),
+];
+
 const languages = {
   slim: {
     name: "slim",
@@ -80,6 +130,7 @@ const languages = {
     extension: ".slim",
     casesScript: "slim_cases.rb",
     officialScript: "slim.rb",
+    officialArguments: (item) => rubyVersionArguments(item.path),
     expectationAgrees: slimExpectation,
     perturb: async (source) => slimPerturbations(source),
   },
@@ -117,7 +168,11 @@ const languages = {
     extension: ".erb",
     officialScript: "erb.rb",
     // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
-    officialArguments: (item) => ["--file", path.basename(item.path)],
+    officialArguments: (item) => [
+      "--file",
+      path.basename(item.path),
+      ...rubyVersionArguments(item.path),
+    ],
     // 3b: compared with the leading whitespace of text lines removed; the formatter must also change something.
     formatFlags: ["--normalize"],
     reportsChanged: true,

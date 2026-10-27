@@ -55,8 +55,8 @@ struct Line<'a> {
 type Ranges = Vec<(usize, usize)>;
 
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped when `trim` is set.
-pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
-    if let Some(d) = crate::erb::diagnostics(text).into_iter().find(|d| d.severity == Some(DiagnosticSeverity::ERROR)) {
+pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: ruby_prism::Version) -> Result<Indented, Skipped> {
+    if let Some(d) = crate::erb::diagnostics(text, ruby).into_iter().find(|d| d.severity == Some(DiagnosticSeverity::ERROR)) {
         return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
     }
     if let Some(d) = tags::diagnostics(text, partial).first() {
@@ -450,6 +450,10 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
+        super::indent(text, unit, trim, partial, ruby_prism::Version::Latest)
+    }
 
     fn fmt(text: &str) -> String {
         let once = indent(text, "  ", true, false).unwrap_or_else(|e| panic!("{e}: {text}")).text;

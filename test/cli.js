@@ -52,6 +52,26 @@ try {
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /notes\.txt: unknown template type/);
 
+  // Ruby 3.3 rejects a line that starts with `&&`; the latest grammar, used without a project Ruby, takes it.
+  const ruby = file("ruby.html.erb", "<% x = a\n  && b %>\n");
+  r = run(["check", ruby]);
+  assert.strictEqual(
+    r.status,
+    0,
+    "no .ruby-version: the latest grammar\n" + r.stdout + r.stderr,
+  );
+  fs.writeFileSync(path.join(root, ".ruby-version"), "3.3.0\n");
+  r = run(["check", ruby]);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.match(
+    r.stdout,
+    /ruby\.html\.erb:2:\d+: error: unexpected '&&', ignoring it/,
+  );
+  fs.writeFileSync(path.join(root, ".ruby-version"), "4.1.0\n");
+  assert.strictEqual(run(["check", ruby]).status, 0, "4.1 takes it");
+  fs.unlinkSync(path.join(root, ".ruby-version"));
+  fs.unlinkSync(ruby);
+
   r = run(["format", messy]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout, "div\n  p\n");
