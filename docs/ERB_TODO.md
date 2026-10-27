@@ -111,7 +111,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 8. Diagnostics and linting
 
 - [x] Unclosed `<%` tag (`server/src/erb.rs`, tree-sitter-embedded-template)
-- [x] Malformed tag / parse error node (`server/src/erb.rs`)
+- [x] Unclosed tag: tree-sitter MISSING `%>` (`server/src/erb.rs`; `malformed-tag` removed, `docs/LINT_PLAN.md` 3a)
 - [x] Block opened without `<% end %>` (`server/src/erb.rs` + `server/src/ruby.rs` `analyze`)
 - [x] Stray `end` with no open block (`server/src/erb.rs`)
 - [x] `else`/`elsif`/`when` outside a block (`server/src/erb.rs` `BlockEffect::Continue`)
@@ -120,11 +120,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/cli.rs`)
 - [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
 - [x] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): tree-sitter-ruby over the tags joined like Erubi, offsets kept (`server/src/ruby_syntax.rs`); runs once tag and block structure is sound, first 3 errors. No false positives on the Forem / rubygems.org / Mastodon / diaspora corpus (1082 ERB views). A tag left open before the next `<%` is reported at its own opener (`unclosed-tag`)
-- [x] `<%= %>` with a block helper missing `do` / `<% %>` on a block helper (`<% form_with do %>` renders nothing) (`server/src/erb.rs` `OUTPUT_BLOCK_HELPER`)
-- [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt`, `image_tag` for computed `src` (`server/src/html_lint.rs`); more HTML checks are catalogued in `docs/lint/ERB.md`
+- [x] `<% form_with … do %>` renders nothing but is valid Ruby, so it isn't reported (`silent-output-helper` removed, `docs/LINT_PLAN.md` 3a)
+- [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt` (`server/src/html_lint.rs`); more HTML checks are catalogued in `docs/lint/ERB.md`
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/lsp.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/lsp.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
-- [x] `raw` / `html_safe` / `<%==` security hints (`unsafe-output`, info, `server/src/html_lint.rs`)
+- [x] `raw` / `html_safe` / `<%==` are valid Erubi, so they aren't reported (`unsafe-output` removed, `docs/LINT_PLAN.md` 3a)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)
 - [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)

@@ -17,9 +17,19 @@ pub mod code {
 pub const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
 pub(crate) const OPTIONAL_END: &[&str] = &[
-    "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "rp", "rt", "optgroup", "html", "head",
-    "body",
+    "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "caption", "rp", "rt", "optgroup", "html",
+    "head", "body",
 ];
+// Start tags that close an open `p` (13.2.6.4.7), so its own end tag later has nothing to close.
+#[rustfmt::skip]
+const CLOSES_P: &[&str] = &[
+    "address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure",
+    "footer", "header", "hgroup", "main", "menu", "nav", "ol", "p", "search", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5",
+    "h6", "pre", "listing", "form", "li", "dd", "dt", "plaintext", "table", "hr", "xmp",
+];
+// Inside these a start tag doesn't close a `p` opened outside (13.2.6.4.7 "has an element in button scope").
+const SCOPE_BOUNDARY: &[&str] = &["button", "applet", "object", "template", "marquee", "table", "td", "th", "caption", "svg", "math"];
+const HTML_END_TAG_RULE: &str = "HTML 13.2.6.4.7";
 const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
 
 // Block helpers whose body is JS/CSS, not HTML; the source has no literal `<script>` to skip.
@@ -33,13 +43,25 @@ pub(crate) struct Tag {
     pub end: usize,
 }
 
-/// An open ERB block: the tag stack on entry and the tag names each finished branch left open.
+/// An open ERB block: the tag stack and `p` state on entry, and those each finished branch left.
 /// `in_branch` is false between `case x` and its first `when`, which is not a branch.
 pub(crate) struct Block {
     pub entry: Vec<Tag>,
+    entry_p: PState,
     branch_ends: Vec<Vec<String>>,
+    branch_p_ends: Vec<PState>,
     has_else: bool,
     in_branch: bool,
+}
+
+/// Whether a `p` element is open, tracked through ERB branches like the tag stack.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub(crate) enum PState {
+    #[default]
+    Closed,
+    Open,
+    /// Branches disagree, or a scope boundary hides whether a start tag closed it: its end tag isn't checked.
+    Unknown,
 }
 
 pub(crate) struct ErbEvent<'a> {
@@ -205,40 +227,50 @@ pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
     Some(tokens)
 }
 
-/// Track the tag stack through ERB branches. Returns false when the stack is no longer certain; the blocks are closed
-/// anyway, and the stack is the one the last branch left.
+/// Track the tag stack and `p` state through ERB branches. Returns false when the stack is no longer certain; the blocks
+/// are closed anyway, and the stack is the one the last branch left.
 // ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
 // open makes the stack path-dependent, so checking stops there. Conditional wrappers
 // (`<% if a %><div><% end %>…<% if a %></div><% end %>`) are therefore unchecked; per-path stacks would cover them.
-pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, blocks: &mut Vec<Block>) -> bool {
+pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, blocks: &mut Vec<Block>) -> bool {
     match event.effect {
         BlockEffect::Open(n) => {
             for _ in 0..n {
                 let in_branch = event.keyword != "case";
-                blocks.push(Block { entry: stack.clone(), branch_ends: Vec::new(), has_else: false, in_branch });
+                let entry = stack.clone();
+                blocks.push(Block { entry, entry_p: *p, branch_ends: Vec::new(), branch_p_ends: Vec::new(), has_else: false, in_branch });
             }
         }
         BlockEffect::Continue => {
             let Some(block) = blocks.last_mut() else { return false };
             if block.in_branch {
                 block.branch_ends.push(names(stack));
+                block.branch_p_ends.push(*p);
             }
             block.in_branch = true;
             block.has_else |= event.keyword == "else";
             *stack = block.entry.clone();
+            *p = block.entry_p;
         }
         BlockEffect::Close(n) => {
             let mut agree = true;
             for _ in 0..n {
                 let Some(block) = blocks.pop() else { return false };
-                let open = names(stack);
-                agree &= block.branch_ends.iter().all(|b| *b == open) && (block.has_else || names(&block.entry) == open);
+                agree &= paths_agree(&block.branch_ends, &names(&block.entry), block.has_else, &names(stack));
+                if !paths_agree(&block.branch_p_ends, &block.entry_p, block.has_else, p) {
+                    *p = PState::Unknown;
+                }
             }
             return agree;
         }
         BlockEffect::Neutral => {}
     }
     true
+}
+
+/// Every finished branch, and the fall-through when there's no `else`, ends in `now`.
+fn paths_agree<T: PartialEq>(branch_ends: &[T], entry: &T, has_else: bool, now: &T) -> bool {
+    branch_ends.iter().all(|b| b == now) && (has_else || entry == now)
 }
 
 /// A matched `<name …>…</name>` pair, as byte offsets.
@@ -277,6 +309,19 @@ pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
     })
 }
 
+fn scope_boundary_open(stack: &[Tag], optional: &[Tag]) -> bool {
+    stack.iter().chain(optional).any(|t| SCOPE_BOUNDARY.contains(&t.name.as_str()))
+}
+
+fn unexpected_close_tag(name: &str, range: Range) -> Diagnostic {
+    let message = format!("Unexpected end tag `</{name}>`: no open element of that name ({HTML_END_TAG_RULE})");
+    coded(warning(range, message), code::UNEXPECTED_CLOSE_TAG)
+}
+
+fn void_close_tag(name: &str, range: Range) -> Diagnostic {
+    coded(warning(range, format!("End tag `</{name}>` for a void element (HTML 13.1.2)")), code::UNEXPECTED_CLOSE_TAG)
+}
+
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
     let Some(tokens) = tokens(text) else { return };
     let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
@@ -284,10 +329,11 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
     // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
     let mut optional: Vec<Tag> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
+    let mut p = PState::Closed;
     for token in tokens {
         match token {
             Token::Erb(event) => {
-                if !apply(&event, &mut stack, &mut blocks) {
+                if !apply(&event, &mut stack, &mut p, &mut blocks) {
                     return;
                 }
             }
@@ -297,14 +343,31 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
                 elements.push(Element { name: tag.name, start: tag.start, open_end: tag.end, close_start, end })
             }
             Token::Open { tag, pairs, .. } => {
+                if CLOSES_P.contains(&tag.name.as_str()) {
+                    p = match p {
+                        _ if tag.name == "p" => PState::Open,
+                        PState::Open if scope_boundary_open(&stack, &optional) => PState::Unknown,
+                        PState::Open => PState::Closed,
+                        other => other,
+                    };
+                }
                 if pairs {
                     stack.push(tag);
                 } else if OPTIONAL_END.contains(&tag.name.as_str()) {
                     optional.push(tag);
                 }
             }
-            Token::Close { tag, .. } if VOID.contains(&tag.name.as_str()) => {}
+            Token::Close { tag: Tag { name, start, end }, .. } if VOID.contains(&name.as_str()) => {
+                out.push(void_close_tag(&name, range(start, end)));
+            }
             Token::Close { tag: Tag { name, start, end }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
+                // `<p>a<div>b</div></p>`: the `div` closed the `p`, and the parser inserts an empty one for this end tag.
+                if name == "p" {
+                    if p == PState::Closed && !partial {
+                        out.push(unexpected_close_tag(&name, range(start, end)));
+                    }
+                    p = PState::Closed;
+                }
                 if let Some(at) = optional.iter().rposition(|t| t.name == name) {
                     elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
                     optional.truncate(at);
@@ -312,16 +375,15 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
             }
             Token::Close { tag: Tag { name, start, end }, .. } => match stack.last() {
                 None if partial => {}
-                None => {
-                    out.push(coded(warning(range(start, end), format!("Unexpected closing tag `</{name}>`")), code::UNEXPECTED_CLOSE_TAG))
-                }
+                None => out.push(unexpected_close_tag(&name, range(start, end))),
                 Some(top) if top.name == name => {
                     elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
                     stack.pop();
                 }
                 Some(top) => {
                     let line = offset_to_position(text, top.start).line + 1;
-                    let message = format!("Closing tag `</{name}>` doesn't match `<{}>` (line {line})", top.name);
+                    let message =
+                        format!("End tag `</{name}>` doesn't close the open `<{}>` (line {line}) ({HTML_END_TAG_RULE})", top.name);
                     out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
                     // ponytail: first mismatch only; recovery guesses would cascade into noise.
                     return;
@@ -330,7 +392,9 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
         }
     }
     if blocks.is_empty() && !partial {
-        let unclosed = |t: &Tag| coded(warning(range(t.start, t.end), format!("`<{}>` is never closed", t.name)), code::UNCLOSED_ELEMENT);
+        let unclosed = |t: &Tag| {
+            coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
+        };
         out.extend(stack.iter().map(unclosed));
     }
 }
@@ -350,17 +414,68 @@ mod tests {
 
     #[test]
     fn reports_mismatch_stray_and_unclosed() {
-        assert_eq!(messages("<div>\n  <span>x</div>"), ["Closing tag `</div>` doesn't match `<span>` (line 2)"]);
-        assert_eq!(messages("<div></div></span>"), ["Unexpected closing tag `</span>`"]);
-        assert_eq!(messages("<section><div></div>"), ["`<section>` is never closed"]);
+        assert_eq!(messages("<div>\n  <span>x</div>"), ["End tag `</div>` doesn't close the open `<span>` (line 2) (HTML 13.2.6.4.7)"]);
+        assert_eq!(messages("<div></div></span>"), ["Unexpected end tag `</span>`: no open element of that name (HTML 13.2.6.4.7)"]);
+        assert_eq!(messages("<section><div></div>"), ["`<section>` is never closed (HTML 13.2.6.4.7)"]);
         // Tags crossing a block boundary inconsistently with the outside are still caught.
-        assert_eq!(messages("<% if a %><div><% else %><div><% end %></span>"), ["Closing tag `</span>` doesn't match `<div>` (line 1)"]);
+        assert_eq!(
+            messages("<% if a %><div><% else %><div><% end %></span>"),
+            ["End tag `</span>` doesn't close the open `<div>` (line 1) (HTML 13.2.6.4.7)"]
+        );
         assert_eq!(
             messages("<% case x %>\n<% when 1 %><a><% else %><a><% end %></span>"),
-            ["Closing tag `</span>` doesn't match `<a>` (line 2)"]
+            ["End tag `</span>` doesn't close the open `<a>` (line 2) (HTML 13.2.6.4.7)"]
         );
         assert_eq!(messages("<% items.each do |i| %><div><% end %></div>"), Vec::<String>::new());
-        assert_eq!(messages("<ul><% items.each do |i| %><li><%= i %><% end %>"), ["`<ul>` is never closed"]);
+        assert_eq!(messages("<ul><% items.each do |i| %><li><%= i %><% end %>"), ["`<ul>` is never closed (HTML 13.2.6.4.7)"]);
+    }
+
+    #[test]
+    fn void_and_optional_end_elements_are_not_unclosed() {
+        for ok in [
+            "<area><base><br><col><embed><hr><img><input><link><meta><param><source><track><wbr>",
+            "<dl><dt>a<dd>b<dt>c</dl><select><optgroup><option>a<option>b</select>",
+            "<table><caption>c<colgroup><col><thead><tr><th>h<tbody><tr><td>a<td>b<tfoot><tr><td>f</table>",
+            "<ruby>a<rt>b<rp>c</ruby><p>a<p>b",
+        ] {
+            assert!(messages(ok).is_empty(), "{ok}: {:?}", messages(ok));
+        }
+        assert_eq!(
+            messages("<br></br><img></img>"),
+            ["End tag `</br>` for a void element (HTML 13.1.2)", "End tag `</img>` for a void element (HTML 13.1.2)"]
+        );
+    }
+
+    #[test]
+    fn end_tag_of_a_p_a_block_start_tag_closed() {
+        let unexpected = ["Unexpected end tag `</p>`: no open element of that name (HTML 13.2.6.4.7)"];
+        assert_eq!(messages("<p>a<div>b</div></p>"), unexpected);
+        assert_eq!(messages("<p>a<ul><li>b</ul></p>"), unexpected);
+        assert_eq!(messages("<div>x</p></div>"), unexpected);
+        assert_eq!(messages("<p>a</p></p>"), unexpected);
+        assert!(messages("<p>a<span>b</span></p><p>c<p>d</p>").is_empty());
+        assert!(super::diagnostics("<div>x</p></div>", true).is_empty());
+    }
+
+    #[test]
+    fn p_end_tag_inside_scope_boundaries_and_erb_branches() {
+        for ok in [
+            "<p><button><div>x</div></button></p>",
+            "<p><object><div>x</div></object></p>",
+            "<p><template><div>x</div></template></p>",
+            "<p><svg><foreignObject><div>x</div></foreignObject></svg></p>",
+            "<table><tr><td><p>a<div>b</div></p></table>",
+            "<% if a %><p>x<% else %><div>y</div><% end %></p>",
+            "<% if a %><div>y</div><% else %><p>x<% end %></p>",
+            "<p><% if a %><div>x</div><% end %></p>",
+            "<p><% if a %><b>x</b><% else %><i>y</i><% end %></p>",
+            "<p><% items.each do |i| %><%= i %><% end %></p>",
+            "<% if a %><p>x<% else %><p>y<% end %></p>",
+        ] {
+            assert!(messages(ok).is_empty(), "{ok}: {:?}", messages(ok));
+        }
+        assert_eq!(messages("<p><% if a %><div>x</div><% else %><div>y</div><% end %></p>").len(), 1);
+        assert_eq!(messages("<% if a %><div>x</div><% else %><span>y</span><% end %></p>").len(), 1);
     }
 
     #[test]

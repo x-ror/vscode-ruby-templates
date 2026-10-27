@@ -44,12 +44,12 @@ struct Frame {
     has_child: bool,
 }
 
-pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+pub fn diagnostics(text: &str, extra_engines: &[String], ruby: ruby_prism::Version) -> Vec<Diagnostic> {
     let Some(body) = text.strip_prefix(BOM) else {
-        return check_structure(text, extra_engines);
+        return check_structure(text, extra_engines, ruby);
     };
     // Slim drops the byte order mark, but the editor still counts it on the first line.
-    let mut out = check_structure(body, extra_engines);
+    let mut out = check_structure(body, extra_engines, ruby);
     let bom_units = BOM.encode_utf16().count() as u32;
     for position in out.iter_mut().flat_map(|d| [&mut d.range.start, &mut d.range.end]).filter(|p| p.line == 0) {
         position.character += bom_units;
@@ -57,7 +57,7 @@ pub fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     out
 }
 
-fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Version) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
     let mut stack: Vec<Frame> = Vec::new();
@@ -82,7 +82,7 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
     if filters_pass && invalid_doctype.is_none() {
-        out.extend(slim_ruby::diagnostics(text, &parsed).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+        out.extend(slim_ruby::diagnostics(text, &parsed, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
@@ -439,6 +439,10 @@ fn find_quoted(s: &str, q: char) -> Option<usize> {
 mod tests {
     use super::*;
     use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+
+    fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+        super::diagnostics(text, extra_engines, ruby_prism::Version::Latest)
+    }
 
     /// (code, 0-based line, 0-based start column, severity) for each Slim diagnostic.
     fn slim(text: &str) -> Vec<(String, u32, u32, DiagnosticSeverity)> {

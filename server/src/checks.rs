@@ -77,26 +77,60 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
     if uri.path().to_ascii_lowercase().ends_with(".tt") {
         return vec![];
     }
-    let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines);
-    if let Ok(path) = uri.to_file_path() {
+    let path = uri.to_file_path().ok();
+    let project = path.as_deref().map(Project::for_template);
+    let ruby =
+        path.as_deref().zip(project.as_ref()).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
+    let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines, &ruby);
+    if let (Some(path), Some(project)) = (&path, &project) {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
-        let project = Project::for_template(&path);
-        out.extend(unresolved_renders(&path, &project, &doc.text, &in_code));
-        out.extend(strict_locals_mismatches(&path, &project, &doc.text, &in_code));
+        out.extend(unresolved_renders(path, project, &doc.text, &in_code));
+        out.extend(strict_locals_mismatches(path, project, &doc.text, &in_code));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
     out
 }
 
+/// How Rails evals a template: the Prism grammar of its project's Ruby, and, where strict locals exist (Rails 7.1 or
+/// newer), the template's name in Rails' messages. Without that name the `locals:` line is a plain comment.
+pub(crate) struct RubyContext {
+    pub grammar: ruby_prism::Version,
+    pub strict_locals_identifier: Option<String>,
+}
+
+impl RubyContext {
+    pub(crate) fn outside_project() -> Self {
+        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals_identifier: None }
+    }
+
+    fn of(path: &Path, project: &Project) -> Self {
+        RubyContext {
+            grammar: project.prism_version(),
+            strict_locals_identifier: supports_strict_locals(project).then(|| project.short_identifier(path)).flatten(),
+        }
+    }
+}
+
+/// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
+pub(crate) fn ruby_context(uri: &Url) -> RubyContext {
+    uri.to_file_path().map_or_else(|_| RubyContext::outside_project(), |path| RubyContext::of(&path, &Project::for_template(&path)))
+}
+
 /// The template language's own checks, without the render checks that need app/views.
-pub(crate) fn language_diagnostics(uri: &Url, lang: TemplateLang, text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
+pub(crate) fn language_diagnostics(
+    uri: &Url,
+    lang: TemplateLang,
+    text: &str,
+    extra_engines: &[String],
+    ruby: &RubyContext,
+) -> Vec<Diagnostic> {
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text),
+        TemplateLang::Erb => erb::diagnostics(text, ruby),
         TemplateLang::Haml => haml_indent::diagnostics(text),
-        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines),
+        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines, ruby.grammar),
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
-        TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines)
+        TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines, ruby.grammar)
             .into_iter()
             .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
             .collect(),
@@ -108,6 +142,7 @@ pub(crate) fn language_diagnostics(uri: &Url, lang: TemplateLang, text: &str, ex
         out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
     if lang == TemplateLang::Erb && html_host(uri) {
+        out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));
     }
@@ -290,17 +325,20 @@ mod tests {
         let haml = "%p hi\n  %b x\n";
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
-        // The tag check stays quiet while ERB blocks don't balance, so each code gets its own text.
-        let erb_cases = [("<% end %>\n", erb::code::STRAY_END), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
+        // Each code gets its own text, so one check does not hide another.
+        let erb_cases =
+            [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
         let options = Options {
-            disabled_erb: vec![erb::code::STRAY_END.into(), tags::code::UNCLOSED_ELEMENT.into()],
+            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into(), erb::code::UNCLOSED_TAG.into()],
             disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
             ..Options::default()
         };
         assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
+        // Text that is not HTML has no `<` to misparse.
+        assert!(codes("file:///v/show.text.erb", TemplateLang::Erb, "hi <% foo", &all).is_empty());
         let haml_path = "file:///v/show.html.haml";
         assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
         let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);
@@ -339,7 +377,6 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("tags.rs"),
             include_str!("html_lint.rs"),
-            include_str!("ruby_syntax.rs"),
             include_str!("haml_indent.rs"),
             include_str!("slim_indent.rs"),
         ] {
@@ -592,6 +629,32 @@ mod tests {
             got.sort();
             assert_eq!(got, expected, "{specs}");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn positional_locals_are_reported_from_rails_7_1_with_the_path_from_the_project_root() {
+        let root = std::env::temp_dir().join(format!("rt-locals-keywords-{}", std::process::id()));
+        let file = root.join("app/views/users/_card.html.erb");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let doc = Doc { lang: TemplateLang::Erb, text: "<%# locals: (user, size:) -%>\n".into(), version: 0 };
+        let uri = Url::from_file_path(&file).unwrap();
+        let messages = || diagnostics(&uri, &doc, &Options::default()).into_iter().map(|d| d.message).collect::<Vec<_>>();
+        let lock = |actionview: &str| {
+            std::fs::write(root.join("Gemfile.lock"), format!("GEM\n  specs:\n    actionview ({actionview})\n")).unwrap()
+        };
+        assert!(messages().is_empty(), "no lockfile");
+        lock("7.0.8");
+        assert!(messages().is_empty(), "Rails 7.0");
+        lock("7.1.0");
+        let expected =
+            "`user` set as non-keyword argument for app/views/users/_card.html.erb. Locals can only be set as keyword arguments.";
+        assert_eq!(messages(), [expected]);
+        let broken = Doc { lang: TemplateLang::Erb, text: "<%# locals: (a: ] ) %>\n".into(), version: 0 };
+        let broken_messages = || diagnostics(&uri, &broken, &Options::default()).len();
+        assert!(broken_messages() > 0, "Rails 7.1");
+        lock("7.0.8");
+        assert_eq!(broken_messages(), 0, "Rails 7.0: a plain comment");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

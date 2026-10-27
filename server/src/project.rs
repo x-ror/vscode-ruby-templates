@@ -1,4 +1,4 @@
-//! Framework and gem versions of the project a template belongs to, from the nearest `Gemfile.lock`.
+//! Framework, gem and Ruby versions of the project a template belongs to, from the nearest `Gemfile.lock` and `.ruby-version`.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -17,13 +17,16 @@ pub enum Framework {
 pub struct Project {
     pub framework: Framework,
     gems: HashMap<String, String>,
+    ruby: Option<Version>,
     /// Format names the app registers in `config/initializers/**/*.rb`, beyond Rails' own.
     formats: Vec<String>,
+    /// The folder of the `Gemfile.lock`, which Rails.root is.
+    root: Option<PathBuf>,
 }
 
 impl Project {
     pub fn unknown() -> Self {
-        Project { framework: Framework::Unknown, gems: HashMap::new(), formats: Vec::new() }
+        Project { framework: Framework::Unknown, gems: HashMap::new(), ruby: None, formats: Vec::new(), root: None }
     }
 
     /// The project of the nearest `Gemfile.lock` above `template`, unknown when there is none, with the formats
@@ -43,7 +46,9 @@ impl Project {
             .collect();
         formats.sort();
         formats.dedup();
-        Project { formats, ..project }
+        let ruby_version_file = template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file());
+        let ruby = ruby_version_file.and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
+        Project { formats, ruby: ruby.or(project.ruby), root: lock_dir.map(Path::to_path_buf), ..project }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
@@ -54,9 +59,14 @@ impl Project {
     pub fn from_lockfile(lock: &str) -> Self {
         let mut gems = HashMap::new();
         let mut in_specs = false;
+        let mut in_ruby_section = false;
+        let mut ruby = None;
         for line in lock.lines() {
             if !line.starts_with(' ') {
                 in_specs = false;
+                in_ruby_section = line.trim_end() == "RUBY VERSION";
+            } else if let Some(version) = in_ruby_section.then(|| line.trim().strip_prefix("ruby ")).flatten() {
+                ruby = ruby_release(version);
             } else if line.trim_end() == "  specs:" {
                 in_specs = true;
             } else if let Some((name, version)) = in_specs.then(|| spec_line(line)).flatten() {
@@ -70,17 +80,52 @@ impl Project {
         } else {
             Framework::Unknown
         };
-        Project { framework, gems, formats: Vec::new() }
+        Project { framework, gems, ruby, formats: Vec::new(), root: None }
     }
 
     pub fn gem_version(&self, name: &str) -> Option<Version> {
         Version::parse(self.gems.get(name)?)
     }
 
+    /// Rails' `short_identifier` of `template`: its path from the project root, with `/`.
+    pub fn short_identifier(&self, template: &Path) -> Option<String> {
+        let relative = template.strip_prefix(self.root.as_deref()?).ok()?;
+        Some(relative.iter().map(|part| part.to_string_lossy()).collect::<Vec<_>>().join("/"))
+    }
+
+    /// The Prism grammar of the project's Ruby, the latest when it names none.
+    pub fn prism_version(&self) -> ruby_prism::Version {
+        let Some(ruby) = &self.ruby else { return ruby_prism::Version::Latest };
+        // Prism 2.0.0 has no grammar before 3.3, which stands in for older Rubies.
+        PRISM_GRAMMARS.iter().rfind(|(since, _)| ruby.at_least(since)).map_or(ruby_prism::Version::CRuby3_3, |&(_, grammar)| grammar)
+    }
+
     /// Does a gem named `name` or `name_*` / `name-*` exist (a gem's own view folder, `spree/` from `spree_core`)?
     pub fn has_gem_family(&self, name: &str) -> bool {
         self.gems.keys().any(|gem| gem == name || gem.strip_prefix(name).is_some_and(|rest| rest.starts_with(['_', '-'])))
     }
+}
+
+/// Grammars Prism 2.0.0 vendors after 3.3, by the first Ruby version that uses each.
+const PRISM_GRAMMARS: [(&str, ruby_prism::Version); 4] = [
+    ("3.4", ruby_prism::Version::CRuby3_4),
+    ("3.5", ruby_prism::Version::CRuby3_5),
+    ("4.1", ruby_prism::Version::CRuby4_1),
+    ("4.2", ruby_prism::Version::Latest),
+];
+
+/// The version a `.ruby-version` file names: `3.3.6` or `ruby-3.3.6`, on its first line that isn't blank or a comment.
+fn ruby_version_file_version(text: &str) -> Option<Version> {
+    let line = text.trim_start_matches('\u{feff}').lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with('#'))?;
+    let name = line.split_whitespace().next()?;
+    ruby_release(name.strip_prefix("ruby-").unwrap_or(name))
+}
+
+/// `3.3.6` from `3.3.6p108` or `3.4.0-preview1`; other Ruby engines (`jruby-9.4`) and a bare major have no CRuby release.
+fn ruby_release(text: &str) -> Option<Version> {
+    let end = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
+    let release = text[..end].trim_end_matches('.');
+    release.contains('.').then(|| Version::parse(release)).flatten()
 }
 
 /// Names registered by `Mime::Type.register` / `register_alias` in the `*.rb` files under `dir`, as Rails loads them.
@@ -275,6 +320,69 @@ mod tests {
         let project = Project::for_template(&template);
         assert!(project.is_format("mobile"));
         assert_eq!(project.framework, Framework::Rails);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn grammar(ruby: &str) -> ruby_prism::Version {
+        Project { ruby: Version::parse(ruby), ..Project::unknown() }.prism_version()
+    }
+
+    #[test]
+    fn grammar_follows_the_ruby_version() {
+        use ruby_prism::Version::*;
+        assert_eq!(Project::unknown().prism_version(), Latest);
+        for (ruby, expected) in [
+            ("2.7.8", CRuby3_3),
+            ("3.2.9", CRuby3_3),
+            ("3.3.0", CRuby3_3),
+            ("3.3.6", CRuby3_3),
+            ("3.4.0", CRuby3_4),
+            ("3.4.9", CRuby3_4),
+            ("3.5.0", CRuby3_5),
+            ("4.0.2", CRuby3_5),
+            ("4.1.0", CRuby4_1),
+            ("4.1.9", CRuby4_1),
+            ("4.2.0", Latest),
+            ("5.0", Latest),
+        ] {
+            assert_eq!(grammar(ruby), expected, "{ruby}");
+        }
+    }
+
+    #[test]
+    fn ruby_version_texts() {
+        let release = ruby_version_file_version;
+        assert_eq!(release("3.3.6\n"), Version::parse("3.3.6"));
+        assert_eq!(release("ruby-3.3.6\n"), Version::parse("3.3.6"));
+        assert_eq!(release("# pinned\n\n  3.4.1 # comment\n"), Version::parse("3.4.1"));
+        assert_eq!(release("3.4.0-preview1"), Version::parse("3.4.0"));
+        assert_eq!(release("jruby-9.4.5.0"), None);
+        assert_eq!(release("system"), None);
+        assert_eq!(release("3"), None);
+        assert_eq!(release("\u{feff}3.3.6\n"), Version::parse("3.3.6"));
+        assert_eq!(release(""), None);
+        let lock = "GEM\n  specs:\n    rack (3.0.0)\n\nRUBY VERSION\n   ruby 3.3.6p108\n\nBUNDLED WITH\n   2.5.0\n";
+        assert_eq!(Project::from_lockfile(lock).ruby, Version::parse("3.3.6"));
+        assert_eq!(Project::from_lockfile("RUBY VERSION\n   ruby 3.4.0\n").ruby, Version::parse("3.4.0"));
+        assert_eq!(Project::from_lockfile("GEM\n  specs:\n    rack (3.0.0)\n").ruby, None);
+        assert_eq!(Project::from_lockfile("BUNDLED WITH\n   ruby 3.3.6\n").ruby, None);
+    }
+
+    #[test]
+    fn nearest_ruby_version_file_beats_the_lockfile() {
+        let root = std::env::temp_dir().join(format!("rt-project-ruby-{}", std::process::id()));
+        let template = root.join("engine/app/views/users/show.html.erb");
+        std::fs::create_dir_all(template.parent().unwrap()).unwrap();
+        let ruby = || Project::for_template(&template).ruby;
+        assert_eq!(ruby(), None);
+        std::fs::write(root.join("Gemfile.lock"), "RUBY VERSION\n   ruby 3.4.1p10\n").unwrap();
+        assert_eq!(ruby(), Version::parse("3.4.1"));
+        std::fs::write(root.join(".ruby-version"), "3.3.6\n").unwrap();
+        assert_eq!(ruby(), Version::parse("3.3.6"));
+        std::fs::write(root.join("engine/.ruby-version"), "ruby-3.2.2\n").unwrap();
+        assert_eq!(ruby(), Version::parse("3.2.2"));
+        std::fs::write(root.join("engine/.ruby-version"), "jruby-9.4.5.0\n").unwrap();
+        assert_eq!(ruby(), Version::parse("3.4.1"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

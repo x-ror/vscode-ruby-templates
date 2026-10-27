@@ -70,6 +70,64 @@ const slimExpectation = (expected, { error, errors }) =>
 const hamlExpectation = (expected, { error }) =>
   error && expected.message === error.message && expected.line === error.line;
 
+const nearestFile = (file, name) => {
+  for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
+    const candidate = path.join(dir, name);
+    if (fs.statSync(candidate, { throwIfNoEntry: false })?.isFile())
+      return candidate;
+    if (path.dirname(dir) === dir) return undefined;
+  }
+};
+
+// The path Rails names a template by (`short_identifier`): from the nearest Gemfile.lock's folder, else the file name.
+const projectRelativePath = (file) => {
+  const lockfile = nearestFile(file, "Gemfile.lock");
+  return lockfile
+    ? path.relative(path.dirname(lockfile), file)
+    : path.basename(file);
+};
+
+const RELEASE = /(\d+\.\d+)(?:\.\d+)*/;
+
+// The Ruby our server parses `file` with: the nearest .ruby-version, else the nearest Gemfile.lock's RUBY VERSION.
+const projectRubyRelease = (file) => {
+  const versionFile = nearestFile(file, ".ruby-version");
+  const fromFile = versionFile
+    ? fs
+        .readFileSync(versionFile, "utf8")
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line && !line.startsWith("#"))
+        ?.match(new RegExp(`^(?:ruby-)?${RELEASE.source}`))?.[1]
+    : undefined;
+  if (fromFile) return fromFile;
+  const lockfile = nearestFile(file, "Gemfile.lock");
+  return lockfile
+    ? fs
+        .readFileSync(lockfile, "utf8")
+        .match(
+          new RegExp(`^RUBY VERSION\\r?\\n\\s+ruby ${RELEASE.source}`, "m"),
+        )?.[1]
+    : undefined;
+};
+
+// Prism 2.0.0's grammars: 3.3 (also for older Rubies), 3.4, 3.5 (also 4.0), 4.1; newer is the latest.
+const prismVersion = (release) => {
+  if (!release) return "latest";
+  const [major, minor] = release.split(".").map(Number);
+  const number = major * 100 + minor;
+  if (number >= 402) return "latest";
+  if (number >= 401) return "4.1";
+  if (number >= 305) return "3.5";
+  return number >= 304 ? "3.4" : "3.3";
+};
+
+// Both sides must parse with one grammar: ours reads the project, so the official script is told what ours finds.
+const rubyVersionArguments = (file) => [
+  "--ruby-version",
+  prismVersion(projectRubyRelease(file)),
+];
+
 const languages = {
   slim: {
     name: "slim",
@@ -80,6 +138,7 @@ const languages = {
     extension: ".slim",
     casesScript: "slim_cases.rb",
     officialScript: "slim.rb",
+    officialArguments: (item) => rubyVersionArguments(item.path),
     expectationAgrees: slimExpectation,
     perturb: async (source) => slimPerturbations(source),
   },
@@ -117,10 +176,17 @@ const languages = {
     extension: ".erb",
     officialScript: "erb.rb",
     // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
-    officialArguments: (item) => ["--file", path.basename(item.path)],
+    officialArguments: (item) => [
+      "--file",
+      projectRelativePath(item.path),
+      ...rubyVersionArguments(item.path),
+    ],
     // 3b: compared with the leading whitespace of text lines removed; the formatter must also change something.
     formatFlags: ["--normalize"],
     reportsChanged: true,
+    // 3a "Ruby": variants of compiling files that break the generated Ruby; every 10th file keeps a run short.
+    breakVariants: (source) => erbBreakVariants(source),
+    breakSample: 10,
   },
 };
 
@@ -237,7 +303,7 @@ const describe = ({ message, line, column }) =>
 
 // Our errors with no Ruby oracle: HTML structure, which WHATWG defines.
 const isHtmlMessage = (message) =>
-  /closing tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
+  /end tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
 
 // items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
 // A file's official errors are `errors` (ERB lists every Prism error) or the one `error`.
@@ -436,6 +502,67 @@ const hamlPerturbations = async (source) => {
   return variants.filter((v) => v.text !== undefined && v.text !== source);
 };
 
+// Erubi's own regexp, so the tags are the ones Rails sees.
+const erbTags = (source) => [
+  ...source.matchAll(/<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?/gs),
+];
+
+const STRICT_LOCALS_HEAD = /#\s+locals:\s+\(/;
+
+// Broken spellings of an ERB template, each a few characters from a compiling one (3a "Ruby"); a name is absent when
+// the file has nothing to break that way.
+const erbBreakVariants = (source) => {
+  const tags = erbTags(source).filter(
+    (tag) => tag[1] !== "#" && tag[1] !== "%",
+  );
+  const bare = (tag) => !tag[1] || tag[1] === "-";
+  const codeStart = (tag) => tag.index + 2 + (tag[1] ?? "").length;
+  const closeStart = (tag) =>
+    tag.index + tag[0].length - (tag[4]?.length ?? 0) - 2;
+  const splice = (from, to, replacement = "") =>
+    source.slice(0, from) + replacement + source.slice(to);
+  const end = tags.find((tag) => bare(tag) && tag[2].trim() === "end");
+  const open = tags.find((tag) =>
+    source.includes("<%", tag.index + tag[0].length),
+  );
+  const conditional = tags.find((tag) => bare(tag) && /^\s*if\s/.test(tag[2]));
+  const parenthesized = tags.find((tag) => tag[2].includes(")"));
+  return [
+    {
+      name: "delete end",
+      text: end && splice(end.index, end.index + end[0].length),
+    },
+    {
+      name: "drop %>",
+      text: open && splice(closeStart(open), closeStart(open) + 2),
+    },
+    {
+      name: "if to <%=",
+      text:
+        conditional &&
+        splice(conditional.index + 2, codeStart(conditional), "="),
+    },
+    { name: "stray end", text: `<% end %>\n${source}` },
+    {
+      // Rails refuses positional strict locals (7.1+) once the Ruby is valid.
+      name: "positional locals",
+      text: STRICT_LOCALS_HEAD.test(source)
+        ? undefined
+        : `<%# locals: (a, b:) -%>\n${source}`,
+    },
+    {
+      name: "delete )",
+      text:
+        parenthesized &&
+        splice(
+          codeStart(parenthesized),
+          codeStart(parenthesized) + parenthesized[2].length,
+          parenthesized[2].replace(/\)([^)]*)$/, "$1"),
+        ),
+    },
+  ].filter((v) => v.text !== undefined && v.text !== source);
+};
+
 // Formats the variants of one file: each must compile to the original's source once formatted, and formatting
 // the result again must change nothing. A refusal (the formatter leaves the text alone) is counted apart.
 const perturbedRows = async (
@@ -575,6 +702,80 @@ const formatReport = (lang, items, indexes, sample) =>
     };
   });
 
+// 3a "Ruby": broken variants of compiling files; each Prism error of Rails must be in ours at the same line.
+// A variant that still compiles, or that fails for a reason other than Ruby's syntax, is counted, not compared.
+const breakReport = async (lang, items, indexes, sample) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-break-"));
+  try {
+    // A Rails 8.1.4 project, so the variants get the Rails checks and are named by their path from `dir`.
+    fs.writeFileSync(
+      path.join(dir, "Gemfile.lock"),
+      "GEM\n  specs:\n    actionview (8.1.4)\n",
+    );
+    const variants = indexes
+      .filter((_, n) => n % sample === 0)
+      .flatMap((i) =>
+        lang
+          .breakVariants(items[i].source)
+          .map((variant) => ({ ...variant, item: items[i] })),
+      )
+      .map((variant, n) => {
+        const file = path.join(
+          dir,
+          String(n),
+          path.basename(variant.item.path),
+        );
+        fs.mkdirSync(path.dirname(file));
+        fs.writeFileSync(file, variant.text);
+        return { ...variant, path: file };
+      });
+    const official = await mapParallel(
+      variants,
+      PARALLEL_RUBY_PROCESSES,
+      (variant) =>
+        officialResult(lang, variant.text, ...lang.officialArguments(variant)),
+    );
+    const ours = oursByPath(
+      lang,
+      variants.map((variant) => variant.path),
+    );
+    const counts = { compiles: 0, other: 0, compared: 0, same: 0 };
+    const mismatches = [];
+    variants.forEach((variant, n) => {
+      const list = official[n].errors;
+      const errors = (ours.get(path.resolve(variant.path)) ?? []).filter(
+        (d) => d.severity === "error",
+      );
+      let agree;
+      if (!list) {
+        counts.compiles++;
+        agree = !errors.length;
+      } else if (list.some((e) => e.line === null)) {
+        counts.other++;
+        return;
+      } else {
+        counts.compared++;
+        agree = list.every((o) => errors.some((e) => sameError(o, e)));
+        if (agree) counts.same++;
+      }
+      if (agree) return;
+      mismatches.push(
+        `break (${variant.name}): ${variant.item.label} ${JSON.stringify(variant.text)}\n` +
+          `    official: ${list ? list.map(describe).join("; ") : "compiles"}\n` +
+          `    ours:     ${errors.length ? errors.map(describe).join("; ") : "no error"}`,
+      );
+    });
+    return {
+      mismatches,
+      summary:
+        `broken:  ${variants.length} variants (every ${sample}th file), still compiles ${counts.compiles}, other error ${counts.other}, ` +
+        `compared ${counts.compared}, same ${counts.same}, mismatches ${mismatches.length}`,
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
 // Prints the report block for `items` under `title`.
 // `perturbSample` n: only every n-th file of a big corpus is perturbed.
 const report = async (lang, title, items, skipped, perturbSample = 1) => {
@@ -605,6 +806,14 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
     perturbSample * PERTURB_SAMPLE,
   );
   const count = (key) => formatted.filter((row) => row[key]).length;
+  const broken = lang.breakVariants
+    ? await breakReport(
+        lang,
+        items,
+        formattable,
+        lang.breakSample * PERTURB_SAMPLE,
+      )
+    : undefined;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
   console.log(
@@ -644,6 +853,10 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
       return `${name} ${all.filter((v) => v.outcome !== "not equivalent").length}/${all.length}`;
     });
     console.log(`  variants run/made: ${byName.join(", ")}`);
+  }
+  if (broken) {
+    console.log(broken.summary);
+    if (process.env.VERBOSE) broken.mismatches.forEach((m) => console.log(m));
   }
   const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
   const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");

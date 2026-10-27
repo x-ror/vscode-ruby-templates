@@ -2,12 +2,15 @@
 # --rails compiles as Rails does (lib/slim/railtie.rb), for comparing the code before and after formatting.
 # Without it, the compiled Ruby is also parsed with Prism 2.0.0 (docs/LINT_PLAN.md 1a "Ruby"): its errors come back as
 # {"errors": [{message, line, column: null}]}, at the template's line (Slim keeps one compiled line per template line).
+# --ruby-version X.Y|latest picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
 require "json"
 require "slim"
 
 # Only generates source, so ActionView isn't needed; use_html_safe is what Slim defaults to once String#html_safe? exists.
 RAILS_OPTIONS = { generator: Temple::Generators::RailsOutputBuffer, disable_capture: true, streaming: true, use_html_safe: true }.freeze
 rails = ARGV.include?("--rails")
+version_flag = ARGV.index("--ruby-version")
+PRISM_OPTIONS = version_flag ? { version: ARGV[version_flag + 1] }.freeze : {}.freeze
 options = rails ? RAILS_OPTIONS : {}
 if rails
   # ActiveSupport isn't loaded; compiling only needs its answer for plain strings.
@@ -32,7 +35,7 @@ def ruby_errors(compiled, template)
   gem "prism", "2.0.0"
   require "prism"
   last_line = [template.lines.size, 1].max
-  Prism.parse(compiled).errors.reject { |e| IGNORED_RUBY_ERRORS.include?(e.type) }.map { |e| { message: e.message, line: [e.location.start_line, last_line].min, column: nil } }
+  Prism.parse(compiled, **PRISM_OPTIONS).errors.reject { |e| IGNORED_RUBY_ERRORS.include?(e.type) }.map { |e| { message: e.message, line: [e.location.start_line, last_line].min, column: nil } }
 end
 
 def error(message, line: nil, column: nil, slim_column: nil) = { error: { message:, line:, column:, slim_column: } }

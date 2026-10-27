@@ -3,9 +3,10 @@
 //! moves with the line its owner starts on, keeping its relative indentation; a `<pre>`, `<textarea>` or `<title>`
 //! body, a quoted attribute value and Ruby holding a heredoc or a multi-line string keep every byte.
 
+use crate::checks::RubyContext;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::ruby::BlockEffect;
-use crate::tags::{self, Block, Tag, Token, OPTIONAL_END, VOID};
+use crate::tags::{self, Block, PState, Tag, Token, OPTIONAL_END, VOID};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -55,11 +56,13 @@ struct Line<'a> {
 type Ranges = Vec<(usize, usize)>;
 
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped when `trim` is set.
-pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
-    if let Some(d) = crate::erb::diagnostics(text).into_iter().find(|d| d.severity == Some(DiagnosticSeverity::ERROR)) {
-        return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
-    }
-    if let Some(d) = tags::diagnostics(text, partial).first() {
+pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
+    let doubt = crate::erb::diagnostics(text, ruby)
+        .into_iter()
+        .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+        .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())
+        .or_else(|| tags::diagnostics(text, partial).into_iter().next());
+    if let Some(d) = doubt {
         return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
     }
     let Some(tokens) = tags::tokens(text) else {
@@ -269,6 +272,7 @@ struct Nesting<'t> {
     paired: &'t HashSet<usize>,
     partial: bool,
     stack: Vec<Tag>,
+    p: PState,
     blocks: Vec<Block>,
     /// False after an ERB block whose branches left different tags open.
     agreed: bool,
@@ -307,7 +311,7 @@ impl Nesting<'_> {
             // Branches that disagree (`<% if a %><div><% end %>`) go on with the tags the last one left open: the usual
             // conditional wrapper closes them under the same condition, and a guess that's wrong ends in a mismatch.
             Token::Erb(e) => {
-                self.agreed = tags::apply(e, &mut self.stack, &mut self.blocks);
+                self.agreed = tags::apply(e, &mut self.stack, &mut self.p, &mut self.blocks);
                 true
             }
             Token::Open { tag, pairs, .. } => {
@@ -339,7 +343,7 @@ fn levels(
     roles: &[Role],
     partial: bool,
 ) -> (Vec<Option<usize>>, Option<usize>) {
-    let mut nesting = Nesting { tokens, paired, partial, stack: Vec::new(), blocks: Vec::new(), agreed: true };
+    let mut nesting = Nesting { tokens, paired, partial, stack: Vec::new(), p: PState::default(), blocks: Vec::new(), agreed: true };
     let mut out = vec![None; lines.len()];
     let mut next = 0;
     for (l, line) in lines.iter().enumerate() {
@@ -451,6 +455,10 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
 mod tests {
     use super::*;
 
+    fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
+        super::indent(text, unit, trim, partial, &RubyContext::outside_project())
+    }
+
     fn fmt(text: &str) -> String {
         let once = indent(text, "  ", true, false).unwrap_or_else(|e| panic!("{e}: {text}")).text;
         assert_eq!(indent(&once, "  ", true, false).map(|i| i.text).as_deref(), Ok(once.as_str()), "idempotent");
@@ -459,6 +467,12 @@ mod tests {
 
     fn lines(list: &[&str]) -> String {
         list.join("\n")
+    }
+
+    #[test]
+    fn unclosed_tag_is_the_reason_to_refuse() {
+        let reason = indent("<div>\n<p>x</p>\n<% foo\n</div>", "  ", true, false).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(reason.contains("line 3") && reason.contains("invalid-first-character-of-tag-name"), "{reason}");
     }
 
     #[test]
@@ -613,12 +627,20 @@ mod tests {
 
     #[test]
     fn doubt_leaves_the_file_alone() {
-        for broken in ["<div><% if a %>", "<div>\n<span>\n</div>", "<% end %>", "<div><% foo", "<pre>\nx", "<script>x", "<div class=\"a"] {
+        for broken in [
+            "<div><% if a %>",
+            "<div>\n<span>\n</div>",
+            "<% end %>",
+            "<div><% foo",
+            "<pre>\nx",
+            "<script>x",
+            "<div class=\"a",
+            "<p><div></p></div>",
+        ] {
             assert!(indent(broken, "  ", true, false).is_err(), "{broken}");
         }
         for helper in ["<%= javascript_tag do %>", "<%= content_tag :pre do %>", "<%= tag.textarea(name: \"a\") do %>"] {
             assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", true, false).is_err(), "{helper}");
         }
-        assert!(indent("<p><div></p></div>", "  ", true, false).is_ok_and(|i| i.text == "<p><div></p></div>"));
     }
 }

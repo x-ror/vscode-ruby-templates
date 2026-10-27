@@ -378,10 +378,15 @@ const check = (label, actual, expected) => {
         )
       : "none";
   };
-  // Lines 4 and 13 are tags left open for the completion checks; each swallows the tags up to the next `%>`.
+  // Lines 4, 5, 6 and 13 are tags left open for the completion checks, each running on to the next `%>`: Prism's errors
+  // for the method Rails builds from the template (`test/oracle/erb.rb` prints the same ones).
   check("diagnostics", diagnostics(uri), [
-    "4: Unclosed ERB tag: missing `%>` before the next `<%`",
-    "13: Unclosed ERB tag: missing `%>` before the next `<%`",
+    "7: unexpected local variable or method, expecting end-of-input",
+    "7: unexpected string literal, expecting end-of-input",
+    "10: unexpected local variable or method, expecting end-of-input",
+    "13: unexpected local variable or method, expecting end-of-input",
+    "14: unexpected '<', ignoring it",
+    "14: expected a matching `)`",
     "7: Missing partial shared/_missing",
   ]);
 
@@ -1195,6 +1200,46 @@ const check = (label, actual, expected) => {
     "/app/views/users/outline.html.slim 2:18 tile",
     "/app/views/users/show.html.haml 1:16 tile",
   ]);
+  // A changed .ruby-version changes the grammar Ruby is parsed with, so open documents are checked again.
+  const versionedUri = fileUri(path.join(views, "users", "versioned.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: versionedUri,
+        languageId: "erb",
+        version: 1,
+        text: "<% x = a\n  && b %>\n",
+      },
+    },
+    true,
+  );
+  const publishedFor = (u) =>
+    notes.filter(
+      (n) =>
+        n.method === "textDocument/publishDiagnostics" && n.params.uri === u,
+    );
+  await new Promise((r) => setTimeout(r, 200));
+  check(
+    "no .ruby-version",
+    publishedFor(versionedUri).at(-1)?.params.diagnostics.length,
+    0,
+  );
+  const rubyVersionFile = path.join(root, ".ruby-version");
+  fs.writeFileSync(rubyVersionFile, "3.3.0\n");
+  await send(
+    "workspace/didChangeWatchedFiles",
+    { changes: [{ uri: fileUri(rubyVersionFile), type: 1 }] },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  check(
+    ".ruby-version 3.3.0",
+    publishedFor(versionedUri)
+      .at(-1)
+      ?.params.diagnostics.map((d) => d.message),
+    ["unexpected '&&', ignoring it"],
+  );
   await send("shutdown", {});
   await send("exit", {}, true);
   fs.rmSync(root, { recursive: true, force: true });

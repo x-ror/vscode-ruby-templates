@@ -6,7 +6,7 @@ A catalogue of what the template linters check, per language, to decide which ru
 
 | Language | File               | Sources                                                                                                                                                  |
 | -------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ERB      | [ERB.md](ERB.md)   | built-in (18 codes), [erb_lint](https://github.com/Shopify/erb_lint) 0.9.0 (23 linters), [Herb](https://herb-tools.dev/linter/rules/) 0.11.1 (170 rules) |
+| ERB      | [ERB.md](ERB.md)   | built-in (14 codes), [erb_lint](https://github.com/Shopify/erb_lint) 0.9.0 (23 linters), [Herb](https://herb-tools.dev/linter/rules/) 0.11.1 (170 rules) |
 | Haml     | [HAML.md](HAML.md) | built-in (13 codes), [haml-lint](https://github.com/sds/haml-lint) 0.78.0 (35 linters)                                                                   |
 | Slim     | [SLIM.md](SLIM.md) | built-in (12 codes), [slim-lint](https://github.com/sds/slim-lint) 0.37.0 (20 linters)                                                                   |
 
@@ -19,10 +19,10 @@ Where a check exists, by rule name. `—` means no source has it for that langua
 | Check                                        | ERB                                                                                                                                | Haml                                                    | Slim                                            |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------- |
 | Unclosed / mismatched HTML tags              | built-in `unclosed-element`, `mismatched-close-tag`; Herb `html-require-closing-tags`, `parser-no-errors`; erb_lint `ParserErrors` | (structure is indentation)                              | (structure is indentation)                      |
-| Unbalanced Ruby blocks                       | built-in `unclosed-block`, `stray-end`, `unmatched-branch`                                                                         | built-in `unmatched-branch`, `explicit-end`             | built-in `unmatched-branch`, `explicit-end`     |
+| Unbalanced Ruby blocks                       | built-in `ruby-syntax`                                                                                                             | built-in `unmatched-branch`, `explicit-end`             | built-in `unmatched-branch`, `explicit-end`     |
 | Ruby syntax errors                           | built-in `ruby-syntax`; Herb (Prism, in diagnostics); erb_lint `Rubocop`                                                           | haml-lint `Syntax`, `RuboCop`                           | built-in `unclosed-ruby`; slim-lint `RuboCop`   |
-| Helper in a silent tag renders nothing       | built-in `silent-output-helper`; Herb `actionview-no-silent-helper`, `actionview-no-silent-render`                                 | —                                                       | built-in `silent-output-helper`                 |
-| Output tag around control flow               | built-in `output-control-flow`; Herb `erb-no-output-control-flow`                                                                  | —                                                       | —                                               |
+| Helper in a silent tag renders nothing       | Herb `actionview-no-silent-helper`, `actionview-no-silent-render`                                                                  | —                                                       | —                                               |
+| Output tag around control flow               | built-in `ruby-syntax`; Herb `erb-no-output-control-flow`                                                                          | —                                                       | —                                               |
 | Unresolved `render`                          | built-in `unresolved-render`                                                                                                       | built-in `unresolved-render`                            | built-in `unresolved-render`                    |
 | Strict locals: required magic comment        | Herb `erb-strict-locals-required`; erb_lint `StrictLocals`                                                                         | haml-lint `StrictLocals`                                | slim-lint `StrictLocalsMissing`                 |
 | Strict locals: callers pass the right locals | built-in `strict-locals`; Herb `actionview-no-mistyped-locals`, `actionview-no-unused-strict-locals`                               | built-in `strict-locals`                                | built-in `strict-locals`                        |
@@ -30,7 +30,7 @@ Where a check exists, by rule name. `—` means no source has it for that langua
 | `<img>` without `alt`                        | built-in `img-missing-alt`; Herb `html-img-require-alt` (also `image_tag`)                                                         | haml-lint `AltText` (off)                               | —                                               |
 | Duplicate ids                                | built-in `duplicate-id`; Herb `html-no-duplicate-ids`                                                                              | haml-lint `RepeatedId`                                  | —                                               |
 | Inline `style` attributes                    | Herb `html-no-style-attributes` (off)                                                                                              | haml-lint `InlineStyles`                                | —                                               |
-| Unescaped / raw output                       | built-in `unsafe-output`; Herb `erb-no-unsafe-raw`, `erb-no-raw-output-in-attribute-value`; erb_lint `ErbSafety`                   | haml-lint `UnescapedHtml`                               | —                                               |
+| Unescaped / raw output                       | Herb `erb-no-unsafe-raw`, `erb-no-raw-output-in-attribute-value`; erb_lint `ErbSafety`                                             | haml-lint `UnescapedHtml`                               | —                                               |
 | Ruby interpolated into `<script>`            | Herb `erb-no-unsafe-script-interpolation`, `erb-no-unsafe-js-attribute`; erb_lint `ErbSafety`                                      | —                                                       | —                                               |
 | Script `nonce`                               | Herb `html-require-script-nonce`; erb_lint `RequireScriptNonce`                                                                    | —                                                       | —                                               |
 | `<input>` without `autocomplete`             | Herb `html-input-require-autocomplete`; erb_lint `RequireInputAutocomplete`                                                        | —                                                       | —                                               |
@@ -51,7 +51,7 @@ Herb is the only source with rules on this choice; they apply the same way to Ha
 
 ### `<img>` vs `image_tag`
 
-Rule `erb-prefer-image-tag-helper` (on, no autofix, needs `framework: actionview` in `.herb.yml`); built in as `prefer-image-tag` (info): use `image_tag` when `src` is computed; a static path is fine.
+Rule `erb-prefer-image-tag-helper` (on, no autofix, needs `framework: actionview` in `.herb.yml`); use `image_tag` when `src` is computed; a static path is fine.
 
 > Prefer using Rails' `image_tag` helper over manual `<img>` tags with dynamic ERB expressions like `image_path` or `asset_path`.
 >
