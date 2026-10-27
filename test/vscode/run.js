@@ -60,8 +60,8 @@ write(
 );
 write("app/views/users/wrap.html.slim", "p\n  hello world\n");
 write("app/views/users/toggle.html.haml", "- foo\n= bar\n-# baz\n%p\n");
-write("app/views/users/reindent.html.haml", "%div\n    %p\n      %b x\n");
-write("app/views/users/format.html.haml", "%ul\n  %li\n     %b x\n");
+write("app/views/users/reindent.html.haml", "%div\n    %p\n        %b x\n");
+write("app/views/users/format.html.haml", "%ul\n   %li\n      %b x\n");
 write("app/views/users/format.html.slim", "div\n    p= x\n    p y\n");
 write(
   "app/views/users/extract.html.erb",
