@@ -14,6 +14,10 @@ pub mod code {
     pub const DUPLICATE_ID: &str = "duplicate-id";
 }
 
+const ALT_RULE: &str = "the alt attribute must be specified (HTML 4.8.4.4.1)";
+/// Set by a markup generator that couldn't get alt text; conformance checkers ignore the missing `alt` then (4.8.4.4).
+const NO_ALT_AVAILABLE: &str = "generator-unable-to-provide-required-alt";
+
 /// Elements whose body is text, not markup.
 pub const RAW_TEXT: &[&str] = &["script", "style", "textarea"];
 static START_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<([a-zA-Z][\w:-]*)").unwrap());
@@ -84,8 +88,9 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
         let tag_range = range(tag.start, tag.start + 4);
-        if !tag.dynamic && !tag.attrs.iter().any(|a| a.name == "alt") {
-            out.push(coded(warning(tag_range, "`<img>` without `alt` text"), code::IMG_MISSING_ALT));
+        let has_alt = tag.attrs.iter().any(|a| a.name == "alt" || (a.name == NO_ALT_AVAILABLE && a.value.is_none_or(|(s, e)| s == e)));
+        if !tag.dynamic && !has_alt {
+            out.push(coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT));
         }
     }
     out.extend(image_tags_without_alt(text, &spans, &range));
@@ -181,8 +186,12 @@ fn image_tags_without_alt<'a>(
     spans.iter().filter_map(move |&(s, e)| {
         let code = &text[s..e.min(text.len())];
         let call = IMAGE_TAG.find(code)?;
-        (!ALT_OPTION.is_match(&code[call.end()..]))
-            .then(|| coded(warning(range(s + call.start(), s + call.end()), "`image_tag` without `alt:`"), code::IMG_MISSING_ALT))
+        (!ALT_OPTION.is_match(&code[call.end()..])).then(|| {
+            coded(
+                warning(range(s + call.start(), s + call.end()), format!("`image_tag` without `alt:`: {ALT_RULE}")),
+                code::IMG_MISSING_ALT,
+            )
+        })
     })
 }
 
@@ -208,7 +217,10 @@ fn duplicate_ids(
         let id = &text[s..e];
         if let Some(&(_, first)) = seen.iter().rev().find(|(seen_id, _)| *seen_id == id) {
             if !branch_between(text, spans, first, s) {
-                let message = format!("Duplicate id `{id}` (first on line {})", offset_to_position(text, first).line + 1);
+                let message = format!(
+                    "Duplicate id `{id}` (first on line {}): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
+                    offset_to_position(text, first).line + 1
+                );
                 out.push(coded(warning(range(s, e), message), code::DUPLICATE_ID));
             }
         }
@@ -255,10 +267,24 @@ mod tests {
         assert_eq!(codes("<img src=\"/a.png\">"), [(0, code::IMG_MISSING_ALT.to_string())]);
         assert!(codes("<img src=\"/a.png\" alt=\"\">\n<img <%= attrs %>>\n<!-- <img src=x> -->\n<%# <img src=x> %>").is_empty());
         assert_eq!(codes("<%= image_tag \"a.png\", class: \"x\" %>"), [(0, code::IMG_MISSING_ALT.to_string())]);
+        assert!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"\">").is_empty());
         assert!(codes("<%= image_tag \"a.png\", alt: \"A\" %><%= image_tag(x, **opts) %>").is_empty());
         assert!(codes("<script>const s = '<img src=x>'</script>").is_empty());
+        assert!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt>").is_empty());
+        assert_eq!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"x\">").len(), 1);
         // A no-break or ideographic space after the name is part of an attribute name, not a crash.
         assert_eq!(codes("<img\u{a0}src=\"a\">\n<div\u{3000}class=\"x\">"), [(0, code::IMG_MISSING_ALT.to_string())]);
+    }
+
+    #[test]
+    fn messages_quote_the_standard() {
+        let message = |text: &str| diagnostics(text).remove(0).message;
+        assert_eq!(message("<img src=x>"), "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)");
+        assert_eq!(message("<%= image_tag \"a\" %>"), "`image_tag` without `alt:`: the alt attribute must be specified (HTML 4.8.4.4.1)");
+        assert_eq!(
+            message("<i id=a></i>\n<b id=a></b>"),
+            "Duplicate id `a` (first on line 1): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)"
+        );
     }
 
     #[test]

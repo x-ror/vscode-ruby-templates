@@ -303,7 +303,7 @@ const describe = ({ message, line, column }) =>
 
 // Our errors with no Ruby oracle: HTML structure, which WHATWG defines.
 const isHtmlMessage = (message) =>
-  /closing tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
+  /end tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
 
 // items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
 // A file's official errors are `errors` (ERB lists every Prism error) or the one `error`.

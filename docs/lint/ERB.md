@@ -10,11 +10,11 @@ What the three sources check in ERB (`.erb`, `.html.erb`, `.erubi`, …). Refere
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `unclosed-tag`         | `<%` with no `%>`, text to Erubi: a warning in HTML templates, the WHATWG `invalid-first-character-of-tag-name` (reported at its opener)                           |
 | `ruby-syntax`          | Prism error in the method source Rails builds for the template (Erubi, `trim: true`); includes unbalanced `end`, `<%= if %>`, a tag left open before the next `<%` |
-| `unexpected-close-tag` | `</div>` with no open element (HTML-host views)                                                                                                                    |
-| `mismatched-close-tag` | `</span>` closing a `<div>` (HTML-host views)                                                                                                                      |
-| `unclosed-element`     | `<div>` never closed (HTML-host views, not partials)                                                                                                               |
-| `img-missing-alt`      | `<img>` with no `alt` (unless ERB adds attributes), `image_tag` with no `alt:` (HTML-host views)                                                                   |
-| `duplicate-id`         | The same static `id` twice with no ERB branch between them (HTML-host views)                                                                                       |
+| `unexpected-close-tag` | `</div>` with no open element, `</br>`, a `</p>` after a block start tag closed the `p` (HTML-host views; HTML 13.2.6.4.7)                                         |
+| `mismatched-close-tag` | `</span>` closing a `<div>` (HTML-host views; HTML 13.2.6.4.7)                                                                                                     |
+| `unclosed-element`     | `<div>` never closed; void elements and omittable end tags excepted (HTML-host views, not partials; HTML 13.2.6.4.7, 13.1.2.4)                                     |
+| `img-missing-alt`      | `<img>` with no `alt` (unless ERB adds attributes), `image_tag` with no `alt:` (HTML-host views; HTML 4.8.4.4.1)                                                   |
+| `duplicate-id`         | The same static `id` twice with no ERB branch between them (HTML-host views; HTML 3.2.6)                                                                           |
 | `unresolved-render`    | `render "dir/name"` with no matching partial/template (also Haml, Slim, Jbuilder)                                                                                  |
 | `strict-locals`        | `render` passes locals a partial's `locals: (…)` doesn't accept, or misses required ones (also Haml, Slim, Jbuilder)                                               |
 
