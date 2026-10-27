@@ -178,8 +178,8 @@ fn format_once(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, e
     Ok(Formatted { text, notes: indented.notes })
 }
 
-/// The settings `format` works with: Slim and Haml take only the indentation width: they always write spaces, keep each line's ending, and trim,
-/// end the file and keep blank lines by their own rules (a range, which can't add a line, leaves the final newline alone).
+/// The settings `format` works with: Slim and Haml take only the indentation width and follow their own rules for the
+/// rest, except that a range, which can't add a line, leaves the final newline alone.
 pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
     if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml) {
         return settings.clone();

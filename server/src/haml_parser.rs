@@ -1,5 +1,5 @@
-//! A port of the line and indentation handling of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`):
-//! the first error Haml raises about indentation, at the line it names.
+//! A port of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`): the first error Haml raises, at the line it names,
+//! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
 use crate::slim_parser::VOID_ELEMENTS;
 use regex::Regex;
