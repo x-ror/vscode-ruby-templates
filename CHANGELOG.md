@@ -4,6 +4,7 @@
 
 ### Language server
 
+- Find references, file renames and the definition of a partial's local scan the app on their own thread, so hover, completion and diagnostics answer while they run (a hover behind references on 5000 templates: 0.3 ms instead of 130 ms).
 - Rails checks follow the project: the framework and gem versions come from the nearest `Gemfile.lock`. `unresolved-render` runs only when it lists `actionview`, `strict-locals` only with `actionview` 7.1 or newer; Sinatra projects and folders without a lockfile get neither. Diagnostics refresh when `Gemfile.lock` changes.
 - Both messages are Rails' own: `Missing partial users/_card` / `Missing template users/show`, and one strict locals error per render (`missing local: :b`, `unknown keywords: :c, :d`, `no locals accepted`, with ` for app/views/…` from Rails 7.2).
 - Formats an app registers in `config/initializers` (`Mime::Type.register`, `register_alias`) count as formats in template names, so `_card.mobile.erb` is the partial `card`.
@@ -21,6 +22,7 @@
 
 ### Formatter
 
+- Format Selection and format on save in "modifications" mode work in Haml and Slim files that end in empty lines.
 - Slim formatting never changes what Slim compiles: before writing, the formatter compares the Ruby Slim::Engine would generate for the text before and after, and leaves the file as it is if they differ. A file with any Slim error is left unchanged too.
 - Empty lines at the end of a Slim file collapse into the final newline (Slim drops them); whitespace-only lines there stay, as Slim compiles them.
 - **Breaking:** Slim takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, also in editors that indent with tabs, keeps each line's ending, and ignores `end_of_line`, `insert_final_newline` and `trim_trailing_whitespace`.
