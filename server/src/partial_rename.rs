@@ -147,6 +147,8 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
 pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
     let files = [partial.to_path_buf()];
     let stems = partial_stems(project, &files);
+    // The key itself, `user:` after the partial name; the call's start when it's spelled another way.
+    let key = Regex::new(&format!(r"(?:^|[^\w]){}:", regex::escape(local))).ok();
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
@@ -159,9 +161,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
             if !passed_locals(line, &r).is_some_and(|names| names.contains(&local)) {
                 continue;
             }
-            // The key itself, `user:` after the partial name; the call's start when it's spelled another way.
-            let key = Regex::new(&format!(r"(?:^|[^\w]){}:", regex::escape(local))).ok();
-            let at = key.and_then(|k| k.find(&line[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
+            let at = key.as_ref().and_then(|k| k.find(&line[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
             let position = offset_to_position(&source.text, line_start + at);
             out.push(Location::new(uri.clone(), Range::new(position, position)));
         }
@@ -203,20 +203,22 @@ fn i18n_refs(line: &str) -> Vec<RenderRef> {
 /// Folders outside app/views whose code renders partials.
 const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 
-/// Templates under `views`, plus Ruby files and templates in app/{controllers,helpers,components}. Text of
-/// `open` documents wins over the disk copy, which may lack unsaved edits.
+/// Templates under `views`, plus Ruby files and templates in app/{controllers,helpers,components}, that mention
+/// `render` or `partial`, as every reference does. Text of `open` documents wins over the disk copy, which may lack
+/// unsaved edits.
 pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
     let code_dirs = views.parent().into_iter().flat_map(|app| CODE_DIRS.iter().map(move |d| app.join(d)));
-    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open)
+    let may_render = |text: &str| text.contains("render") || text.contains("partial");
+    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open, may_render)
 }
 
 /// Templates and Ruby files anywhere in `app` and the app's `lib`: translations are looked up from models,
 /// mailers and jobs too.
 pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
-    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open)
+    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open, |_| true)
 }
 
-fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>, keep: fn(&str) -> bool) -> Vec<Source> {
     roots
         .flat_map(|root| WalkDir::new(root).follow_links(true).into_iter().flatten())
         .filter(|e| e.file_type().is_file())
@@ -230,7 +232,7 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
                 Some(text) => text.clone(),
                 None => std::fs::read_to_string(&path).ok()?,
             };
-            Some(Source { path, lang, text })
+            keep(&text).then_some(Source { path, lang, text })
         })
         .collect()
 }
@@ -547,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn sources_include_ruby_files_and_prefer_open_text() {
+    fn sources_keep_files_that_render_and_prefer_open_text() {
         let t = Tree::new(
             "sources",
             &[
@@ -558,17 +560,18 @@ mod tests {
                 "app/models/user.rb",
             ],
         );
-        let open = HashMap::from([(t.path("app/views/users/index.html.erb"), "unsaved".to_string())]);
+        let controller = "render partial: 'users/card'";
+        std::fs::write(t.path("app/controllers/users_controller.rb"), controller).unwrap();
+        std::fs::write(t.path("app/helpers/h.rb"), "def h = 1").unwrap();
+        let open = HashMap::from([(t.path("app/views/users/index.html.erb"), "<%= render 'unsaved' %>".to_string())]);
         let mut found: Vec<_> =
             sources(&t.path("app/views"), &open).into_iter().map(|s| (t.rel(&s.path), s.lang.is_none(), s.text)).collect();
         found.sort();
-        let ruby = |p: &str| (p.to_string(), true, String::new());
         assert_eq!(
             found,
             [
-                ruby("app/controllers/users_controller.rb"),
-                ruby("app/helpers/h.rb"),
-                ("app/views/users/index.html.erb".to_string(), false, "unsaved".to_string()),
+                ("app/controllers/users_controller.rb".to_string(), true, controller.to_string()),
+                ("app/views/users/index.html.erb".to_string(), false, "<%= render 'unsaved' %>".to_string()),
             ]
         );
     }
