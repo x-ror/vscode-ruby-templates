@@ -4,6 +4,7 @@ mod assets;
 mod checks;
 pub mod cli;
 mod code_context;
+mod completion;
 mod config;
 mod controllers;
 mod erb;
