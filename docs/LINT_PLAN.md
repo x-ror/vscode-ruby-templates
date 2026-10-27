@@ -305,7 +305,7 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | 1b. Slim format          | done        |
 | 2a. Haml errors          | done        |
 | 2b. Haml format          | done        |
-| 3a. ERB errors           | in review   |
+| 3a. ERB errors           | done        |
 | 3b. ERB format           | not started |
 | 4. Editor and CLI        | not started |
 | 5. Remove external tools | not started |
