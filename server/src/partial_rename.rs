@@ -2,8 +2,8 @@
 //! one at a time or with their folder. `textDocument/references`: the same references to given files, and the
 //! `t("…")` calls of an i18n key.
 
+use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
-use crate::lsp::render_filter;
 use crate::partials::{
     app_root, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, template_stem, views_root, RenderKind,
     RenderRef,

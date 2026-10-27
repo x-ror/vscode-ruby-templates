@@ -2,8 +2,9 @@
 //! newline and line endings. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged,
 //! with the reason.
 
-use crate::lang::{html_host, slim_html_host, TemplateLang};
-use crate::{erb, erb_format, haml_format, haml_indent, haml_parser, slim_format, slim_indent, slim_ruby, tags, util};
+use crate::checks::language_diagnostics;
+use crate::lang::{html_host, is_partial, TemplateLang};
+use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim_ruby, util};
 use std::fmt;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
 
@@ -202,10 +203,6 @@ fn indent_unit(settings: &Settings) -> String {
     }
 }
 
-fn is_partial(uri: &Url) -> bool {
-    uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
-}
-
 fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String]) -> Result<Indented, Skipped> {
     let rejected = slim_indent::diagnostics(text, extra_engines).iter().any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
     if rejected {
@@ -316,29 +313,11 @@ fn same_non_whitespace(a: &str, b: &str) -> bool {
 /// The language's own structure checks, as `(code, message)` with line numbers dropped, since blank-line
 /// steps move lines.
 fn structure_diagnostics(uri: &Url, lang: TemplateLang, text: &str, extra_engines: &[String]) -> Vec<(String, String)> {
-    let found: Vec<Diagnostic> = match lang {
-        TemplateLang::Erb => {
-            let mut found = erb::diagnostics(text);
-            if html_host(uri) {
-                found.extend(tags::diagnostics(text, is_partial(uri)));
-            }
-            found
-        }
-        TemplateLang::Haml => haml_indent::diagnostics(text),
-        TemplateLang::Slim | TemplateLang::Skim => {
-            let mut found = slim_indent::diagnostics(text, extra_engines);
-            if !slim_html_host(uri) {
-                found.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
-            }
-            found
-        }
-        TemplateLang::Ruby => vec![],
-    };
     let key = |d: &Diagnostic| {
         let code = util::code(d).unwrap_or_default().to_string();
         (code, d.message.chars().filter(|c| !c.is_ascii_digit()).collect())
     };
-    found.iter().map(key).collect()
+    language_diagnostics(uri, lang, text, extra_engines).iter().map(key).collect()
 }
 
 #[cfg(test)]

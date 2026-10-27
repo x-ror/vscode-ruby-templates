@@ -1,9 +1,9 @@
 //! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
 
+use crate::checks::{diagnostics, Doc, Options};
 use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
-use crate::lsp::{diagnostics, Doc, Options};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};

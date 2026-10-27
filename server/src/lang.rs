@@ -71,6 +71,10 @@ pub fn slim_html_host(uri: &Url) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
+pub fn is_partial(uri: &Url) -> bool {
+    uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
+}
+
 /// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`. URIs that aren't
 /// file paths here (`untitled:`, a drive-less `file:///v/x` on Windows) are decoded by hand.
 pub fn file_name(uri: &Url) -> String {
