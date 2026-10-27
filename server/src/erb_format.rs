@@ -57,10 +57,12 @@ type Ranges = Vec<(usize, usize)>;
 
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped when `trim` is set.
 pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
-    if let Some(d) = crate::erb::diagnostics(text, ruby).into_iter().find(|d| d.severity == Some(DiagnosticSeverity::ERROR)) {
-        return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
-    }
-    if let Some(d) = tags::diagnostics(text, partial).first() {
+    let doubt = crate::erb::diagnostics(text, ruby)
+        .into_iter()
+        .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+        .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())
+        .or_else(|| tags::diagnostics(text, partial).into_iter().next());
+    if let Some(d) = doubt {
         return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
     }
     let Some(tokens) = tags::tokens(text) else {
@@ -464,6 +466,12 @@ mod tests {
 
     fn lines(list: &[&str]) -> String {
         list.join("\n")
+    }
+
+    #[test]
+    fn unclosed_tag_is_the_reason_to_refuse() {
+        let reason = indent("<div>\n<p>x</p>\n<% foo\n</div>", "  ", true, false).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(reason.contains("line 3") && reason.contains("invalid-first-character-of-tag-name"), "{reason}");
     }
 
     #[test]

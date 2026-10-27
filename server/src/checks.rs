@@ -142,6 +142,7 @@ pub(crate) fn language_diagnostics(
         out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
     if lang == TemplateLang::Erb && html_host(uri) {
+        out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));
     }
@@ -325,16 +326,19 @@ mod tests {
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
         // Each code gets its own text, so one check does not hide another.
-        let erb_cases = [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT)];
+        let erb_cases =
+            [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
         let options = Options {
-            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into()],
+            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into(), erb::code::UNCLOSED_TAG.into()],
             disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
             ..Options::default()
         };
         assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
+        // Text that is not HTML has no `<` to misparse.
+        assert!(codes("file:///v/show.text.erb", TemplateLang::Erb, "hi <% foo", &all).is_empty());
         let haml_path = "file:///v/show.html.haml";
         assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
         let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);

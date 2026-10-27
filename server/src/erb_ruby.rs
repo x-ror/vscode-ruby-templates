@@ -64,7 +64,14 @@ struct Erubi {
     newline_pending: usize,
     /// Code copied as it is: its byte range in `src` and the offset of its first byte in the template Erubi read.
     verbatim: Vec<(usize, usize, usize)>,
+    /// The texts before the text after the last tag, as the HTML they render (an output tag as one character).
+    texts: Vec<String>,
+    /// Where the text after the last tag starts in the template Erubi read.
+    tail_at: usize,
 }
+
+/// The value is unknown; one plain character keeps a tag or an unquoted value open as the output would.
+const OUTPUT_PLACEHOLDER: &str = "x";
 
 impl Erubi {
     fn add_text(&mut self, text: &str) {
@@ -130,6 +137,14 @@ impl Erubi {
         }
     }
 
+    /// `add_text`, keeping `text` for `rendered_texts`; every text but the one after the last tag goes through here.
+    fn add_rendered_text(&mut self, text: &str) {
+        if !text.is_empty() {
+            self.texts.push(text.to_string());
+        }
+        self.add_text(text);
+    }
+
     /// Erubi's scan of `template`, `Erubi::Engine#initialize`.
     fn compile(&mut self, template: &str) {
         let mut pos = 0;
@@ -164,24 +179,25 @@ impl Erubi {
             }
 
             is_bol = rspace.is_some();
-            self.add_text(text);
+            self.add_rendered_text(text);
             match kind {
                 Some('=') => {
                     if tail.is_some() {
                         rspace = None;
                     }
+                    self.texts.push(OUTPUT_PLACEHOLDER.to_string());
                     self.add_expression(indicator.unwrap_or(""), code_text, code_at);
-                    self.add_text(rspace.unwrap_or(""));
+                    self.add_rendered_text(rspace.unwrap_or(""));
                 }
                 None | Some('-') => {
                     if let (Some(before), Some(after)) = (lspace, rspace) {
                         let start = self.add_code(&format!("{before}{code_text}{after}"));
                         self.record(start + before.len(), code_text, code_at);
                     } else {
-                        self.add_text(lspace.unwrap_or(""));
+                        self.add_rendered_text(lspace.unwrap_or(""));
                         let start = self.add_code(code_text);
                         self.record(start, code_text, code_at);
-                        self.add_text(rspace.unwrap_or(""));
+                        self.add_rendered_text(rspace.unwrap_or(""));
                     }
                 }
                 Some('#') => {
@@ -189,14 +205,20 @@ impl Erubi {
                     if lspace.is_some() && rspace.is_some() {
                         self.add_code(&newlines);
                     } else {
-                        self.add_text(lspace.unwrap_or(""));
+                        self.add_rendered_text(lspace.unwrap_or(""));
                         self.add_code(&newlines);
-                        self.add_text(rspace.unwrap_or(""));
+                        self.add_rendered_text(rspace.unwrap_or(""));
                     }
                 }
-                Some(_) => self.add_text(&format!("{}<%{code_text}{}%>{}", lspace.unwrap_or(""), tail.unwrap_or(""), rspace.unwrap_or(""))),
+                Some(_) => self.add_rendered_text(&format!(
+                    "{}<%{code_text}{}%>{}",
+                    lspace.unwrap_or(""),
+                    tail.unwrap_or(""),
+                    rspace.unwrap_or("")
+                )),
             }
         }
+        self.tail_at = pos;
         self.add_text(&template[pos..]);
         if !self.src.ends_with('\n') {
             self.src.push('\n');
@@ -204,6 +226,20 @@ impl Erubi {
         self.flush_newline_if_pending();
         self.src.push_str(OUTPUT_BUFFER.trim_start());
     }
+}
+
+/// Erubi's read of `template` after the encoding tag Rails cuts, and that tag's length.
+fn read_after_encoding_tag(template: &str) -> (Erubi, usize) {
+    let encoding_tag = ENCODING_TAG.find(template).map_or(0, |m| m.end());
+    let mut erubi = Erubi::default();
+    erubi.compile(&template[encoding_tag..]);
+    (erubi, encoding_tag)
+}
+
+/// The texts Erubi renders for `text` before the text after its last tag, and where in `text` that text starts.
+pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
+    let (erubi, encoding_tag) = read_after_encoding_tag(text);
+    (erubi.texts, encoding_tag + erubi.tail_at)
 }
 
 /// The method source Rails evals for a template, and where the template's text went in it.
@@ -243,9 +279,7 @@ fn compile(text: &str, strict_locals_exist: bool) -> Compiled {
     if let Some(strict) = &strict {
         template.replace_range(strict.comment.clone(), "");
     }
-    let encoding_tag = ENCODING_TAG.find(&template).map_or(0, |m| m.end());
-    let mut erubi = Erubi::default();
-    erubi.compile(&template[encoding_tag..]);
+    let (erubi, encoding_tag) = read_after_encoding_tag(&template);
 
     let parameters = match &strict {
         Some(strict) if strict.parameters.contains('&') => format!("local_assigns, output_buffer, {}", strict.parameters),

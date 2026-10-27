@@ -8,7 +8,7 @@ What the three sources check in ERB (`.erb`, `.html.erb`, `.erubi`, …). Refere
 
 | Code                   | What it flags                                                                                                                                                      |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `unclosed-tag`         | `<%` with no `%>` (reported at its opener)                                                                                                                         |
+| `unclosed-tag`         | `<%` with no `%>`, text to Erubi: a warning in HTML templates, the WHATWG `invalid-first-character-of-tag-name` (reported at its opener)                           |
 | `ruby-syntax`          | Prism error in the method source Rails builds for the template (Erubi, `trim: true`); includes unbalanced `end`, `<%= if %>`, a tag left open before the next `<%` |
 | `unexpected-close-tag` | `</div>` with no open element (HTML-host views)                                                                                                                    |
 | `mismatched-close-tag` | `</span>` closing a `<div>` (HTML-host views)                                                                                                                      |
