@@ -665,7 +665,8 @@ const check = (label, actual, expected) => {
         uri: reindentUri,
         languageId: "haml",
         version: 1,
-        text: "%div\n    %p\n        %b x\n    %i\n",
+        // The formatter drops the empty lines at the end; range formatting still edits the lines above.
+        text: "%div\n    %p\n        %b x\n    %i\n\n\n",
       },
     },
     true,

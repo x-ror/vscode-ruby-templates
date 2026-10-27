@@ -1,8 +1,9 @@
 //! ViewComponent slots: `renders_one :header` / `renders_many :items` in the class, set by callers with
 //! `c.with_header` inside `render(CardComponent.new) do |c|`, read in the component's template as `header`.
 
-use crate::partials::{resolve_component, singularize, template_stem};
+use crate::partials::{resolve_component, singularize};
 use crate::project::Project;
+use crate::rails_paths::template_stem;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -46,7 +47,7 @@ pub fn block_component<'a>(before: &'a str, var: &str) -> Option<&'a str> {
 /// The class file of a component's template: `card_component.html.erb` next to it, or one folder up for a
 /// sidecar `card_component/card_component.html.erb`.
 pub fn class_of_template(project: &Project, template: &Path) -> Option<PathBuf> {
-    let stem = template_stem(project, template.file_name()?.to_str()?);
+    let stem = template_stem(|f| project.is_format(f), template.file_name()?.to_str()?);
     if !stem.ends_with("_component") {
         return None;
     }

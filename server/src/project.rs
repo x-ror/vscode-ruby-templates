@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::partials::{app_root, files_under, KNOWN_FORMATS};
+use crate::rails_paths::{app_root, files_under, is_known_format};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
@@ -48,7 +48,7 @@ impl Project {
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
     pub fn is_format(&self, segment: &str) -> bool {
-        KNOWN_FORMATS.contains(&segment) || self.formats.iter().any(|f| f == segment)
+        is_known_format(segment) || self.formats.iter().any(|f| f == segment)
     }
 
     pub fn from_lockfile(lock: &str) -> Self {

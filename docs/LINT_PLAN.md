@@ -109,7 +109,7 @@ Checked against the oracle (Slim 5.2.2), nothing differs from ours:
 | `less:` (5.2.2), `haml:`, `liquid:`, `radius:`, `markaby:` (1.0.3), `erb(x="y"):`                                                 | `Expected tag`, at the end of the line                       | same                    |
 | `asciidoc:` (4.0.0, back in 5.2.2), `ruby:`, `javascript:`, `css:`, `sass:`, `scss:`, `coffee:`, `markdown:`, `textile:`, `rdoc:` | engines                                                      | no diagnostic           |
 
-A doctype outside Temple's xhtml table (`html`, `5`, `1.1`, `strict`, `frameset`, `mobile`, `basic`, `transitional`, `svg`, `xml [encoding]`, any case) is `Invalid doctype <name>` from Temple, a bare `doctype` included: reported on the doctype line, after Slim's parser and filter errors.
+A doctype outside Temple's xhtml table (`html`, `5`, `1.1`, `strict`, `frameset`, `mobile`, `basic`, `transitional`, `svg`, `xml [encoding]`, any case) is `Invalid doctype <name>` from Temple, a bare `doctype` included: reported on the doctype line, after Slim's parser and filter errors. The table is xhtml's, Slim's default format: an app that sets `format: :html` gets Temple's smaller html table (`html`, `5`, `strict`, `frameset`, `transitional`) and `Invalid xml directive in html mode` for `xml`, and those errors are not reported.
 
 **Ruby:** the Ruby of `-`, `=`, `==` lines and Ruby attributes, as `Slim::Engine` compiles it, must be valid Ruby; Prism 2.0.0's error message is reported at the template line it comes from.
 

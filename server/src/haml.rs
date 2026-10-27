@@ -1,6 +1,7 @@
 //! Haml editing features on one line: where Ruby is, what to complete, and hover docs for filters and prefixes.
 
-use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole, HAML_FILTERS};
+use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole};
+use crate::haml_parser::HAML_FILTERS;
 use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
 use crate::ruby;
 use crate::util::{completion_item, leading_ws};
@@ -394,7 +395,7 @@ mod tests {
     #[test]
     fn every_filter_is_documented() {
         let documented: Vec<&str> = FILTER_DOCS.iter().map(|(name, _)| *name).collect();
-        assert_eq!(documented, crate::haml_indent::HAML_FILTERS);
+        assert_eq!(documented, crate::haml_parser::HAML_FILTERS);
     }
 
     #[test]

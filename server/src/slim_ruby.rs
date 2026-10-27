@@ -2,7 +2,7 @@
 
 use crate::prism;
 use crate::slim_parser::{Origin, Parsed, Piece};
-use crate::util::{coded, error, leading_ws, line_range, offset_to_position};
+use crate::util::{error, leading_ws, line_range, offset_to_position};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
@@ -92,7 +92,7 @@ pub fn diagnostics(text: &str, parsed: &Parsed) -> Vec<Diagnostic> {
         .filter(|e| e.message != IGNORED_ERROR)
         .map(|e| {
             let range = template_range(text, &lines, &compiled, e.start, e.end, e.range);
-            coded(error(range, e.message), crate::slim_indent::code::RUBY_SYNTAX)
+            error(range, e.message)
         })
         .collect()
 }

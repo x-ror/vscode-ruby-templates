@@ -1,8 +1,9 @@
 //! Instance variables a view gets from its controller: those assigned in the action and in the `before_action`
 //! callbacks that run for it. A partial has no action of its own, so it gets every action's.
 
-use crate::partials::{app_root, snake_case, template_stem, views_root};
+use crate::partials::snake_case;
 use crate::project::Project;
+use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::ruby::logical_lines;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -34,7 +35,7 @@ pub struct Assignment {
 fn source_of(project: &Project, view: &Path) -> Option<(PathBuf, Option<String>)> {
     let rel = view.strip_prefix(views_root(view)?).ok()?;
     let dir = rel.parent()?.to_str()?.replace('\\', "/");
-    let name = template_stem(project, rel.file_name()?.to_str()?);
+    let name = template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?);
     if dir.is_empty() || dir.starts_with("layouts") {
         return None;
     }

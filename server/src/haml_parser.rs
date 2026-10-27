@@ -1,10 +1,11 @@
-//! A port of the line and indentation handling of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`):
-//! the first error Haml raises about indentation, at the line it names.
+//! A port of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`): the first error Haml raises, at the line it names,
+//! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
-use crate::haml_indent::{block_keyword, is_haml_multiline, is_ruby_multiline, strip_output_prefix, HAML_FILTERS, MID_BLOCK_KEYWORDS};
 use crate::slim_parser::VOID_ELEMENTS;
+use regex::Regex;
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::sync::LazyLock;
 
 pub const BOM: char = '\u{feff}';
 const AT_START: &str = "Indenting at the beginning of the document is illegal.";
@@ -21,6 +22,30 @@ const MIXED_INDENTATION: &str = "Indentation can't use both tabs and spaces.";
 const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
 /// Ruby's regexp `\s`.
 const REGEXP_SPACE: [char; 6] = [' ', '\t', '\n', '\x0b', '\x0c', '\r'];
+/// The filters Haml 6 and 7 register (`Haml::Filters`).
+pub const HAML_FILTERS: &[&str] = &[
+    "plain",
+    "escaped",
+    "preserve",
+    "cdata",
+    "javascript",
+    "css",
+    "ruby",
+    "erb",
+    "markdown",
+    "sass",
+    "scss",
+    "less",
+    "coffee",
+    "coffeescript",
+];
+/// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
+const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
+/// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
+static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless))\b").unwrap()
+});
+static BLOCK_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"do\s*\|\s*[^|]*\s+\|$").unwrap());
 
 /// A parse error: Haml's message and the 0-based line it reports.
 #[derive(Debug, PartialEq, Eq)]
@@ -1154,6 +1179,37 @@ impl BraceScanner {
             *braces = value;
         }
     }
+}
+
+fn block_keyword(code: &str) -> Option<&str> {
+    let caps = BLOCK_KEYWORD.captures(code)?;
+    caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str())
+}
+
+/// Haml's `is_ruby_multiline?`: ends in `,`, except the character literals `?,` and `?\,`.
+pub(crate) fn is_ruby_multiline(text: &str) -> bool {
+    let b = text.as_bytes();
+    let n = b.len();
+    if n < 2 || b[n - 1] != b',' {
+        return false;
+    }
+    let char_literal = n >= 3
+        && ((b[n - 2] == b'?' && !(b[n - 3].is_ascii_alphanumeric() || b[n - 3] == b'_')) || (b[n - 3] == b'?' && b[n - 2] == b'\\'));
+    !char_literal
+}
+
+pub(crate) fn strip_output_prefix(s: &str) -> Option<&str> {
+    // `==`, `&==`, `!==` are interpolated plain text, not Ruby.
+    if ["==", "&==", "!=="].iter().any(|p| s.starts_with(p)) {
+        return None;
+    }
+    ["!=", "&=", "!~", "&~", "=", "~"].iter().find_map(|p| s.strip_prefix(p))
+}
+
+/// Haml's `is_multiline?`: ends in ` |`, unless it's a block argument list (`do | x |`).
+pub(crate) fn is_haml_multiline(line: &str) -> bool {
+    let t = line.trim_end();
+    t.ends_with(" |") && !BLOCK_WITH_SPACES.is_match(t)
 }
 
 #[cfg(test)]
