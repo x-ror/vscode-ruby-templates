@@ -121,6 +121,9 @@ const languages = {
     // 3b: compared with the leading whitespace of text lines removed; the formatter must also change something.
     formatFlags: ["--normalize"],
     reportsChanged: true,
+    // 3a "Ruby": variants of compiling files that break the generated Ruby; every 10th file keeps a run short.
+    breakVariants: (source) => erbBreakVariants(source),
+    breakSample: 10,
   },
 };
 
@@ -436,6 +439,58 @@ const hamlPerturbations = async (source) => {
   return variants.filter((v) => v.text !== undefined && v.text !== source);
 };
 
+// Erubi's own regexp, so the tags are the ones Rails sees.
+const erbTags = (source) => [
+  ...source.matchAll(/<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?/gs),
+];
+
+// Broken spellings of an ERB template, each a few characters from a compiling one (3a "Ruby"); a name is absent when
+// the file has nothing to break that way.
+const erbBreakVariants = (source) => {
+  const tags = erbTags(source).filter(
+    (tag) => tag[1] !== "#" && tag[1] !== "%",
+  );
+  const bare = (tag) => !tag[1] || tag[1] === "-";
+  const codeStart = (tag) => tag.index + 2 + (tag[1] ?? "").length;
+  const closeStart = (tag) =>
+    tag.index + tag[0].length - (tag[4]?.length ?? 0) - 2;
+  const splice = (from, to, replacement = "") =>
+    source.slice(0, from) + replacement + source.slice(to);
+  const end = tags.find((tag) => bare(tag) && tag[2].trim() === "end");
+  const open = tags.find((tag) =>
+    source.includes("<%", tag.index + tag[0].length),
+  );
+  const conditional = tags.find((tag) => bare(tag) && /^\s*if\s/.test(tag[2]));
+  const parenthesized = tags.find((tag) => tag[2].includes(")"));
+  return [
+    {
+      name: "delete end",
+      text: end && splice(end.index, end.index + end[0].length),
+    },
+    {
+      name: "drop %>",
+      text: open && splice(closeStart(open), closeStart(open) + 2),
+    },
+    {
+      name: "if to <%=",
+      text:
+        conditional &&
+        splice(conditional.index + 2, codeStart(conditional), "="),
+    },
+    { name: "stray end", text: `<% end %>\n${source}` },
+    {
+      name: "delete )",
+      text:
+        parenthesized &&
+        splice(
+          codeStart(parenthesized),
+          codeStart(parenthesized) + parenthesized[2].length,
+          parenthesized[2].replace(/\)([^)]*)$/, "$1"),
+        ),
+    },
+  ].filter((v) => v.text !== undefined && v.text !== source);
+};
+
 // Formats the variants of one file: each must compile to the original's source once formatted, and formatting
 // the result again must change nothing. A refusal (the formatter leaves the text alone) is counted apart.
 const perturbedRows = async (
@@ -575,6 +630,75 @@ const formatReport = (lang, items, indexes, sample) =>
     };
   });
 
+// 3a "Ruby": broken variants of compiling files; each Prism error of Rails must be in ours at the same line.
+// A variant that still compiles, or that fails for a reason other than Ruby's syntax, is counted, not compared.
+const breakReport = async (lang, items, indexes, sample) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-oracle-break-"));
+  try {
+    const variants = indexes
+      .filter((_, n) => n % sample === 0)
+      .flatMap((i) =>
+        lang
+          .breakVariants(items[i].source)
+          .map((variant) => ({ ...variant, item: items[i] })),
+      )
+      .map((variant, n) => {
+        const file = path.join(
+          dir,
+          String(n),
+          path.basename(variant.item.path),
+        );
+        fs.mkdirSync(path.dirname(file));
+        fs.writeFileSync(file, variant.text);
+        return { ...variant, path: file };
+      });
+    const official = await mapParallel(
+      variants,
+      PARALLEL_RUBY_PROCESSES,
+      (variant) =>
+        officialResult(lang, variant.text, ...lang.officialArguments(variant)),
+    );
+    const ours = oursByPath(
+      lang,
+      variants.map((variant) => variant.path),
+    );
+    const counts = { compiles: 0, other: 0, compared: 0, same: 0 };
+    const mismatches = [];
+    variants.forEach((variant, n) => {
+      const list = official[n].errors;
+      const errors = (ours.get(path.resolve(variant.path)) ?? []).filter(
+        (d) => d.severity === "error",
+      );
+      let agree;
+      if (!list) {
+        counts.compiles++;
+        agree = !errors.length;
+      } else if (list.some((e) => e.line === null)) {
+        counts.other++;
+        return;
+      } else {
+        counts.compared++;
+        agree = list.every((o) => errors.some((e) => sameError(o, e)));
+        if (agree) counts.same++;
+      }
+      if (agree) return;
+      mismatches.push(
+        `break (${variant.name}): ${variant.item.label} ${JSON.stringify(variant.text)}\n` +
+          `    official: ${list ? list.map(describe).join("; ") : "compiles"}\n` +
+          `    ours:     ${errors.length ? errors.map(describe).join("; ") : "no error"}`,
+      );
+    });
+    return {
+      mismatches,
+      summary:
+        `broken:  ${variants.length} variants (every ${sample}th file), still compiles ${counts.compiles}, other error ${counts.other}, ` +
+        `compared ${counts.compared}, same ${counts.same}, mismatches ${mismatches.length}`,
+    };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
 // Prints the report block for `items` under `title`.
 // `perturbSample` n: only every n-th file of a big corpus is perturbed.
 const report = async (lang, title, items, skipped, perturbSample = 1) => {
@@ -605,6 +729,14 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
     perturbSample * PERTURB_SAMPLE,
   );
   const count = (key) => formatted.filter((row) => row[key]).length;
+  const broken = lang.breakVariants
+    ? await breakReport(
+        lang,
+        items,
+        formattable,
+        lang.breakSample * PERTURB_SAMPLE,
+      )
+    : undefined;
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
   console.log(
@@ -644,6 +776,10 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
       return `${name} ${all.filter((v) => v.outcome !== "not equivalent").length}/${all.length}`;
     });
     console.log(`  variants run/made: ${byName.join(", ")}`);
+  }
+  if (broken) {
+    console.log(broken.summary);
+    if (process.env.VERBOSE) broken.mismatches.forEach((m) => console.log(m));
   }
   const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
   const reasons = [...skipped].map(([r, n]) => `${r} ${n}`).join(", ");
