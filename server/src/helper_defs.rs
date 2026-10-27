@@ -1,6 +1,6 @@
 //! A helper called in a view → its `def` in app/helpers, or in a controller that exposes it with `helper_method`.
 
-use crate::partials::app_root;
+use crate::rails_paths::app_root;
 use crate::ruby::logical_lines;
 use regex::Regex;
 use std::path::{Path, PathBuf};

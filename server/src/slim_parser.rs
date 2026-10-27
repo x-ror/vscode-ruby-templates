@@ -3,13 +3,15 @@
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
 use crate::ruby::comment_before;
-use crate::slim_indent::SLIM_ENGINES;
 use std::ops::Range;
 
 pub const BOM: &str = "\u{feff}";
 /// Slim::Parser default `tabsize`.
 const TABSIZE: usize = 4;
 const DEFAULT_TAG: &str = "div";
+// Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
+pub(crate) const SLIM_ENGINES: &[&str] =
+    &["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"];
 pub const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Engines that run `#{}` through Slim's interpolation: TagEngine without a Tilt engine, and InterpolateTiltEngine.
 const INTERPOLATING_ENGINES: &[&str] = &["javascript", "css", "markdown", "textile", "rdoc", "asciidoc"];

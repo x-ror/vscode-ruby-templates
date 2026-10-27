@@ -1,9 +1,7 @@
 //! Haml's diagnostics: the first error `haml_parser` finds, or the void elements that hold content.
 
-use crate::haml_parser;
+use crate::haml_parser::{self, is_haml_multiline, is_ruby_multiline, strip_output_prefix};
 use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
-use regex::Regex;
-use std::sync::LazyLock;
 use tower_lsp::lsp_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
@@ -22,32 +20,6 @@ pub mod code {
     pub const SELF_CLOSING_CONTENT: &str = "self-closing-content";
     pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
 }
-
-/// The filters Haml 6 and 7 register (`Haml::Filters`).
-pub const HAML_FILTERS: &[&str] = &[
-    "plain",
-    "escaped",
-    "preserve",
-    "cdata",
-    "javascript",
-    "css",
-    "ruby",
-    "erb",
-    "markdown",
-    "sass",
-    "scss",
-    "less",
-    "coffee",
-    "coffeescript",
-];
-/// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
-pub(crate) const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
-/// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
-static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless))\b").unwrap()
-});
-
-static BLOCK_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"do\s*\|\s*[^|]*\s+\|$").unwrap());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
@@ -183,11 +155,6 @@ fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagn
     coded(error(span_range(parse_error.line, raw, start, end), parse_error.message.clone()), code)
 }
 
-pub(crate) fn block_keyword(code: &str) -> Option<&str> {
-    let caps = BLOCK_KEYWORD.captures(code)?;
-    caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str())
-}
-
 /// Returns the line kind and how many physical lines it spans.
 fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let raw = lines[i];
@@ -226,26 +193,6 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
         return (LineKind::Tag, head_lines - 1 + tail_lines);
     }
     (LineKind::Other, multiline_len(lines, i))
-}
-
-/// Haml's `is_ruby_multiline?`: ends in `,`, except the character literals `?,` and `?\,`.
-pub(crate) fn is_ruby_multiline(text: &str) -> bool {
-    let b = text.as_bytes();
-    let n = b.len();
-    if n < 2 || b[n - 1] != b',' {
-        return false;
-    }
-    let char_literal = n >= 3
-        && ((b[n - 2] == b'?' && !(b[n - 3].is_ascii_alphanumeric() || b[n - 3] == b'_')) || (b[n - 3] == b'?' && b[n - 2] == b'\\'));
-    !char_literal
-}
-
-pub(crate) fn strip_output_prefix(s: &str) -> Option<&str> {
-    // `==`, `&==`, `!==` are interpolated plain text, not Ruby.
-    if ["==", "&==", "!=="].iter().any(|p| s.starts_with(p)) {
-        return None;
-    }
-    ["!=", "&=", "!~", "&~", "=", "~"].iter().find_map(|p| s.strip_prefix(p))
 }
 
 /// Byte offset where Ruby code starts on a Haml line, after a line-start `-`/`=`/`~`/`!=`/`&=`
@@ -305,12 +252,6 @@ pub fn tag_head_len(s: &str) -> Option<usize> {
 
 fn is_tag_name_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':' | '@')
-}
-
-/// Haml's `is_multiline?`: ends in ` |`, unless it's a block argument list (`do | x |`).
-pub(crate) fn is_haml_multiline(line: &str) -> bool {
-    let t = line.trim_end();
-    t.ends_with(" |") && !BLOCK_WITH_SPACES.is_match(t)
 }
 
 /// Physical lines in the Haml `|` multiline group starting at line `i`, blank lines inside included; 1 if none.

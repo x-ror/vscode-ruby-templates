@@ -1,8 +1,8 @@
 //! Rails i18n keys in `t("…")` calls → `config/locales/**/*.yml`: definition, hover, completion.
 
 use crate::erb::truncate;
-use crate::partials::{app_root, views_root};
 use crate::project::Project;
+use crate::rails_paths::{app_root, template_stem, views_root};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -48,7 +48,7 @@ pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)>
 /// `users/_form.html.erb` → `users.form`, like ActionView's `@virtual_path.gsub(%r{/_?}, ".")`.
 pub fn lazy_scope(project: &Project, current: &Path) -> Option<String> {
     let rel = current.strip_prefix(views_root(current)?).ok()?;
-    let stem = crate::partials::template_stem(project, rel.file_name()?.to_str()?);
+    let stem = template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?);
     let virtual_path = rel.with_file_name(stem).to_str()?.replace('\\', "/");
     Some(format!("/{virtual_path}").replace("/_", "/").replace('/', ".")[1..].to_string())
 }

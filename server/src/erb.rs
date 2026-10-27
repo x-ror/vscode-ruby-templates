@@ -158,7 +158,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     }
     // Ruby parse errors would only repeat a broken tag or block structure, so they wait until it is sound.
     if out.iter().all(|d| d.severity != Some(DiagnosticSeverity::ERROR)) {
-        out.extend(crate::ruby_syntax::diagnostics(text, &tree));
+        out.extend(crate::ruby_syntax::diagnostics(text, &tree).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     }
     out
 }

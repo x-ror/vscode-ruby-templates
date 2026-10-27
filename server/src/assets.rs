@@ -1,6 +1,6 @@
 //! Literal asset helper paths (`image_tag "logo.png"`, `stylesheet_link_tag "application"`) → files.
 
-use crate::partials::app_root;
+use crate::rails_paths::app_root;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;

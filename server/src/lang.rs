@@ -1,7 +1,7 @@
 //! Which template language a document is, and whether its output is HTML.
 
-use crate::project::Project;
-use crate::{partials, util};
+use crate::rails_paths::{is_known_format, is_locale, template_format, views_root};
+use crate::util;
 use std::path::Path;
 use tower_lsp::lsp_types::Url;
 
@@ -56,19 +56,23 @@ pub fn html_host(uri: &Url) -> bool {
         return true;
     }
     // The URI's own path, not `to_file_path`, which a drive-less test URI fails on Windows.
-    let in_views = partials::views_root(Path::new(&util::percent_decode(uri.path()))).is_some();
+    let in_views = views_root(Path::new(&util::percent_decode(uri.path()))).is_some();
     let original = file_name(uri);
     let parts: Vec<&str> = original.split('.').collect();
     in_views
         && parts.len() == 3
-        && partials::is_locale(parts[1])
-        && partials::template_format(&Project::unknown(), Path::new(&file)).is_none()
+        && is_locale(parts[1])
+        && template_format(is_known_format, Path::new(&file)).is_none()
         && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
 pub fn slim_html_host(uri: &Url) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
+}
+
+pub fn is_partial(uri: &Url) -> bool {
+    uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
 }
 
 /// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`. URIs that aren't
@@ -83,7 +87,7 @@ pub fn file_name(uri: &Url) -> String {
 /// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.
 fn host_format<'a>(file: &'a str, ext: &str) -> Option<&'a str> {
     // A file name alone doesn't tell the app's registered formats; only Rails' own count here.
-    file.ends_with(ext).then(|| partials::template_format(&Project::unknown(), Path::new(file)))?
+    file.ends_with(ext).then(|| template_format(is_known_format, Path::new(file)))?
 }
 
 fn is_html_format(format: &str) -> bool {

@@ -2,8 +2,7 @@
 //! where an attribute may start.
 
 use crate::html::{ATTRIBUTES, BOOLEAN_ATTRIBUTES, TAGS};
-use crate::slim_indent::SLIM_ENGINES;
-use crate::slim_parser::Parsed;
+use crate::slim_parser::{Parsed, SLIM_ENGINES};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name.
