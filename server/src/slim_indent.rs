@@ -76,14 +76,15 @@ fn check_structure(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
     }
     // Temple raises this after `EndInserter` and the attribute merger, so it only shows when they stay quiet.
     let explicit_end = parsed.pieces.iter().any(|p| matches!(p, Piece::Control { code, .. } if is_explicit_end(code)));
-    let invalid_doctype = parsed.invalid_doctype.as_ref().filter(|_| parsed.valid && parsed.repeated_attribute.is_none() && !explicit_end);
+    let filters_pass = parsed.valid && parsed.repeated_attribute.is_none() && !explicit_end;
+    let invalid_doctype = parsed.invalid_doctype.as_ref().filter(|_| filters_pass);
     if let Some((line, kind)) = invalid_doctype {
         let raw = lines[*line];
         let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
         out.push(coded(error(range, format!("Invalid doctype {kind}")), code::SYNTAX_ERROR));
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
-    if parsed.valid && parsed.repeated_attribute.is_none() && invalid_doctype.is_none() && !explicit_end {
+    if filters_pass && invalid_doctype.is_none() {
         out.extend(slim_ruby::diagnostics(text, &parsed));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.

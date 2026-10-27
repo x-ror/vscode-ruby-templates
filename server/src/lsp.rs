@@ -190,7 +190,12 @@ fn spacing_actions(uri: &Url, text: &str, range: Range, only: Option<&[CodeActio
 }
 
 fn file_location(file: impl AsRef<Path>) -> Option<Location> {
-    Some(Location::new(Url::from_file_path(file).ok()?, Range::default()))
+    line_location(file, 0)
+}
+
+fn line_location(file: impl AsRef<Path>, line: usize) -> Option<Location> {
+    let start = Position::new(line as u32, 0);
+    Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -273,17 +278,13 @@ impl Backend {
     /// Where the `@ivar` or partial local under `col` comes from: its assignments in the controller, or the
     /// `render` calls passing the local (else the strict-locals comment declaring it).
     async fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Result<Vec<Location>> {
-        let at_line = |file: &Path, line: usize| {
-            let start = Position::new(line as u32, 0);
-            Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
-        };
         let word = util::word_at(line, col);
         let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
         if before.ends_with('@') && !before.ends_with("@@") {
             return Ok(ivars::for_view(&Project::for_template(path), path)
                 .into_iter()
                 .filter(|a| a.name == word)
-                .filter_map(|a| at_line(&a.file, a.line))
+                .filter_map(|a| line_location(&a.file, a.line))
                 .collect());
         }
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
@@ -303,7 +304,7 @@ impl Backend {
         }
         let declared = partials::strict_locals(text).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
-        Ok(comment.filter(|_| declared).and_then(|line| at_line(path, line)).into_iter().collect())
+        Ok(comment.filter(|_| declared).and_then(|line| line_location(path, line)).into_iter().collect())
     }
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
@@ -477,10 +478,7 @@ impl LanguageServer for Backend {
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
         {
             let helper = helper_defs::name_at(line, col);
-            let at_line = |(file, line): (PathBuf, usize)| {
-                let start = Position::new(line as u32, 0);
-                Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
-            };
+            let at_line = |(file, line): (PathBuf, usize)| line_location(file, line);
             let route = helper.and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
             match route {
                 Some(source) => locs.extend(at_line(source)),
