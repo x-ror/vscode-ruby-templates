@@ -1098,7 +1098,7 @@ mod tests {
     }
 
     fn views_tree(name: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("rt-rename-{name}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("rt-lsp-rename-{name}-{}", std::process::id()));
         let views = root.join("app/views");
         for (file, text) in files {
             let path = views.join(file);
