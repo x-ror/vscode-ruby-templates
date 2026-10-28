@@ -205,7 +205,7 @@ div.card              div.card
 
 ## Stage 5. Remove the external tools
 
-**Remove** from `package.json` and `src/`: `rubyTemplates.erb.formatter` values `htmlbeautifier` and `erb-format`, `rubyTemplates.haml.formatter` value `haml-lint`, `rubyTemplates.commands.htmlbeautifier`, `commands.erbFormat`, `commands.hamlLint`, `commands.erbLint`, `commands.herbLint`, `commands.slimLint`, `hamlLint.enabled`, `hamlLint.useBundler`, `erbLint.enabled`, `herbLint.enabled`, `slimLint.enabled`, the client code that spawns them (`src/extension.js` runners, `src/erbLint.js`, `src/herbLint.js`, `src/erbFormat.js`, `hamlLintOffenses` in `src/haml.js`) with their tests (`test/clientPure.js`, `test/haml.js`, `test/vscode/suite.js`), and the reading of `.erb_lint.yml`, `.erb-lint.yml`, `.haml-lint.yml`, `.slim-lint.yml` in `server/src/config.rs`. Kept: `commands.slimrb` and `slim.compileForRails` (run the official Slim compiler for the preview).
+**Remove** from `package.json` and `src/`: `rubyTemplates.erb.formatter` values `htmlbeautifier` and `erb-format`, `rubyTemplates.haml.formatter` value `haml-lint`, `rubyTemplates.commands.htmlbeautifier`, `commands.erbFormat`, `commands.hamlLint`, `commands.erbLint`, `commands.herbLint`, `commands.slimLint`, `hamlLint.enabled`, `hamlLint.useBundler`, `erbLint.enabled`, `herbLint.enabled`, `slimLint.enabled`, the client code that spawns them (`src/extension.js` runners, `src/erbLint.js`, `src/herbLint.js`, `src/erbFormat.js`, `hamlLintOffenses` in `src/haml.js`) with their tests (`test/clientPure.js`, `test/haml.js`, `test/vscode/suite.js`), and the reading of `.erb_lint.yml`, `.erb-lint.yml`, `.haml-lint.yml`, `.slim-lint.yml` in `server/src/config.rs`. With only the built-in formatter left, `rubyTemplates.erb.formatter` and `rubyTemplates.haml.formatter` go too: `rubyTemplates.<lang>.format.enabled` (9) is the switch, and off it registers no formatter for that language, leaving it to other extensions (decided 2026-10-28). Kept: `commands.slimrb` and `slim.compileForRails` (run the official Slim compiler for the preview).
 
 **Get:** a CHANGELOG `BREAKING CHANGE` entry listing the removed settings.
 
@@ -299,18 +299,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status      |
-| ------------------------ | ----------- |
-| 0. Harness               | done        |
-| 0b. Context              | done        |
-| 1a. Slim errors          | done        |
-| 1b. Slim format          | done        |
-| 2a. Haml errors          | done        |
-| 2b. Haml format          | done        |
-| 3a. ERB errors           | done        |
-| 3b. ERB format           | done        |
-| 4. Editor and CLI        | done        |
-| 5. Remove external tools | not started |
+| Stage                    | Status                     |
+| ------------------------ | -------------------------- |
+| 0. Harness               | done                       |
+| 0b. Context              | done                       |
+| 1a. Slim errors          | done                       |
+| 1b. Slim format          | done                       |
+| 2a. Haml errors          | done                       |
+| 2b. Haml format          | done                       |
+| 3a. ERB errors           | done                       |
+| 3b. ERB format           | done                       |
+| 4. Editor and CLI        | done                       |
+| 5. Remove external tools | in progress: scope decided |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 
