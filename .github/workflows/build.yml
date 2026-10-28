@@ -170,6 +170,8 @@ jobs:
     steps:
       - uses: actions/setup-node@v5
         with: { node-version: 24, registry-url: "https://registry.npmjs.org" }
+      # The npm bundled with Node may predate 11.5.
+      - run: npm install -g npm@latest
       - uses: actions/download-artifact@v8
         with: { name: npm, path: npm-dist }
       # Artifacts lose the executable bit.
