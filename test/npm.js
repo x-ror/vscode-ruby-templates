@@ -90,7 +90,7 @@ try {
     "<div>\n<p>x</p>  \n</div>",
   );
   assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.stdout, "<div>\n  <p>x</p>\n</div>\n");
+  assert.strictEqual(r.stdout, "<div>\n  <p>x</p>\n</div>");
   r = run(
     ["format", "--check", "--stdin-filepath", "a.html.erb"],
     "<div>\n<p>x</p>\n</div>\n",
