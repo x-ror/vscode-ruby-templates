@@ -37,7 +37,7 @@ struct Backend {
     options: Arc<OnceLock<Options>>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
     roots: OnceLock<Vec<PathBuf>>,
-    /// Formatting is registered for Slim/Skim only, and only when the client supports dynamic registration:
+    /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration and `slim.format.enabled` is on:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
 }
@@ -377,7 +377,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        if self.dynamic_formatting.get() == Some(&true) {
+        if self.dynamic_formatting.get() == Some(&true) && self.options().format_enabled(TemplateLang::Slim) {
             let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
             let registration =
                 Registration { id: "slim-formatting".into(), method: "textDocument/formatting".into(), register_options: Some(selector) };

@@ -8,7 +8,6 @@ import {
   actionLine,
   previewPartners,
 } from "../src/related.js";
-import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
 import { routesFromOutput } from "../src/routes.js";
@@ -93,21 +92,6 @@ assert.deepStrictEqual(
   ["/a/components"],
 );
 assert.deepStrictEqual(relatedDirs("/a/views/users", "show.html.erb"), []);
-
-// erbFormatterArgs
-assert.deepStrictEqual(
-  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: true }),
-  ["--tab-stops", "4"],
-);
-assert.deepStrictEqual(
-  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: false }),
-  ["--tab"],
-);
-assert.deepStrictEqual(
-  erbFormatterArgs("erb-format", { tabSize: 2, insertSpaces: true }),
-  ["--stdin"],
-);
-assert.ok(Object.keys(ERB_FORMATTERS).every((k) => k !== "none"));
 
 // tagToClose
 for (const [text, name] of [

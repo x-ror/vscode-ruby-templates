@@ -618,60 +618,10 @@
           "default": "ruby",
           "description": "Ruby used to preview and compile ERB through Erubi (gem install erubi; stdlib ERB without it) and for Haml → ERB through the haml_to_erb library (gem install haml_to_erb)."
         },
-        "rubyTemplates.commands.hamlLint": {
-          "type": "string",
-          "default": "haml-lint",
-          "description": "Executable for the haml-lint formatter (gem install haml_lint)."
-        },
-        "rubyTemplates.hamlLint.useBundler": {
-          "type": "boolean",
-          "default": false,
-          "description": "Run haml-lint through `bundle exec` when a Gemfile exists in the workspace."
-        },
         "rubyTemplates.erb.autoCloseTags": {
           "type": "boolean",
           "default": true,
           "description": "Typing the `>` of an HTML start tag in ERB inserts its end tag after the cursor (like html.autoClosingTags for plain HTML)."
-        },
-        "rubyTemplates.erb.formatter": {
-          "type": "string",
-          "enum": [
-            "none",
-            "builtin",
-            "htmlbeautifier",
-            "erb-format"
-          ],
-          "enumDescriptions": [
-            "No ERB formatter from this extension, even with rubyTemplates.erb.format.enabled on (another extension's stays in charge).",
-            "Built-in, through the language server: re-indents HTML views by HTML and ERB nesting with the editor's indentation width and trims trailing whitespace of text lines; keeps <script>/<style>/<pre>/<textarea>/<title> bodies, comments, the Ruby of multi-line ERB tags, line endings and the end of the file; never wraps lines. Also Format Selection.",
-            "htmlbeautifier (gem install htmlbeautifier): re-indents HTML and ERB blocks to the editor's tab size, keeps line breaks.",
-            "erb-format (gem install erb-formatter): re-flows tags and attributes to a line width."
-          ],
-          "default": "builtin",
-          "description": "What Format Document does in ERB files. Runs through bundle exec when rubyTemplates.preview.useBundler is on."
-        },
-        "rubyTemplates.commands.htmlbeautifier": {
-          "type": "string",
-          "default": "htmlbeautifier",
-          "description": "Executable for the htmlbeautifier ERB formatter."
-        },
-        "rubyTemplates.commands.erbFormat": {
-          "type": "string",
-          "default": "erb-format",
-          "description": "Executable for the erb-format ERB formatter (gem install erb-formatter)."
-        },
-        "rubyTemplates.haml.formatter": {
-          "type": "string",
-          "enum": [
-            "reindent",
-            "haml-lint"
-          ],
-          "enumDescriptions": [
-            "Built-in, through the language server: re-indent every nesting level to the indentation width (2 by default, spaces) and trim trailing whitespace where Haml ignores it; only the width from the editor or .editorconfig applies. Files Haml would reject are left alone.",
-            "haml-lint --auto-correct-only: applies the safe corrections of your haml-lint/RuboCop config, which can rewrite Ruby code."
-          ],
-          "default": "reindent",
-          "description": "What Format Document does in Haml files. Format Selection always re-indents."
         },
         "rubyTemplates.preview.refreshOnSave": {
           "type": "boolean",

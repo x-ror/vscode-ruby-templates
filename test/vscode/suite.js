@@ -7,11 +7,6 @@ import * as vscode from "vscode";
 
 const app = process.env.RT_APP;
 const settings = () => vscode.workspace.getConfiguration("rubyTemplates");
-/** The gem's executable, or undefined when it isn't installed (the check is skipped). */
-const gemTool = (name) => {
-  const file = path.join(process.env.RT_GEM_BIN ?? "", name);
-  return process.env.RT_GEM_BIN && fs.existsSync(file) ? file : undefined;
-};
 const open = async (rel) =>
   vscode.window.showTextDocument(
     await vscode.workspace.openTextDocument(path.join(app, rel)),
@@ -221,33 +216,6 @@ const checks = {
     );
   },
 
-  async "ERB formatter: htmlbeautifier"() {
-    const bin = gemTool("htmlbeautifier");
-    if (!bin) return "skipped: htmlbeautifier not installed";
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("commands.htmlbeautifier", bin, global);
-    await settings().update("erb.formatter", "htmlbeautifier", global);
-    const editor = await open("app/views/users/unformatted.html.erb");
-    const edits = await until("format edits", () =>
-      vscode.commands.executeCommand(
-        "vscode.executeFormatDocumentProvider",
-        editor.document.uri,
-        { tabSize: 2, insertSpaces: true },
-      ),
-    );
-    // VS Code turns the whole-document replacement into a minimal diff, so compare the result.
-    const edit = new vscode.WorkspaceEdit();
-    edit.set(editor.document.uri, edits);
-    await vscode.workspace.applyEdit(edit);
-    assert.strictEqual(
-      editor.document.getText(),
-      "<div>\n  <% if x %>\n    <p>a</p>\n  <% end %>\n</div>\n",
-    );
-    await vscode.commands.executeCommand("workbench.action.files.revert");
-    await settings().update("erb.formatter", undefined, global);
-    await settings().update("commands.htmlbeautifier", undefined, global);
-  },
-
   async "ERB formatter: builtin by default, through the server"() {
     const editor = await open("app/views/users/unformatted.html.erb");
     try {
@@ -268,6 +236,28 @@ const checks = {
     } finally {
       await revert(editor);
     }
+  },
+
+  async "ERB formatter: off with erb.format.enabled false, on again after"() {
+    const editor = await open("app/views/users/unformatted.html.erb");
+    const key = "erb.format.enabled";
+    const global = vscode.ConfigurationTarget.Global;
+    const format = () =>
+      vscode.commands.executeCommand(
+        "vscode.executeFormatDocumentProvider",
+        editor.document.uri,
+        { tabSize: 2, insertSpaces: true },
+      );
+    try {
+      await settings().update(key, false, global);
+      await until(
+        "no formatter offered",
+        async () => !(await format())?.length,
+      );
+    } finally {
+      await settings().update(key, undefined, global);
+    }
+    await until("formatter back", async () => (await format())?.length);
   },
 
   async "wrap in ERB output: selection and empty cursor"() {

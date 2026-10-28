@@ -23,7 +23,6 @@ import {
   actionLine,
   previewPartners,
 } from "./related.js";
-import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { erbRubyArgs } from "./erbEngine.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
@@ -90,8 +89,7 @@ function activate(context) {
     log: true,
   });
   context.subscriptions.push(output);
-  registerHamlFormatting(context, output);
-  registerErbFormatting(context, output);
+  registerServerFormatting(context);
   registerErbAutoClose(context);
   sub("rubyTemplates.restartServer", () => restartClient(context, output));
   context.subscriptions.push(
@@ -1017,25 +1015,6 @@ async function convert(target) {
   }
 }
 
-// ---------------------------------------------------------------- haml-lint formatter
-
-// haml-lint exits 65 (EX_DATAERR) when it found lints; anything else non-zero is a failure.
-const HAML_LINT_OK_CODES = new Set([0, 65]);
-
-/** `haml-lint <args> --stdin <file>` fed the document's text. */
-function runHamlLint(doc, args) {
-  const bin = cfg().get("commands.hamlLint", "haml-lint");
-  const useBundler = cfg().get("hamlLint.useBundler", false);
-  return run(
-    bin,
-    [...args, "--stdin", doc.uri.fsPath],
-    { cwd: workspaceFolderFor(doc), useBundler },
-    doc.getText(),
-  );
-}
-
-// 127: `bundle exec` couldn't find the executable.
-const toolMissing = (r) => r.err?.code === "ENOENT" || r.code === 127;
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
 
 /**
@@ -1086,116 +1065,43 @@ function registerErbAutoClose(context) {
 const formatWithServer = async (doc, options, range) =>
   (await serverFormatEdits(doc, options, range)) ?? [];
 
-/** Registered only while a formatter is chosen, so another extension's ERB formatter isn't shadowed. */
-function registerErbFormatting(context, output) {
-  let registration;
+/** Offers the server's formatting for ERB and Haml only while `rubyTemplates.<lang>.format.enabled` is on, so another extension's formatter isn't shadowed. */
+function registerServerFormatting(context) {
+  const registrations = new Map();
   const update = () => {
-    registration?.dispose();
-    registration = undefined;
-    const tool = cfg().get("erb.formatter", "builtin");
-    if (tool === "builtin") {
-      registration = vscode.Disposable.from(
-        vscode.languages.registerDocumentFormattingEditProvider("erb", {
-          provideDocumentFormattingEdits: (doc, options) =>
-            formatWithServer(doc, options),
-        }),
-        vscode.languages.registerDocumentRangeFormattingEditProvider("erb", {
-          provideDocumentRangeFormattingEdits: (doc, range, options) =>
-            formatWithServer(doc, options, range),
-        }),
+    for (const lang of ["erb", "haml"]) {
+      const enabled = cfg().get(`${lang}.format.enabled`, true);
+      if (enabled === registrations.has(lang)) continue;
+      if (!enabled) {
+        registrations.get(lang).dispose();
+        registrations.delete(lang);
+        continue;
+      }
+      registrations.set(
+        lang,
+        vscode.Disposable.from(
+          vscode.languages.registerDocumentFormattingEditProvider(lang, {
+            provideDocumentFormattingEdits: (doc, options) =>
+              formatWithServer(doc, options),
+          }),
+          vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
+            provideDocumentRangeFormattingEdits: (doc, range, options) =>
+              formatWithServer(doc, options, range),
+          }),
+        ),
       );
-      return;
     }
-    if (!ERB_FORMATTERS[tool]) return;
-    registration = vscode.languages.registerDocumentFormattingEditProvider(
-      "erb",
-      {
-        provideDocumentFormattingEdits: (doc, options) =>
-          formatErb(doc, options, tool, output),
-      },
-    );
   };
   update();
   context.subscriptions.push(
-    { dispose: () => registration?.dispose() },
+    { dispose: () => registrations.forEach((r) => r.dispose()) },
     vscode.workspace.onDidChangeConfiguration(
-      (e) => e.affectsConfiguration("rubyTemplates.erb.formatter") && update(),
+      (e) =>
+        (e.affectsConfiguration("rubyTemplates.erb.format.enabled") ||
+          e.affectsConfiguration("rubyTemplates.haml.format.enabled")) &&
+        update(),
     ),
   );
-}
-
-async function formatErb(doc, options, tool, output) {
-  const { command, gem } = ERB_FORMATTERS[tool];
-  const bin = cfg().get(`commands.${command}`, tool);
-  const { version } = doc;
-  const r = await run(
-    bin,
-    erbFormatterArgs(tool, options),
-    { cwd: workspaceFolderFor(doc) },
-    doc.getText(),
-  );
-  if (toolMissing(r)) {
-    vscode.window.showErrorMessage(
-      `${bin} was not found. Install it with: gem install ${gem} — or set rubyTemplates.commands.${command}.`,
-    );
-    return [];
-  }
-  if (r.code !== 0) {
-    output.appendLine(
-      `[${tool}] format ${doc.uri.fsPath} failed:\n${r.stderr || r.stdout}`,
-    );
-    vscode.window.showErrorMessage(`${tool} failed: ${firstLine(r)}`);
-    return [];
-  }
-  if (!r.stdout || r.stdout === doc.getText() || doc.version !== version)
-    return [];
-  return [
-    vscode.TextEdit.replace(
-      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
-      r.stdout,
-    ),
-  ];
-}
-
-function registerHamlFormatting(context, output) {
-  context.subscriptions.push(
-    vscode.languages.registerDocumentFormattingEditProvider("haml", {
-      provideDocumentFormattingEdits: (doc, options) =>
-        cfg().get("haml.formatter", "reindent") === "haml-lint"
-          ? formatWithHamlLint(doc, output)
-          : formatWithServer(doc, options),
-    }),
-    vscode.languages.registerDocumentRangeFormattingEditProvider("haml", {
-      provideDocumentRangeFormattingEdits: (doc, range, options) =>
-        formatWithServer(doc, options, range),
-    }),
-  );
-}
-
-async function formatWithHamlLint(doc, output) {
-  const { version } = doc;
-  const r = await runHamlLint(doc, ["--auto-correct-only", "--stderr"]);
-  if (toolMissing(r)) {
-    vscode.window.showErrorMessage(
-      "haml-lint was not found. Install it with: gem install haml_lint — or set rubyTemplates.commands.hamlLint.",
-    );
-    return [];
-  }
-  if (!HAML_LINT_OK_CODES.has(r.code)) {
-    output.appendLine(
-      `[haml-lint] format ${doc.uri.fsPath} failed:\n${r.stderr || r.stdout}`,
-    );
-    vscode.window.showErrorMessage(`haml-lint failed: ${firstLine(r)}`);
-    return [];
-  }
-  // haml-lint prints nothing when there was nothing to correct.
-  if (!r.stdout || doc.version !== version) return [];
-  return [
-    vscode.TextEdit.replace(
-      new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)),
-      r.stdout,
-    ),
-  ];
 }
 
 function deactivate() {
