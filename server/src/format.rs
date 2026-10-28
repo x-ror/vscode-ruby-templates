@@ -1,6 +1,5 @@
-//! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace, blank lines, the final
-//! newline and line endings. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged,
-//! with the reason.
+//! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace and the final
+//! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
 use crate::checks::{language_diagnostics, ruby_context, RubyContext};
 use crate::lang::{html_host, is_partial, TemplateLang};
@@ -8,53 +7,17 @@ use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim
 use std::fmt;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndentStyle {
-    Space,
-    Tab,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LineEnding {
-    Lf,
-    CrLf,
-}
-
-impl LineEnding {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Lf => "\n",
-            Self::CrLf => "\r\n",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
-    pub indent_style: IndentStyle,
-    /// Columns per nesting level; with tabs, how wide a tab counts when measuring indentation.
+    /// Columns per nesting level.
     pub indent_size: usize,
-    /// `None` keeps each line's ending.
-    pub end_of_line: Option<LineEnding>,
-    /// `Some(true)` ends the file with a line ending, `Some(false)` drops it, `None` leaves it.
-    pub final_newline: Option<bool>,
-    pub trim_trailing_whitespace: bool,
-    /// At most one blank line in a row.
-    pub collapse_blank_lines: bool,
-    pub trim_trailing_blank_lines: bool,
+    /// End the file with a line ending; off for a range, which can't add a line.
+    pub final_newline: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self {
-            indent_style: IndentStyle::Space,
-            indent_size: 2,
-            end_of_line: None,
-            final_newline: Some(true),
-            trim_trailing_whitespace: true,
-            collapse_blank_lines: false,
-            trim_trailing_blank_lines: false,
-        }
+        Self { indent_size: 2, final_newline: true }
     }
 }
 
@@ -69,17 +32,9 @@ pub enum SkipKind {
 }
 
 impl Settings {
-    /// These settings under the editor's options: its indentation, and the file options it turns on.
+    /// These settings under the editor's indentation width.
     pub fn with_editor(self, options: &FormattingOptions) -> Self {
-        let on = |flag: Option<bool>| flag == Some(true);
-        Self {
-            indent_style: if options.insert_spaces { IndentStyle::Space } else { IndentStyle::Tab },
-            indent_size: options.tab_size as usize,
-            trim_trailing_whitespace: self.trim_trailing_whitespace || on(options.trim_trailing_whitespace),
-            final_newline: if on(options.insert_final_newline) { Some(true) } else { self.final_newline },
-            trim_trailing_blank_lines: self.trim_trailing_blank_lines || on(options.trim_final_newlines),
-            ..self
-        }
+        Self { indent_size: options.tab_size as usize, ..self }
     }
 }
 
@@ -100,11 +55,9 @@ pub(crate) fn skip<T>(kind: SkipKind, reason: impl Into<String>) -> Result<T, Sk
     Err(Skipped { kind, reason: reason.into() })
 }
 
-/// A language's re-indented text, plus which lines hold content whitespace (a `<pre>` body, Ruby code, a filter)
-/// that the blank-line steps must keep.
+/// A language's re-indented text.
 pub(crate) struct Indented {
     pub text: String,
-    pub fixed: Vec<bool>,
     /// What was left alone inside an otherwise formatted file, for `--verbose`.
     pub notes: Vec<String>,
 }
@@ -167,50 +120,20 @@ fn format_once(
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
         TemplateLang::Erb if !html_host(uri) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
-        TemplateLang::Erb => erb_format::indent(text, &indent_unit(settings), settings.trim_trailing_whitespace, is_partial(uri), ruby)?,
+        TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
     };
-    let mut lines = split_lines(&indented.text, &indented.fixed);
-    if settings.collapse_blank_lines {
-        collapse_blank_lines(&mut lines);
+    let mut formatted = indented.text;
+    if settings.final_newline && !formatted.is_empty() && !formatted.ends_with('\n') {
+        formatted.push_str(dominant_ending(text));
     }
-    if settings.trim_trailing_blank_lines {
-        trim_trailing_blank_lines(&mut lines);
-    }
-    let final_newline = settings.final_newline;
-    // Without a final line ending, an empty last line would only be the previous line's ending.
-    if final_newline == Some(false) {
-        while lines.last().is_some_and(|l| l.text.is_empty() && !l.fixed) {
-            lines.pop();
-        }
-    }
-    let text = join_lines(&lines, dominant_ending(text), settings.end_of_line, final_newline);
-    Ok(Formatted { text, notes: indented.notes })
+    Ok(Formatted { text: formatted, notes: indented.notes })
 }
 
-/// The settings `format` works with: Slim, Haml and ERB take only the indentation width and follow their own rules for the
-/// rest, except that a range, which can't add a line, leaves the final newline alone. ERB keeps the end of the file as it is.
+/// The settings `format` works with: Slim and Haml follow their own rules for the end of the file, and ERB keeps it as it is.
 pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
-    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml | TemplateLang::Erb) {
-        return settings.clone();
-    }
-    Settings {
-        indent_style: IndentStyle::Space,
-        end_of_line: None,
-        final_newline: settings.final_newline.filter(|_| lang != TemplateLang::Erb).map(|_| true),
-        trim_trailing_whitespace: true,
-        collapse_blank_lines: false,
-        trim_trailing_blank_lines: false,
-        ..settings.clone()
-    }
-}
-
-fn indent_unit(settings: &Settings) -> String {
-    match settings.indent_style {
-        IndentStyle::Space => " ".repeat(settings.indent_size),
-        IndentStyle::Tab => "\t".into(),
-    }
+    Settings { final_newline: settings.final_newline && lang != TemplateLang::Erb, ..settings.clone() }
 }
 
 fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: ruby_prism::Version) -> Result<Indented, Skipped> {
@@ -219,15 +142,13 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: 
         return skip(SkipKind::Doubt, "Slim would reject the file");
     }
     let original = text;
-    let Some(text) = slim_format::format(text, settings.indent_size, extra_engines, settings.trim_trailing_whitespace) else {
+    let Some(text) = slim_format::format(text, settings.indent_size, extra_engines) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
     if !slim_ruby::same_compilation(original, &text, extra_engines) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
-    // Slim compiles every line, blank ones included, so line counts stay as they are.
-    let fixed = vec![true; text.split('\n').count()];
-    Ok(Indented { text, fixed, notes: vec![] })
+    Ok(Indented { text, notes: vec![] })
 }
 
 fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
@@ -237,82 +158,17 @@ fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
     if !haml_parser::same_compilation(text, &formatted) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
-    let fixed = vec![true; formatted.split('\n').count()];
-    Ok(Indented { text: formatted, fixed, notes: vec![] })
+    Ok(Indented { text: formatted, notes: vec![] })
 }
 
-struct Line<'a> {
-    text: &'a str,
-    /// `"\n"`, `"\r\n"`, or `""` on a last line without one.
-    eol: &'a str,
-    fixed: bool,
-}
-
-impl Line<'_> {
-    fn blank(&self) -> bool {
-        !self.fixed && self.text.trim().is_empty()
-    }
-}
-
-fn split_lines<'a>(text: &'a str, fixed: &[bool]) -> Vec<Line<'a>> {
-    let mut lines = Vec::new();
-    let mut rest = text;
-    for i in 0.. {
-        if rest.is_empty() {
-            break;
-        }
-        let (line, eol, next) = match rest.find('\n') {
-            Some(n) if rest[..n].ends_with('\r') => (&rest[..n - 1], "\r\n", &rest[n + 1..]),
-            Some(n) => (&rest[..n], "\n", &rest[n + 1..]),
-            None => (rest, "", ""),
-        };
-        lines.push(Line { text: line, eol, fixed: fixed.get(i).copied().unwrap_or(true) });
-        rest = next;
-    }
-    lines
-}
-
-fn collapse_blank_lines(lines: &mut Vec<Line>) {
-    let mut previous_blank = false;
-    lines.retain(|line| {
-        let blank = line.blank();
-        let keep = !(blank && previous_blank);
-        previous_blank = blank;
-        keep
-    });
-}
-
-fn trim_trailing_blank_lines(lines: &mut Vec<Line>) {
-    while lines.last().is_some_and(Line::blank) {
-        lines.pop();
-    }
-}
-
-fn dominant_ending(text: &str) -> LineEnding {
+fn dominant_ending(text: &str) -> &'static str {
     let lf = text.matches('\n').count();
     let crlf = text.matches("\r\n").count();
     if crlf * 2 > lf {
-        LineEnding::CrLf
+        "\r\n"
     } else {
-        LineEnding::Lf
+        "\n"
     }
-}
-
-fn join_lines(lines: &[Line], dominant: LineEnding, end_of_line: Option<LineEnding>, final_newline: Option<bool>) -> String {
-    let mut out = String::new();
-    for (i, line) in lines.iter().enumerate() {
-        out.push_str(line.text);
-        let last = i + 1 == lines.len();
-        let eol = match (end_of_line, line.eol) {
-            _ if last && final_newline == Some(false) => "",
-            (_, "") if final_newline != Some(true) => "",
-            (Some(ending), _) => ending.as_str(),
-            (None, "") => dominant.as_str(),
-            (None, eol) => eol,
-        };
-        out.push_str(eol);
-    }
-    out
 }
 
 // ASCII only: a no-break space is content.
@@ -320,8 +176,8 @@ fn same_non_whitespace(a: &str, b: &str) -> bool {
     a.chars().filter(|c| !c.is_ascii_whitespace()).eq(b.chars().filter(|c| !c.is_ascii_whitespace()))
 }
 
-/// The language's own structure checks, as `(code, message)` with line numbers dropped, since blank-line
-/// steps move lines.
+/// The language's own structure checks, as `(code, message)` with line numbers dropped, since Slim and Haml drop
+/// trailing blank lines.
 fn structure_diagnostics(uri: &Url, lang: TemplateLang, text: &str, extra_engines: &[String], ruby: &RubyContext) -> Vec<(String, String)> {
     let key = |d: &Diagnostic| {
         let code = util::code(d).unwrap_or_default().to_string();
@@ -390,22 +246,15 @@ mod tests {
 
     #[test]
     fn slim_takes_only_the_indentation_width_from_the_settings() {
-        // A tab-indenting editor still gets spaces, and the width is the only setting that counts.
-        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..Settings::default() };
-        assert_eq!(fmt("a.html.slim", "div\n  p\n", &tabs).as_deref(), Ok("div\n   p\n"));
-        let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\nq\n", &crlf).as_deref(), Ok("p\nq\n"));
-        let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\r\nq\r\n", &lf).as_deref(), Ok("p\r\nq\r\n"));
-        assert_eq!(fmt("a.slim", "p\r\n  q\nr", &lf).as_deref(), Ok("p\r\n  q\nr\n"), "each line keeps its ending");
-        let drop = Settings { final_newline: Some(false), ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\n", &drop).as_deref(), Ok("p\n"));
-        let keep_trailing = Settings { trim_trailing_whitespace: false, ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p  \nq\n", &keep_trailing).as_deref(), Ok("p\nq\n"));
-        let more_blank = Settings { collapse_blank_lines: true, trim_trailing_blank_lines: true, ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &more_blank).as_deref(), Ok("p\n\n\nq\n   \n"));
+        assert_eq!(fmt("a.slim", "p\r\n  q\nr", &Settings::default()).as_deref(), Ok("p\r\n  q\nr\n"), "each line keeps its ending");
+        assert_eq!(
+            fmt("a.slim", "p  \nq\n\n\n", &Settings::default()).as_deref(),
+            Ok("p\nq\n"),
+            "trailing empty lines become the final newline"
+        );
+        assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &Settings::default()).as_deref(), Ok("p\n\n\nq\n   \n"), "Slim compiles blank lines");
         // A range leaves the final newline as it is.
-        let range = Settings { final_newline: None, ..Settings::default() };
+        let range = Settings { final_newline: false, ..Settings::default() };
         assert_eq!(fmt("a.slim", "p", &range).as_deref(), Ok("p"));
     }
 
@@ -413,13 +262,10 @@ mod tests {
     fn haml_takes_only_the_indentation_width_from_the_settings() {
         let d = Settings::default;
         assert_eq!(fmt("a.html.haml", "%div\n\t%p  \n", &d()).as_deref(), Ok("%div\n  %p\n"));
-        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..d() };
-        assert_eq!(fmt("a.haml", "%div\n  %p\n", &tabs).as_deref(), Ok("%div\n   %p\n"));
-        let crlf = Settings { end_of_line: Some(LineEnding::CrLf), trim_trailing_whitespace: false, ..d() };
-        assert_eq!(fmt("a.haml", "%p \n%i\n\n  \n", &crlf).as_deref(), Ok("%p\n%i\n"), "ending kept, trailing lines collapse");
-        let more_blank = Settings { collapse_blank_lines: true, ..d() };
-        assert_eq!(fmt("a.haml", "%p\n\n\n%i\n", &more_blank).as_deref(), Ok("%p\n\n\n%i\n"));
-        let range = Settings { final_newline: None, ..d() };
+        assert_eq!(fmt("a.haml", "%div\n  %p\n", &Settings { indent_size: 3, ..d() }).as_deref(), Ok("%div\n   %p\n"));
+        assert_eq!(fmt("a.haml", "%p \r\n%i\r\n\r\n  \r\n", &d()).as_deref(), Ok("%p\r\n%i\r\n"), "ending kept, trailing lines collapse");
+        assert_eq!(fmt("a.haml", "%p\n\n\n%i\n", &d()).as_deref(), Ok("%p\n\n\n%i\n"));
+        let range = Settings { final_newline: false, ..d() };
         assert_eq!(fmt("a.haml", "%p", &range).as_deref(), Ok("%p"));
     }
 
@@ -449,40 +295,28 @@ mod tests {
     }
 
     #[test]
-    fn final_newline_and_line_endings() {
+    fn final_newline_follows_the_language() {
         let s = Settings::default();
         assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
         assert_eq!(fmt("a.slim", "p\r\nq", &s).as_deref(), Ok("p\r\nq\r\n"));
-        let keep = Settings { final_newline: None, ..Settings::default() };
-        assert_eq!(fmt("a.slim", "p", &keep).as_deref(), Ok("p"));
-        let drop = Settings { final_newline: Some(false), ..Settings::default() };
-        assert_eq!(fmt("a.html.haml", "p", &drop).as_deref(), Ok("p\n"), "Haml ends the file by its own rules");
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>\n\n\n"), "ERB keeps the end of the file");
-        let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
-        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &lf).as_deref(), Ok("<p>\r\n<br>\r\n"), "ERB keeps each ending");
-        let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\n<br>"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &s).as_deref(), Ok("<p>\n\n\n"), "ERB keeps the end of the file");
+        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &s).as_deref(), Ok("<p>\r\n<br>\r\n"), "ERB keeps each ending");
+        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &s).as_deref(), Ok("<p>\n<br>"));
     }
 
     #[test]
     fn erb_takes_only_the_indentation_width_from_the_settings() {
-        let d = Settings::default;
-        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..d() };
-        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>\n", &tabs).as_deref(), Ok("<div>\n   <p>x</p>\n</div>\n"));
-        let keep_trailing = Settings { trim_trailing_whitespace: false, ..d() };
-        assert_eq!(fmt("a.html.erb", "<p>x</p>  \n", &keep_trailing).as_deref(), Ok("<p>x</p>\n"));
-        let more_blank = Settings { collapse_blank_lines: true, trim_trailing_blank_lines: true, ..d() };
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n<br>\n\n", &more_blank).as_deref(), Ok("<p>\n\n\n<br>\n\n"));
+        let three = Settings { indent_size: 3, ..Settings::default() };
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>\n", &three).as_deref(), Ok("<div>\n   <p>x</p>\n</div>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>  \n", &Settings::default()).as_deref(), Ok("<p>x</p>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n<br>\n\n", &Settings::default()).as_deref(), Ok("<p>\n\n\n<br>\n\n"));
     }
 
     #[test]
-    fn editor_options_come_first() {
-        let project = Settings { indent_size: 4, trim_trailing_whitespace: false, final_newline: Some(false), ..Settings::default() };
-        let editor = FormattingOptions { tab_size: 3, insert_spaces: false, trim_trailing_whitespace: Some(true), ..Default::default() };
-        let s = project.clone().with_editor(&editor);
-        assert_eq!((s.indent_style, s.indent_size, s.trim_trailing_whitespace, s.final_newline), (IndentStyle::Tab, 3, true, Some(false)));
-        let quiet = FormattingOptions { tab_size: 2, insert_spaces: true, trim_trailing_whitespace: Some(false), ..Default::default() };
-        assert!(!project.with_editor(&quiet).trim_trailing_whitespace, "an editor option that is off leaves the project's");
+    fn editor_tab_size_sets_the_indentation_width() {
+        let project = Settings { indent_size: 4, ..Settings::default() };
+        let editor = FormattingOptions { tab_size: 3, insert_spaces: false, ..Default::default() };
+        assert_eq!(project.with_editor(&editor).indent_size, 3);
     }
 
     #[test]
@@ -523,13 +357,7 @@ mod tests {
 
     fn settings_variants() -> Vec<Settings> {
         let d = Settings::default;
-        vec![
-            d(),
-            Settings { indent_size: 4, ..d() },
-            Settings { indent_style: IndentStyle::Tab, ..d() },
-            Settings { end_of_line: Some(LineEnding::CrLf), final_newline: Some(false), ..d() },
-            Settings { collapse_blank_lines: true, trim_trailing_blank_lines: true, trim_trailing_whitespace: false, ..d() },
-        ]
+        vec![d(), Settings { indent_size: 4, ..d() }, Settings { final_newline: false, ..d() }]
     }
 
     /// The invariants checked on the unguarded formatter, so a violation fails here instead of being refused.

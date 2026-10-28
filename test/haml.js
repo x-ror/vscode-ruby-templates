@@ -1,9 +1,5 @@
 import assert from "assert";
-import {
-  toggleHamlPrefix,
-  toggleHamlLines,
-  hamlLintOffenses,
-} from "../src/haml.js";
+import { toggleHamlPrefix, toggleHamlLines } from "../src/haml.js";
 import { extractBlock, partialFileName } from "../src/partial.js";
 
 // toggleHamlPrefix: - → = → -# → -, other output prefixes become comments, == text and plain lines are left alone.
@@ -88,50 +84,5 @@ assert.strictEqual(
   "_card.html+phone.haml",
 );
 assert.strictEqual(partialFileName("Gemfile", "card"), "_card");
-
-// hamlLintOffenses: shape of haml-lint 0.78 `--reporter json`.
-const json = JSON.stringify({
-  metadata: { haml_lint_version: "0.78.0" },
-  files: [
-    {
-      path: "app/views/x.html.haml",
-      offenses: [
-        {
-          severity: "warning",
-          message:
-            "`%div.foo` can be written as `.foo` since `%div` is implicit",
-          corrected: false,
-          correctable: true,
-          location: { line: 3 },
-          linter_name: "ImplicitDiv",
-        },
-        {
-          severity: "error",
-          message: "app/views/x.html.haml - Unbalanced brackets.",
-          corrected: false,
-          correctable: false,
-          location: { line: 0 },
-          linter_name: "Syntax",
-        },
-      ],
-    },
-  ],
-  summary: { offense_count: 2 },
-});
-assert.deepStrictEqual(hamlLintOffenses(json), [
-  {
-    line: 2,
-    severity: "warning",
-    linter: "ImplicitDiv",
-    message: "`%div.foo` can be written as `.foo` since `%div` is implicit",
-  },
-  {
-    line: 0,
-    severity: "error",
-    linter: "Syntax",
-    message: "Unbalanced brackets.",
-  },
-]);
-assert.deepStrictEqual(hamlLintOffenses(JSON.stringify({ files: [] })), []);
 
 console.log("haml helpers ok");

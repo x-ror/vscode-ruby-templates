@@ -4,7 +4,7 @@
 
 ### Language server
 
-- **Breaking:** `rubyTemplates.erb.formatter` defaults to `builtin`: Format Document and format on save now re-indent HTML ERB views with the built-in formatter. Set `rubyTemplates.erb.format.enabled: false` or `rubyTemplates.erb.formatter: none` to keep the old behaviour.
+- **Breaking:** Format Document and format on save now re-indent HTML ERB views with the built-in formatter. Set `rubyTemplates.erb.format.enabled: false` to keep the old behaviour.
 - `rubyTemplates.erb|haml|slim.diagnostics.enabled` and `rubyTemplates.erb|haml|slim.format.enabled` (both on by default) switch a language's diagnostics and the built-in formatter off; Skim follows `slim`. The `ruby-templates` command line is unaffected.
 - Find references, file renames and the definition of a partial's local scan the app on their own thread, so hover, completion and diagnostics answer while they run (a hover behind references on 5000 templates: 0.3 ms instead of 130 ms).
 - Rails checks follow the project: the framework and gem versions come from the nearest `Gemfile.lock`. `unresolved-render` runs only when it lists `actionview`, `strict-locals` only with `actionview` 7.1 or newer; Sinatra projects and folders without a lockfile get neither. Diagnostics refresh when `Gemfile.lock` changes.
@@ -29,6 +29,11 @@
 - **Breaking:** Haml's "Nested content under Ruby code that doesn't open a block" is gone (Haml compiles `= x` with children); it was reported under `illegal-nesting`.
 - **Breaking:** Haml's `bad-dedent` is gone (Haml reports a dedent to a level that never existed as inconsistent indentation); its entry in `rubyTemplates.haml.disabledDiagnostics` is ignored.
 - Every diagnostic's `source` is the file's language (`erb`, `haml`, `slim`; `ruby` for Jbuilder and Builder views), HTML and Rails checks included, instead of `ruby-templates`.
+
+### Removed tools
+
+- **Breaking:** the external linters are gone; the built-in server checks replace them. Removed settings: `rubyTemplates.erbLint.enabled`, `rubyTemplates.commands.erbLint`, `rubyTemplates.herbLint.enabled`, `rubyTemplates.commands.herbLint`, `rubyTemplates.slimLint.enabled`, `rubyTemplates.commands.slimLint` and `rubyTemplates.hamlLint.enabled`; erb_lint, herb-lint, slim-lint and haml-lint no longer show diagnostics.
+- **Breaking:** the external formatters are gone too (htmlbeautifier, erb-format and `haml-lint --auto-correct-only`); the built-in formatter is the only one. Removed settings: `rubyTemplates.erb.formatter`, `rubyTemplates.haml.formatter`, `rubyTemplates.commands.htmlbeautifier`, `rubyTemplates.commands.erbFormat`, `rubyTemplates.commands.hamlLint` and `rubyTemplates.hamlLint.useBundler`. `.erb_lint.yml`, `.erb-lint.yml`, `.haml-lint.yml`, `.slim-lint.yml` are no longer read. `rubyTemplates.<erb|haml|slim>.format.enabled` is the switch: off, the extension registers no formatter for that language and another extension's formatter can be used.
 
 ### Formatter
 

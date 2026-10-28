@@ -8,11 +8,8 @@ import {
   actionLine,
   previewPartners,
 } from "../src/related.js";
-import { ERB_FORMATTERS, erbFormatterArgs } from "../src/erbFormat.js";
-import { erbLintOffenses } from "../src/erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
-import { herbLintReport } from "../src/herbLint.js";
 import { routesFromOutput } from "../src/routes.js";
 import { spawnSync } from "node:child_process";
 
@@ -96,72 +93,6 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(relatedDirs("/a/views/users", "show.html.erb"), []);
 
-// erbFormatterArgs
-assert.deepStrictEqual(
-  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: true }),
-  ["--tab-stops", "4"],
-);
-assert.deepStrictEqual(
-  erbFormatterArgs("htmlbeautifier", { tabSize: 4, insertSpaces: false }),
-  ["--tab"],
-);
-assert.deepStrictEqual(
-  erbFormatterArgs("erb-format", { tabSize: 2, insertSpaces: true }),
-  ["--stdin"],
-);
-assert.ok(Object.keys(ERB_FORMATTERS).every((k) => k !== "none"));
-
-// erbLintOffenses, on erb_lint 0.9's report shape
-const erbLintReport = JSON.stringify({
-  files: [
-    {
-      path: "a.html.erb",
-      offenses: [
-        {
-          linter: "SpaceAroundErbTag",
-          message: "Use 1 space after `<%=` instead of 0 space.",
-          location: {
-            start_line: 2,
-            start_column: 3,
-            last_line: 2,
-            last_column: 3,
-            length: 0,
-          },
-        },
-        {
-          linter: "RequireInputAutocomplete",
-          message: "Input tag is missing an autocomplete attribute.",
-          location: {
-            start_line: 4,
-            start_column: 2,
-            last_line: 5,
-            last_column: 1,
-            length: 9,
-          },
-        },
-      ],
-    },
-  ],
-});
-assert.deepStrictEqual(erbLintOffenses(erbLintReport), [
-  {
-    line: 1,
-    column: 3,
-    endLine: 1,
-    endColumn: 4,
-    linter: "SpaceAroundErbTag",
-    message: "Use 1 space after `<%=` instead of 0 space.",
-  },
-  {
-    line: 3,
-    column: 2,
-    endLine: 4,
-    endColumn: 1,
-    linter: "RequireInputAutocomplete",
-    message: "Input tag is missing an autocomplete attribute.",
-  },
-]);
-
 // tagToClose
 for (const [text, name] of [
   ["<div>", "div"],
@@ -240,70 +171,6 @@ if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
   });
   assert.strictEqual(ascii.stdout, "é ünil");
 }
-
-// herbLintReport
-const herbOffense = (start, end, extra = {}) => ({
-  filename: "app/views/a.html.erb",
-  message: "m",
-  code: "html-img-require-alt",
-  severity: "warning",
-  location: { start, end },
-  ...extra,
-});
-assert.deepStrictEqual(
-  herbLintReport(
-    JSON.stringify({
-      offenses: [
-        herbOffense({ line: 1, column: 1 }, { line: 1, column: 4 }),
-        herbOffense({ line: 3, column: 5 }, { line: 3, column: 5 }),
-        herbOffense({ line: 2, column: 7 }, { line: 4, column: 0 }),
-      ],
-      completed: true,
-    }),
-  ),
-  {
-    offenses: [
-      {
-        line: 0,
-        column: 1,
-        endLine: 0,
-        endColumn: 4,
-        code: "html-img-require-alt",
-        message: "m",
-        severity: "warning",
-      },
-      {
-        line: 2,
-        column: 5,
-        endLine: 2,
-        endColumn: 6,
-        code: "html-img-require-alt",
-        message: "m",
-        severity: "warning",
-      },
-      {
-        line: 1,
-        column: 7,
-        endLine: 3,
-        endColumn: 0,
-        code: "html-img-require-alt",
-        message: "m",
-        severity: "warning",
-      },
-    ],
-    error: null,
-  },
-);
-assert.deepStrictEqual(
-  herbLintReport(
-    JSON.stringify({
-      offenses: [],
-      completed: false,
-      message: "✗ No files found matching pattern: x.erb",
-    }),
-  ),
-  { offenses: [], error: "✗ No files found matching pattern: x.erb" },
-);
 
 // actionSource / actionLine
 assert.deepStrictEqual(actionSource("/r/app/views/admin/users/show.html.erb"), {

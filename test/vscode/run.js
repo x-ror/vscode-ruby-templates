@@ -3,7 +3,6 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { execFileSync } from "child_process";
 import { runTests } from "@vscode/test-electron";
 
 const root = path.join(import.meta.dirname, "..", "..");
@@ -50,8 +49,6 @@ write(
   "app/views/users/unformatted.html.erb",
   "<div>\n<% if x %>\n<p>a</p>\n<% end %>\n</div>\n",
 );
-write("app/views/users/lint.html.erb", "<%=foo%>\n");
-write(".erb_lint.yml", "linters:\n  SpaceAroundErbTag:\n    enabled: true\n");
 write("app/views/users/wrap.html.erb", "hello world\n");
 write("app/views/users/wrap_empty.html.erb", "\n");
 write(
@@ -69,26 +66,13 @@ write(
 );
 write("app/views/users/extract.html.haml", "%div\n  %p a\n  %p b\n");
 write("app/views/users/extract.html.slim", "div\n  p a\n  p b\n");
-write("app/views/users/lint.html.haml", "%p\n  = foo   \n");
-write("app/views/users/lint.html.slim", "p \n  = foo\n");
-// Where `gem install` puts executables; the formatter and linter checks skip tools that aren't there.
-const gemBin = (() => {
-  try {
-    return execFileSync("ruby", ["-e", "print Gem.bindir"], {
-      encoding: "utf8",
-    });
-  } catch {
-    return "";
-  }
-})();
-
 try {
   await runTests({
     version: process.env.VSCODE_VERSION ?? "stable",
     extensionDevelopmentPath: root,
     extensionTestsPath: path.join(import.meta.dirname, "suite.js"),
     launchArgs: [app, "--disable-extensions", "--disable-workspace-trust"],
-    extensionTestsEnv: { RT_APP: app, RT_GEM_BIN: gemBin },
+    extensionTestsEnv: { RT_APP: app },
   });
 } catch (e) {
   console.error(e.message ?? e);

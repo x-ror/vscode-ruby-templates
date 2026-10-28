@@ -111,19 +111,14 @@ try {
   assert.strictEqual(fs.readFileSync(broken, "utf8"), "p\n    a\n  b\n");
   assert.strictEqual(run(["format", "--check", views]).status, 0);
 
-  // Config: .editorconfig beats the linter config; --verbose lists what it read and ignored.
+  // Config: only the width of .editorconfig counts; --verbose lists what it read and ignored.
   fs.writeFileSync(
     path.join(root, ".editorconfig"),
     "root = true\n[*.slim]\nindent_size = 4\nmax_line_length = 100\n",
   );
-  fs.writeFileSync(
-    path.join(root, ".slim-lint.yml"),
-    "linters:\n  LineLength:\n    max: 100\n",
-  );
   r = run(["format", "--verbose", messy]);
   assert.strictEqual(r.stdout, "div\n    p\n");
   assert.match(r.stderr, /\.editorconfig: ignored max_line_length = 100/);
-  assert.match(r.stderr, /\.slim-lint\.yml: ignored linters\.LineLength/);
 
   for (const args of [
     [],

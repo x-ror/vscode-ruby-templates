@@ -49,8 +49,8 @@ struct Line<'a> {
 /// Inclusive ranges of line starts, or of line-end offsets.
 type Ranges = Vec<(usize, usize)>;
 
-/// `text` with every line re-indented by `unit`, and trailing whitespace dropped when `trim` is set.
-pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
+/// `text` with every line re-indented by `unit`, and trailing whitespace dropped.
+pub(crate) fn indent(text: &str, unit: &str, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
     let doubt = crate::erb::diagnostics(text, ruby)
         .into_iter()
         .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
@@ -160,17 +160,16 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
             out.push('\n');
         }
         let blank = line.rest.trim_matches([' ', '\t']).is_empty();
-        let content = if trim && !keeps_end[i] { line.rest.trim_end_matches([' ', '\t']) } else { line.rest };
+        let content = if !keeps_end[i] { line.rest.trim_end_matches([' ', '\t']) } else { line.rest };
         match &decided[i] {
-            _ if blank && roles[i] == Role::Markup && trim => {}
+            _ if blank && roles[i] == Role::Markup => {}
             Some(ws) if !content.is_empty() => out.push_str(ws),
             _ => out.push_str(line.ws),
         }
         out.push_str(content);
         out.push_str(line.cr);
     }
-    let fixed_lines = roles.iter().zip(&keeps_end).map(|(role, keeps)| *role != Role::Markup || *keeps).collect();
-    Ok(Indented { text: out, fixed: fixed_lines, notes })
+    Ok(Indented { text: out, notes })
 }
 
 fn split(text: &str) -> Vec<Line<'_>> {
@@ -428,13 +427,13 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
 mod tests {
     use super::*;
 
-    fn indent(text: &str, unit: &str, trim: bool, partial: bool) -> Result<Indented, Skipped> {
-        super::indent(text, unit, trim, partial, &RubyContext::outside_project())
+    fn indent(text: &str, unit: &str, partial: bool) -> Result<Indented, Skipped> {
+        super::indent(text, unit, partial, &RubyContext::outside_project())
     }
 
     fn fmt(text: &str) -> String {
-        let once = indent(text, "  ", true, false).unwrap_or_else(|e| panic!("{e}: {text}")).text;
-        assert_eq!(indent(&once, "  ", true, false).map(|i| i.text).as_deref(), Ok(once.as_str()), "idempotent");
+        let once = indent(text, "  ", false).unwrap_or_else(|e| panic!("{e}: {text}")).text;
+        assert_eq!(indent(&once, "  ", false).map(|i| i.text).as_deref(), Ok(once.as_str()), "idempotent");
         once
     }
 
@@ -444,7 +443,7 @@ mod tests {
 
     #[test]
     fn unclosed_tag_is_the_reason_to_refuse() {
-        let reason = indent("<div>\n<p>x</p>\n<% foo\n</div>", "  ", true, false).err().map(|e| e.to_string()).unwrap_or_default();
+        let reason = indent("<div>\n<p>x</p>\n<% foo\n</div>", "  ", false).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(reason.contains("line 3") && reason.contains("invalid-first-character-of-tag-name"), "{reason}");
     }
 
@@ -568,13 +567,11 @@ mod tests {
         assert_eq!(fmt("<% x = 1  \n  y = 2 %>  \n"), "<% x = 1  \n  y = 2 %>\n");
         assert_eq!(fmt("   \n\t\n"), "\n\n");
         assert_eq!(fmt("<p>\r\n  x  \r\n</p>\r\n"), "<p>\r\n  x\r\n</p>\r\n");
-        let kept = indent("<p>  \n x\n</p>", "  ", false, false).unwrap().text;
-        assert_eq!(kept, "<p>  \n  x\n</p>");
     }
 
     #[test]
     fn tabs() {
-        assert_eq!(indent("<div>\n<p>\nx\n</p>\n</div>", "\t", true, false).unwrap().text, "<div>\n\t<p>\n\t\tx\n\t</p>\n</div>");
+        assert_eq!(indent("<div>\n<p>\nx\n</p>\n</div>", "\t", false).unwrap().text, "<div>\n\t<p>\n\t\tx\n\t</p>\n</div>");
     }
 
     #[test]
@@ -613,9 +610,9 @@ mod tests {
 
     #[test]
     fn partials_may_close_what_they_did_not_open() {
-        assert_eq!(indent("    </main>\n  </div>\n</body>", "  ", true, true).unwrap().text, "</main>\n</div>\n</body>");
+        assert_eq!(indent("    </main>\n  </div>\n</body>", "  ", true).unwrap().text, "</main>\n</div>\n</body>");
         assert_eq!(
-            indent("<div class=\"wrapper\">\n<header>x</header>", "  ", true, true).unwrap().text,
+            indent("<div class=\"wrapper\">\n<header>x</header>", "  ", true).unwrap().text,
             "<div class=\"wrapper\">\n  <header>x</header>"
         );
     }
@@ -632,10 +629,10 @@ mod tests {
             "<div class=\"a",
             "<p><div></p></div>",
         ] {
-            assert!(indent(broken, "  ", true, false).is_err(), "{broken}");
+            assert!(indent(broken, "  ", false).is_err(), "{broken}");
         }
         for helper in ["<%= javascript_tag do %>", "<%= content_tag :pre do %>", "<%= tag.textarea(name: \"a\") do %>"] {
-            assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", true, false).is_err(), "{helper}");
+            assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", false).is_err(), "{helper}");
         }
     }
 }
