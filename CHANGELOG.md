@@ -38,6 +38,7 @@
 - Empty and whitespace-only lines at the end of a Haml file collapse into the final line ending (Haml strips the template).
 - **Breaking:** Haml takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, so tab-indented Haml is now written with spaces, keeps each line's ending, and ignores `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace` and the `.haml-lint.yml` formatting keys (`FinalNewline`, `TrailingWhitespace`, `TrailingEmptyLines`).
 - **Breaking:** files with Haml indentation errors are no longer re-indented; fix the error first.
+- **Breaking:** ERB takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces, so tab-indented ERB is now written with spaces, keeps each line's ending and the end of the file as it is, always trims trailing whitespace of text lines, and ignores `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace` and the `.erb_lint.yml` formatting keys (`SpaceIndentation`, `FinalNewline`, `TrailingWhitespace`, `ExtraNewline`).
 
 ### Development
 
