@@ -178,7 +178,8 @@ jobs:
       - run: |
           publish() {
             spec=$(node -p "const p = require('./$1/package.json'); p.name + '@' + p.version")
-            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "$1"
+            # npm reads a bare "dir/name" as a GitHub repository; "./" makes it a folder.
+            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "./$1"
           }
           for dir in npm-dist/*/; do [ "$dir" = npm-dist/main/ ] || publish "${dir%/}"; done
           publish npm-dist/main
