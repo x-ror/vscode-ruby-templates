@@ -1,9 +1,9 @@
 name: build
 on:
-  push: { branches: [main], tags: ["v*"] }
+  push: { tags: ["v*"] }
   pull_request:
 
-# A new push to a PR supersedes its running build; main and tags always finish.
+# A new push to a PR supersedes its running build; a release tag always finishes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
