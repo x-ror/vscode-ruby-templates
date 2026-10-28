@@ -299,18 +299,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                         |
-| ------------------------ | ---------------------------------------------------------------------------------------------- |
-| 0. Harness               | done                                                                                           |
-| 0b. Context              | done                                                                                           |
-| 1a. Slim errors          | done                                                                                           |
-| 1b. Slim format          | done                                                                                           |
-| 2a. Haml errors          | done                                                                                           |
-| 2b. Haml format          | done                                                                                           |
-| 3a. ERB errors           | done                                                                                           |
-| 3b. ERB format           | done                                                                                           |
-| 4. Editor and CLI        | done                                                                                           |
-| 5. Remove external tools | in progress: scope decided; linters removed; formatters removed; linter configs no longer read |
+| Stage                    | Status    |
+| ------------------------ | --------- |
+| 0. Harness               | done      |
+| 0b. Context              | done      |
+| 1a. Slim errors          | done      |
+| 1b. Slim format          | done      |
+| 2a. Haml errors          | done      |
+| 2b. Haml format          | done      |
+| 3a. ERB errors           | done      |
+| 3b. ERB format           | done      |
+| 4. Editor and CLI        | done      |
+| 5. Remove external tools | in review |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 
