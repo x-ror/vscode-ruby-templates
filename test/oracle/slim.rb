@@ -1,6 +1,6 @@
 # Compiles the Slim template on stdin with Slim 5.2.2's defaults and prints the outcome as JSON.
 # --rails compiles as Rails does (lib/slim/railtie.rb), for comparing the code before and after formatting.
-# Without it, the compiled Ruby is also parsed with Prism 2.0.0 (docs/LINT_PLAN.md 1a "Ruby"): its errors come back as
+# Without it, the compiled Ruby is also parsed with Prism 2.0.0: its errors come back as
 # {"errors": [{message, line, column: null}]}, at the template's line (Slim keeps one compiled line per template line).
 # --ruby-version X.Y|latest picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
 require "json"

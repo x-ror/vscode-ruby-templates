@@ -101,7 +101,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 7. Formatting
 
 - [x] Document formatting provider for ERB: `rubyTemplates.erb.formatter` = `builtin`, `htmlbeautifier` or `erb-format`, registered only when chosen (`src/extension.js` `registerErbFormatting`, `src/erbFormat.js`)
-- [x] Built-in whitespace-only formatter for HTML ERB (also Erubi, Erubis, `.rhtml`): HTML and ERB-block nesting, `<script>`/`<style>`/multi-line tags moved as units, `<pre>`/`<textarea>`/Ruby strings untouched, files in doubt left alone; settings from `.editorconfig` and `.erb_lint.yml` (`server/src/erb_format.rs`, `format.rs`, `config.rs`; invariant tests in `format.rs`, corpus results in `docs/FORMATTER_PLAN.md`)
+- [x] Built-in whitespace-only formatter for HTML ERB (also Erubi, Erubis, `.rhtml`): HTML and ERB-block nesting; Ruby, `<script>`/`<style>`/`<pre>`/`<textarea>` bodies and comments kept; only the indentation width from the editor or `.editorconfig`; files in doubt left alone (`server/src/erb_format.rs`, `format.rs`; compared against Rails' compiled output by `test/oracle.js erb`)
 - [x] Range formatting, with `builtin` (`server/src/lsp.rs` `range_formatting`)
 - [x] Formatting from the command line: `ruby-templates format [--check|--write]`, also on npm (`server/src/cli.rs`, `npm/`; `test/cli.js`, `test/npm.js`)
 - [x] Configurable formatter executable plus `bundle exec` (`rubyTemplates.commands.htmlbeautifier` / `.erbFormat`, `rubyTemplates.preview.useBundler`)
@@ -111,7 +111,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 8. Diagnostics and linting
 
 - [x] Unclosed `<%` tag (`server/src/erb.rs`, text Erubi leaves after its last tag)
-- [x] Unclosed tag: a `<%` with no `%>` after it (`server/src/erb.rs`; `malformed-tag` removed, `docs/LINT_PLAN.md` 3a)
+- [x] Unclosed tag: a `<%` with no `%>` after it (`server/src/erb.rs`; `malformed-tag` removed)
 - [x] Block opened without `<% end %>` (`server/src/erb.rs` + `server/src/ruby.rs` `analyze`)
 - [x] Stray `end` with no open block (`server/src/erb.rs`)
 - [x] `else`/`elsif`/`when` outside a block (`server/src/erb.rs` `BlockEffect::Continue`)
@@ -120,11 +120,11 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] CLI `ruby-templates-ls --check`, exit 1 on errors (`server/src/cli.rs`)
 - [x] Unclosed or mismatched HTML tags (`<div>` … `</span>`), including tags that cross ERB block boundaries (`server/src/tags.rs`; stops where ERB branches disagree, skips JS block helpers, partials report mismatches only)
 - [x] Ruby syntax errors inside tags (e.g. `<%= foo( %>`): tree-sitter-ruby over the tags joined like Erubi, offsets kept (`server/src/ruby_syntax.rs`); runs once tag and block structure is sound, first 3 errors. No false positives on the Forem / rubygems.org / Mastodon / diaspora corpus (1082 ERB views). A tag left open before the next `<%` is reported at its own opener (`unclosed-tag`)
-- [x] `<% form_with … do %>` renders nothing but is valid Ruby, so it isn't reported (`silent-output-helper` removed, `docs/LINT_PLAN.md` 3a)
-- [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt` (`server/src/html_lint.rs`); more HTML checks are catalogued in `docs/lint/ERB.md`
+- [x] `<% form_with … do %>` renders nothing but is valid Ruby, so it isn't reported (`silent-output-helper` removed)
+- [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt` (`server/src/html_lint.rs`)
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/lsp.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/lsp.rs` `strict_locals_mismatches`; one-line literal `dir/name` renders)
-- [x] `raw` / `html_safe` / `<%==` are valid Erubi, so they aren't reported (`unsafe-output` removed, `docs/LINT_PLAN.md` 3a)
+- [x] `raw` / `html_safe` / `<%==` are valid Erubi, so they aren't reported (`unsafe-output` removed)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)
 - [x] Settings to enable/disable each built-in check (`rubyTemplates.erb.disabledDiagnostics`, codes in `server/src/erb.rs`/`tags.rs` `code`)
@@ -209,7 +209,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [ ] Phlex/other component frameworks: explicitly out of scope, or supported
 - [x] Mailer views (`app/views/*_mailer/*.text.erb` / `.html.erb` pairs) switch command (`rubyTemplates.switchRelated`: any view's other formats)
 - [ ] Rails engines and `app/views` in gems found via `bundle show`
-- [x] Jbuilder/Builder views get partial navigation (`docs/JBUILDER_TODO.md`, `TemplateLang::Ruby`)
+- [x] Jbuilder/Builder views get partial navigation (`TemplateLang::Ruby`)
 - [x] Jbuilder/other templates in the same dir don't confuse partial resolution (`server/src/partials.rs` `renders_format`)
 - [x] Hash-rocket `render :partial => "x"`, `:template =>`, `:layout =>` (`server/src/partials.rs` `RENDER_STR`)
 
