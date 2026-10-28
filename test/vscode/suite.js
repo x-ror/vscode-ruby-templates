@@ -270,49 +270,6 @@ const checks = {
     }
   },
 
-  async "erb_lint diagnostics"() {
-    const bin = gemTool("erb_lint");
-    if (!bin) return "skipped: erb_lint not installed";
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("commands.erbLint", bin, global);
-    await settings().update("erbLint.enabled", true, global);
-    const editor = await open("app/views/users/lint.html.erb");
-    const lints = await until(
-      "erb_lint offenses",
-      () =>
-        vscode.languages
-          .getDiagnostics(editor.document.uri)
-          .filter((d) => d.source === "erb_lint").length,
-      60000,
-    );
-    assert.strictEqual(lints, 2);
-    await settings().update("erbLint.enabled", undefined, global);
-    await settings().update("commands.erbLint", undefined, global);
-  },
-
-  async "herb-lint diagnostics"() {
-    const bin = process.env.RT_HERB_LINT;
-    if (!bin || !fs.existsSync(bin)) return "skipped: RT_HERB_LINT not set";
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("commands.herbLint", bin, global);
-    await settings().update("herbLint.enabled", true, global);
-    const editor = await open("app/views/users/lint.html.erb");
-    const codes = await until(
-      "herb-lint offenses",
-      () => {
-        const found = vscode.languages
-          .getDiagnostics(editor.document.uri)
-          .filter((d) => d.source === "herb-lint")
-          .map((d) => d.code);
-        return found.length && found;
-      },
-      60000,
-    );
-    assert.ok(codes.includes("erb-require-whitespace-inside-tags"), codes);
-    await settings().update("herbLint.enabled", undefined, global);
-    await settings().update("commands.herbLint", undefined, global);
-  },
-
   async "wrap in ERB output: selection and empty cursor"() {
     const editor = await open("app/views/users/wrap.html.erb");
     try {
@@ -480,62 +437,6 @@ const checks = {
         await revert(editor);
       }
     });
-  },
-
-  async "haml-lint diagnostics"() {
-    const bin = gemTool("haml-lint");
-    if (!bin) return "skipped: haml-lint not installed";
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("commands.hamlLint", bin, global);
-    try {
-      const editor = await open("app/views/users/lint.html.haml");
-      const found = await until(
-        "haml-lint offenses",
-        () => {
-          const found = vscode.languages
-            .getDiagnostics(editor.document.uri)
-            .filter((d) => d.source === "haml-lint");
-          return found.length && found;
-        },
-        60000,
-      );
-      const trailing = found.find((d) => d.code === "TrailingWhitespace");
-      assert.ok(trailing, found.map((d) => d.code).join());
-      assert.strictEqual(trailing.range.start.line, 1);
-    } finally {
-      await settings().update("commands.hamlLint", undefined, global);
-    }
-  },
-
-  async "slim-lint diagnostics on save"() {
-    const bin = gemTool("slim-lint");
-    if (!bin) return "skipped: slim-lint not installed";
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("commands.slimLint", bin, global);
-    await settings().update("slimLint.enabled", true, global);
-    const editor = await open("app/views/users/lint.html.slim");
-    try {
-      // slim-lint runs on save; a clean document wouldn't fire it.
-      await editor.edit((eb) => eb.insert(new vscode.Position(2, 0), "\n"));
-      await editor.document.save();
-      const found = await until(
-        "slim-lint offenses",
-        () => {
-          const found = vscode.languages
-            .getDiagnostics(editor.document.uri)
-            .filter((d) => d.source === "slim-lint");
-          return found.length && found;
-        },
-        60000,
-      );
-      assert.strictEqual(found[0].code, "TrailingWhitespace");
-      assert.strictEqual(found[0].range.start.line, 0);
-    } finally {
-      fs.writeFileSync(editor.document.uri.fsPath, "p \n  = foo\n");
-      await settings().update("slimLint.enabled", undefined, global);
-      await settings().update("commands.slimLint", undefined, global);
-      await revert(editor);
-    }
   },
 
   async "switch to related: component class"() {

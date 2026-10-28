@@ -30,6 +30,10 @@
 - **Breaking:** Haml's `bad-dedent` is gone (Haml reports a dedent to a level that never existed as inconsistent indentation); its entry in `rubyTemplates.haml.disabledDiagnostics` is ignored.
 - Every diagnostic's `source` is the file's language (`erb`, `haml`, `slim`; `ruby` for Jbuilder and Builder views), HTML and Rails checks included, instead of `ruby-templates`.
 
+### Removed tools
+
+- **Breaking:** the external linters are gone; the built-in server checks replace them. Removed settings: `rubyTemplates.erbLint.enabled`, `rubyTemplates.commands.erbLint`, `rubyTemplates.herbLint.enabled`, `rubyTemplates.commands.herbLint`, `rubyTemplates.slimLint.enabled`, `rubyTemplates.commands.slimLint` and `rubyTemplates.hamlLint.enabled`; erb_lint, herb-lint, slim-lint and haml-lint no longer show diagnostics.
+
 ### Formatter
 
 - Format Selection and format on save in "modifications" mode work in Haml and Slim files that end in empty lines.

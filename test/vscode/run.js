@@ -50,8 +50,6 @@ write(
   "app/views/users/unformatted.html.erb",
   "<div>\n<% if x %>\n<p>a</p>\n<% end %>\n</div>\n",
 );
-write("app/views/users/lint.html.erb", "<%=foo%>\n");
-write(".erb_lint.yml", "linters:\n  SpaceAroundErbTag:\n    enabled: true\n");
 write("app/views/users/wrap.html.erb", "hello world\n");
 write("app/views/users/wrap_empty.html.erb", "\n");
 write(
@@ -69,9 +67,7 @@ write(
 );
 write("app/views/users/extract.html.haml", "%div\n  %p a\n  %p b\n");
 write("app/views/users/extract.html.slim", "div\n  p a\n  p b\n");
-write("app/views/users/lint.html.haml", "%p\n  = foo   \n");
-write("app/views/users/lint.html.slim", "p \n  = foo\n");
-// Where `gem install` puts executables; the formatter and linter checks skip tools that aren't there.
+// Where `gem install` puts executables; the formatter checks skip tools that aren't there.
 const gemBin = (() => {
   try {
     return execFileSync("ruby", ["-e", "print Gem.bindir"], {

@@ -13,7 +13,7 @@ import {
 } from "./client.js";
 import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
 import { toggleErbTagAt } from "./erbTags.js";
-import { toggleHamlLines, hamlLintOffenses } from "./haml.js";
+import { toggleHamlLines } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
 import {
@@ -24,10 +24,8 @@ import {
   previewPartners,
 } from "./related.js";
 import { ERB_FORMATTERS, erbFormatterArgs } from "./erbFormat.js";
-import { ERB_LINT_OK_CODES, erbLintOffenses } from "./erbLint.js";
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { erbRubyArgs } from "./erbEngine.js";
-import { herbLintReport } from "./herbLint.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
@@ -95,7 +93,6 @@ function activate(context) {
   registerHamlFormatting(context, output);
   registerErbFormatting(context, output);
   registerErbAutoClose(context);
-  startHamlLint(context, output);
   sub("rubyTemplates.restartServer", () => restartClient(context, output));
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -104,9 +101,6 @@ function activate(context) {
     }),
   );
   void startClient(context, output);
-  registerSlimLint(context, output);
-  registerErbLint(context, output);
-  registerHerbLint(context, output);
   registerRoutes(context, output);
 
   context.subscriptions.push(
@@ -797,188 +791,6 @@ async function showCompiledSource() {
   });
 }
 
-// ---------------------------------------------------------------- erb_lint, herb-lint
-
-/**
- * Lint ERB files on open, on save and when `rubyTemplates.<setting>` changes. `lint(doc)` resolves to
- * `{ diagnostics }`, `{ missing: message }` or `{}` after logging a failure.
- */
-function registerErbLinter(context, { source, setting, skip, lint }) {
-  const lints = vscode.languages.createDiagnosticCollection(source);
-  // Saves can overlap; only the latest run per document may publish.
-  const latestRun = new Map();
-  let reportedMissing = false;
-  const enabled = () => cfg().get(`${setting}.enabled`, false);
-
-  const lintDoc = async (doc) => {
-    if (!/^erb/.test(doc.languageId) || doc.uri.scheme !== "file") return;
-    if (doc.uri.path.toLowerCase().endsWith(".tt") || skip?.(doc)) return;
-    if (!enabled()) return;
-    const key = doc.uri.toString();
-    const runId = (latestRun.get(key) ?? 0) + 1;
-    latestRun.set(key, runId);
-    const { diagnostics, missing } = await lint(doc);
-    // A run that was in flight when the linter was turned off must not bring its offenses back.
-    if (latestRun.get(key) !== runId || doc.isClosed || !enabled()) return;
-    if (missing) {
-      if (!reportedMissing) vscode.window.showWarningMessage(missing);
-      reportedMissing = true;
-      return;
-    }
-    if (diagnostics) lints.set(doc.uri, diagnostics);
-  };
-
-  context.subscriptions.push(
-    lints,
-    vscode.workspace.onDidOpenTextDocument(lintDoc),
-    vscode.workspace.onDidSaveTextDocument(lintDoc),
-    vscode.workspace.onDidCloseTextDocument((doc) => {
-      lints.delete(doc.uri);
-      latestRun.delete(doc.uri.toString());
-    }),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        !e.affectsConfiguration(`rubyTemplates.${setting}`) &&
-        !e.affectsConfiguration(`rubyTemplates.commands.${setting}`)
-      )
-        return;
-      reportedMissing = false;
-      if (enabled()) vscode.workspace.textDocuments.forEach(lintDoc);
-      else lints.clear();
-    }),
-  );
-  vscode.workspace.textDocuments.forEach(lintDoc);
-}
-
-/** A diagnostic for an offense whose columns count characters. */
-function charRangeDiagnostic(doc, offense, severity, source, code) {
-  const { line, column, endLine, endColumn, message } = offense;
-  const d = new vscode.Diagnostic(
-    new vscode.Range(
-      line,
-      utf16Column(doc, line, column),
-      endLine,
-      utf16Column(doc, endLine, endColumn),
-    ),
-    message,
-    severity,
-  );
-  d.source = source;
-  d.code = code;
-  return d;
-}
-
-/** erb_lint and herb-lint count columns in characters; VS Code in UTF-16 units, which differ after an emoji. */
-function utf16Column(doc, line, column) {
-  if (line >= doc.lineCount) return column;
-  return [...doc.lineAt(line).text].slice(0, column).join("").length;
-}
-
-/** `erb_lint --stdin`, so the editor's text is what gets linted. */
-function registerErbLint(context, output) {
-  registerErbLinter(context, {
-    source: "erb_lint",
-    setting: "erbLint",
-    lint: async (doc) => {
-      const bin = cfg().get("commands.erbLint", "erb_lint");
-      const r = await run(
-        bin,
-        ["--format", "json", "--stdin", doc.uri.fsPath],
-        { cwd: workspaceFolderFor(doc) },
-        doc.getText(),
-      );
-      if (toolMissing(r))
-        return {
-          missing: `"${bin}" was not found. Install it with: gem install erb_lint — or set rubyTemplates.commands.erbLint.`,
-        };
-      if (!ERB_LINT_OK_CODES.has(r.code)) {
-        output.appendLine(`[erb_lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
-        return {};
-      }
-      try {
-        return {
-          diagnostics: erbLintOffenses(r.stdout).map((o) =>
-            charRangeDiagnostic(
-              doc,
-              o,
-              vscode.DiagnosticSeverity.Warning,
-              "erb_lint",
-              o.linter,
-            ),
-          ),
-        };
-      } catch (e) {
-        output.appendLine(
-          `[erb_lint] unreadable JSON for ${doc.uri.fsPath}: ${e.message}`,
-        );
-        return {};
-      }
-    },
-  });
-}
-
-const HERB_SEVERITY = {
-  error: vscode.DiagnosticSeverity.Error,
-  warning: vscode.DiagnosticSeverity.Warning,
-  info: vscode.DiagnosticSeverity.Information,
-  hint: vscode.DiagnosticSeverity.Hint,
-};
-
-/** The project's own `node_modules/.bin/herb-lint` while the setting is left at its default. */
-function herbLintBin(doc) {
-  const bin = cfg().get("commands.herbLint", "herb-lint");
-  if (bin !== "herb-lint") return bin;
-  const rel = path.join("node_modules", ".bin", "herb-lint");
-  const project = findUp(path.dirname(doc.uri.fsPath), rel);
-  return project ? path.join(project, rel) : bin;
-}
-
-/** `herb-lint --json`; it has no stdin mode, so unsaved text isn't linted. */
-function registerHerbLint(context, output) {
-  registerErbLinter(context, {
-    source: "herb-lint",
-    setting: "herbLint",
-    skip: (doc) => doc.isDirty,
-    lint: async (doc) => {
-      const bin = herbLintBin(doc);
-      const cwd =
-        findUp(path.dirname(doc.uri.fsPath), ".herb.yml") ??
-        workspaceFolderFor(doc);
-      const r = await run(
-        bin,
-        ["--json", "--no-timing", "--no-color", doc.uri.fsPath],
-        { cwd, useBundler: false },
-      );
-      if (toolMissing(r))
-        return {
-          missing: `"${bin}" was not found. Install it with: npm install --save-dev @herb-tools/linter — or set rubyTemplates.commands.herbLint.`,
-        };
-      let report;
-      try {
-        report = herbLintReport(r.stdout);
-      } catch {
-        output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
-        return {};
-      }
-      if (report.error) {
-        output.appendLine(`[herb-lint] ${doc.uri.fsPath}: ${report.error}`);
-        return {};
-      }
-      return {
-        diagnostics: report.offenses.map((o) =>
-          charRangeDiagnostic(
-            doc,
-            o,
-            HERB_SEVERITY[o.severity] ?? vscode.DiagnosticSeverity.Warning,
-            "herb-lint",
-            o.code,
-          ),
-        ),
-      };
-    },
-  });
-}
-
 // ---------------------------------------------------------------- routes
 
 /**
@@ -1099,99 +911,6 @@ function registerRoutes(context, output) {
   vscode.workspace.textDocuments.forEach(opened);
 }
 
-// ---------------------------------------------------------------- slim-lint
-
-function registerSlimLint(context, output) {
-  const lints = vscode.languages.createDiagnosticCollection("slim-lint");
-  let warnedMissing = false;
-  // Saves can overlap; only the latest run per document may publish.
-  const latestRun = new Map();
-
-  const warnMissing = (message) => {
-    if (!warnedMissing) vscode.window.showWarningMessage(message);
-    warnedMissing = true;
-  };
-
-  const lint = async (doc) => {
-    if (doc.languageId !== "slim" || doc.uri.scheme !== "file") return;
-    // Generator templates (`*.slim.tt`) hold ERB tags that slim-lint would misreport.
-    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
-    if (!cfg().get("slimLint.enabled", false)) return;
-    const key = doc.uri.toString();
-    const runId = (latestRun.get(key) ?? 0) + 1;
-    latestRun.set(key, runId);
-    const bin = cfg().get("commands.slimLint", "slim-lint");
-    const r = await run(bin, ["--reporter", "json", doc.uri.fsPath], {
-      cwd: workspaceFolderFor(doc),
-    });
-    if (latestRun.get(key) !== runId || doc.isClosed) return;
-    if (r.err?.code === "ENOENT") {
-      const missing = r.err.path ?? bin;
-      warnMissing(
-        missing === bin
-          ? `"${bin}" was not found. Install it with: gem install slim_lint — or set rubyTemplates.commands.slimLint.`
-          : `"${missing}" was not found, so slim-lint can't run through Bundler. Install Bundler or turn off rubyTemplates.preview.useBundler.`,
-      );
-      return;
-    }
-    // `bundle exec` exits 127 when the bundle doesn't include the command.
-    if (r.code === 127 || /command not found/.test(r.stderr)) {
-      warnMissing(
-        `"${bin}" is not in the bundle. Add slim_lint to the Gemfile, or turn off rubyTemplates.preview.useBundler.`,
-      );
-      return;
-    }
-    try {
-      lints.set(doc.uri, slimLintDiagnostics(JSON.parse(r.stdout), doc));
-    } catch {
-      output.appendLine(
-        `[slim-lint] ${bin} exited ${r.code}: ${r.stderr || r.stdout}`,
-      );
-    }
-  };
-
-  context.subscriptions.push(
-    lints,
-    vscode.workspace.onDidSaveTextDocument((doc) => lint(doc)),
-    vscode.workspace.onDidCloseTextDocument((doc) => {
-      lints.delete(doc.uri);
-      latestRun.delete(doc.uri.toString());
-    }),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration("rubyTemplates.slimLint") &&
-        !cfg().get("slimLint.enabled", false)
-      )
-        lints.clear();
-    }),
-  );
-}
-
-/** Map a `slim-lint --reporter json` report to diagnostics on the offending lines of `doc`. */
-function slimLintDiagnostics(report, doc) {
-  return (report.files ?? [])
-    .flatMap((f) => f.offenses ?? [])
-    .map(({ severity, message, linter, location }) => {
-      const line = doc.lineAt(
-        Math.min(Math.max((location?.line ?? 1) - 1, 0), doc.lineCount - 1),
-      );
-      const range = new vscode.Range(
-        line.lineNumber,
-        line.firstNonWhitespaceCharacterIndex,
-        line.lineNumber,
-        line.text.length,
-      );
-      const level =
-        severity === "error"
-          ? vscode.DiagnosticSeverity.Error
-          : vscode.DiagnosticSeverity.Warning;
-      const d = new vscode.Diagnostic(range, message, level);
-      d.source = "slim-lint";
-      d.code = linter;
-      return d;
-    });
-}
-
 // ---------------------------------------------------------------- converters
 
 // `command` is both the rubyTemplates.commands.* setting name and its default executable.
@@ -1298,24 +1017,19 @@ async function convert(target) {
   }
 }
 
-// ---------------------------------------------------------------- haml-lint
+// ---------------------------------------------------------------- haml-lint formatter
 
-const LINT_DEBOUNCE_MS = 300;
 // haml-lint exits 65 (EX_DATAERR) when it found lints; anything else non-zero is a failure.
 const HAML_LINT_OK_CODES = new Set([0, 65]);
-const LINT_SEVERITY = {
-  error: vscode.DiagnosticSeverity.Error,
-  warning: vscode.DiagnosticSeverity.Warning,
-};
 
 /** `haml-lint <args> --stdin <file>` fed the document's text. */
-function runHamlLint(doc, args, signal) {
+function runHamlLint(doc, args) {
   const bin = cfg().get("commands.hamlLint", "haml-lint");
   const useBundler = cfg().get("hamlLint.useBundler", false);
   return run(
     bin,
     [...args, "--stdin", doc.uri.fsPath],
-    { cwd: workspaceFolderFor(doc), useBundler, signal },
+    { cwd: workspaceFolderFor(doc), useBundler },
     doc.getText(),
   );
 }
@@ -1482,115 +1196,6 @@ async function formatWithHamlLint(doc, output) {
       r.stdout,
     ),
   ];
-}
-
-function lintDiagnostic(doc, { line, severity, linter, message }) {
-  const { lineNumber, firstNonWhitespaceCharacterIndex, text } = doc.lineAt(
-    Math.min(line, doc.lineCount - 1),
-  );
-  const d = new vscode.Diagnostic(
-    new vscode.Range(
-      lineNumber,
-      firstNonWhitespaceCharacterIndex,
-      lineNumber,
-      text.length,
-    ),
-    message,
-    LINT_SEVERITY[severity] ?? vscode.DiagnosticSeverity.Information,
-  );
-  d.source = "haml-lint";
-  d.code = linter;
-  return d;
-}
-
-/** Run haml-lint on open and save; a newer run for the same file cancels the older one. */
-function startHamlLint(context, output) {
-  const diagnostics = vscode.languages.createDiagnosticCollection("haml-lint");
-  const pending = new Map(); // uri → { timer, controller }
-  let reportedMissing = false;
-
-  const cancel = (key) => {
-    const p = pending.get(key);
-    if (!p) return;
-    clearTimeout(p.timer);
-    p.controller.abort();
-    pending.delete(key);
-  };
-
-  const lint = async (doc, controller) => {
-    const r = await runHamlLint(doc, ["--reporter", "json"], controller.signal);
-    if (controller.signal.aborted) return;
-    pending.delete(doc.uri.toString());
-    if (toolMissing(r)) {
-      if (!reportedMissing)
-        output.appendLine(
-          "[haml-lint] not found; Haml lint diagnostics are off. Install it with: gem install haml_lint",
-        );
-      reportedMissing = true;
-      return;
-    }
-    if (!HAML_LINT_OK_CODES.has(r.code)) {
-      output.appendLine(`[haml-lint] ${doc.uri.fsPath}: ${firstLine(r)}`);
-      return;
-    }
-    try {
-      diagnostics.set(
-        doc.uri,
-        hamlLintOffenses(r.stdout).map((o) => lintDiagnostic(doc, o)),
-      );
-    } catch (e) {
-      output.appendLine(
-        `[haml-lint] unreadable JSON for ${doc.uri.fsPath}: ${e.message}`,
-      );
-    }
-  };
-
-  const schedule = (doc) => {
-    if (
-      doc.languageId !== "haml" ||
-      doc.uri.scheme !== "file" ||
-      !cfg().get("hamlLint.enabled", true)
-    )
-      return;
-    // Generator templates (`*.haml.tt`) hold ERB tags that haml-lint would misreport.
-    if (doc.uri.path.toLowerCase().endsWith(".tt")) return;
-    const key = doc.uri.toString();
-    cancel(key);
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () =>
-        lint(doc, controller).catch((e) =>
-          output.appendLine(`[haml-lint] ${e.message}`),
-        ),
-      LINT_DEBOUNCE_MS,
-    );
-    pending.set(key, { timer, controller });
-  };
-
-  const relintAll = () => {
-    [...pending.keys()].forEach(cancel);
-    diagnostics.clear();
-    vscode.workspace.textDocuments.forEach(schedule);
-  };
-
-  context.subscriptions.push(
-    diagnostics,
-    { dispose: () => [...pending.keys()].forEach(cancel) },
-    vscode.workspace.onDidOpenTextDocument(schedule),
-    vscode.workspace.onDidSaveTextDocument(schedule),
-    vscode.workspace.onDidCloseTextDocument((doc) => {
-      cancel(doc.uri.toString());
-      diagnostics.delete(doc.uri);
-    }),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration("rubyTemplates.hamlLint") ||
-        e.affectsConfiguration("rubyTemplates.commands.hamlLint")
-      )
-        relintAll();
-    }),
-  );
-  vscode.workspace.textDocuments.forEach(schedule);
 }
 
 function deactivate() {

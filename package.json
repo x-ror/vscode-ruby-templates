@@ -621,12 +621,7 @@
         "rubyTemplates.commands.hamlLint": {
           "type": "string",
           "default": "haml-lint",
-          "description": "Executable for Haml lint diagnostics and the haml-lint formatter (gem install haml_lint)."
-        },
-        "rubyTemplates.hamlLint.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Run haml-lint on open and save and show its offenses as diagnostics. Does nothing if haml-lint isn't installed."
+          "description": "Executable for the haml-lint formatter (gem install haml_lint)."
         },
         "rubyTemplates.hamlLint.useBundler": {
           "type": "boolean",
@@ -810,40 +805,10 @@
           "default": true,
           "description": "Let the language server format Slim and Skim files (Format Document and Format Selection). Turn off for no edits."
         },
-        "rubyTemplates.erbLint.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Run erb_lint (`--format json --stdin`) on open and save and show its offenses, using the project's .erb_lint.yml. Uses `bundle exec` when rubyTemplates.preview.useBundler is on."
-        },
-        "rubyTemplates.commands.erbLint": {
-          "type": "string",
-          "default": "erb_lint",
-          "description": "Executable for erb_lint diagnostics (gem install erb_lint)."
-        },
         "rubyTemplates.routes.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Read the app's routes with `bin/rails runner` (boots the app once, and again when config/routes.rb or config/routes/*.rb changes) for completion, hover and go to definition of `*_path` / `*_url` helpers in views."
-        },
-        "rubyTemplates.herbLint.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Run herb-lint (`--json`) on ERB files when they are opened and saved and show its offenses, configured by the project's `.herb.yml`. herb-lint reads the file from disk, so unsaved edits are not linted."
-        },
-        "rubyTemplates.commands.herbLint": {
-          "type": "string",
-          "default": "herb-lint",
-          "description": "Executable for herb-lint diagnostics (npm install --save-dev @herb-tools/linter). With the default, the project's node_modules/.bin/herb-lint wins over one on PATH."
-        },
-        "rubyTemplates.slimLint.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Run slim-lint (`--reporter json`) on save and show its offenses. Uses `bundle exec` when rubyTemplates.preview.useBundler is on."
-        },
-        "rubyTemplates.commands.slimLint": {
-          "type": "string",
-          "default": "slim-lint",
-          "description": "Executable used to lint Slim (gem install slim_lint)."
         },
         "rubyTemplates.server.enabled": {
           "type": "boolean",

@@ -104,20 +104,15 @@ gem install slim haml erubi    # rendering
 gem install html2haml          # ERB/HTML → Haml
 gem install haml_to_erb        # Haml → ERB
 gem install html2slim haml2slim  # ERB → Slim, Haml → Slim
-gem install haml_lint          # Haml lint diagnostics, haml-lint formatter
+gem install haml_lint          # haml-lint formatter
 gem install htmlbeautifier     # or erb-formatter: ERB formatting
-gem install erb_lint           # ERB lint diagnostics
 ```
 
 **Lint rule catalogue**: [`docs/lint/`](docs/lint/README.md) lists every check of the built-in server, erb_lint, Herb, haml-lint and slim-lint per language, which of them overlap, and when Herb prefers `image_tag` / `link_to` / `form_with` over plain HTML.
 
-**erb_lint**: set `rubyTemplates.erbLint.enabled` to show `erb_lint`'s offenses (your `.erb_lint.yml`) on open and save; the editor's unsaved text is what gets linted. `rubyTemplates.commands.erbLint` sets the executable.
-
-**herb-lint**: set `rubyTemplates.herbLint.enabled` to show [Herb](https://herb-tools.dev/linter/rules/)'s offenses (your `.herb.yml`, with its severities) on open and save. herb-lint has no stdin mode, so it lints the saved file. It is an npm package (`npm install --save-dev @herb-tools/linter`); the project's `node_modules/.bin/herb-lint` is used before one on `PATH`, and `rubyTemplates.commands.herbLint` overrides both. erb_lint and herb-lint can run side by side; turn off the built-in checks they duplicate with `rubyTemplates.erb.disabledDiagnostics`.
-
 **ERB formatting**: _Format Document_ / format on save (`"[erb]": { "editor.formatOnSave": true }`) run the built-in formatter by default (see [Built-in formatter](#built-in-formatter); also _Format Selection_; `rubyTemplates.erb.format.enabled: false` turns it off). Set `rubyTemplates.erb.formatter` to `htmlbeautifier` (`gem install htmlbeautifier`; re-indents to the editor's tab size) or `erb-format` (`gem install erb-formatter`; re-flows to a line width) to run one of those instead, or to `none` to leave ERB formatting to other extensions.
 
-**haml-lint**: when `haml-lint` is installed, Haml files are linted on open and save and its offenses show up as diagnostics (`rubyTemplates.hamlLint.enabled`, `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`). Set `rubyTemplates.haml.formatter` to `haml-lint` to make _Format Document_ run `haml-lint --auto-correct-only`; note that it applies your RuboCop config's safe corrections too, which can rewrite or drop Ruby code (for example a useless assignment).
+**haml-lint formatter**: set `rubyTemplates.haml.formatter` to `haml-lint` (`rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`) to make _Format Document_ run `haml-lint --auto-correct-only`; note that it applies your RuboCop config's safe corrections too, which can rewrite or drop Ruby code (for example a useless assignment).
 
 Executable paths are configurable under `rubyTemplates.commands.*`. Set `rubyTemplates.preview.useBundler` to run them through `bundle exec` in projects with a Gemfile.
 
@@ -157,7 +152,7 @@ Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O error
 - Emmet works in `.html.erb` out of the box (the extension defaults `"emmet.includeLanguages": { "erb": "html" }`). VS Code's Emmet supports the `slim` id natively and expands to Slim syntax (`ul>li` → `ul` / `  li`); the extension maps `skim` to it too.
 - Host-specific Slim files (`.text.slim`, `.xml.slim`, `.js.slim`, …) open as Slim; the void-element check (`img` with children) only runs for HTML hosts (`.html.slim`, `.html+variant.slim`, `.turbo_stream.slim` and bare `.slim`).
 - Partials resolve by Rails' default formats; a format an app registers itself (`Mime::Type.register "text/html", :mobile`) is read as part of the name, so `_card.mobile.haml` is not found for `render "card"`. Renders into a gem's view folder (`devise/…`, `spree/…`) aren't flagged when the gem is in `Gemfile.lock`.
-- Rails generator templates (`lib/templates/{erb,haml,slim}/**/*.tt`, `lib/generators/**/templates/**/*.{erb,haml,slim}.tt`) open in their template language; diagnostics, formatting and linters skip them because the generator's own ERB is mixed in.
+- Rails generator templates (`lib/templates/{erb,haml,slim}/**/*.tt`, `lib/generators/**/templates/**/*.{erb,haml,slim}.tt`) open in their template language; diagnostics and formatting skip them because the generator's own ERB is mixed in.
 - Ruby LSP (Shopify) and this extension both register the `erb` language id, so they work together.
 - If you also have another Slim or Haml extension installed, VS Code picks one grammar; disable the other to avoid surprises.
 - Slim options set per app are not reflected in highlighting: custom `:shortcut`s (`&text`, `@role`), custom `attr_list_delims` / `code_attr_delims`, smart text's implicit text lines (only explicit `>` lines are recognized; the checks report them as `Unknown line indicator`, as Slim's default parser does without `slim/smart`) and logic-less mode (`- section` / `= var` still show as Ruby). The translator plugin (`slim/translator`) changes nothing in the syntax, so it needs no support.
@@ -169,13 +164,13 @@ bun install           # also enables .githooks (pre-commit formats staged JS and
 bun run build:server  # cargo build --release, copies the binary into bin/<platform>/
 bun run test:tokens   # token scopes of test/sample.* vs. test/__snapshots__, with VS Code's HTML/Ruby/JS/CSS grammars (UPDATE=1 rewrites them)
 bun run test:server   # cargo test + diagnostics check on the samples
-bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle, haml-lint JSON)
+bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle)
 bun run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
 bun test/e2e.js       # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
 bun test/cli.js       # the ruby-templates command line on a temp folder
 bun test/npm.js       # the npm packages: assembled from the release build, packed, installed offline, run
 bun run test:slim     # Slim editing helpers and onEnterRules
-bun run test:vscode   # commands, formatter, linters and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)
+bun run test:vscode   # commands, formatter and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)
 bun run test:format   # Slim/Haml formatters vs. the gems: test/format/*.{slim,haml} compile the same before and after (needs `ruby -rslim` / `ruby -rhaml`)
 bun run build         # bundle the client into dist/extension.js (what VS Code loads)
 bun run package       # bundle, then build the .vsix

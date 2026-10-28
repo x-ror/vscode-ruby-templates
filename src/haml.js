@@ -42,22 +42,4 @@ function toggleHamlLines(lines, targets) {
   return edits;
 }
 
-/**
- * Offenses from `haml-lint --reporter json` output, with 0-based lines. Syntax errors are reported on
- * line 0 and prefixed with the file path, which is dropped.
- */
-function hamlLintOffenses(json) {
-  const { files = [] } = JSON.parse(json);
-  return files.flatMap(({ path: file, offenses = [] }) =>
-    offenses.map(({ severity, message, linter_name: linter, location }) => ({
-      line: Math.max((location?.line ?? 1) - 1, 0),
-      severity,
-      linter,
-      message: message.startsWith(`${file} - `)
-        ? message.slice(file.length + 3)
-        : message,
-    })),
-  );
-}
-
-export { toggleHamlPrefix, toggleHamlLines, hamlLintOffenses };
+export { toggleHamlPrefix, toggleHamlLines };
