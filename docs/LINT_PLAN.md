@@ -222,6 +222,7 @@ Decided (2026-10-25):
 5. **ERB formatting changes rendered whitespace**, accepted as 3b describes: re-indentation outside `<pre>`, `<textarea>`, `<script>`, `<style>`, multi-line ERB tags' Ruby and text with significant leading spaces, compared with leading whitespace on text lines removed.
 6. **Editor and `.editorconfig` give the Slim and Haml formatters only the indentation width (default 2); they always write spaces and keep the file's line endings** (Slim decided 2026-10-26, Haml 2026-10-27). For Haml, empty and whitespace-only lines at the end collapse into one final line ending (Haml strips the template), and the `.haml-lint.yml` formatting keys stop applying.
 7. **Ruby checks parse with the project's Ruby version** (`.ruby-version`, else `Gemfile.lock` `RUBY VERSION`), the latest grammar when none (decided 2026-10-27).
+8. **ERB formatting, the whitespace beyond re-indentation** (decided 2026-10-28): trailing whitespace of text lines is removed, under the same exceptions as indentation (5), and the compiled-output comparison also ignores it; the indentation of attribute lines inside a multi-line start tag may change (whitespace between attributes, never inside a value); a missing final newline is not added; the inside of an HTML comment is left as it is (only the line holding `<!--` is re-indented).
 
 ### Built-in diagnostic codes
 
@@ -297,18 +298,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status      |
-| ------------------------ | ----------- |
-| 0. Harness               | done        |
-| 0b. Context              | done        |
-| 1a. Slim errors          | done        |
-| 1b. Slim format          | done        |
-| 2a. Haml errors          | done        |
-| 2b. Haml format          | done        |
-| 3a. ERB errors           | done        |
-| 3b. ERB format           | not started |
-| 4. Editor and CLI        | not started |
-| 5. Remove external tools | not started |
+| Stage                    | Status                                    |
+| ------------------------ | ----------------------------------------- |
+| 0. Harness               | done                                      |
+| 0b. Context              | done                                      |
+| 1a. Slim errors          | done                                      |
+| 1b. Slim format          | done                                      |
+| 2a. Haml errors          | done                                      |
+| 2b. Haml format          | done                                      |
+| 3a. ERB errors           | done                                      |
+| 3b. ERB format           | in progress: whitespace rules decided (8) |
+| 4. Editor and CLI        | not started                               |
+| 5. Remove external tools | not started                               |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 
