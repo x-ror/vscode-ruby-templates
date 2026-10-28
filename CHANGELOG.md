@@ -45,14 +45,14 @@ First release. Requires VS Code 1.100 or newer.
 - Switch to Related File: a view's other formats, its controller or mailer action, and a ViewComponent's class, template and preview.
 - Preview rendered HTML and show compiled Ruby, through Erubi like Rails (`rubyTemplates.commands.ruby`), or inside the Rails app (`rubyTemplates.preview.useRails`).
 - Converters: ERB → Haml / Slim, Haml → ERB / Slim, Slim → ERB, HTML → Haml.
-- Command line: `ruby-templates check` and `ruby-templates format [--check|--write]` for CI and editors, shipped next to the server and on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux, macOS and Windows; `ruby-templates-ls --check` takes folders too.
+- Command line: `ruby-templates check` and `ruby-templates format [--check|--write]` for CI and editors, shipped next to the server and on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux and Windows; `ruby-templates-ls --check` takes folders too.
 - Formatting: a built-in whitespace-only formatter for HTML ERB, Haml and Slim, on by default for Format Document and format on save, with Format Selection for ERB and Haml. `rubyTemplates.<erb|haml|slim>.format.enabled` (on by default) switches it off, and the extension then registers no formatter for that language, so another extension's can be used.
 - The formatter takes only the indentation width from the editor or `.editorconfig` (default 2): it always writes spaces and keeps each line's ending. ERB keeps the end of the file as it is and trims trailing whitespace of text lines; a file with an ERB error or an HTML structure error is left unchanged.
 - Haml and Slim formatting never changes what the template compiles: the formatter compares what Haml reads (nodes, depths, filter bodies) or the Ruby `Slim::Engine` generates, before and after, and leaves the file as it is if they differ, or if it has any Haml or Slim error. Empty lines at the end collapse into the final line ending; in Slim, whitespace-only lines there stay, as Slim compiles them.
 
 ### Packaging
 
-- One `.vsix` per platform (Linux x64 / arm64, macOS x64 / arm64, Windows x64), each with only its own server binary.
+- One `.vsix` per platform (Linux x64 / arm64, Windows x64; macOS builds are paused until GitHub's macOS runners pick up jobs again), each with only its own server binary.
 
 ### Development
 

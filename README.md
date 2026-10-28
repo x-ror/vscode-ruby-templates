@@ -5,7 +5,7 @@
 [![build](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml/badge.svg)](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.100-007ACC)
-![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20macOS%20%7C%20windows-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-linux%20%7C%20windows-lightgrey)
 ![Server](https://img.shields.io/badge/language%20server-Rust-orange)
 
 One extension for the three most common Ruby HTML template languages.
@@ -125,7 +125,7 @@ One formatter for HTML ERB views (`.html.erb`, `.html+variant.erb`, `.turbo_stre
 
 **Settings**: only the indentation width, from the editor (in VS Code), then `.editorconfig`, then 2 spaces; see [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md).
 
-**Command line**: the server build includes a second binary, also published on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux x64/arm64, macOS x64/arm64 and Windows x64:
+**Command line**: the server build includes a second binary, also published on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux x64/arm64 and Windows x64:
 
 ```sh
 npm install --save-dev @x-ror/ruby-templates
@@ -170,4 +170,4 @@ bun run build         # bundle the client into dist/extension.js (what VS Code l
 bun run package       # bundle, then build the .vsix
 ```
 
-Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (a library shared by `ruby-templates-ls` and the `ruby-templates` CLI: `lsp.rs`, `cli.rs`, `format.rs` with `erb_format.rs`, `haml_format.rs`, `slim_format.rs` and `config.rs` for the formatter, `erb.rs`, `haml_indent.rs` and `slim_indent.rs` for Haml/Slim structure, `slim_parser.rs` (a port of `Slim::Parser` used by Slim completion, hover and formatting), `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux, macOS and Windows, packages one `.vsix` per platform, and assembles the npm packages (`npm/`, `npm/assemble.js`); tags publish them.
+Grammars live in `syntaxes/`, language configs in `language-configuration/`, snippets in `snippets/`, the VS Code client in `src/`, and the language server in `server/src/` (a library shared by `ruby-templates-ls` and the `ruby-templates` CLI: `lsp.rs`, `cli.rs`, `format.rs` with `erb_format.rs`, `haml_format.rs`, `slim_format.rs` and `config.rs` for the formatter, `erb.rs`, `haml_indent.rs` and `slim_indent.rs` for Haml/Slim structure, `slim_parser.rs` (a port of `Slim::Parser` used by Slim completion, hover and formatting), `partials.rs`, `ruby.rs`). CI (`.github/workflows/build.yml`) builds the server for Linux and Windows, packages one `.vsix` per platform, and assembles the npm packages (`npm/`, `npm/assemble.js`); tags publish them.

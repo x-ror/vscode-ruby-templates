@@ -52,20 +52,7 @@ jobs:
               ext: "",
               cross: true,
             }
-          - {
-              os: macos-14,
-              target: aarch64-apple-darwin,
-              dir: darwin-arm64,
-              ext: "",
-              test: true,
-            }
-          # Cross-built on Apple silicon; darwin-arm64 runs the macOS tests.
-          - {
-              os: macos-14,
-              target: x86_64-apple-darwin,
-              dir: darwin-x64,
-              ext: "",
-            }
+          # macOS (darwin-arm64, darwin-x64) is left out while GitHub's macos-14 runners don't pick up jobs.
           - {
               os: windows-latest,
               target: x86_64-pc-windows-msvc,
@@ -164,7 +151,7 @@ jobs:
         with: { pattern: cli-*, path: .cli }
       - run: bun npm/assemble.js .cli npm-dist
       # Every platform the server matrix builds, plus the main package: a renamed artifact must not drop one.
-      - run: test "$(ls npm-dist | wc -l)" -eq 6
+      - run: test "$(ls npm-dist | wc -l)" -eq 4
       - uses: actions/upload-artifact@v7
         with: { name: npm, path: npm-dist }
 
