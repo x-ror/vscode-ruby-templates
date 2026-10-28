@@ -1,9 +1,11 @@
 //! ERB re-indentation. A line that starts in markup gets one indent unit per open HTML element and ERB block, read
-//! with `tags.rs`; a line that starts inside a `<script>`/`<style>` element, a multi-line tag, comment or ERB tag
-//! moves with the line its owner starts on, keeping its relative indentation; a `<pre>`, `<textarea>` or `<title>`
-//! body, a quoted attribute value and Ruby holding a heredoc or a multi-line string keep every byte.
+//! with `tags.rs`; a line that starts inside a multi-line tag moves with the line its owner starts on, keeping its
+//! relative indentation; a `<script>`, `<style>`, `<pre>`, `<textarea>` or `<title>` body (its end tag's line too), a
+//! quoted attribute value, every line after the first of an HTML comment and every line that starts inside an ERB tag
+//! (its Ruby) keep every byte.
 
 use crate::checks::RubyContext;
+use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::ruby::BlockEffect;
 use crate::tags::{self, Block, PState, Tag, Token, OPTIONAL_END, VOID};
@@ -11,14 +13,9 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::DiagnosticSeverity;
-use tree_sitter::{Node, Parser};
 
 // A `<pre>`/`<textarea>` built by a helper: its block body keeps every space, but `tags.rs` sees no element.
 static PRE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(tag\.(pre|textarea)|content_tag[ (]\s*:(pre|textarea))\b").unwrap());
-
-// Ruby nodes whose text is content: a line break inside one can't move.
-const RUBY_LITERALS: &[&str] =
-    &["string", "string_array", "symbol_array", "delimited_symbol", "regex", "subshell", "heredoc_body", "comment"];
 
 /// Where a line starts.
 #[derive(Clone, Copy, PartialEq)]
@@ -35,13 +32,10 @@ struct UnitSpan {
     first: usize,
     last: usize,
     owner: usize,
-    rigid: bool,
 }
 
 struct Unit {
     owner_line: usize,
-    /// Ruby whose line breaks may fall inside a string: it can't move at all.
-    rigid: bool,
 }
 
 struct Line<'a> {
@@ -75,7 +69,7 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
     let mut fixed: Ranges = Vec::new();
     let mut keep_end: Ranges = Vec::new();
     let mut unit_spans: Vec<UnitSpan> = Vec::new();
-    let span = |first, last, owner, rigid| UnitSpan { first, last, owner, rigid };
+    let span = |first, last, owner| UnitSpan { first, last, owner };
     let paired = paired_optional(&tokens);
     for (i, token) in tokens.iter().enumerate() {
         match token {
@@ -84,11 +78,11 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
                 if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(code) {
                     return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(e.at) + 1));
                 }
-                unit_spans.push(span(e.at + 1, e.end - 1, e.at, rigid_ruby(code)));
+                fixed.push((e.at + 1, e.end - 1));
                 keep_end.push((e.at + 1, e.end - 1));
             }
             Token::Open { tag, quoted, .. } | Token::Close { tag, quoted } => {
-                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start, false));
+                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start));
                 for &(q, q_end) in quoted {
                     fixed.push((q + 1, q_end - 1));
                     keep_end.push((q + 1, q_end - 1));
@@ -104,36 +98,40 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
                 }
             }
             Token::Raw { tag, close } => {
-                let Some((close_start, close_end)) = *close else {
+                let Some((close_start, _)) = *close else {
                     return skip(SkipKind::Doubt, format!("line {}: `<{}>` is never closed", line_of(tag.start) + 1, tag.name));
                 };
                 keep_end.push((tag.end, close_start.saturating_sub(1)));
-                if tag.name == "script" || tag.name == "style" {
-                    // A JS template literal or a `\` line continuation is content, like a Ruby string.
-                    let body = &text[tag.end..close_start];
-                    let rigid = body.contains('`') || body.lines().any(|l| l.trim_end().ends_with('\\'));
-                    unit_spans.push(span(tag.start + 1, close_end - 1, tag.start, rigid));
-                } else {
-                    unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start, false));
-                    fixed.push((tag.end, close_start));
-                }
+                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start));
+                fixed.push((tag.end, close_start));
             }
-            Token::Comment { start, end } => unit_spans.push(span(start + 1, end - 1, *start, false)),
+            Token::Comment { start, end } => {
+                // The line holding `<!--` is re-indented; the lines after it, the one with `-->` too, keep every byte.
+                let Some(newline) = text[*start..*end].find('\n') else { continue };
+                fixed.push((start + newline + 1, end - 1));
+                keep_end.push((start + newline + 1, end - 1));
+            }
             Token::Unterminated => return skip(SkipKind::Doubt, "a tag is never closed with `>`"),
         }
+    }
+
+    // A `<%%` literal is text to `tags.rs`, but the oracle keeps its bytes like any other ERB tag's.
+    for tag in erb_ruby::tags(text).iter().filter(|t| t.is_literal()) {
+        fixed.push((tag.start + 1, tag.end - 1));
+        keep_end.push((tag.start + 1, tag.end - 1));
     }
 
     let mut roles = vec![Role::Markup; lines.len()];
     let mut units = Vec::new();
     // Inner units start later; sorting by start lets them win over the unit around them.
     unit_spans.sort_by_key(|u| u.owner);
-    for UnitSpan { first, last, owner, rigid } in unit_spans {
+    for UnitSpan { first, last, owner } in unit_spans {
         let lines_inside = lines_starting_in(&starts, first, last);
         if lines_inside.is_empty() {
             continue;
         }
         let index = units.len();
-        units.push(Unit { owner_line: line_of(owner), rigid });
+        units.push(Unit { owner_line: line_of(owner) });
         for line in lines_inside {
             roles[line] = Role::Unit(index);
         }
@@ -202,31 +200,6 @@ fn erb_code(tag: &str) -> &str {
     }
     let inner = tag.strip_prefix("<%").unwrap_or(tag).trim_start_matches(['=', '-']);
     inner.strip_suffix("%>").unwrap_or(inner).trim_end_matches('-')
-}
-
-/// Ruby code that a move could change: a string, regexp, heredoc, command or `=begin` comment across lines. Code
-/// the parser can't read across lines counts too, which only keeps more code where it is.
-fn rigid_ruby(code: &str) -> bool {
-    if !code.contains('\n') {
-        return false;
-    }
-    let mut parser = Parser::new();
-    if parser.set_language(&tree_sitter_ruby::LANGUAGE.into()).is_err() {
-        return true;
-    }
-    parser.parse(code, None).is_none_or(|tree| literal_across_lines(tree.root_node()))
-}
-
-fn literal_across_lines(node: Node) -> bool {
-    if node.start_position().row == node.end_position().row {
-        return false;
-    }
-    if node.is_error() || RUBY_LITERALS.contains(&node.kind()) {
-        return true;
-    }
-    let mut cursor = node.walk();
-    let found = node.children(&mut cursor).any(literal_across_lines);
-    found
 }
 
 fn closing<'t>(tokens: &'t [Token], name: &str) -> Option<&'t Tag> {
@@ -401,8 +374,8 @@ fn levels(
 }
 
 /// The new leading whitespace of each line, `None` to keep it. A unit moves only as a whole: if one of its lines
-/// can't follow the first (it is indented less, or holds Ruby that can't move), the first line stays too, and so
-/// does every unit that line belongs to.
+/// can't follow the first (it is indented less), the first line stays too, and so does every unit that line
+/// belongs to.
 fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize>], unit: &str) -> Vec<Option<String>> {
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
     for (i, role) in roles.iter().enumerate() {
@@ -430,7 +403,7 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
                 let owner = &lines[units[u].owner_line];
                 let moved = decided[units[u].owner_line].as_deref().is_some_and(|new| new != owner.ws);
                 let behind = || members[u].iter().any(|&i| !lines[i].rest.is_empty() && !lines[i].ws.starts_with(owner.ws));
-                moves[u] && moved && (units[u].rigid || behind())
+                moves[u] && moved && behind()
             })
             .collect();
         if stuck.is_empty() {
@@ -476,6 +449,20 @@ mod tests {
     }
 
     #[test]
+    fn tag_ends_at_the_first_erubi_close() {
+        let text = "<div>\n<% a = 1 %%>\n<% if b %>\n<p>x</p>\n<% end %>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <% a = 1 %%>\n  <% if b %>\n    <p>x</p>\n  <% end %>\n</div>\n");
+        let text = "<div>\n<% x = 1 %%>\n y %>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <% x = 1 %%>\n  y %>\n</div>\n");
+    }
+
+    #[test]
+    fn literal_tag_keeps_its_lines() {
+        let text = "<div>\n<%% foo\n    bar %>\n<p>x</p>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <%% foo\n    bar %>\n  <p>x</p>\n</div>\n");
+    }
+
+    #[test]
     fn nests_elements_and_blocks() {
         let text = lines(&["<div>", "<% if a %>", "<p>", "x", "</p>", "<% elsif b %>", "y", "<% else %>", "z", "<% end %>", "</div>"]);
         let want = lines(&[
@@ -518,9 +505,9 @@ mod tests {
     }
 
     #[test]
-    fn comments_and_multi_line_tags_move_with_their_first_line() {
-        let text = lines(&["<div>", "      <input type=\"text\"", "             name=\"q\">", "<!-- a", "       b -->", "</div>"]);
-        let want = lines(&["<div>", "  <input type=\"text\"", "         name=\"q\">", "  <!-- a", "         b -->", "</div>"]);
+    fn multi_line_tags_move_with_their_first_line() {
+        let text = lines(&["<div>", "      <input type=\"text\"", "             name=\"q\">", "</div>"]);
+        let want = lines(&["<div>", "  <input type=\"text\"", "         name=\"q\">", "</div>"]);
         assert_eq!(fmt(&text), want);
         // A value that spans lines is content.
         let title = lines(&["<div>", "    <a title=\"one", "      two\"", "      href=\"/\">x</a>", "</div>"]);
@@ -528,25 +515,37 @@ mod tests {
     }
 
     #[test]
-    fn multi_line_erb_moves_as_a_unit_unless_it_holds_a_string() {
+    fn comment_interiors_are_content() {
+        assert_eq!(fmt("<div>\n<!-- a\n  b -->\n</div>\n"), "<div>\n  <!-- a\n  b -->\n</div>\n");
+        assert_eq!(fmt("<div>\n<!-- a  \n  b  \n-->  \n</div>\n"), "<div>\n  <!-- a\n  b  \n-->\n</div>\n");
+        let mso = lines(&["<div>", "<!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "<p>x</p>", "</div>"]);
+        assert_eq!(fmt(&mso), lines(&["<div>", "  <!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "  <p>x</p>", "</div>"]));
+    }
+
+    #[test]
+    fn multi_line_erb_keeps_its_ruby() {
         let text = lines(&["<div>", "<%= render partial: \"x\",", "           locals: { a: 1 } %>", "</div>"]);
-        assert_eq!(fmt(&text), lines(&["<div>", "  <%= render partial: \"x\",", "             locals: { a: 1 } %>", "</div>"]));
+        assert_eq!(fmt(&text), lines(&["<div>", "  <%= render partial: \"x\",", "           locals: { a: 1 } %>", "</div>"]));
+        let hash = lines(&["<div>", "<%= render \"x\", {", "    id: 1,", "  } %>", "</div>"]);
+        assert_eq!(fmt(&hash), lines(&["<div>", "  <%= render \"x\", {", "    id: 1,", "  } %>", "</div>"]));
+        let cond = lines(&["<div>", "<% if a &&", "      b %>", "x", "<% end %>", "</div>"]);
+        assert_eq!(fmt(&cond), lines(&["<div>", "  <% if a &&", "      b %>", "    x", "  <% end %>", "</div>"]));
         for rigid in [
             lines(&["<div>", "<% sql = <<~SQL", "  select 1", "SQL", "%>", "</div>"]),
             lines(&["<div>", "<%= t(\"a", "  b\") %>", "</div>"]),
         ] {
-            assert_eq!(fmt(&rigid), rigid);
+            assert_eq!(fmt(&rigid), rigid.replacen("\n<%", "\n  <%", 1));
         }
         for literal in ["t %(a\n  b)", "x = `a\n  b`", "x = /a\n  b/", "x 1 # note\n  \"a\n  b\""] {
             let text = format!("<div>\n<%= {literal} %>\n</div>");
-            assert_eq!(fmt(&text), text, "{literal}");
+            assert_eq!(fmt(&text), text.replacen("\n<%", "\n  <%", 1), "{literal}");
         }
         for literal in ["\"a\n b\".scan /a\n b/", "x\n=begin\nnote\n=end\n", "case y\nwhen /a\n b/ then 1 end"] {
             let text = format!("<div>\n<%= {literal} %>\n</div>");
-            assert_eq!(fmt(&text), text, "{literal}");
+            assert_eq!(fmt(&text), text.replacen("\n<%", "\n  <%", 1), "{literal}");
         }
-        assert_eq!(fmt("<div>\n<%= a / b +\n  c %>\n</div>"), "<div>\n  <%= a / b +\n    c %>\n</div>", "a division moves");
-        assert_eq!(fmt("<div>\n<%# a\n  b %>\n</div>"), "<div>\n  <%# a\n    b %>\n</div>", "a comment tag moves");
+        assert_eq!(fmt("<div>\n<%= a / b +\n  c %>\n</div>"), "<div>\n  <%= a / b +\n  c %>\n</div>");
+        assert_eq!(fmt("<div>\n<%# a\n  b %>\n</div>"), "<div>\n  <%# a\n  b %>\n</div>", "comment text is kept");
         let block = lines(&["<%= link_to x,", "      class: \"a\" do %>", "<span>y</span>", "<% end %>"]);
         assert_eq!(fmt(&block), lines(&["<%= link_to x,", "      class: \"a\" do %>", "  <span>y</span>", "<% end %>"]));
     }
@@ -554,15 +553,11 @@ mod tests {
     #[test]
     fn raw_text_and_pre() {
         let script = lines(&["<div>", "    <script>", "      if (a) {", "        b();", "      }", "    </script>", "</div>"]);
-        assert_eq!(fmt(&script), lines(&["<div>", "  <script>", "    if (a) {", "      b();", "    }", "  </script>", "</div>"]));
-        let template = lines(&["<div>", "<script>", "  var a = `x", "  y`;", "</script>", "</div>"]);
-        assert_eq!(fmt(&template), template, "a template literal is content");
-        let continued = lines(&["<div>", "<script>", "  var s = \"a\\", "  b\";", "</script>", "</div>"]);
-        assert_eq!(fmt(&continued), continued, "a line continuation is content");
+        assert_eq!(fmt(&script), lines(&["<div>", "  <script>", "      if (a) {", "        b();", "      }", "    </script>", "</div>"]));
+        let style = lines(&["<div>", "<style>", "    a {}", "</style>", "</div>"]);
+        assert_eq!(fmt(&style), lines(&["<div>", "  <style>", "    a {}", "</style>", "</div>"]));
         let nested = lines(&["<div>", "<script>", "  var a = <%= raw \"x", "  y\" %>;", "</script>", "</div>"]);
-        assert_eq!(fmt(&nested), nested, "a stuck ERB tag holds its script too");
-        let shallow = lines(&["<div>", "    <style>", "a {}", "    </style>", "</div>"]);
-        assert_eq!(fmt(&shallow), shallow, "a body left of its tag can't keep its offsets");
+        assert_eq!(fmt(&nested), lines(&["<div>", "  <script>", "  var a = <%= raw \"x", "  y\" %>;", "</script>", "</div>"]));
         let pre = lines(&["<div>", "    <pre>", "  a  ", "    b", "    </pre>", "  <textarea>", " x ", "</textarea>", "</div>"]);
         assert_eq!(fmt(&pre), lines(&["<div>", "  <pre>", "  a  ", "    b", "    </pre>", "  <textarea>", " x ", "</textarea>", "</div>"]));
     }

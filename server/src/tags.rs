@@ -1,6 +1,6 @@
 //! Unclosed and mismatched HTML tags in ERB templates with an HTML host.
 
-use crate::erb;
+use crate::erb_ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::util::{coded, offset_to_position, warning};
 use regex::Regex;
@@ -140,36 +140,30 @@ fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
     None
 }
 
-/// HTML with ERB tags blanked out, plus every ERB tag as an event, in order.
+/// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
+/// renders as text, so it stays in the HTML.
 fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
-    let tree = erb::parse(text)?;
-    let root = tree.root_node();
-    // Broken ERB is reported elsewhere; tag positions would be guesswork.
-    if root.has_error() {
+    let found = erb_ruby::tags(text);
+    // An unclosed `<%` is reported elsewhere; tag positions would be guesswork. `<%%` is text.
+    let tail = &text[found.last().map_or(0, |t| t.end)..];
+    if tail.match_indices("<%").any(|(at, _)| !tail[at..].starts_with("<%%")) {
         return None;
     }
     let mut html = text.as_bytes().to_ascii_lowercase();
     let mut events = Vec::new();
-    let mut cursor = root.walk();
-    for node in root.children(&mut cursor) {
-        if node.kind() == "content" {
-            continue;
-        }
-        html[node.byte_range()].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
-        let mut c2 = node.walk();
-        let code = node.children(&mut c2).find(|n| n.kind() == "code");
-        let (effect, keyword) = match code {
-            Some(code) => {
-                let snippet = &text[code.byte_range()];
-                // ponytail: a JS/CSS block body anywhere skips the whole file; per-block raw spans would keep checking.
-                if RAW_BLOCK.is_match(snippet) {
-                    return None;
-                }
-                (analyze(snippet).0, snippet.split_whitespace().next().unwrap_or(""))
+    for tag in found.iter().filter(|t| !t.is_literal()) {
+        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+        let (effect, keyword) = if tag.is_comment() {
+            (BlockEffect::Neutral, "")
+        } else {
+            let snippet = &text[tag.code.clone()];
+            // ponytail: a JS/CSS block body anywhere skips the whole file; per-block raw spans would keep checking.
+            if RAW_BLOCK.is_match(snippet) {
+                return None;
             }
-            None => (BlockEffect::Neutral, ""),
+            (analyze(snippet).0, snippet.split_whitespace().next().unwrap_or(""))
         };
-        events.push(ErbEvent { at: node.start_byte(), end: node.end_byte(), effect, keyword });
+        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword });
     }
     Some((html, events))
 }
@@ -410,6 +404,11 @@ mod tests {
 
     fn messages(text: &str) -> Vec<String> {
         diagnostics(text).into_iter().map(|d| d.message).collect()
+    }
+
+    #[test]
+    fn unclosed_literal_is_text() {
+        assert_eq!(messages("<div>\n<%# a %>\n<span>\n</div>\n<%% open\n").len(), 1);
     }
 
     #[test]

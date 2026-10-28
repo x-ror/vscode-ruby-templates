@@ -25,7 +25,7 @@ A linter counts when the config enables it, or doesn't mention it and the tool e
 
 What each language does with them:
 
-- **ERB** (HTML views only): all of them. Content whitespace (`<pre>`, `<textarea>`, Ruby strings…) is never trimmed or collapsed.
+- **ERB** (HTML views only): only the indentation width counts. It always writes spaces, keeps each line's ending and the end of the file, and trims trailing whitespace of text lines. Content whitespace (`<pre>`, `<textarea>`, Ruby strings…) is never trimmed or collapsed.
 - **Haml**: as Slim: only the indentation width counts. It always writes spaces, keeps each line's ending, trims trailing whitespace only where Haml ignores it (not in filter bodies), keeps blank lines before the last line (Haml compiles them) and collapses the empty and whitespace-only lines at the end into one line ending, since Haml strips the template. `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace`, the editor's file options and `.haml-lint.yml` change nothing. A file with any Haml error is left unchanged.
 - **Slim**: only the indentation width counts (the editor's tab size or `indent_size`, default 2). It always writes spaces, even for a tab-indenting editor or `indent_style = tab`, keeps each line's ending, ends the file with one line ending, trims trailing whitespace only where Slim ignores it and keeps blank lines, since Slim compiles every line. `end_of_line`, `insert_final_newline`, `trim_trailing_whitespace`, the editor's file options and `.slim-lint.yml` change nothing.
 

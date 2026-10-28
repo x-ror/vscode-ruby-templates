@@ -1,10 +1,9 @@
-//! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves; tree-sitter-embedded-template for the rest.
+//! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves.
 
 use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::util::{coded, offset_to_position, warning};
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
-use tree_sitter::{Parser, Tree};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
@@ -12,30 +11,17 @@ pub mod code {
     pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
-pub fn parse(text: &str) -> Option<Tree> {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_embedded_template::LANGUAGE.into()).ok()?;
-    parser.parse(text, None)
-}
-
 /// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
 pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
-    let Some(tree) = parse(text) else { return vec![] };
-    let mut cursor = tree.root_node().walk();
     let mut out = Vec::new();
-    for tag in tree.root_node().children(&mut cursor) {
-        if tag.kind() != "directive" && tag.kind() != "output_directive" {
+    for tag in erb_ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
+        let source = &text[tag.code.clone()];
+        if source.contains('\n') || source.trim().is_empty() {
             continue;
         }
-        let mut inner = tag.walk();
-        let Some(code) = tag.children(&mut inner).find(|n| n.kind() == "code") else { continue };
-        let source = &text[code.byte_range()];
-        if source.contains('\n') || source.trim().is_empty() || !text[..tag.end_byte()].ends_with("%>") {
-            continue;
-        }
-        let spaced = format!("{} {} {}", &text[tag.start_byte()..code.start_byte()], source.trim(), &text[code.end_byte()..tag.end_byte()]);
-        if spaced != text[tag.byte_range()] {
-            out.push((tag.start_byte(), tag.end_byte(), spaced));
+        let spaced = format!("{} {} {}", &text[tag.start..tag.code.start], source.trim(), &text[tag.code.end..tag.end]);
+        if spaced != text[tag.start..tag.end] {
+            out.push((tag.start, tag.end, spaced));
         }
     }
     out

@@ -1,7 +1,7 @@
 # Compiles the ERB template on stdin the way Rails 8.1.4 does and parses the Ruby it would eval with Prism 2.0.0.
 # Usage: erb.rb [--file name.html.erb] [--normalize] [--ruby-version X.Y|latest]; the name picks the format and appears in Rails' messages.
 # --ruby-version picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
-# --normalize compiles the template with the leading whitespace of its text lines removed (see below).
+# --normalize compiles the template with the leading and trailing whitespace of its text lines removed (see below).
 # Prints {"errors": [{message, line, column}]} for every error, else {"source": the method source Rails evals}.
 require "json"
 gem "minitest", "< 6" # minitest 6 (an ActiveSupport dependency) wants prism ~> 1.5
@@ -25,10 +25,11 @@ format = :html unless ActionView::Template::Types.symbols.include?(format)
 VIRTUAL_PATH_ASSIGNMENT = "@virtual_path = "
 
 # docs/LINT_PLAN.md 3b: ERB copies the template's text, indentation included, into the HTML, so re-indenting changes
-# the rendered whitespace by design. What formatting may change is therefore compared with the leading whitespace of
-# text lines removed, except in `pre`, `textarea`, `script` and `style` and inside ERB tags, whose Ruby stays
-# byte-identical. Erubi's own regexp finds the tags, so Rails' view of what is text and what is code is the one used;
-# the whitespace Erubi trims around a `<% %>` line is text too.
+# the rendered whitespace by design. What formatting may change is therefore compared with the leading and trailing
+# whitespace of text lines removed (and that of lines inside a start tag, between attributes), except in `pre`,
+# `textarea`, `script` and `style` and inside ERB tags, whose Ruby stays byte-identical. Erubi's own regexp finds the
+# tags, so Rails' view of what is text and what is code is the one used; the whitespace Erubi trims around a `<% %>`
+# line is text too.
 #
 # "Text" is what the HTML tokenizer calls data: not inside a start or end tag (attribute values keep their
 # whitespace), a comment, a bogus comment, or the body of a `script`, `style` or `textarea` (raw text), nor inside a
@@ -46,13 +47,20 @@ class TextWhitespace
   # text itself starts a line (it follows a newline, not an ERB tag).
   def strip(text, at_line_start)
     text.lines.each_with_index.map do |line, index|
-      stripped = (index.positive? || at_line_start) && @mode == :data && @pre_depth.zero? ? line.sub(/\A[ \t]+/, "") : line
+      stripped = line
+      stripped = stripped.sub(/\A[ \t]+/, "") if (index.positive? || at_line_start) && insignificant_whitespace?
       advance(line)
+      stripped = stripped.sub(/[ \t]+(\r?\n)\z/, '\1') if insignificant_whitespace?
       stripped
     end.join
   end
 
   private
+
+  # Text outside pre, and the space between attributes of a start tag; not inside a quoted value or a comment.
+  def insignificant_whitespace?
+    (@mode == :data && @pre_depth.zero?) || @mode == :tag
+  end
 
   def advance(line)
     position = 0
@@ -145,8 +153,11 @@ def normalize_text_whitespace(source)
   normalized = +""
   source.to_enum(:scan, Erubi::Engine::DEFAULT_REGEXP).map { Regexp.last_match }.each do |tag|
     normalized << text_whitespace.strip(source[position...tag.begin(0)], at_line_start)
-    normalized << tag[0]
-    at_line_start = tag[0].end_with?("\n")
+    # The blanks up to the newline after `%>` are text as well.
+    line_end = tag[4].to_s
+    normalized << tag[0].delete_suffix(line_end)
+    normalized << text_whitespace.strip(line_end, false)
+    at_line_start = line_end.end_with?("\n")
     position = tag.end(0)
   end
   normalized << text_whitespace.strip(source[position..], at_line_start)

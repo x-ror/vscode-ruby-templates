@@ -189,16 +189,16 @@ fn format_once(
     Ok(Formatted { text, notes: indented.notes })
 }
 
-/// The settings `format` works with: Slim and Haml take only the indentation width and follow their own rules for the
-/// rest, except that a range, which can't add a line, leaves the final newline alone.
+/// The settings `format` works with: Slim, Haml and ERB take only the indentation width and follow their own rules for the
+/// rest, except that a range, which can't add a line, leaves the final newline alone. ERB keeps the end of the file as it is.
 pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
-    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml) {
+    if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml | TemplateLang::Erb) {
         return settings.clone();
     }
     Settings {
         indent_style: IndentStyle::Space,
         end_of_line: None,
-        final_newline: settings.final_newline.map(|_| true),
+        final_newline: settings.final_newline.filter(|_| lang != TemplateLang::Erb).map(|_| true),
         trim_trailing_whitespace: true,
         collapse_blank_lines: false,
         trim_trailing_blank_lines: false,
@@ -440,6 +440,15 @@ mod tests {
     }
 
     #[test]
+    fn erb_keeps_the_end_of_the_file() {
+        let s = Settings::default();
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>  ", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n\n", &s).as_deref(), Ok("<p>x</p>\n\n\n"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n  ", &s).as_deref(), Ok("<p>x</p>\n\n"));
+    }
+
+    #[test]
     fn final_newline_and_line_endings() {
         let s = Settings::default();
         assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
@@ -448,11 +457,22 @@ mod tests {
         assert_eq!(fmt("a.slim", "p", &keep).as_deref(), Ok("p"));
         let drop = Settings { final_newline: Some(false), ..Settings::default() };
         assert_eq!(fmt("a.html.haml", "p", &drop).as_deref(), Ok("p\n"), "Haml ends the file by its own rules");
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>\n\n\n"), "ERB keeps the end of the file");
         let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
-        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &lf).as_deref(), Ok("<p>\n<br>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &lf).as_deref(), Ok("<p>\r\n<br>\r\n"), "ERB keeps each ending");
         let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\r\n<br>\r\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\n<br>"));
+    }
+
+    #[test]
+    fn erb_takes_only_the_indentation_width_from_the_settings() {
+        let d = Settings::default;
+        let tabs = Settings { indent_style: IndentStyle::Tab, indent_size: 3, ..d() };
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>\n", &tabs).as_deref(), Ok("<div>\n   <p>x</p>\n</div>\n"));
+        let keep_trailing = Settings { trim_trailing_whitespace: false, ..d() };
+        assert_eq!(fmt("a.html.erb", "<p>x</p>  \n", &keep_trailing).as_deref(), Ok("<p>x</p>\n"));
+        let more_blank = Settings { collapse_blank_lines: true, trim_trailing_blank_lines: true, ..d() };
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n<br>\n\n", &more_blank).as_deref(), Ok("<p>\n\n\n<br>\n\n"));
     }
 
     #[test]
