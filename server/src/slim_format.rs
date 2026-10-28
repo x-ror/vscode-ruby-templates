@@ -4,9 +4,8 @@
 
 use crate::slim_parser::{indent_width, parse, Role, BOM};
 
-/// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0). `trim` drops trailing
-/// whitespace where Slim ignores it.
-pub fn format(text: &str, tab_size: usize, extra_engines: &[String], trim: bool) -> Option<String> {
+/// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0).
+pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<String> {
     if tab_size == 0 {
         return None;
     }
@@ -26,7 +25,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String], trim: bool)
         if i > 0 {
             out.push('\n');
         }
-        if i >= tail || (!trim && raw.trim().is_empty()) {
+        if i >= tail {
             out.push_str(raw);
             continue;
         }
@@ -52,7 +51,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String], trim: bool)
         };
         // A trailing `,` or `\` before the whitespace would turn into a continuation once stripped.
         let stripped = content.trim_end_matches(|c: char| c.is_ascii_whitespace());
-        let content = if !trim || info.keeps_trailing || stripped.ends_with([',', '\\']) { content } else { stripped };
+        let content = if info.keeps_trailing || stripped.ends_with([',', '\\']) { content } else { stripped };
         if !content.is_empty() {
             out.push_str(&" ".repeat(new_width));
             out.push_str(content);
@@ -71,15 +70,15 @@ mod tests {
     use super::*;
 
     fn fmt(text: &str) -> String {
-        let once = format(text, 2, &[], true).expect("formattable");
-        assert_eq!(format(&once, 2, &[], true).as_deref(), Some(once.as_str()), "idempotent");
+        let once = format(text, 2, &[]).expect("formattable");
+        assert_eq!(format(&once, 2, &[]).as_deref(), Some(once.as_str()), "idempotent");
         once
     }
 
     #[test]
     fn reindents_structure() {
         assert_eq!(fmt("html\n    body\n        p x  \n    \n\tfooter"), "html\n  body\n    p x  \n\n  footer");
-        assert_eq!(format("ul\n  li\n", 4, &[], true).as_deref(), Some("ul\n    li\n"));
+        assert_eq!(format("ul\n  li\n", 4, &[]).as_deref(), Some("ul\n    li\n"));
         assert_eq!(fmt("- if a   \r\n    = b \r\n"), "- if a\r\n  = b\r\n");
     }
 
@@ -101,11 +100,6 @@ mod tests {
         assert_eq!(fmt("p  \n| t  \n' u  \na href=x  \n/ c  \n<b>  \np Text  "), "p\n| t  \n' u  \na href=x\n/ c\n<b>  \np Text  ");
         assert_eq!(fmt("a href=x,  \n  y"), "a href=x,  \n  y", "`x,` + space ends the value");
         assert_eq!(fmt("p title=\"a  \n  b\""), "p title=\"a  \n  b\"");
-    }
-
-    #[test]
-    fn trailing_whitespace_kept_when_asked() {
-        assert_eq!(format("div  \n    p  \n   \n    q", 2, &[], false).as_deref(), Some("div  \n  p  \n   \n  q"));
     }
 
     #[test]
@@ -138,9 +132,9 @@ mod tests {
 
     #[test]
     fn refuses_what_it_cannot_keep() {
-        assert_eq!(format("p\n    a\n  b", 2, &[], true), None);
-        assert_eq!(format("\tp Text\n\t\t  more", 2, &[], true), None, "text column counts the tab as one");
-        assert!(format("\tp Text\n\tp", 2, &[], true).is_some());
-        assert_eq!(format("p", 0, &[], true), None);
+        assert_eq!(format("p\n    a\n  b", 2, &[]), None);
+        assert_eq!(format("\tp Text\n\t\t  more", 2, &[]), None, "text column counts the tab as one");
+        assert!(format("\tp Text\n\tp", 2, &[]).is_some());
+        assert_eq!(format("p", 0, &[]), None);
     }
 }

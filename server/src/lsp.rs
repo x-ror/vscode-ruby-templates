@@ -207,10 +207,9 @@ impl Backend {
             return None;
         }
         let path = uri.to_file_path().ok();
-        let mut settings =
-            path.map_or_else(format::Settings::default, |path| config::settings_for(&path, lang).settings).with_editor(options);
+        let mut settings = path.map_or_else(format::Settings::default, |path| config::settings_for(&path).settings).with_editor(options);
         if lines_only {
-            settings = format::Settings { final_newline: None, collapse_blank_lines: false, trim_trailing_blank_lines: false, ..settings };
+            settings.final_newline = false;
         }
         match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
             Ok(formatted) => Some((text, formatted.text)),

@@ -33,7 +33,7 @@
 ### Removed tools
 
 - **Breaking:** the external linters are gone; the built-in server checks replace them. Removed settings: `rubyTemplates.erbLint.enabled`, `rubyTemplates.commands.erbLint`, `rubyTemplates.herbLint.enabled`, `rubyTemplates.commands.herbLint`, `rubyTemplates.slimLint.enabled`, `rubyTemplates.commands.slimLint` and `rubyTemplates.hamlLint.enabled`; erb_lint, herb-lint, slim-lint and haml-lint no longer show diagnostics.
-- **Breaking:** the external formatters are gone too (htmlbeautifier, erb-format and `haml-lint --auto-correct-only`); the built-in formatter is the only one. Removed settings: `rubyTemplates.erb.formatter`, `rubyTemplates.haml.formatter`, `rubyTemplates.commands.htmlbeautifier`, `rubyTemplates.commands.erbFormat`, `rubyTemplates.commands.hamlLint` and `rubyTemplates.hamlLint.useBundler`. `rubyTemplates.<erb|haml|slim>.format.enabled` is the switch: off, the extension registers no formatter for that language and another extension's formatter can be used.
+- **Breaking:** the external formatters are gone too (htmlbeautifier, erb-format and `haml-lint --auto-correct-only`); the built-in formatter is the only one. Removed settings: `rubyTemplates.erb.formatter`, `rubyTemplates.haml.formatter`, `rubyTemplates.commands.htmlbeautifier`, `rubyTemplates.commands.erbFormat`, `rubyTemplates.commands.hamlLint` and `rubyTemplates.hamlLint.useBundler`. `.erb_lint.yml`, `.erb-lint.yml`, `.haml-lint.yml`, `.slim-lint.yml` are no longer read. `rubyTemplates.<erb|haml|slim>.format.enabled` is the switch: off, the extension registers no formatter for that language and another extension's formatter can be used.
 
 ### Formatter
 

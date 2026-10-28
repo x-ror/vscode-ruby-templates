@@ -19,8 +19,8 @@ Usage:
   ruby-templates format [--check] [--verbose] --stdin-filepath <path> [-]
 
 check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates.
-format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace, blank lines, the final newline
-        and line endings. Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
+format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace and the final newline.
+        Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
         on stderr. Without --check or --write the result goes to stdout.
 
 Exit codes: 0 ok, 1 diagnostics (errors or warnings) or files that would change, 2 usage or I/O error, a formatter
@@ -41,7 +41,7 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 
 /// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
 fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[], true));
+    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[]));
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;
@@ -223,7 +223,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
     let shown = path.display();
     let result = match (file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
-            let resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()), lang);
+            let resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()));
             if args.verbose {
                 eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
                 resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
