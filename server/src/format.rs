@@ -190,8 +190,11 @@ fn format_once(
 }
 
 /// The settings `format` works with: Slim and Haml take only the indentation width and follow their own rules for the
-/// rest, except that a range, which can't add a line, leaves the final newline alone.
+/// rest, except that a range, which can't add a line, leaves the final newline alone. ERB keeps the end of the file as it is.
 pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
+    if lang == TemplateLang::Erb {
+        return Settings { final_newline: None, ..settings.clone() };
+    }
     if !matches!(lang, TemplateLang::Slim | TemplateLang::Skim | TemplateLang::Haml) {
         return settings.clone();
     }
@@ -440,6 +443,15 @@ mod tests {
     }
 
     #[test]
+    fn erb_keeps_the_end_of_the_file() {
+        let s = Settings::default();
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>  ", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n\n", &s).as_deref(), Ok("<p>x</p>\n\n\n"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n  ", &s).as_deref(), Ok("<p>x</p>\n\n"));
+    }
+
+    #[test]
     fn final_newline_and_line_endings() {
         let s = Settings::default();
         assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
@@ -448,11 +460,11 @@ mod tests {
         assert_eq!(fmt("a.slim", "p", &keep).as_deref(), Ok("p"));
         let drop = Settings { final_newline: Some(false), ..Settings::default() };
         assert_eq!(fmt("a.html.haml", "p", &drop).as_deref(), Ok("p\n"), "Haml ends the file by its own rules");
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &drop).as_deref(), Ok("<p>\n\n\n"), "ERB keeps the end of the file");
         let lf = Settings { end_of_line: Some(LineEnding::Lf), ..Settings::default() };
         assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &lf).as_deref(), Ok("<p>\n<br>\n"));
         let crlf = Settings { end_of_line: Some(LineEnding::CrLf), ..Settings::default() };
-        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\r\n<br>\r\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &crlf).as_deref(), Ok("<p>\r\n<br>"));
     }
 
     #[test]

@@ -298,18 +298,18 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 
 ## Order and status
 
-| Stage                    | Status                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------- |
-| 0. Harness               | done                                                                                              |
-| 0b. Context              | done                                                                                              |
-| 1a. Slim errors          | done                                                                                              |
-| 1b. Slim format          | done                                                                                              |
-| 2a. Haml errors          | done                                                                                              |
-| 2b. Haml format          | done                                                                                              |
-| 3a. ERB errors           | done                                                                                              |
-| 3b. ERB format           | in progress: whitespace rules decided (8); multi-line ERB tags' Ruby and script/style bodies kept |
-| 4. Editor and CLI        | not started                                                                                       |
-| 5. Remove external tools | not started                                                                                       |
+| Stage                    | Status                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 0. Harness               | done                                                                                                                                 |
+| 0b. Context              | done                                                                                                                                 |
+| 1a. Slim errors          | done                                                                                                                                 |
+| 1b. Slim format          | done                                                                                                                                 |
+| 2a. Haml errors          | done                                                                                                                                 |
+| 2b. Haml format          | done                                                                                                                                 |
+| 3a. ERB errors           | done                                                                                                                                 |
+| 3b. ERB format           | in progress: whitespace rules decided (8); multi-line ERB tags' Ruby, script/style bodies, comment interiors and the file's end kept |
+| 4. Editor and CLI        | not started                                                                                                                          |
+| 5. Remove external tools | not started                                                                                                                          |
 
 Each stage is its own branch and PR, with its harness report in the PR description.
 

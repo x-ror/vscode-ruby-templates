@@ -1,7 +1,8 @@
 //! ERB re-indentation. A line that starts in markup gets one indent unit per open HTML element and ERB block, read
-//! with `tags.rs`; a line that starts inside a multi-line tag or comment moves with the line its owner starts on,
-//! keeping its relative indentation; a `<script>`, `<style>`, `<pre>`, `<textarea>` or `<title>` body (its end tag's
-//! line too), a quoted attribute value and every line that starts inside an ERB tag (its Ruby) keep every byte.
+//! with `tags.rs`; a line that starts inside a multi-line tag moves with the line its owner starts on, keeping its
+//! relative indentation; a `<script>`, `<style>`, `<pre>`, `<textarea>` or `<title>` body (its end tag's line too), a
+//! quoted attribute value, every line after the first of an HTML comment and every line that starts inside an ERB tag
+//! (its Ruby) keep every byte.
 
 use crate::checks::RubyContext;
 use crate::format::{skip, Indented, SkipKind, Skipped};
@@ -103,7 +104,12 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
                 unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start));
                 fixed.push((tag.end, close_start));
             }
-            Token::Comment { start, end } => unit_spans.push(span(start + 1, end - 1, *start)),
+            Token::Comment { start, end } => {
+                // The line holding `<!--` is re-indented; the lines after it, the one with `-->` too, keep every byte.
+                let Some(newline) = text[*start..*end].find('\n') else { continue };
+                fixed.push((start + newline + 1, end - 1));
+                keep_end.push((start + newline + 1, end - 1));
+            }
             Token::Unterminated => return skip(SkipKind::Doubt, "a tag is never closed with `>`"),
         }
     }
@@ -478,13 +484,21 @@ mod tests {
     }
 
     #[test]
-    fn comments_and_multi_line_tags_move_with_their_first_line() {
-        let text = lines(&["<div>", "      <input type=\"text\"", "             name=\"q\">", "<!-- a", "       b -->", "</div>"]);
-        let want = lines(&["<div>", "  <input type=\"text\"", "         name=\"q\">", "  <!-- a", "         b -->", "</div>"]);
+    fn multi_line_tags_move_with_their_first_line() {
+        let text = lines(&["<div>", "      <input type=\"text\"", "             name=\"q\">", "</div>"]);
+        let want = lines(&["<div>", "  <input type=\"text\"", "         name=\"q\">", "</div>"]);
         assert_eq!(fmt(&text), want);
         // A value that spans lines is content.
         let title = lines(&["<div>", "    <a title=\"one", "      two\"", "      href=\"/\">x</a>", "</div>"]);
         assert_eq!(fmt(&title), lines(&["<div>", "  <a title=\"one", "      two\"", "    href=\"/\">x</a>", "</div>"]));
+    }
+
+    #[test]
+    fn comment_interiors_are_content() {
+        assert_eq!(fmt("<div>\n<!-- a\n  b -->\n</div>\n"), "<div>\n  <!-- a\n  b -->\n</div>\n");
+        assert_eq!(fmt("<div>\n<!-- a  \n  b  \n-->  \n</div>\n"), "<div>\n  <!-- a\n  b  \n-->\n</div>\n");
+        let mso = lines(&["<div>", "<!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "<p>x</p>", "</div>"]);
+        assert_eq!(fmt(&mso), lines(&["<div>", "  <!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "  <p>x</p>", "</div>"]));
     }
 
     #[test]
