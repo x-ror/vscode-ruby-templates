@@ -5,6 +5,7 @@
 //! (its Ruby) keep every byte.
 
 use crate::checks::RubyContext;
+use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::ruby::BlockEffect;
 use crate::tags::{self, Block, PState, Tag, Token, OPTIONAL_END, VOID};
@@ -112,6 +113,12 @@ pub(crate) fn indent(text: &str, unit: &str, trim: bool, partial: bool, ruby: &R
             }
             Token::Unterminated => return skip(SkipKind::Doubt, "a tag is never closed with `>`"),
         }
+    }
+
+    // A `<%%` literal is text to `tags.rs`, but the oracle keeps its bytes like any other ERB tag's.
+    for tag in erb_ruby::tags(text).iter().filter(|t| t.is_literal()) {
+        fixed.push((tag.start + 1, tag.end - 1));
+        keep_end.push((tag.start + 1, tag.end - 1));
     }
 
     let mut roles = vec![Role::Markup; lines.len()];
@@ -439,6 +446,20 @@ mod tests {
     fn unclosed_tag_is_the_reason_to_refuse() {
         let reason = indent("<div>\n<p>x</p>\n<% foo\n</div>", "  ", true, false).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(reason.contains("line 3") && reason.contains("invalid-first-character-of-tag-name"), "{reason}");
+    }
+
+    #[test]
+    fn tag_ends_at_the_first_erubi_close() {
+        let text = "<div>\n<% a = 1 %%>\n<% if b %>\n<p>x</p>\n<% end %>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <% a = 1 %%>\n  <% if b %>\n    <p>x</p>\n  <% end %>\n</div>\n");
+        let text = "<div>\n<% x = 1 %%>\n y %>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <% x = 1 %%>\n  y %>\n</div>\n");
+    }
+
+    #[test]
+    fn literal_tag_keeps_its_lines() {
+        let text = "<div>\n<%% foo\n    bar %>\n<p>x</p>\n</div>\n";
+        assert_eq!(fmt(text), "<div>\n  <%% foo\n    bar %>\n  <p>x</p>\n</div>\n");
     }
 
     #[test]

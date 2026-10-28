@@ -26,9 +26,6 @@ tokio = { version = "1", features = [
   "io-std",
   "time",
 ] }
-tree-sitter = "0.27"
-tree-sitter-embedded-template = "0.25"
-tree-sitter-ruby = "0.23"
 dashmap = "6"
 regex = "1"
 walkdir = "2"

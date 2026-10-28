@@ -228,6 +228,40 @@ impl Erubi {
     }
 }
 
+/// A tag as Erubi's scan finds it.
+pub struct ErbTag<'a> {
+    /// From `<%` to just past `%>`, without the newline Erubi may trim after it.
+    pub start: usize,
+    pub end: usize,
+    pub indicator: Option<&'a str>,
+    /// Between the indicator and the `-`/`=` before `%>`.
+    pub code: ByteRange<usize>,
+}
+
+impl ErbTag<'_> {
+    pub fn is_comment(&self) -> bool {
+        self.indicator == Some("#")
+    }
+
+    /// `<%% … %>`, which renders as the text `<% … %>`.
+    pub fn is_literal(&self) -> bool {
+        self.indicator == Some("%")
+    }
+}
+
+/// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
+pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
+    ERUBI_TAG
+        .captures_iter(text)
+        .filter_map(|tag| {
+            let whole = tag.get(0)?;
+            let code = tag.get(2)?;
+            let trimmed = tag.get(4).map_or(0, |m| m.len());
+            Some(ErbTag { start: whole.start(), end: whole.end() - trimmed, indicator: tag.get(1).map(|m| m.as_str()), code: code.range() })
+        })
+        .collect()
+}
+
 /// Erubi's read of `template` after the encoding tag Rails cuts, and that tag's length.
 fn read_after_encoding_tag(template: &str) -> (Erubi, usize) {
     let encoding_tag = ENCODING_TAG.find(template).map_or(0, |m| m.end());

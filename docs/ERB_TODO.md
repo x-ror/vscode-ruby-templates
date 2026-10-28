@@ -110,8 +110,8 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 
 ## 8. Diagnostics and linting
 
-- [x] Unclosed `<%` tag (`server/src/erb.rs`, tree-sitter-embedded-template)
-- [x] Unclosed tag: tree-sitter MISSING `%>` (`server/src/erb.rs`; `malformed-tag` removed, `docs/LINT_PLAN.md` 3a)
+- [x] Unclosed `<%` tag (`server/src/erb.rs`, text Erubi leaves after its last tag)
+- [x] Unclosed tag: a `<%` with no `%>` after it (`server/src/erb.rs`; `malformed-tag` removed, `docs/LINT_PLAN.md` 3a)
 - [x] Block opened without `<% end %>` (`server/src/erb.rs` + `server/src/ruby.rs` `analyze`)
 - [x] Stray `end` with no open block (`server/src/erb.rs`)
 - [x] `else`/`elsif`/`when` outside a block (`server/src/erb.rs` `BlockEffect::Continue`)

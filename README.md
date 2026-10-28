@@ -45,7 +45,7 @@ One extension for the three most common Ruby HTML template languages.
 
 **Language server (Rust)**
 
-A small language server written in Rust (`server/`, built on tower-lsp and tree-sitter) adds what a TextMate grammar can't:
+A small language server written in Rust (`server/`, built on tower-lsp) adds what a TextMate grammar can't:
 
 - Diagnostics as you type:
   - ERB views with an HTML host: `<img>` / `image_tag` without `alt`, duplicate static ids, `<img src="<%= … %>">` (use `image_tag`, info), unescaped output `<%==` / `raw` / `.html_safe` (info).
