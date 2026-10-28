@@ -390,6 +390,19 @@ const check = (label, actual, expected) => {
     "7: Missing partial shared/_missing",
   ]);
 
+  const sources = (u) => [
+    ...new Set(
+      notes
+        .find(
+          (n) =>
+            n.method === "textDocument/publishDiagnostics" &&
+            n.params.uri === u,
+        )
+        ?.params.diagnostics.map((d) => d.source),
+    ),
+  ];
+  check("erb diagnostics source", sources(uri), ["erb"]);
+
   const strictUri = fileUri(path.join(views, "strict", "show.html.erb"));
   await send(
     "textDocument/didOpen",
@@ -537,6 +550,8 @@ const check = (label, actual, expected) => {
     },
     true,
   );
+  check("haml diagnostics source", sources(hamlUri), ["haml"]);
+
   await new Promise((r) => setTimeout(r, 200));
   const slimDiag = notes.find(
     (n) =>
@@ -559,6 +574,7 @@ const check = (label, actual, expected) => {
       "8:1 ruby-syntax",
     ],
   );
+  check("slim diagnostics source", sources(slimUri), ["slim"]);
 
   const editUri = fileUri(path.join(views, "users", "edit.html.slim"));
   const editText =

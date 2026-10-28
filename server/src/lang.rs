@@ -16,6 +16,16 @@ pub enum TemplateLang {
 }
 
 impl TemplateLang {
+    /// The `source` of this language's diagnostics; Skim is Slim syntax.
+    pub fn diagnostic_source(self) -> &'static str {
+        match self {
+            Self::Erb => "erb",
+            Self::Haml => "haml",
+            Self::Slim | Self::Skim => "slim",
+            Self::Ruby => "ruby",
+        }
+    }
+
     pub fn from_uri_or_id(uri: &Url, language_id: Option<&str>) -> Option<Self> {
         match language_id {
             Some(id) if id == "erb" || id.starts_with("erb-") => return Some(Self::Erb),

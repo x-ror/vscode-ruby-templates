@@ -24,7 +24,7 @@ pub fn span_range(line: usize, line_text: &str, start_col: usize, end_col: usize
 }
 
 pub fn diag(range: Range, severity: DiagnosticSeverity, message: impl Into<String>) -> Diagnostic {
-    Diagnostic { range, severity: Some(severity), source: Some("ruby-templates".into()), message: message.into(), ..Default::default() }
+    Diagnostic { range, severity: Some(severity), message: message.into(), ..Default::default() }
 }
 
 pub fn error(range: Range, message: impl Into<String>) -> Diagnostic {

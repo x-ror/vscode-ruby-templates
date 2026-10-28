@@ -26,6 +26,7 @@
 - Haml's `- else`/`elsif`/`when` placement follows Haml's own bookkeeping (`Got "else" with no preceding "if"`, `"else" is indented at wrong level: expected 0, but was at 1.`), and content in a void element (`%br` with children or text, which Haml compiles to `<br>x</br>`) gets the warning `void-children`, a new Haml code.
 - **Breaking:** Haml's "Nested content under Ruby code that doesn't open a block" is gone (Haml compiles `= x` with children); it was reported under `illegal-nesting`.
 - **Breaking:** Haml's `bad-dedent` is gone (Haml reports a dedent to a level that never existed as inconsistent indentation); its entry in `rubyTemplates.haml.disabledDiagnostics` is ignored.
+- Every diagnostic's `source` is the file's language (`erb`, `haml`, `slim`; `ruby` for Jbuilder and Builder views), HTML and Rails checks included, instead of `ruby-templates`.
 
 ### Formatter
 

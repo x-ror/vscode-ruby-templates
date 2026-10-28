@@ -89,6 +89,9 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
+    for d in &mut out {
+        d.source = Some(doc.lang.diagnostic_source().into());
+    }
     out
 }
 
@@ -382,6 +385,37 @@ mod tests {
         ] {
             assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
         }
+    }
+
+    #[test]
+    fn diagnostic_source_is_the_file_language() {
+        let root = std::env::temp_dir().join(format!("rt-source-{}", std::process::id()));
+        let views = root.join("app/views/users");
+        std::fs::create_dir_all(&views).unwrap();
+        std::fs::write(root.join("Gemfile.lock"), format!("{GEM_LOCK}    actionview (8.0.2)\n")).unwrap();
+        let render = "<%= render \"users/gone\" %>";
+        let cases = [
+            ("a.html.erb", TemplateLang::Erb, "<% end %>\n<div>\n", "erb"),
+            ("b.html.erb", TemplateLang::Erb, render, "erb"),
+            ("c.haml", TemplateLang::Haml, "%p hi\n  %b x\n= render \"users/gone\"\n", "haml"),
+            ("d.slim", TemplateLang::Slim, "p\n   a\n  b\n= render \"users/gone\"\n", "slim"),
+            ("e.skim", TemplateLang::Skim, "p\n   a\n  b\n", "slim"),
+            ("f.jbuilder", TemplateLang::Ruby, "json.partial! \"users/gone\"\n", "ruby"),
+        ];
+        for (name, lang, text, source) in cases {
+            let uri = Url::from_file_path(views.join(name)).unwrap();
+            let found = diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, &Options::default());
+            assert!(!found.is_empty(), "{name}");
+            for d in found {
+                assert_eq!(d.source.as_deref(), Some(source), "{name}: {}", d.message);
+            }
+        }
+        let uri = Url::from_file_path(views.join("g.html.erb")).unwrap();
+        let html = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), version: 0 };
+        let found = diagnostics(&uri, &html, &Options::default());
+        assert_eq!(found.iter().filter_map(util::code).collect::<Vec<_>>(), [tags::code::UNCLOSED_ELEMENT]);
+        assert_eq!(found[0].source.as_deref(), Some("erb"));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
