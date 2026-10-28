@@ -111,6 +111,9 @@ jobs:
   extension:
     needs: [lint, server]
     runs-on: ubuntu-26.04
+    # The release step creates the GitHub release; the repo's default token is read-only.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
