@@ -647,12 +647,12 @@
             "erb-format"
           ],
           "enumDescriptions": [
-            "No ERB formatter from this extension (another extension's stays in charge).",
-            "Built-in, through the language server: re-indents HTML views by HTML and ERB nesting (<script>/<style> bodies and multi-line tags move as a block) and fixes trailing whitespace, blank lines and the final newline per .editorconfig and .erb_lint.yml; never wraps lines or changes <pre>/<textarea> bodies or Ruby strings. Also Format Selection.",
+            "No ERB formatter from this extension, even with rubyTemplates.erb.format.enabled on (another extension's stays in charge).",
+            "Built-in, through the language server: re-indents HTML views by HTML and ERB nesting with the editor's indentation width and trims trailing whitespace of text lines; keeps <script>/<style>/<pre>/<textarea>/<title> bodies, comments, the Ruby of multi-line ERB tags, line endings and the end of the file; never wraps lines. Also Format Selection.",
             "htmlbeautifier (gem install htmlbeautifier): re-indents HTML and ERB blocks to the editor's tab size, keeps line breaks.",
             "erb-format (gem install erb-formatter): re-flows tags and attributes to a line width."
           ],
-          "default": "none",
+          "default": "builtin",
           "description": "What Format Document does in ERB files. Runs through bundle exec when rubyTemplates.preview.useBundler is on."
         },
         "rubyTemplates.commands.htmlbeautifier": {

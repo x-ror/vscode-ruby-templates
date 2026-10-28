@@ -1378,7 +1378,7 @@ function registerErbFormatting(context, output) {
   const update = () => {
     registration?.dispose();
     registration = undefined;
-    const tool = cfg().get("erb.formatter", "none");
+    const tool = cfg().get("erb.formatter", "builtin");
     if (tool === "builtin") {
       registration = vscode.Disposable.from(
         vscode.languages.registerDocumentFormattingEditProvider("erb", {

@@ -4,6 +4,7 @@
 
 ### Language server
 
+- **Breaking:** `rubyTemplates.erb.formatter` defaults to `builtin`: Format Document and format on save now re-indent HTML ERB views with the built-in formatter. Set `rubyTemplates.erb.format.enabled: false` or `rubyTemplates.erb.formatter: none` to keep the old behaviour.
 - `rubyTemplates.erb|haml|slim.diagnostics.enabled` and `rubyTemplates.erb|haml|slim.format.enabled` (both on by default) switch a language's diagnostics and the built-in formatter off; Skim follows `slim`. The `ruby-templates` command line is unaffected.
 - Find references, file renames and the definition of a partial's local scan the app on their own thread, so hover, completion and diagnostics answer while they run (a hover behind references on 5000 templates: 0.3 ms instead of 130 ms).
 - Rails checks follow the project: the framework and gem versions come from the nearest `Gemfile.lock`. `unresolved-render` runs only when it lists `actionview`, `strict-locals` only with `actionview` 7.1 or newer; Sinatra projects and folders without a lockfile get neither. Diagnostics refresh when `Gemfile.lock` changes.

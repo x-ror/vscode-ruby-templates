@@ -248,9 +248,7 @@ const checks = {
     await settings().update("commands.htmlbeautifier", undefined, global);
   },
 
-  async "ERB formatter: builtin, through the server"() {
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("erb.formatter", "builtin", global);
+  async "ERB formatter: builtin by default, through the server"() {
     const editor = await open("app/views/users/unformatted.html.erb");
     try {
       // Empty until the server is up.
@@ -269,7 +267,6 @@ const checks = {
       );
     } finally {
       await revert(editor);
-      await settings().update("erb.formatter", undefined, global);
     }
   },
 
