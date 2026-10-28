@@ -170,6 +170,8 @@ jobs:
     steps:
       - uses: actions/setup-node@v5
         with: { node-version: 24, registry-url: "https://registry.npmjs.org" }
+      # The npm bundled with Node may predate 11.5.
+      - run: npm install -g npm@latest
       - uses: actions/download-artifact@v8
         with: { name: npm, path: npm-dist }
       # Artifacts lose the executable bit.
@@ -178,23 +180,27 @@ jobs:
       - run: |
           publish() {
             spec=$(node -p "const p = require('./$1/package.json'); p.name + '@' + p.version")
-            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "$1"
+            # npm reads a bare "dir/name" as a GitHub repository; "./" makes it a folder.
+            npm view "$spec" version >/dev/null 2>&1 || npm publish --provenance --access public "./$1"
           }
           for dir in npm-dist/*/; do [ "$dir" = npm-dist/main/ ] || publish "${dir%/}"; done
           publish npm-dist/main
 
   # Each registry gets its own job, so one failing doesn't block the other.
   # A version already out is skipped, so a failed run can be re-run.
+  # Marketplace trusted publishing: no token, the publisher trusts this repository and workflow file.
   publish-marketplace:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: extension
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: oven-sh/setup-bun@v2
       - uses: actions/download-artifact@v8
         with: { name: vsix }
-      - run: for vsix in *.vsix; do bunx @vscode/vsce publish --skip-duplicate --packagePath "$vsix"; done
-        env: { VSCE_PAT: "${{ secrets.VSCE_PAT }}" }
+      - run: for vsix in *.vsix; do bunx @vscode/vsce publish --oidc --skip-duplicate --packagePath "$vsix"; done
 
   # Open VSX trusted publishing: no token, the registry trusts this repository and workflow file.
   publish-open-vsx:
