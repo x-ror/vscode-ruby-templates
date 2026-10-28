@@ -24,7 +24,7 @@ format = :html unless ActionView::Template::Types.symbols.include?(format)
 # The source line of ActionView's method definition: the template's first line follows `@virtual_path = …;` on the next.
 VIRTUAL_PATH_ASSIGNMENT = "@virtual_path = "
 
-# docs/LINT_PLAN.md 3b: ERB copies the template's text, indentation included, into the HTML, so re-indenting changes
+# ERB copies the template's text, indentation included, into the HTML, so re-indenting changes
 # the rendered whitespace by design. What formatting may change is therefore compared with the leading and trailing
 # whitespace of text lines removed (and that of lines inside a start tag, between attributes), except in `pre`,
 # `textarea`, `script` and `style` and inside ERB tags, whose Ruby stays byte-identical. Erubi's own regexp finds the

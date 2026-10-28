@@ -115,7 +115,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `- else` / `- elsif` / `- when` without a matching `- if` / `- case` (not reported today) (`server/src/slim_indent.rs` `unmatched-branch`)
 - [x] Ruby syntax errors in `-`/`=` lines and attribute values (e.g. `= foo(` is not reported): bracket/quote balance only, as a warning; no Ruby parser (`server/src/slim_indent.rs` `unclosed-ruby`)
 - [x] Children under a void element (`input`, `br`, `img/`) or under an inline-output tag that doesn't open a block: void elements and `tag/` (warning, HTML hosts only: `server/src/slim_indent.rs` `void-children`, `server/src/lang.rs` `slim_html_host`); inline-output tags with children are valid Slim (DoInserter adds `do`), so not reported
-- [x] `- form_with … do` renders nothing but is valid Slim and Ruby, so it isn't reported (`silent-output-helper` removed, `docs/LINT_PLAN.md` 1a)
+- [x] `- form_with … do` renders nothing but is valid Slim and Ruby, so it isn't reported (`silent-output-helper` removed)
 - [x] Unknown engine check accepts engines registered by the app (setting for extra engine names) (`rubyTemplates.slim.extraEngines`, `src/client.js` `initializationOptions.slim`)
 - [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/slim_indent.rs`): trimmed to Slim 5's list (`server/src/slim_indent.rs` `SLIM_ENGINES`)
 - [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)

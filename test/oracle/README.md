@@ -1,6 +1,6 @@
 # Oracle harness
 
-Compares the official template engine with `ruby-templates` (see `docs/LINT_PLAN.md`, "How we compare"). Stage 0 measures today's code: mismatches are printed, not failed.
+Compares the official template engine with `ruby-templates`: the same errors at the same lines, and formatting that leaves the compiled output unchanged. Mismatches are printed, not failed.
 
 ## Install
 

@@ -106,8 +106,6 @@ gem install haml_to_erb        # Haml → ERB
 gem install html2slim haml2slim  # ERB → Slim, Haml → Slim
 ```
 
-**Lint rule catalogue**: [`docs/lint/`](docs/lint/README.md) lists every check of the built-in server, erb_lint, Herb, haml-lint and slim-lint per language, which of them overlap, and when Herb prefers `image_tag` / `link_to` / `form_with` over plain HTML.
-
 **ERB formatting**: _Format Document_ / format on save (`"[erb]": { "editor.formatOnSave": true }`) run the built-in formatter (see [Built-in formatter](#built-in-formatter); also _Format Selection_). `rubyTemplates.<erb|haml>.format.enabled: false` registers no formatter for that language, so another extension's formatter can take over.
 
 Executable paths are configurable under `rubyTemplates.commands.*`. Set `rubyTemplates.preview.useBundler` to run them through `bundle exec` in projects with a Gemfile.
