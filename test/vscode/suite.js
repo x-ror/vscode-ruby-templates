@@ -141,6 +141,23 @@ const checks = {
     );
   },
 
+  async "erb.diagnostics.enabled off clears diagnostics"() {
+    const editor = await open("app/views/users/index.html.erb");
+    const served = () =>
+      vscode.languages
+        .getDiagnostics(editor.document.uri)
+        .filter((d) => d.source === "erb");
+    const key = "erb.diagnostics.enabled";
+    const global = vscode.ConfigurationTarget.Global;
+    try {
+      await settings().update(key, false, global);
+      await until("no diagnostics", () => served().length === 0);
+    } finally {
+      await settings().update(key, undefined, global);
+    }
+    await until("diagnostics back", () => served().length > 0);
+  },
+
   async "go to partial"() {
     const editor = await open("app/views/users/index.html.erb");
     const locations = await until("definition", () =>

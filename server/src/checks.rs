@@ -25,7 +25,13 @@ pub(crate) struct Options {
     disabled_erb: Vec<String>,
     disabled_haml: Vec<String>,
     disabled_jbuilder: Vec<String>,
+    diagnostics_off: Vec<TemplateLang>,
+    format_off: Vec<TemplateLang>,
 }
+
+/// The settings sections that switch diagnostics and formatting on or off, and the languages each covers.
+const SWITCHED_SECTIONS: [(&str, &[TemplateLang]); 3] =
+    [("erb", &[TemplateLang::Erb]), ("haml", &[TemplateLang::Haml]), ("slim", &[TemplateLang::Slim, TemplateLang::Skim])];
 
 impl Options {
     /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
@@ -50,14 +56,33 @@ impl Options {
                 })
                 .collect()
         };
-        let options = Self {
+        let mut options = Self {
             extra_engines: strings("slim", "extraEngines"),
             disabled_slim: strings("slim", "disabledDiagnostics"),
             disabled_erb: strings("erb", "disabledDiagnostics"),
             disabled_haml: strings("haml", "disabledDiagnostics"),
             disabled_jbuilder: strings("jbuilder", "disabledDiagnostics"),
+            ..Self::default()
         };
+        for (section, langs) in SWITCHED_SECTIONS {
+            for (group, off) in [("diagnostics", &mut options.diagnostics_off), ("format", &mut options.format_off)] {
+                let Some(value) = init.and_then(|v| v.get(section)?.get(group)?.get("enabled")) else { continue };
+                match value.as_bool() {
+                    Some(false) => off.extend(langs),
+                    Some(true) => {}
+                    None => ignored.push(format!("{section}.{group}.enabled: expected a boolean, got {value}")),
+                }
+            }
+        }
         (options, ignored)
+    }
+
+    fn diagnostics_enabled(&self, lang: TemplateLang) -> bool {
+        !self.diagnostics_off.contains(&lang)
+    }
+
+    pub(crate) fn format_enabled(&self, lang: TemplateLang) -> bool {
+        !self.format_off.contains(&lang)
     }
 
     /// Diagnostic codes turned off for `lang`; Skim shares Slim's setting.
@@ -74,7 +99,7 @@ impl Options {
 pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
-    if uri.path().to_ascii_lowercase().ends_with(".tt") {
+    if uri.path().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
         return vec![];
     }
     let path = uri.to_file_path().ok();
@@ -310,6 +335,33 @@ mod tests {
         assert_eq!(options, expected);
         assert_eq!(ignored.len(), 3, "{ignored:?}");
         assert_eq!(Options::from_init(None), (Options::default(), vec![]));
+    }
+
+    #[test]
+    fn languages_switch_diagnostics_and_formatting_off() {
+        let init = serde_json::json!({
+            "erb": { "diagnostics": { "enabled": false } },
+            "slim": { "format": { "enabled": false }, "diagnostics": { "enabled": "no" } },
+            "haml": { "diagnostics": { "enabled": true }, "format": {} }
+        });
+        let (options, ignored) = Options::from_init(Some(&init));
+        assert_eq!(ignored.len(), 1, "{ignored:?}");
+        let count = |lang, text: &str, options: &Options| {
+            let uri = Url::parse("file:///v/show.html.erb").unwrap();
+            diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, options).len()
+        };
+        assert_eq!(count(TemplateLang::Erb, "<% end %>\n", &Options::default()), 1);
+        assert_eq!(count(TemplateLang::Erb, "<% end %>\n", &options), 0);
+        let haml = "%p hi\n  %b x\n";
+        assert_eq!(count(TemplateLang::Haml, haml, &options), count(TemplateLang::Haml, haml, &Options::default()));
+        let slim = "p\n   a\n  b\n";
+        assert_ne!(count(TemplateLang::Slim, slim, &options), 0);
+        let formats = |lang| options.format_enabled(lang);
+        assert!(formats(TemplateLang::Erb) && formats(TemplateLang::Haml) && formats(TemplateLang::Ruby));
+        assert!(!formats(TemplateLang::Slim) && !formats(TemplateLang::Skim));
+        // Skim follows Slim.
+        let off = Options::from_init(Some(&serde_json::json!({ "slim": { "diagnostics": { "enabled": false } } }))).0;
+        assert_eq!(count(TemplateLang::Skim, slim, &off), 0);
     }
 
     #[test]

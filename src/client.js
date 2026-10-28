@@ -41,6 +41,10 @@ function findServer(context) {
 async function doStart(context, output) {
   const config = vscode.workspace.getConfiguration("rubyTemplates");
   if (!config.get("server.enabled", true)) return;
+  const switches = (lang) => ({
+    diagnostics: { enabled: config.get(`${lang}.diagnostics.enabled`, true) },
+    format: { enabled: config.get(`${lang}.format.enabled`, true) },
+  });
   const command = findServer(context);
   output.appendLine(`[ruby-templates] starting language server: ${command}`);
 
@@ -90,10 +94,15 @@ async function doStart(context, output) {
         slim: {
           extraEngines: config.get("slim.extraEngines", []),
           disabledDiagnostics: config.get("slim.disabledDiagnostics", []),
+          ...switches("slim"),
         },
-        erb: { disabledDiagnostics: config.get("erb.disabledDiagnostics", []) },
+        erb: {
+          disabledDiagnostics: config.get("erb.disabledDiagnostics", []),
+          ...switches("erb"),
+        },
         haml: {
           disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
+          ...switches("haml"),
         },
         jbuilder: {
           disabledDiagnostics: config.get("jbuilder.disabledDiagnostics", []),

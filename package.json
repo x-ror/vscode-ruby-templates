@@ -780,6 +780,36 @@
           "uniqueItems": true,
           "description": "Built-in Slim diagnostics to turn off, by code."
         },
+        "rubyTemplates.erb.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the language server's diagnostics in ERB files. Turn off to silence them all."
+        },
+        "rubyTemplates.haml.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the language server's diagnostics in Haml files. Turn off to silence them all."
+        },
+        "rubyTemplates.slim.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the language server's diagnostics in Slim and Skim files. Turn off to silence them all."
+        },
+        "rubyTemplates.erb.format.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the language server format ERB files (Format Document and Format Selection with the built-in formatter). Turn off for no edits."
+        },
+        "rubyTemplates.haml.format.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the language server format Haml files (Format Document and Format Selection). Turn off for no edits."
+        },
+        "rubyTemplates.slim.format.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Let the language server format Slim and Skim files (Format Document and Format Selection). Turn off for no edits."
+        },
         "rubyTemplates.erbLint.enabled": {
           "type": "boolean",
           "default": false,

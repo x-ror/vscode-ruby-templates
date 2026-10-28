@@ -144,38 +144,42 @@ fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
 const phoneText = '= render "card"\n';
 const phoneUri = fileUri(phoneFile).replace("+", "%2B");
 
-const proc = cp.spawn(bin);
-let id = 0,
-  buf = Buffer.alloc(0);
-const pending = new Map();
-const notes = [];
-proc.stdout.on("data", (d) => {
-  buf = Buffer.concat([buf, d]);
-  for (;;) {
-    const m = buf.toString("utf8").match(/^Content-Length: (\d+)\r\n\r\n/);
-    if (!m) return;
-    const len = +m[1],
-      start = m[0].length;
-    if (buf.length < start + len) return;
-    const msg = JSON.parse(buf.slice(start, start + len).toString("utf8"));
-    buf = buf.slice(start + len);
-    if (msg.id !== undefined && pending.has(msg.id)) {
-      pending.get(msg.id)(msg);
-      pending.delete(msg.id);
-    } else notes.push(msg);
-  }
-});
-const send = (method, params, isNote) =>
-  new Promise((res) => {
-    const msg = { jsonrpc: "2.0", method, params };
-    if (!isNote) {
-      msg.id = ++id;
-      pending.set(msg.id, res);
+const startServer = () => {
+  const proc = cp.spawn(bin);
+  let id = 0,
+    buf = Buffer.alloc(0);
+  const pending = new Map();
+  const notes = [];
+  proc.stdout.on("data", (d) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      const m = buf.toString("utf8").match(/^Content-Length: (\d+)\r\n\r\n/);
+      if (!m) return;
+      const len = +m[1],
+        start = m[0].length;
+      if (buf.length < start + len) return;
+      const msg = JSON.parse(buf.slice(start, start + len).toString("utf8"));
+      buf = buf.slice(start + len);
+      if (msg.id !== undefined && pending.has(msg.id)) {
+        pending.get(msg.id)(msg);
+        pending.delete(msg.id);
+      } else notes.push(msg);
     }
-    const s = JSON.stringify(msg);
-    proc.stdin.write(`Content-Length: ${Buffer.byteLength(s)}\r\n\r\n${s}`);
-    if (isNote) res();
   });
+  const send = (method, params, isNote) =>
+    new Promise((res) => {
+      const msg = { jsonrpc: "2.0", method, params };
+      if (!isNote) {
+        msg.id = ++id;
+        pending.set(msg.id, res);
+      }
+      const s = JSON.stringify(msg);
+      proc.stdin.write(`Content-Length: ${Buffer.byteLength(s)}\r\n\r\n${s}`);
+      if (isNote) res();
+    });
+  return { send, notes };
+};
+const { send, notes } = startServer();
 const rel = (p) => p.replace(fileUri(root), "");
 let failures = 0;
 const check = (label, actual, expected) => {
@@ -1256,6 +1260,62 @@ const check = (label, actual, expected) => {
       ?.params.diagnostics.map((d) => d.message),
     ["unexpected '&&', ignoring it"],
   );
+  // Per-language switches from the client's initializationOptions: no diagnostics, no formatting edits.
+  const off = startServer();
+  await off.send("initialize", {
+    processId: null,
+    rootUri: fileUri(root),
+    capabilities: {},
+    initializationOptions: {
+      erb: { diagnostics: { enabled: false }, format: { enabled: false } },
+      haml: { format: { enabled: false } },
+    },
+  });
+  await off.send("initialized", {}, true);
+  const open = (u, languageId, text) =>
+    off.send(
+      "textDocument/didOpen",
+      { textDocument: { uri: u, languageId, version: 1, text } },
+      true,
+    );
+  await open(uri, "erb", text);
+  await open(reindentUri, "haml", "%div\n    %p\n");
+  await open(hamlUri, "haml", hamlText);
+  await open(editUri, "slim", "div\n    p x\n");
+  await new Promise((r) => setTimeout(r, 300));
+  const diagnosticsOf = (u) =>
+    off.notes
+      .filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" && n.params.uri === u,
+      )
+      .at(-1)?.params.diagnostics.length;
+  check("erb diagnostics off", diagnosticsOf(uri) ?? 0, 0);
+  expect(
+    "haml diagnostics stay on",
+    diagnosticsOf(hamlUri) > 0,
+    diagnosticsOf(hamlUri),
+  );
+  const formatResult = async (u) =>
+    (
+      await off.send("textDocument/formatting", {
+        textDocument: { uri: u },
+        options: { tabSize: 2, insertSpaces: true },
+      })
+    ).result;
+  check("haml format off", await formatResult(reindentUri), null);
+  const rangeOff = await off.send("textDocument/rangeFormatting", {
+    textDocument: { uri: reindentUri },
+    options: { tabSize: 2, insertSpaces: true },
+    range: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 } },
+  });
+  check("haml range format off", rangeOff.result, null);
+  expect(
+    "slim format stays on",
+    (await formatResult(editUri))?.[0]?.newText === "div\n  p x\n",
+  );
+  await off.send("shutdown", {});
+  await off.send("exit", {}, true);
   await send("shutdown", {});
   await send("exit", {}, true);
   fs.rmSync(root, { recursive: true, force: true });
