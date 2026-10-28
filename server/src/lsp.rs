@@ -198,10 +198,14 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
 }
 
 impl Backend {
-    /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is.
+    /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is,
+    /// and, unlogged, when formatting is switched off for its language.
     /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
     async fn formatted(&self, uri: &Url, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
         let (lang, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.text.clone()))?;
+        if !self.options().format_enabled(lang) {
+            return None;
+        }
         let path = uri.to_file_path().ok();
         let mut settings =
             path.map_or_else(format::Settings::default, |path| config::settings_for(&path, lang).settings).with_editor(options);

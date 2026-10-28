@@ -223,6 +223,7 @@ Decided (2026-10-25):
 6. **Editor and `.editorconfig` give the Slim, Haml and ERB formatters only the indentation width (default 2); they always write spaces and keep the file's line endings** (Slim decided 2026-10-26, Haml 2026-10-27, ERB 2026-10-28). For Haml, empty and whitespace-only lines at the end collapse into one final line ending (Haml strips the template), and the `.haml-lint.yml` formatting keys stop applying.
 7. **Ruby checks parse with the project's Ruby version** (`.ruby-version`, else `Gemfile.lock` `RUBY VERSION`), the latest grammar when none (decided 2026-10-27).
 8. **ERB formatting, the whitespace beyond re-indentation** (decided 2026-10-28): trailing whitespace of text lines is removed, under the same exceptions as indentation (5), and the compiled-output comparison also ignores it; the indentation of attribute lines inside a multi-line start tag may change (whitespace between attributes, never inside a value); a missing final newline is not added; the inside of an HTML comment is left as it is (only the line holding `<!--` is re-indented).
+9. **Editor settings of stage 4** (decided 2026-10-28): the indentation width stays the editor's and `.editorconfig`'s (6), with no setting of its own; each language gets `rubyTemplates.<erb|haml|slim>.diagnostics.enabled` and `rubyTemplates.<erb|haml|slim>.format.enabled` (both on by default); every diagnostic's `source` is the file's language (`erb`, `haml`, `slim`), HTML and Rails checks included. The built-in ERB formatter is the default (`rubyTemplates.erb.formatter: builtin`); `erb.format.enabled` turns it off.
 
 ### Built-in diagnostic codes
 
@@ -307,8 +308,8 @@ Every code the server emits today (`code` modules in `erb.rs`, `tags.rs`, `html_
 | 2a. Haml errors          | done        |
 | 2b. Haml format          | done        |
 | 3a. ERB errors           | done        |
-| 3b. ERB format           | in review   |
-| 4. Editor and CLI        | not started |
+| 3b. ERB format           | done        |
+| 4. Editor and CLI        | in review   |
 | 5. Remove external tools | not started |
 
 Each stage is its own branch and PR, with its harness report in the PR description.

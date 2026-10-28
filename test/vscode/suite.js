@@ -141,6 +141,23 @@ const checks = {
     );
   },
 
+  async "erb.diagnostics.enabled off clears diagnostics"() {
+    const editor = await open("app/views/users/index.html.erb");
+    const served = () =>
+      vscode.languages
+        .getDiagnostics(editor.document.uri)
+        .filter((d) => d.source === "erb");
+    const key = "erb.diagnostics.enabled";
+    const global = vscode.ConfigurationTarget.Global;
+    try {
+      await settings().update(key, false, global);
+      await until("no diagnostics", () => served().length === 0);
+    } finally {
+      await settings().update(key, undefined, global);
+    }
+    await until("diagnostics back", () => served().length > 0);
+  },
+
   async "go to partial"() {
     const editor = await open("app/views/users/index.html.erb");
     const locations = await until("definition", () =>
@@ -231,9 +248,7 @@ const checks = {
     await settings().update("commands.htmlbeautifier", undefined, global);
   },
 
-  async "ERB formatter: builtin, through the server"() {
-    const global = vscode.ConfigurationTarget.Global;
-    await settings().update("erb.formatter", "builtin", global);
+  async "ERB formatter: builtin by default, through the server"() {
     const editor = await open("app/views/users/unformatted.html.erb");
     try {
       // Empty until the server is up.
@@ -252,7 +267,6 @@ const checks = {
       );
     } finally {
       await revert(editor);
-      await settings().update("erb.formatter", undefined, global);
     }
   },
 
