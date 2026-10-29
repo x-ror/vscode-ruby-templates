@@ -2,7 +2,7 @@
 
 use crate::erb_ruby;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{coded, offset_to_position, warning};
+use crate::util::{coded, offset_to_position, warning, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
@@ -319,7 +319,8 @@ fn void_close_tag(name: &str, range: Range) -> Diagnostic {
 
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
     let Some(tokens) = tokens(text) else { return };
-    let range = |start, end| Range::new(offset_to_position(text, start), offset_to_position(text, end));
+    let index = LineIndex::new(text);
+    let range = |start, end| Range::new(index.position(start), index.position(end));
     let mut stack: Vec<Tag> = Vec::new();
     // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
     let mut optional: Vec<Tag> = Vec::new();

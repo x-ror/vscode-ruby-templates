@@ -156,9 +156,8 @@ fn spacing_actions(uri: &Url, text: &str, range: Range, only: Option<&[CodeActio
         return vec![];
     };
     let edits = erb::spacing_edits(text);
-    let to_edit = |(s, e, tag): &(usize, usize, String)| {
-        TextEdit::new(Range::new(util::offset_to_position(text, *s), util::offset_to_position(text, *e)), tag.clone())
-    };
+    let index = util::LineIndex::new(text);
+    let to_edit = |(s, e, tag): &(usize, usize, String)| TextEdit::new(Range::new(index.position(*s), index.position(*e)), tag.clone());
     let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
         CodeActionOrCommand::CodeAction(CodeAction {
             title: title.into(),
@@ -676,7 +675,8 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position_params.text_document.uri;
         let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri)) else { return Ok(None) };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
-        let to_range = |(s, e)| Range::new(util::offset_to_position(&doc.text, s), util::offset_to_position(&doc.text, e));
+        let index = util::LineIndex::new(&doc.text);
+        let to_range = |(s, e)| Range::new(index.position(s), index.position(e));
         Ok(tags::linked_names(&doc.text, offset)
             .map(|names| LinkedEditingRanges { ranges: names.map(to_range).to_vec(), word_pattern: None }))
     }

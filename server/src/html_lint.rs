@@ -3,7 +3,7 @@
 
 use crate::erb;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{coded, offset_to_position, warning};
+use crate::util::{coded, offset_to_position, warning, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
@@ -84,7 +84,8 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let regions = non_markup(text);
     let spans = erb::code_spans(text);
     let tags = start_tags(text, &regions);
-    let range = |start: usize, end: usize| Range::new(offset_to_position(text, start), offset_to_position(text, end));
+    let index = LineIndex::new(text);
+    let range = |start: usize, end: usize| Range::new(index.position(start), index.position(end));
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
         let tag_range = range(tag.start, tag.start + 4);

@@ -4,7 +4,19 @@ use tower_lsp::lsp_types::{
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
-    LineIndex::new(text).position(offset)
+    let offset = char_floor(text, offset);
+    let before = &text[..offset];
+    column_position(text, before.matches('\n').count(), before.rfind('\n').map_or(0, |i| i + 1), offset)
+}
+
+/// `offset` clamped to `text` and moved back to a character boundary.
+fn char_floor(text: &str, offset: usize) -> usize {
+    (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0)
+}
+
+/// The position of `offset` on `line`, which starts at byte `line_start`: its column counts UTF-16 units.
+fn column_position(text: &str, line: usize, line_start: usize, offset: usize) -> Position {
+    Position::new(line as u32, text[line_start..offset].encode_utf16().count() as u32)
 }
 
 /// The line starts of a text, so that many offsets or lines can be looked up without scanning from the start each time.
@@ -20,11 +32,9 @@ impl<'a> LineIndex<'a> {
 
     /// The line and UTF-16 column of `offset`, moved back to a character boundary and clamped to the text.
     pub fn position(&self, offset: usize) -> Position {
-        let text = self.text;
-        let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+        let offset = char_floor(self.text, offset);
         let line = self.starts.partition_point(|&s| s <= offset) - 1;
-        let col = text[self.starts[line]..offset].encode_utf16().count();
-        Position::new(line as u32, col as u32)
+        column_position(self.text, line, self.starts[line], offset)
     }
 
     /// Line `n` as `str::lines` gives it; empty past the end.

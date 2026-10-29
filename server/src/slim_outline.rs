@@ -3,6 +3,7 @@
 use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
 use crate::partials::render_refs;
 use crate::slim_parser::SLIM_ENGINES;
+use crate::util::LineIndex;
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
@@ -327,8 +328,9 @@ pub fn document_symbols(text: &str, extra_engines: &[String]) -> Vec<DocumentSym
     let entries = entries(text, &lines, extra_engines);
     let ends = block_ends(&entries);
     let mut items = Vec::new();
+    let index = LineIndex::new(text);
     let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(text, name, kind, range, selection)));
+        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
     };
     for (e, end) in entries.iter().zip(ends) {
         let block = (e.start, line_end(&lines, end));
