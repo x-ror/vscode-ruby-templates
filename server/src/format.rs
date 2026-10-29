@@ -13,11 +13,13 @@ pub struct Settings {
     pub indent_size: usize,
     /// End the file with a line ending; off for a range, which can't add a line.
     pub final_newline: bool,
+    /// Move the lines inside an ERB template's comments with the line the comment opens on.
+    pub align_comments: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { indent_size: 2, final_newline: true }
+        Self { indent_size: 2, final_newline: true, align_comments: false }
     }
 }
 
@@ -120,7 +122,7 @@ fn format_once(
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
         TemplateLang::Erb if !html_host(uri) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
-        TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), ruby)?,
+        TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
     };

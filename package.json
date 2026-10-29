@@ -747,6 +747,11 @@
           "default": true,
           "description": "Let the language server format ERB files (Format Document and Format Selection with the built-in formatter). Turn off for no edits."
         },
+        "rubyTemplates.erb.format.alignComments": {
+          "type": "boolean",
+          "default": false,
+          "description": "Move the lines inside an ERB template's HTML comments (`<!-- … -->`) and multi-line `<%# … %>` comments with the line the comment opens on, keeping their relative indentation. Off: those lines keep their bytes."
+        },
         "rubyTemplates.haml.format.enabled": {
           "type": "boolean",
           "default": true,

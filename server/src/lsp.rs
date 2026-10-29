@@ -211,6 +211,7 @@ impl Backend {
         if lines_only {
             settings.final_newline = false;
         }
+        settings.align_comments = self.options().align_erb_comments;
         match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
             Ok(formatted) => Some((text, formatted.text)),
             Err(skipped) => {

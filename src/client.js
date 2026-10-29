@@ -99,6 +99,10 @@ async function doStart(context, output) {
         erb: {
           disabledDiagnostics: config.get("erb.disabledDiagnostics", []),
           ...switches("erb"),
+          format: {
+            ...switches("erb").format,
+            alignComments: config.get("erb.format.alignComments", false),
+          },
         },
         haml: {
           disabledDiagnostics: config.get("haml.disabledDiagnostics", []),

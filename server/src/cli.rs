@@ -15,13 +15,14 @@ const USAGE: i32 = 2;
 const HELP: &str = "\
 Usage:
   ruby-templates check <files|dirs>...
-  ruby-templates format [--check | --write] [--verbose] <files|dirs>...
-  ruby-templates format [--check] [--verbose] --stdin-filepath <path> [-]
+  ruby-templates format [--check | --write] [--verbose] [--align-comments] <files|dirs>...
+  ruby-templates format [--check] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
 check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates.
 format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace and the final newline.
         Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
-        on stderr. Without --check or --write the result goes to stdout.
+        on stderr. Without --check or --write the result goes to stdout. --align-comments moves the
+        lines inside ERB comments with the line the comment opens on.
 
 Exit codes: 0 ok, 1 diagnostics (errors or warnings) or files that would change, 2 usage or I/O error, a formatter
 bug, or (for check) a named file that isn't a template.
@@ -83,6 +84,7 @@ struct FormatArgs {
     check: bool,
     write: bool,
     verbose: bool,
+    align_comments: bool,
     /// Read the text from stdin; the path picks the language and the config.
     stdin_path: Option<PathBuf>,
     paths: Vec<PathBuf>,
@@ -98,6 +100,7 @@ impl FormatArgs {
                 "--check" => parsed.check = true,
                 "--write" => parsed.write = true,
                 "--verbose" => parsed.verbose = true,
+                "--align-comments" => parsed.align_comments = true,
                 "--stdin-filepath" => parsed.stdin_path = Some(args.next().ok_or("--stdin-filepath needs a path")?.into()),
                 "-" => stdin = true,
                 flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
@@ -223,7 +226,8 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
     let shown = path.display();
     let result = match (file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
-            let resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()));
+            let mut resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()));
+            resolved.settings.align_comments = args.align_comments;
             if args.verbose {
                 eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
                 resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
@@ -296,6 +300,7 @@ mod tests {
         assert_eq!(parsed, FormatArgs { check: true, paths: vec!["app/views".into(), "a.html.erb".into()], ..Default::default() });
         let stdin = FormatArgs::parse(&args(&["--stdin-filepath", "x.html.erb", "-"])).unwrap();
         assert_eq!(stdin.stdin_path.as_deref(), Some(Path::new("x.html.erb")));
+        assert!(FormatArgs::parse(&args(&["--align-comments", "a.html.erb"])).unwrap().align_comments);
         for bad in [&["--check", "--write", "a"][..], &["-"], &["--stdin-filepath"], &["--stdin-filepath", "a", "b"], &["--wat", "a"], &[]]
         {
             assert!(FormatArgs::parse(&args(bad)).is_err(), "{bad:?}");

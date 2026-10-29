@@ -1316,6 +1316,41 @@ const check = (label, actual, expected) => {
   );
   await off.send("shutdown", {});
   await off.send("exit", {}, true);
+  // `erb.format.alignComments` moves a comment's lines with the line it opens on.
+  const aligned = startServer();
+  await aligned.send("initialize", {
+    processId: null,
+    rootUri: fileUri(root),
+    capabilities: {},
+    initializationOptions: { erb: { format: { alignComments: true } } },
+  });
+  await aligned.send("initialized", {}, true);
+  const commentUri = fileUri(path.join(views, "users", "comment.html.erb"));
+  await aligned.send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: commentUri,
+        languageId: "erb",
+        version: 1,
+        text: "<div>\n<%# a\n  b %>\n</div>\n",
+      },
+    },
+    true,
+  );
+  const alignedEdits = (
+    await aligned.send("textDocument/formatting", {
+      textDocument: { uri: commentUri },
+      options: { tabSize: 2, insertSpaces: true },
+    })
+  ).result;
+  check(
+    "erb comments aligned",
+    alignedEdits?.[0]?.newText,
+    "<div>\n  <%# a\n    b %>\n</div>\n",
+  );
+  await aligned.send("shutdown", {});
+  await aligned.send("exit", {}, true);
   await send("shutdown", {});
   await send("exit", {}, true);
   fs.rmSync(root, { recursive: true, force: true });
