@@ -2,7 +2,7 @@
   "name": "ruby-templates",
   "displayName": "Ruby Templates: ERB, Haml, Slim",
   "description": "Syntax highlighting, diagnostics, go-to-partial, completion and hover, plus snippets, HTML preview, tag toggling and converters for ERB, Haml and Slim templates.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "x-ror",
   "icon": "images/icon.png",
   "license": "MIT",
