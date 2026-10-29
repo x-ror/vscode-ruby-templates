@@ -205,7 +205,7 @@ if ARGV.include?("--normalize")
   source = normalize_text_whitespace(source)
 end
 comment = source.match(ActionView::Template::STRICT_LOCALS_REGEX)
-signature_line = comment && source[0...comment.begin(0)].count("\n") + 1
+signature_line = comment && source[0...(comment.begin(0) + comment[0].index("locals:"))].count("\n") + 1
 template_lines = [source.lines.size, 1].max
 errors =
   begin
