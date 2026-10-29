@@ -10,6 +10,8 @@ use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
 
 const OUTPUT_BUFFER: &str = " @output_buffer";
+/// The start of the method Rails wraps a template in, up to its parameters.
+const WRAPPER_DEF: &str = "          def _template(";
 /// Prism's message for the wrapper's own `def`, which the template's code never gets to close.
 const UNCLOSED_DEF: &str = "expected an `end` to close the `def` statement";
 
@@ -280,7 +282,7 @@ fn compile(text: &str, close: Option<Close>) -> Compiled {
     let (erubi, encoding_tag) = read_after_encoding_tag(&template);
 
     let parameters = strict_locals::method_parameters(strict.as_ref());
-    let head = format!("          def _template({parameters})\n            @virtual_path = \"template\";;");
+    let head = format!("{WRAPPER_DEF}{parameters})\n            @virtual_path = \"template\";;");
     Compiled {
         code_line: head.matches('\n').count(),
         verbatim: erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect(),
@@ -317,7 +319,11 @@ fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::Ru
         if e.message == UNCLOSED_DEF {
             return None;
         }
-        compiled.strict_locals.as_ref()?.line(text)
+        let comment = compiled.strict_locals.as_ref()?;
+        if let Some(range) = comment.error_range(text, WRAPPER_DEF.len(), e.start, e.end) {
+            return Some(range);
+        }
+        comment.line(text)
     } else {
         // Past the template are the lines Erubi and the wrapper add after it.
         (generated_line - compiled.code_line).min(lines.len().saturating_sub(1))
@@ -559,9 +565,9 @@ mod tests {
     }
 
     #[test]
-    fn signature_error_range_is_the_comment_line_and_later_errors_keep_their_line() {
+    fn signature_error_range_is_in_the_comment_and_later_errors_keep_their_line() {
         let found = diagnostics("<p>\n  <%# locals: (a: ] ) %>");
-        assert_eq!(found[0].range, Range::new(Position::new(1, 2), Position::new(1, 24)));
+        assert_eq!(found[0].range, Range::new(Position::new(1, 18), Position::new(1, 19)));
         let later = errors("<%# locals: (a: ] ) %>\n<p>\n<% if y %>\n");
         assert_eq!(later.last(), Some(&(2, "unexpected end-of-input, assuming it is closing the parent top level context".to_string())));
     }

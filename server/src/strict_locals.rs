@@ -3,12 +3,12 @@
 
 use crate::prism;
 use crate::project::Project;
-use crate::util::{error, line_text_range};
+use crate::util::{error, line_text_range, offset_to_position};
 use regex::Regex;
 use std::collections::HashSet;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp::lsp_types::{Diagnostic, Range};
 
 /// Ruby's `\s`, which `STRICT_LOCALS_REGEX` is written in.
 const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
@@ -54,6 +54,8 @@ pub struct Comment {
     pub parameters: String,
     /// Where `parameters` starts in the text; none when Rails put `**nil` for a blank list.
     parameters_at: Option<usize>,
+    /// Where `locals:` is, which may be on a line after the `#`.
+    keyword_at: usize,
 }
 
 /// `STRICT_LOCALS_REGEX`'s first match.
@@ -73,6 +75,7 @@ pub fn find(text: &str, close: Close) -> Option<Comment> {
                 range: head.start()..end + 1,
                 parameters: if blank { "**nil" } else { parameters }.to_string(),
                 parameters_at: (!blank).then_some(head.end()),
+                keyword_at: head.start() + head.as_str().find("locals:").unwrap_or(0),
             });
         }
         from = head.start() + 1;
@@ -104,9 +107,22 @@ impl Comment {
         self.parameters_at.is_none()
     }
 
-    /// The 0-based line the comment starts on.
+    /// The 0-based line of `locals:`.
     pub fn line(&self, text: &str) -> usize {
-        text[..self.range.start].matches('\n').count()
+        text[..self.keyword_at].matches('\n').count()
+    }
+
+    /// Where Prism's error at `start..end` of a method source whose parameter list starts at `list_at` is in `text`:
+    /// exact inside the locals the comment wrote, none elsewhere.
+    pub fn error_range(&self, text: &str, list_at: usize, start: usize, end: usize) -> Option<Range> {
+        let at = self.parameters_at?;
+        let first = list_at + WRAPPER_PARAMETERS.len();
+        let last = first + self.parameters.len();
+        if !(first..=last).contains(&start) {
+            return None;
+        }
+        let position = |offset: usize| offset_to_position(text, at + offset.clamp(first, last) - first);
+        Some(Range::new(position(start), position(end)))
     }
 }
 
@@ -144,7 +160,11 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&source, ruby);
     if !errors.is_empty() {
         let mut seen = HashSet::new();
-        return errors.into_iter().filter(|e| seen.insert(e.message.clone())).map(|e| error(line, e.message)).collect();
+        return errors
+            .into_iter()
+            .filter(|e| seen.insert(e.message.clone()))
+            .map(|e| error(comment.error_range(text, SIGNATURE_DEF.len(), e.start, e.end).unwrap_or(line), e.message))
+            .collect();
     }
     non_keyword_message(positional, block, &rails.identifier).map(|message| error(line, message)).into_iter().collect()
 }
@@ -152,6 +172,7 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower_lsp::lsp_types::Position;
 
     const IDENTIFIER: &str = "app/views/users/_card.html.haml";
 
@@ -184,6 +205,22 @@ mod tests {
         for signature in ["(a:)", "(a:, b: 1, **rest)", "()", "(a:, &_)"] {
             assert_eq!(messages(&format!("-# locals: {signature}\n%p\n")), [], "{signature}");
         }
+    }
+
+    #[test]
+    fn a_syntax_error_is_where_the_signature_has_it() {
+        let text = "%p\n  -# locals: (a: 1, b: ] , c:)\n";
+        let at = text.find(']').unwrap() - text.find("  -#").unwrap();
+        let range = found(text, Close::default())[0].range;
+        assert_eq!(range.start, Position::new(1, at as u32));
+        let multi = "-# locals: (a:,\n  b: ])\n";
+        assert!(found(multi, Close::default()).iter().any(|d| d.range.start.line == 1), "{:?}", found(multi, Close::default()));
+    }
+
+    #[test]
+    fn the_message_is_on_the_line_of_locals() {
+        let expected = format!("`user` set as non-keyword argument for {IDENTIFIER}. Locals can only be set as keyword arguments.");
+        assert_eq!(messages("-#\n  locals: (user)\n%p\n"), [(1, expected)]);
     }
 
     #[test]
