@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Haml: Ruby syntax errors (`ruby-syntax`) in `-`, `=`, `!=`, `&=` and `~` lines, code after a tag, `{}` attribute hashes, `#{}` in text, comments and `()` attribute values, and `:ruby` filters, as Prism finds them in the Ruby Haml generates for Rails. That includes a `- rescue`, `- ensure`, `- in` or second `- else` in the wrong place and lines nested under code that opens no block, which Haml accepts and only the generated Ruby rejects. They are checked once Haml itself accepts the template.
+
 ## 0.2.0
 
 - ERB formatting: `rubyTemplates.erb.format.alignComments` (off by default; `--align-comments` on the command line) moves the lines inside HTML comments and multi-line `<%# … %>` comments with the line the comment opens on, keeping their relative indentation.

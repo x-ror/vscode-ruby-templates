@@ -153,9 +153,16 @@ const languages = {
     extension: ".haml",
     casesScript: "haml_cases.rb",
     officialScript: "haml.rb",
+    officialArguments: (item) => rubyVersionArguments(item.path),
     expectationAgrees: hamlExpectation,
     perturb: (source) => hamlPerturbations(source),
     reportsNormalForm: true,
+    endAnyLine: true,
+    joinsLines: true,
+    firstErrorOnly: true,
+    // 3a "Ruby": variants of compiling files that break the generated Ruby, checked against Prism's errors on it.
+    breakVariants: (source) => hamlBreakVariants(source),
+    breakSample: 10,
   },
   // Corpora only: Erubi's own tests check output, not errors.
   erb: {
@@ -284,10 +291,27 @@ const oursByPath = ({ extension }, files) => {
   return byPath;
 };
 
-const sameError = (official, ours) =>
+// Haml writes the `end` of lines nested under code after the block, and Ruby blames it where it stands; ours is never later.
+const isUnexpectedEnd = (message) => message.startsWith("unexpected 'end'");
+
+// A statement over several lines is one line to Haml, whose errors are on its first line; ours are on the line that
+// holds them: the lines between end in a comma, a `|` or an opening bracket.
+const continuesTo = (source, official, ours) =>
+  ours.line > official.line &&
+  source
+    .split(/\r?\n/)
+    .slice(official.line - 1, ours.line - 1)
+    .every((line) => /[,|{(\[]\s*$/.test(line));
+
+const sameError = (official, ours, lang, source) =>
   ours.severity === "error" &&
   ours.message === official.message &&
-  (official.line === null || ours.line === official.line) &&
+  (official.line === null ||
+    ours.line === official.line ||
+    (lang?.joinsLines && continuesTo(source, official, ours)) ||
+    (lang?.endAnyLine &&
+      isUnexpectedEnd(official.message) &&
+      ours.line <= official.line)) &&
   (official.column === null || ours.column === official.column + COLUMN_TO_CLI);
 
 // Haml can accept a template and generate Ruby that doesn't parse; that is the template's error, not Haml's.
@@ -305,6 +329,19 @@ const describe = ({ message, line, column }) =>
 const isHtmlMessage = (message) =>
   /end tag|never closed|<\/?[a-z][\w-]*>/i.test(message);
 
+// Whether ours answer the official errors. Haml turns its markup and dynamic parts into one string, which Prism
+// recovers from differently after an error, so only the first error must agree; `cascade` says the others don't.
+const agreement = (lang, official, ours, source) => {
+  if (official.every((o) => ours.some((e) => sameError(o, e, lang, source)))) {
+    return { agree: true };
+  }
+  const first =
+    lang.firstErrorOnly &&
+    ours[0] &&
+    sameError(official[0], ours[0], lang, source);
+  return { agree: Boolean(first), cascade: Boolean(first) };
+};
+
 // items: [{label, source, path, expected_error?}]; official and ours are parallel to items / keyed by path.
 // A file's official errors are `errors` (ERB lists every Prism error) or the one `error`.
 const compare = (lang, items, official, ours, skip) => {
@@ -315,6 +352,7 @@ const compare = (lang, items, official, ours, skip) => {
     same: 0,
     sameLine: 0,
     oursOnlyHtml: 0,
+    cascade: 0,
   };
   const mismatches = [];
   const formattable = [];
@@ -338,9 +376,10 @@ const compare = (lang, items, official, ours, skip) => {
     if (officialList.some((o) => errors.some((e) => e.line === o.line))) {
       counts.sameLine++;
     }
-    const agree = officialList.length
-      ? officialList.every((o) => errors.some((e) => sameError(o, e)))
-      : !errors.length;
+    const { agree, cascade } = officialList.length
+      ? agreement(lang, officialList, errors, item.source)
+      : { agree: !errors.length };
+    if (cascade) counts.cascade++;
     if (!officialList.length) {
       (errors.length ? notFormatted : formattable).push(i);
     }
@@ -563,6 +602,75 @@ const erbBreakVariants = (source) => {
   ].filter((v) => v.text !== undefined && v.text !== source);
 };
 
+// Broken spellings of a Haml template, each a few characters from a compiling one (3a "Ruby"); a name is absent when
+// the file has nothing to break that way. Some are Haml's own errors (compared as such), most are Prism's.
+const hamlBreakVariants = (source) => {
+  const lines = source.split("\n");
+  const code = /^(\s*)(-(?!#)|=|!=|&=|~)\s*\S/;
+  const blockStart =
+    /\b(do(\s*\|[^|]*\|)?|if|unless|case|begin|else|elsif|when|in|rescue|ensure)\s*$|,$|\|$/;
+  const edit = (index, line) =>
+    index < 0 ? undefined : lines.with(index, line).join("\n");
+  const first = (test) => lines.findIndex(test);
+  const unclosed = first((l) => code.test(l) && !blockStart.test(l));
+  const parenthesized = first((l) => code.test(l) && l.includes(")"));
+  const hashed = first((l) => /^\s*[%.#][^{\n]*\{[^}\n]*\}/.test(l));
+  const interpolated = first((l) => /#\{[^}\n]*\}/.test(l));
+  const doBlock = first(
+    (l) => code.test(l) && /\bdo(\s*\|[^|]*\|)?\s*$/.test(l),
+  );
+  const plain = first((l) =>
+    /^\s*-\s+(?!if|unless|case|begin|else|elsif|when|rescue|ensure|end|#)\w+\s*=[^=]/.test(
+      l,
+    ),
+  );
+  const nested =
+    plain >= 0 &&
+    (lines[plain + 1] === undefined ||
+      lines[plain + 1].match(/^\s*/)[0].length <=
+        lines[plain].match(/^\s*/)[0].length)
+      ? lines.toSpliced(
+          plain + 1,
+          0,
+          `${lines[plain].match(/^\s*/)[0]}${lines.some((l) => l.startsWith("\t")) ? "\t" : "  "}%p x`,
+        )
+      : undefined;
+  return [
+    { name: "unclosed (", text: edit(unclosed, `${lines[unclosed]}(`) },
+    {
+      name: "delete )",
+      text: edit(
+        parenthesized,
+        lines[parenthesized]?.replace(/\)([^)]*)$/, "$1"),
+      ),
+    },
+    {
+      name: "break hash",
+      text: edit(hashed, lines[hashed]?.replace(/\}/, ",,}")),
+    },
+    {
+      name: "break interpolation",
+      text: edit(interpolated, lines[interpolated]?.replace(/#\{/, "#{ +")),
+    },
+    {
+      name: "delete do",
+      text: edit(
+        doBlock,
+        lines[doBlock]?.replace(/\s*\bdo(\s*\|[^|]*\|)?\s*$/, ""),
+      ),
+    },
+    { name: "nest under code", text: nested?.join("\n") },
+    { name: "stray rescue", text: `- rescue\n${source}` },
+    {
+      name: "second else",
+      text: `- if x\n  %p a\n- else\n  %p b\n- else\n  %p c\n${source}`,
+    },
+    { name: "stray when", text: `- when 1\n  %p x\n${source}` },
+    { name: "broken :ruby", text: `:ruby\n  x = (1\n${source}` },
+    { name: "text interpolation", text: `%p a #{"b("} c #{d(} e\n${source}` },
+  ].filter((v) => v.text !== undefined && v.text !== source);
+};
+
 // Formats the variants of one file: each must compile to the original's source once formatted, and formatting
 // the result again must change nothing. A refusal (the formatter leaves the text alone) is counted apart.
 const perturbedRows = async (
@@ -739,10 +847,13 @@ const breakReport = async (lang, items, indexes, sample) => {
       lang,
       variants.map((variant) => variant.path),
     );
-    const counts = { compiles: 0, other: 0, compared: 0, same: 0 };
+    const counts = { compiles: 0, other: 0, compared: 0, same: 0, cascade: 0 };
     const mismatches = [];
     variants.forEach((variant, n) => {
-      const list = official[n].errors;
+      // ERB lists Prism's errors; Haml may stop at its own first error.
+      const list =
+        official[n].errors ??
+        (official[n].error ? [official[n].error] : undefined);
       const errors = (ours.get(path.resolve(variant.path)) ?? []).filter(
         (d) => d.severity === "error",
       );
@@ -755,8 +866,10 @@ const breakReport = async (lang, items, indexes, sample) => {
         return;
       } else {
         counts.compared++;
-        agree = list.every((o) => errors.some((e) => sameError(o, e)));
+        const answer = agreement(lang, list, errors, variant.text);
+        agree = answer.agree;
         if (agree) counts.same++;
+        if (answer.cascade) counts.cascade++;
       }
       if (agree) return;
       mismatches.push(
@@ -769,7 +882,7 @@ const breakReport = async (lang, items, indexes, sample) => {
       mismatches,
       summary:
         `broken:  ${variants.length} variants (every ${sample}th file), still compiles ${counts.compiles}, other error ${counts.other}, ` +
-        `compared ${counts.compared}, same ${counts.same}, mismatches ${mismatches.length}`,
+        `compared ${counts.compared}, same ${counts.same}${lang.firstErrorOnly ? ` (${counts.cascade} on the first error only)` : ""}, mismatches ${mismatches.length}`,
     };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -795,6 +908,7 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
     same,
     sameLine,
     oursOnlyHtml,
+    cascade,
     mismatches,
     formattable,
     notFormatted,
@@ -817,7 +931,7 @@ const report = async (lang, title, items, skipped, perturbSample = 1) => {
 
   console.log(`${title}  (${compared.toLocaleString("en-US")} files)`);
   console.log(
-    `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}`,
+    `errors:  official ${officialErrors}, ours ${oursErrors}, same ${same}${lang.firstErrorOnly ? ` (${cascade} on the first error only)` : ""}`,
   );
   if (lang.reportsChanged) {
     console.log(

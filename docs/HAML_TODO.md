@@ -93,10 +93,10 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 ## 8. Formatting
 
-- [x] Document formatting provider: built-in re-indenter (in the language server) or `haml-lint`, chosen by `rubyTemplates.haml.formatter` (`src/extension.js`, `server/src/haml_format.rs`)
+- [x] Document formatting provider: the built-in re-indenter in the language server (`src/extension.js`, `server/src/haml_format.rs`)
 - [x] Re-indent a file or selection to the indentation width (spaces, default 2) over the parser's line roles, trailing whitespace dropped where Haml ignores it, empty lines at the end collapsed into one line ending; a file with any Haml error, or whose compiled source would change (`haml_parser::same_compilation`), is left alone (`server/src/haml_format.rs`, `format.rs`, range formatting in `server/src/lsp.rs`; compiled output checked in `bun run test:format`)
 - [x] Formatting from the command line and npm: `ruby-templates format`, width from `.editorconfig` (`server/src/cli.rs`, `config.rs`)
-- [x] Configurable formatter executable plus `bundle exec` (`package.json` `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`)
+- [x] No external formatter: the settings that ran `haml-lint` were removed (`docs/DECISIONS.md` D13)
 
 ## 9. Diagnostics and linting
 
@@ -106,12 +106,12 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Line-start `~ code` is Ruby, `#{x}` at line start is plain text; code with children but no block opener is fine (Haml compiles `= x` with children)
 - [x] Tabs: consistent tabs are accepted; a line indented with the other character than the first indented line gets Haml's `Inconsistent indentation: 1 tab used for indentation, but the rest of the document was indented using 2 spaces.`
 - [x] Unresolved `render "dir/partial"` warning on `=`/`-`/`!=`/`&=` lines (`server/src/lsp.rs` `unresolved_renders`, unit test `unresolved_render_warnings`)
-- [ ] `- rescue` / `- ensure` / `- in` / a second `- else` out of place: Haml itself accepts them and only the generated Ruby fails to parse; belongs with the Ruby syntax check below
+- [x] `- rescue` / `- ensure` / `- in` / a second `- else` out of place: Haml itself accepts them and only the generated Ruby fails to parse, so they are Prism's errors in the Ruby check below, which parses inside the method Rails compiles the template into (a `rescue` or `ensure` at the top of the template belongs to that method) (`server/src/haml_ruby.rs` tests `a_clause_in_the_wrong_place_is_ruby_s_error`, `the_first_when_gives_its_lines_to_the_case`)
 - [x] Indentation of `,` continuation lines: nothing to report. Haml 7.5 compiles `%p= link_to x,\n\t  y` and spaces-in-a-tab-file continuations without error (checked with the gem), so a check would be a false positive
 - [x] Indentation inside filter bodies relative to the filter: nothing to report. Haml 7.5 accepts bodies that dedent below their first line or use spaces in a tab file (checked with the gem)
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/lsp.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
-- [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output). ERB has it now (`server/src/ruby_syntax.rs`); Haml and Slim need the implicit `end`s of indented blocks synthesized, with an offset map back to the template
-- [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `bun run test:unit`)
+- [x] Ruby syntax errors (`ruby-syntax`) in `-`/`=`/`!=`/`&=`/`~` lines, code after a tag (`%p= x`), `{}` attribute hashes and `[]` object references, `#{}` in text, comments, tag content, `()` attribute values and the text filters, and the body of `:ruby`: Prism over the Ruby `Haml::Engine` generates with the `Haml::RailsTemplate` options, built from `haml_parser`'s `pieces` with the `end`s Haml adds for nested lines and an offset map back to the template; run only when Haml's own parse is clean (`server/src/haml_ruby.rs`, `server/src/generated_ruby.rs`; `bun test/oracle.js haml` compares them with Prism's errors on Haml's compiled source). Not checked: `:erb` bodies
+- [x] External linters: `haml-lint` is not run; the checks above replace it (`docs/DECISIONS.md` D13)
 - [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/lsp.rs` `Options`)
 
 ## 10. Completion

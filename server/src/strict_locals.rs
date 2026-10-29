@@ -155,8 +155,13 @@ fn to_sentence(names: &[String]) -> String {
 pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>) -> Vec<Diagnostic> {
     let Some(rails) = rails else { return Vec::new() };
     let Some(comment) = find(text, rails.close) else { return Vec::new() };
+    comment_diagnostics(text, &comment, ruby, rails)
+}
+
+/// `diagnostics` for the comment `find` found in `text`.
+pub fn comment_diagnostics(text: &str, comment: &Comment, ruby: ruby_prism::Version, rails: &Rails) -> Vec<Diagnostic> {
     let line = line_text_range(text, comment.line(text));
-    let source = format!("{SIGNATURE_DEF}{})\nend\n", method_parameters(Some(&comment)));
+    let source = format!("{SIGNATURE_DEF}{})\nend\n", method_parameters(Some(comment)));
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&source, ruby);
     if !errors.is_empty() {
         let mut seen = HashSet::new();

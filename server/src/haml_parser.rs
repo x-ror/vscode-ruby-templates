@@ -1,6 +1,7 @@
 //! A port of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`): the first error Haml raises, at the line it names,
 //! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
+use crate::generated_ruby::ruby_string_body;
 use crate::slim_parser::VOID_ELEMENTS;
 use regex::Regex;
 use std::collections::VecDeque;
@@ -74,6 +75,12 @@ struct Line {
     tabs: Option<usize>,
 }
 
+impl Line {
+    fn indent(&self) -> usize {
+        self.whitespace.as_ref().map_or(0, String::len)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Which {
     Current,
@@ -89,8 +96,8 @@ struct Parser {
     flat: bool,
     flat_spaces: Option<String>,
     template_tabs: usize,
-    /// One entry per open block, which says what closing it undoes.
-    open_blocks: Vec<Node>,
+    /// One entry per open block (Haml's `@parent` chain), which says what closing it undoes.
+    open_blocks: Vec<Open>,
     tab_up: bool,
     /// The open `if`/`case`/`unless` lines, for `else`, `elsif` and `when` (`@script_level_stack`).
     script_levels: Vec<ScriptLevel>,
@@ -107,6 +114,52 @@ struct Parser {
     flat_comment: bool,
     /// The first filter Haml has no compiler for; it fails at compile time, so any parser error comes first.
     unknown_filter: Option<Error>,
+    /// Whether to build `pieces`, which only the Ruby check uses.
+    ruby: bool,
+    pieces: Vec<Piece>,
+    /// Where each physical line starts in the template.
+    line_starts: Vec<usize>,
+    /// The lines whose text `|` multiline joined: they are no longer a slice of the template.
+    pipe_joined: Vec<bool>,
+    /// How the Ruby of the line being read opens a block.
+    line_block: Option<RubyBlock>,
+    /// The line being read is a node Haml pushes although the document ends in the middle of it (an attribute list).
+    counted_at_end: bool,
+    /// What the body of the filter just read compiles to.
+    filter: FilterBody,
+    /// Where the body of the open filter starts in `compiled`.
+    filter_start: usize,
+}
+
+/// What a filter's body is to the Ruby Haml generates.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterBody {
+    None,
+    Ruby,
+    /// Text that may hold `#{}`.
+    Text,
+}
+
+/// One open block: its node, how many lines Haml pushed into it, and what its Ruby needs.
+struct Open {
+    node: Node,
+    line: usize,
+    children: usize,
+    ruby: Option<RubyBlock>,
+}
+
+/// A `-` or `=` line, or a tag with code: what the lines that nest under it do to its Ruby.
+#[derive(Clone, Copy)]
+struct RubyBlock {
+    /// The index of its `Output` piece.
+    output: Option<usize>,
+    /// Haml gives it an `end` and a block when lines nest under it; a tag's code is dropped instead.
+    ends: bool,
+    /// A `case` line, whose first `when` takes the lines that nest under it.
+    case: bool,
+    when: bool,
+    /// The first `when` of a `case`: Haml moves its lines to the `case`, so it has no `end`.
+    adopted: bool,
 }
 
 /// What a line opens, as far as closing it matters.
@@ -149,6 +202,39 @@ pub enum Role {
     FlatBody { owner: usize, prefix_len: usize },
 }
 
+/// A run of the Ruby Haml compiles, on template line `line`: at byte `offset` of the template (without its BOM) when it
+/// is a verbatim slice of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chunk {
+    pub text: String,
+    pub line: usize,
+    pub offset: Option<usize>,
+}
+
+impl Chunk {
+    pub(crate) fn synthetic(text: &str, line: usize) -> Chunk {
+        Chunk { text: text.to_string(), line, offset: None }
+    }
+}
+
+/// The Ruby Haml generates for the template, as far as its structure and syntax go.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Piece {
+    /// A `-` line, or the body of a `:ruby` filter.
+    Statement(Vec<Chunk>),
+    /// A `=` line or tag content: the value is written. `block` when lines nest under it.
+    Output { code: Vec<Chunk>, block: bool },
+    /// Text with `#{}`, as the Ruby string literal Haml makes of it.
+    Text(Vec<Chunk>),
+    /// What Haml passes to `AttributeBuilder.build` at run time: an object reference, then the hash of the `()` attributes
+    /// and the code of the `{}` hash.
+    Attributes { object: Vec<Chunk>, arguments: Vec<Chunk> },
+    /// The `end` of the block the line opened, which has lines nested under it.
+    End(usize),
+    /// A tag's code that Haml leaves out because lines nest under the tag.
+    Dropped,
+}
+
 /// What Haml makes of one node, as far as the compiled source depends on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Compiled {
@@ -163,14 +249,28 @@ pub struct Parsed {
     pub void_content: Vec<VoidContent>,
     /// One per physical line of the template (without a BOM).
     pub roles: Vec<Role>,
+    /// The Ruby Haml generates, in order. Only complete when the template has no error.
+    pub pieces: Vec<Piece>,
     compiled: Vec<Compiled>,
 }
 
 pub fn parse(text: &str) -> Parsed {
-    let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text));
+    parse_as(text, false)
+}
+
+/// `parse`, and the `pieces` of Ruby Haml generates, which cost more than the rest.
+pub fn parse_with_ruby(text: &str) -> Parsed {
+    parse_as(text, true)
+}
+
+fn parse_as(text: &str, ruby: bool) -> Parsed {
+    let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text), ruby);
     let error = match parser.run() {
         Err(Halt::Error(error)) => Some(error),
-        Err(Halt::Done) => parser.unknown_filter.take(),
+        Err(Halt::Done) => {
+            parser.close_all();
+            parser.unknown_filter.take()
+        }
     };
     let void_content = if error.is_some() { Vec::new() } else { parser.void_content };
     let mut roles = parser.roles;
@@ -179,7 +279,7 @@ pub fn parse(text: &str) -> Parsed {
             *role = Role::Inner { owner, counted };
         }
     }
-    Parsed { error, void_content, roles, compiled: parser.compiled }
+    Parsed { error, void_content, roles, pieces: parser.pieces, compiled: parser.compiled }
 }
 
 /// Whether Haml compiles `before` and `after` to the same source: both are free of errors and read the same nodes, at
@@ -232,6 +332,20 @@ fn split_lines(text: &str) -> Vec<Line> {
         .collect()
 }
 
+/// Where each of the first `count` lines starts in `text`.
+fn line_starts(text: &str, count: usize) -> Vec<usize> {
+    let mut start = 0;
+    lines_with_endings(text)
+        .into_iter()
+        .take(count)
+        .map(|(line, ending)| {
+            let at = start;
+            start += line.len() + ending.len();
+            at
+        })
+        .collect()
+}
+
 fn human_indentation(indentation: &str) -> String {
     let noun = match (indentation.contains('\t'), indentation.contains(' ')) {
         (false, _) => "space",
@@ -243,10 +357,11 @@ fn human_indentation(indentation: &str) -> String {
 }
 
 impl Parser {
-    fn new(text: &str) -> Parser {
+    fn new(text: &str, ruby: bool) -> Parser {
         let mut template: VecDeque<Line> = split_lines(text).into();
         let index = template.len();
         let lines = index;
+        let line_starts = if ruby { line_starts(text, lines) } else { Vec::new() };
         template.push_back(Line { text: "-#".into(), full: "-#".into(), index, end_of_document: true, ..Line::default() });
         Parser {
             template,
@@ -268,6 +383,14 @@ impl Parser {
             flat_owner: 0,
             flat_comment: false,
             unknown_filter: None,
+            ruby,
+            pieces: Vec::new(),
+            line_starts,
+            pipe_joined: vec![false; lines],
+            line_block: None,
+            counted_at_end: false,
+            filter: FilterBody::None,
+            filter_start: 0,
         }
     }
 
@@ -290,13 +413,19 @@ impl Parser {
             }
             self.tab_up = false;
             self.joined.clear();
+            self.line_block = None;
+            self.counted_at_end = false;
             let read = if self.line.text.is_empty() { Ok(Node::Other) } else { self.process_line() };
             // The last node counts even when the document ends in the middle of it.
             self.record_node();
+            if self.counted_at_end && matches!(read, Err(Halt::Done)) {
+                self.push_node();
+            }
             let node = read?;
+            let ruby = self.push_node();
             if self.block_opened()? || self.tab_up {
                 self.template_tabs += 1;
-                self.open_blocks.push(node);
+                self.open_blocks.push(Open { node, line: self.line.index, children: 0, ruby });
             }
             if !self.flat {
                 let (next, current) = (self.tabs(Which::Next)?, self.tabs(Which::Current)?);
@@ -307,6 +436,28 @@ impl Parser {
             }
             self.advance();
         }
+    }
+
+    /// Haml's `push`: the line just read becomes a child of the block it stands in. Returns its Ruby block, if it opens one.
+    fn push_node(&mut self) -> Option<RubyBlock> {
+        if self.line.text.is_empty() {
+            return None;
+        }
+        let mut ruby = self.line_block.take();
+        let Some(parent) = self.open_blocks.last_mut() else { return ruby };
+        parent.children += 1;
+        let first = parent.children == 1;
+        if let (true, Some(RubyBlock { output: Some(piece), ends, .. })) = (first, parent.ruby) {
+            match self.pieces.get_mut(piece) {
+                Some(slot) if !ends => *slot = Piece::Dropped,
+                Some(Piece::Output { block, .. }) => *block = true,
+                _ => {}
+            }
+        }
+        if let (true, Some(block), Some(RubyBlock { case: true, .. })) = (first, ruby.as_mut(), parent.ruby) {
+            block.adopted = block.when;
+        }
+        ruby
     }
 
     fn set_role(&mut self, index: usize, role: Role) {
@@ -440,6 +591,9 @@ impl Parser {
             return;
         }
         line.text.pop();
+        if let Some(joined) = self.pipe_joined.get_mut(line.index) {
+            *joined = true;
+        }
         while let Some(next) = self.template.front() {
             let text = next.text.trim_matches(RUBY_WHITESPACE);
             if next.end_of_document || (!text.is_empty() && !is_haml_multiline(text)) {
@@ -476,15 +630,27 @@ impl Parser {
 
     fn close(&mut self) {
         self.template_tabs -= 1;
-        match self.open_blocks.pop() {
-            Some(Node::FlatSection) => {
+        let Some(open) = self.open_blocks.pop() else { return };
+        match open.node {
+            Node::FlatSection => {
                 self.flat = false;
                 self.flat_spaces = None;
+                self.finish_filter();
             }
-            Some(Node::Branch) => {
+            Node::Branch => {
                 self.script_levels.pop();
             }
-            _ => {}
+            Node::Other => {}
+        }
+        if open.children > 0 && open.ruby.is_some_and(|block| block.ends && !block.adopted) {
+            self.emit(Piece::End(open.line));
+        }
+    }
+
+    /// Haml's `close until @parent.type == :root` at the end of the template.
+    fn close_all(&mut self) {
+        while !self.open_blocks.is_empty() {
+            self.close();
         }
     }
 
@@ -499,10 +665,12 @@ impl Parser {
         }
     }
 
-    fn start_flat_section(&mut self, comment: bool) -> Node {
+    fn start_flat_section(&mut self, comment: bool, body: FilterBody) -> Node {
         if !self.filter_opened() {
             return Node::Other;
         }
+        self.filter = if comment { FilterBody::None } else { body };
+        self.filter_start = self.compiled.len();
         self.flat = true;
         self.flat_owner = self.line.index;
         self.flat_comment = comment;
@@ -524,24 +692,24 @@ impl Parser {
         match (chars.next(), chars.next()) {
             (Some('%' | '.'), _) => self.tag(text)?,
             (Some('#'), second) if !matches!(second, Some('{' | '@' | '$')) => self.tag(text)?,
-            (Some('-'), Some('#')) => return Ok(self.start_flat_section(true)),
+            (Some('-'), Some('#')) => return Ok(self.start_flat_section(true, FilterBody::None)),
             (Some(':'), _) => {
-                self.filter(&text[1..])?;
-                return Ok(self.start_flat_section(false));
+                let body = self.filter(&text[1..])?;
+                return Ok(self.start_flat_section(false, body));
             }
-            (Some('/'), _) => self.comment(&text[1..])?,
+            (Some('/'), _) => self.comment(text, &text[1..])?,
             (Some('!'), _) if text.starts_with("!!!") => self.doctype()?,
             (Some('-' | '=' | '~' | '&' | '!'), _) => match text.strip_prefix('-').or_else(|| strip_output_prefix(text)) {
                 Some(code) => return self.script(text, code),
-                None => self.plain()?,
+                None => self.plain(text)?,
             },
-            _ => self.plain()?,
+            _ => self.plain(text)?,
         }
         Ok(Node::Other)
     }
 
     /// `filter`: the name must be a word; whether a compiler exists for it is only found out when Haml compiles.
-    fn filter(&mut self, name: &str) -> Result<(), Halt> {
+    fn filter(&mut self, name: &str) -> Result<FilterBody, Halt> {
         let name = name.to_lowercase();
         if name.is_empty() || !name.chars().all(is_word) {
             return Err(halt(format!("Invalid filter name \":{name}\"."), self.line.index));
@@ -549,17 +717,25 @@ impl Parser {
         if self.unknown_filter.is_none() && !HAML_FILTERS.contains(&name.as_str()) {
             self.unknown_filter = Some(Error { message: format!("FilterCompiler for '{name}' was not found"), line: self.line.index });
         }
-        Ok(())
+        Ok(match name.as_str() {
+            "ruby" => FilterBody::Ruby,
+            // The filters that compile their body into a string, `:erb` and the unknown ones don't.
+            "plain" | "escaped" | "preserve" | "cdata" | "javascript" | "css" | "markdown" | "sass" | "scss" | "less" | "coffee"
+            | "coffeescript" => FilterBody::Text,
+            _ => FilterBody::None,
+        })
     }
 
     fn nested_line_error(&mut self, message: &str) -> Halt {
         halt(message, self.next_line.index)
     }
 
-    fn plain(&mut self) -> Result<(), Halt> {
+    fn plain(&mut self, text: &str) -> Result<(), Halt> {
         if self.block_opened()? {
             return Err(self.nested_line_error(NESTING_PLAIN));
         }
+        let body = &text[plain_text_start(text)..];
+        self.push_text(body, self.line.index, self.line_column(body, text));
         Ok(())
     }
 
@@ -571,14 +747,15 @@ impl Parser {
     }
 
     /// `comment`: `/ text` and `/[if IE] text` can't have nested lines.
-    fn comment(&mut self, text: &str) -> Result<(), Halt> {
+    fn comment(&mut self, line_text: &str, text: &str) -> Result<(), Halt> {
         let text = text.trim_start_matches(RUBY_WHITESPACE);
         let text = if text.starts_with("![") { &text[1..] } else { text };
         let text = if text.starts_with('[') { balance_brackets(text).ok_or_else(|| halt(UNBALANCED, self.line.index))? } else { text };
-        let has_text = !text.trim_matches(RUBY_WHITESPACE).is_empty();
-        if self.block_opened()? && has_text {
+        let text = text.trim_matches(RUBY_WHITESPACE);
+        if self.block_opened()? && !text.is_empty() {
             return Err(self.nested_line_error(NESTING_CONTENT));
         }
+        self.push_text(text, self.line.index, self.line_column(text, line_text));
         Ok(())
     }
 
@@ -592,7 +769,7 @@ impl Parser {
             let action = if text[..text.len() - code.len()].ends_with('~') { '~' } else { '=' };
             return Err(halt(no_ruby_code(action), self.line.index));
         }
-        self.join_ruby_lines(text)?;
+        let continued = self.join_ruby_lines(text)?;
         let keyword = block_keyword(code);
         let tabs = self.tabs(Which::Current)?;
         let opens_branch = matches!(keyword, Some("if" | "case" | "unless"));
@@ -603,6 +780,17 @@ impl Parser {
         if let Some(keyword @ ("else" | "elsif" | "when")) = keyword.filter(|_| silent) {
             self.check_branch_level(keyword, tabs)?;
         }
+        let code_text = code.trim_start_matches(REGEXP_SPACE);
+        let mut chunks = vec![self.chunk(self.line.index, code_text, self.line_column(code_text, text))];
+        chunks.extend(continued);
+        self.line_block = Some(RubyBlock {
+            output: (!silent).then_some(self.pieces.len()),
+            ends: true,
+            case: keyword == Some("case"),
+            when: keyword == Some("when"),
+            adopted: false,
+        });
+        self.emit(if silent { Piece::Statement(chunks) } else { Piece::Output { code: chunks, block: false } });
         Ok(if opens_branch { Node::Branch } else { Node::Other })
     }
 
@@ -633,28 +821,33 @@ impl Parser {
         if has_empty_class_or_id(&text[attributes_start..head_len]) {
             return Err(halt(ILLEGAL_ELEMENT, self.line.index));
         }
-        let mut rest = text[head_len..].to_string();
+        let mut rest =
+            Rest { text: text[head_len..].to_string(), line: self.line.index, column: self.line_column(&text[head_len..], text) };
         let (mut hash, mut list, mut reference) = (false, false, false);
         // The line the last attribute group ends on, which Haml reports some errors at.
         let mut last_line = self.line.index;
+        let (mut object, mut list_hash, mut hash_code) = (Vec::new(), Vec::new(), Vec::new());
         loop {
-            match rest.chars().next() {
+            match rest.text.chars().next() {
                 Some('{') if !hash => {
                     hash = true;
-                    (rest, last_line) = self.skip_hash(&rest)?;
+                    (rest, last_line, hash_code) = self.skip_hash(&rest)?;
                 }
                 Some('(') if !list => {
                     list = true;
-                    (rest, last_line) = self.skip_attribute_list(&rest)?;
+                    (rest, last_line, list_hash) = self.skip_attribute_list(&rest)?;
                 }
                 Some('[') if !reference => {
                     reference = true;
-                    rest = balance_brackets(&rest).ok_or_else(|| halt(UNBALANCED, self.line.index))?.to_string();
+                    let after = balance_brackets(&rest.text).ok_or_else(|| halt(UNBALANCED, self.line.index))?;
+                    let consumed = rest.text.len() - after.len();
+                    object = vec![self.chunk(rest.line, &rest.text[..consumed], rest.column)];
+                    rest = Rest { text: after.to_string(), column: rest.column + consumed, ..rest };
                 }
                 _ => break,
             }
         }
-        let content = tag_content(&rest);
+        let content = tag_content(&rest.text);
         // This reads the next line's indentation before any Ruby lines are joined.
         let block_opened = self.block_opened()?;
         if block_opened && content.self_closing {
@@ -677,39 +870,83 @@ impl Parser {
                 self.void_content.push(VoidContent { line: self.next_line.index, name: name.to_string(), nested: true });
             }
         }
-        if content.parse {
-            self.join_ruby_lines(&content.value)?;
+        let continued = if content.parse { self.join_ruby_lines(&content.value)? } else { Vec::new() };
+        if !list_hash.is_empty() && !hash_code.is_empty() {
+            list_hash.push(Chunk::synthetic(", ", self.line.index));
+        }
+        list_hash.extend(hash_code);
+        if !object.is_empty() || !list_hash.is_empty() {
+            self.emit(Piece::Attributes { object, arguments: list_hash });
+        }
+        if let Some((source, range)) = content.source {
+            let value = &rest.text[range.clone()];
+            let column = rest.column + range.start;
+            match source {
+                Source::Text => self.push_text(value, rest.line, column),
+                Source::Code => {
+                    let mut code = vec![self.chunk(rest.line, value, column)];
+                    code.extend(continued);
+                    self.line_block =
+                        Some(RubyBlock { output: Some(self.pieces.len()), ends: false, case: false, when: false, adopted: false });
+                    self.emit(Piece::Output { code, block: false });
+                }
+            }
         }
         Ok(())
     }
 
-    /// `parse_old_attributes`: what follows the `{...}` that starts `text`, which may close on a later line.
-    fn skip_hash(&mut self, text: &str) -> Result<(String, usize), Halt> {
+    /// `parse_old_attributes`: what follows the `{...}` that starts `rest`, which may close on a later line, and the
+    /// Ruby between the braces.
+    fn skip_hash(&mut self, rest: &Rest) -> Result<(Rest, usize, Vec<Chunk>), Halt> {
         let mut scanner = BraceScanner::new();
-        let mut segment = text[1..].to_string();
+        let mut segment = rest.text[1..].to_string();
+        let (mut line, mut column) = (rest.line, rest.column + 1);
         let mut last_line = self.line.index;
+        let mut code = Vec::new();
         loop {
             if let Some(end) = scanner.feed(&segment) {
-                return Ok((segment[end..].to_string(), last_line));
+                code.push(self.chunk(line, &segment[..end - 1], column));
+                let after = Rest { text: segment[end..].to_string(), line, column: column + end };
+                return Ok((after, last_line, code));
             }
             if self.next_line.end_of_document {
                 return Err(halt(UNBALANCED, self.line.index));
             }
+            code.push(self.chunk(line, &segment, column));
+            code.push(Chunk::synthetic("\n", line));
             segment = self.next_line.text.clone();
+            (line, column) = (self.next_line.index, self.next_line.indent());
             self.join_line(self.next_line.index, self.line.index, &segment);
             last_line += 1;
             self.next_line()?;
         }
     }
 
-    /// `parse_new_attributes`: what follows the `(...)` that starts `text`, whose attributes may continue on later lines.
-    fn skip_attribute_list(&mut self, text: &str) -> Result<(String, usize), Halt> {
-        let mut joined = text.to_string();
-        let mut segment = text[1..].trim_start_matches(REGEXP_SPACE).to_string();
+    /// `parse_new_attributes`: what follows the `(...)` that starts `rest`, whose attributes may continue on later lines,
+    /// and the hash of its Ruby attributes (`{"title" => "x#{y}",}`), empty when there are none.
+    fn skip_attribute_list(&mut self, rest: &Rest) -> Result<(Rest, usize, Vec<Chunk>), Halt> {
+        let mut joined = rest.text.clone();
+        let mut segment = rest.text[1..].trim_start_matches(REGEXP_SPACE).to_string();
+        let (mut line, mut column) = (rest.line, rest.column + rest.text.len() - segment.len());
         let mut continuations = 0;
+        let mut hash = Vec::new();
         loop {
-            match scan_attribute_list(&segment) {
-                AttributeList::Closed(end) => return Ok((segment[end..].to_string(), self.line.index + continuations)),
+            let mut dynamic = Vec::new();
+            let scanned = scan_attribute_list(&segment, &mut dynamic);
+            if self.ruby {
+                for attribute in &dynamic {
+                    hash.extend(self.dynamic_attribute(&segment, line, column, attribute));
+                }
+            }
+            match scanned {
+                AttributeList::Closed(end) => {
+                    let after = Rest { text: segment[end..].to_string(), line, column: column + end };
+                    if !hash.is_empty() {
+                        hash.insert(0, Chunk::synthetic("{", rest.line));
+                        hash.push(Chunk::synthetic("}", rest.line));
+                    }
+                    return Ok((after, self.line.index + continuations, hash));
+                }
                 AttributeList::Unbalanced => return Err(halt(UNBALANCED, self.line.index)),
                 AttributeList::Invalid => {
                     let fragment = balance_parentheses(&joined).unwrap_or(&joined);
@@ -719,34 +956,238 @@ impl Parser {
                     joined.push(' ');
                     joined.push_str(&self.next_line.text);
                     segment = self.next_line.text.clone();
+                    (line, column) = (self.next_line.index, self.next_line.indent());
                     self.join_line(self.next_line.index, self.line.index, &segment);
                     continuations += 1;
+                    self.counted_at_end = true;
                     self.next_line()?;
                 }
             }
         }
     }
 
-    /// `handle_ruby_multiline`: lines after one ending in a comma belong to it.
-    fn join_ruby_lines(&mut self, code: &str) -> Result<(), Halt> {
+    /// `"name" => value,` for an attribute of a `(...)` list, as Haml puts it in the hash it passes at run time.
+    fn dynamic_attribute(&self, segment: &str, line: usize, column: usize, attribute: &DynamicAttribute) -> Vec<Chunk> {
+        let name = format!("\"{}\" => ", &segment[attribute.name.clone()]);
+        let value = &segment[attribute.value.clone()];
+        let at = column + attribute.value.start;
+        let ruby = match value.strip_prefix(['"', '\'']) {
+            Some(quoted) => {
+                let inner = &quoted[..quoted.len() - 1];
+                self.interpolated(inner, &[(0, line, at + 1)], false)
+            }
+            None => Some(vec![self.chunk(line, value, at)]),
+        };
+        let Some(ruby) = ruby else { return Vec::new() };
+        let mut chunks = vec![Chunk::synthetic(&name, line)];
+        chunks.extend(ruby);
+        chunks.push(Chunk::synthetic(",", line));
+        chunks
+    }
+
+    /// `handle_ruby_multiline`: lines after one ending in a comma belong to it. Returns them as Ruby, each after a space.
+    fn join_ruby_lines(&mut self, code: &str) -> Result<Vec<Chunk>, Halt> {
+        let mut chunks = Vec::new();
         if !is_ruby_multiline(code.trim_end_matches(RUBY_WHITESPACE)) {
-            return Ok(());
+            return Ok(chunks);
         }
         let continues = |line: &Line| !line.end_of_document && is_ruby_multiline(&line.text);
         let owner = self.line.index;
         if !self.next_line.end_of_document {
-            let (index, text) = (self.next_line.index, self.next_line.text.clone());
-            self.join_line(index, owner, &text);
+            let next = self.next_line.clone();
+            self.join_line(next.index, owner, &next.text);
+            chunks.extend(self.continuation(&next));
         }
         let mut joined_continues = continues(&self.next_line);
         while joined_continues {
             let Some(next) = self.template.pop_front() else { break };
             if !next.end_of_document {
                 self.join_line(next.index, owner, &next.text);
+                chunks.extend(self.continuation(&next));
             }
             joined_continues = continues(&next);
         }
-        self.next_line()
+        self.next_line()?;
+        Ok(chunks)
+    }
+
+    /// The Ruby a joined line adds: a space and its text.
+    fn continuation(&self, line: &Line) -> Vec<Chunk> {
+        if line.text.is_empty() {
+            return Vec::new();
+        }
+        vec![Chunk::synthetic(" ", line.index), self.chunk(line.index, &line.text, line.indent())]
+    }
+}
+
+/// The Ruby Haml compiles, collected as the lines are read.
+impl Parser {
+    fn emit(&mut self, piece: Piece) {
+        if self.ruby {
+            self.pieces.push(piece);
+        }
+    }
+
+    /// `text` on `line`, `column` bytes from the line's start: a slice of the template, unless `|` multiline rewrote the line.
+    fn chunk(&self, line: usize, text: &str, column: usize) -> Chunk {
+        if !self.ruby {
+            return Chunk::synthetic("", line);
+        }
+        let rewritten = self.pipe_joined.get(line).copied().unwrap_or(false);
+        let offset = self.line_starts.get(line).filter(|_| !rewritten).map(|start| start + column);
+        Chunk { text: text.to_string(), line, offset }
+    }
+
+    /// The column of `part`, a slice of `text`, the current line without its indentation.
+    fn line_column(&self, part: &str, text: &str) -> usize {
+        self.line.indent() + span_in(text, part).start
+    }
+
+    /// The string literal Haml makes of plain text, a comment or a tag's content when it has `#{}`.
+    fn push_text(&mut self, text: &str, line: usize, column: usize) {
+        if let Some(literal) = self.interpolated(text, &[(0, line, column)], true) {
+            self.emit(Piece::Text(literal));
+        }
+    }
+
+    /// The body of the filter that just ended, as the Ruby Haml compiles it.
+    fn finish_filter(&mut self) {
+        let body = std::mem::replace(&mut self.filter, FilterBody::None);
+        if !self.ruby || body == FilterBody::None {
+            return;
+        }
+        // (line, text, length of the indentation that is the body's prefix) of each line of the body.
+        let lines: Vec<(usize, &str, usize)> = self.compiled[self.filter_start..]
+            .iter()
+            .filter_map(|node| match node {
+                Compiled::Flat { index, text } => {
+                    let prefix_len = match self.roles.get(*index) {
+                        Some(Role::FlatBody { prefix_len, .. }) => *prefix_len,
+                        _ => 0,
+                    };
+                    Some((*index, text.as_str(), prefix_len))
+                }
+                Compiled::Node { .. } => None,
+            })
+            .collect();
+        let piece = match body {
+            FilterBody::None => None,
+            FilterBody::Ruby => {
+                let mut code = Vec::new();
+                for &(line, text, prefix_len) in &lines {
+                    code.push(self.chunk(line, text, prefix_len));
+                    code.push(Chunk::synthetic("\n", line));
+                }
+                Some(Piece::Statement(code))
+            }
+            FilterBody::Text => {
+                let mut body = String::new();
+                let mut segments = Vec::new();
+                for &(line, text, prefix_len) in &lines {
+                    segments.push((body.len(), line, prefix_len));
+                    body.push_str(text);
+                    body.push('\n');
+                }
+                body.pop();
+                self.interpolated(&body, &segments, true).map(Piece::Text)
+            }
+        };
+        if let Some(piece) = piece.filter(|_| !lines.is_empty()) {
+            self.pieces.push(piece);
+        }
+    }
+
+    /// Haml's `unescape_interpolation`: the Ruby string literal for `text` when it has `#{}`, and `#@x` or `#$x` for
+    /// `variables`. `text` is lines joined by `\n`; `segments` say where each starts in it and in the template (as
+    /// start, line and column). Nothing when there is no interpolation, or when one never closes, which Haml fails on
+    /// by itself.
+    fn interpolated(&self, text: &str, segments: &[(usize, usize, usize)], variables: bool) -> Option<Vec<Chunk>> {
+        if !self.ruby {
+            return None;
+        }
+        let first_line = segments.first()?.1;
+        let mut chunks = vec![Chunk::synthetic("\"", first_line)];
+        let (mut copied, mut at, mut found_any) = (0, 0, false);
+        while let Some(found) = text[at..].find('#') {
+            let hash = at + found;
+            let sigil = text[hash + 1..].chars().next().filter(|ch| *ch == '{' || variables && matches!(ch, '@' | '$'));
+            let backslashes = text[..hash].len() - text[..hash].trim_end_matches('\\').len();
+            let Some(sigil) = sigil.filter(|_| backslashes % 2 == 0) else {
+                at = hash + 1 + usize::from(sigil.is_some());
+                continue;
+            };
+            let (from, to, next) = if sigil == '{' {
+                let close = closing_brace(&text[hash + 2..])? + hash + 2;
+                (hash + 2, close, close + 1)
+            } else {
+                let word = text[hash + 2..].find(|ch: char| !is_word(ch)).unwrap_or(text.len() - hash - 2);
+                (hash + 1, hash + 2 + word, hash + 2 + word)
+            };
+            let line = segments[segments.partition_point(|segment| segment.0 <= hash).saturating_sub(1)].1;
+            chunks.push(Chunk::synthetic(&ruby_string_body(&text[copied..hash]), line));
+            chunks.push(Chunk::synthetic("#{", line));
+            chunks.extend(self.slice_chunks(text, segments, from, to));
+            chunks.push(Chunk::synthetic("}", line));
+            (copied, at) = (next, next);
+            found_any = true;
+        }
+        if !found_any {
+            return None;
+        }
+        chunks.push(Chunk::synthetic(&ruby_string_body(&text[copied..]), first_line));
+        chunks.push(Chunk::synthetic("\"", first_line));
+        Some(chunks)
+    }
+
+    /// `text[from..to]` as the chunks of the template lines it spans.
+    fn slice_chunks(&self, text: &str, segments: &[(usize, usize, usize)], from: usize, to: usize) -> Vec<Chunk> {
+        let mut chunks = Vec::new();
+        let first = segments.partition_point(|segment| segment.0 <= from).saturating_sub(1);
+        for (i, &(start, line, column)) in segments.iter().enumerate().skip(first) {
+            if start > to {
+                break;
+            }
+            let end = segments.get(i + 1).map_or(text.len(), |next| next.0 - 1);
+            if from > end {
+                continue;
+            }
+            if !chunks.is_empty() {
+                chunks.push(Chunk::synthetic("\n", line));
+            }
+            let (a, b) = (from.max(start), to.min(end));
+            chunks.push(self.chunk(line, &text[a..b], column + a - start));
+        }
+        chunks
+    }
+}
+
+/// Where the `}` that closes an interpolation is in `text`, which follows its `#{`: Haml's `balance`, which counts only
+/// the braces.
+fn closing_brace(text: &str) -> Option<usize> {
+    let mut depth = 1;
+    text.char_indices().find_map(|(at, ch)| {
+        depth += match ch {
+            '{' => 1,
+            '}' => -1,
+            _ => 0,
+        };
+        (depth == 0).then_some(at)
+    })
+}
+
+/// Where the text of a plain line starts: Haml's `strip!` drops the `\`, `&`, `!` or `==` that marks it.
+fn plain_text_start(text: &str) -> usize {
+    let after = |marker_len: usize| text.len() - text[marker_len..].trim_start_matches(' ').len();
+    if text.starts_with("!==") || text.starts_with("&==") {
+        after(3)
+    } else if text.starts_with("==") {
+        after(2)
+    } else if text.starts_with(['!', '&']) && (text[1..].starts_with(' ') || text[1..].starts_with("#{")) {
+        after(1)
+    } else if text.starts_with('\\') {
+        1
+    } else {
+        0
     }
 }
 
@@ -810,31 +1251,57 @@ struct TagContent {
     parse: bool,
     /// The text or code; text with `#{}` or `==` is a string literal in Haml, which stands as `""` here.
     value: String,
+    /// The Ruby Haml compiles, and where it is in the text the tag content was read from.
+    source: Option<(Source, std::ops::Range<usize>)>,
+}
+
+/// Text that follows a tag.
+enum Source {
+    /// Code whose value is written.
+    Code,
+    /// Text with `#{}`.
+    Text,
+}
+
+/// The rest of a tag's line, as the attribute groups leave it: where in the template it is, in `line` at byte `column`.
+#[derive(Clone)]
+struct Rest {
+    text: String,
+    line: usize,
+    column: usize,
 }
 
 fn tag_content(rest: &str) -> TagContent {
-    let rest = rest.strip_prefix("<>").or_else(|| rest.strip_prefix("><")).or_else(|| rest.strip_prefix(['<', '>'])).unwrap_or(rest);
-    let action = rest.chars().next().filter(|ch| "=/~&!".contains(*ch));
-    let value = rest[action.map_or(0, char::len_utf8)..].trim_matches(RUBY_WHITESPACE);
+    let stripped = rest.strip_prefix("<>").or_else(|| rest.strip_prefix("><")).or_else(|| rest.strip_prefix(['<', '>'])).unwrap_or(rest);
+    let action = stripped.chars().next().filter(|ch| "=/~&!".contains(*ch));
+    let value = stripped[action.map_or(0, char::len_utf8)..].trim_matches(RUBY_WHITESPACE);
     let interpolated = || "\"\"".to_string();
     let has_interpolation = ["#{", "#$", "#@"].iter().any(|opener| value.contains(opener));
-    let (parse, value) = match action {
+    let trimmed = |text: &'_ str| text.trim_matches(RUBY_WHITESPACE).to_string();
+    let source_of = |kind, part: &str| Some((kind, span_in(rest, part.trim_matches(RUBY_WHITESPACE))));
+    let (parse, text, source) = match action {
         Some('/') => {
-            return TagContent { action, self_closing: true, parse: false, value: value.to_string() };
+            return TagContent { action, self_closing: true, parse: false, value: value.to_string(), source: None };
         }
-        Some('~') => (true, value.to_string()),
-        Some('=') if value.starts_with('=') => (true, interpolated()),
-        Some('=') => (true, value.to_string()),
+        Some('~') => (true, value.to_string(), source_of(Source::Code, value)),
+        Some('=') if value.starts_with('=') => (true, interpolated(), source_of(Source::Text, &value[1..])),
+        Some('=') => (true, value.to_string(), source_of(Source::Code, value)),
         Some('&' | '!') => match value.strip_prefix(['=', '~']) {
-            Some(code) if code.starts_with('=') => (true, interpolated()),
-            Some(code) => (true, code.trim_matches(RUBY_WHITESPACE).to_string()),
-            None if has_interpolation => (true, interpolated()),
-            None => (false, value.to_string()),
+            Some(code) if code.starts_with('=') => (true, interpolated(), source_of(Source::Text, &code[1..])),
+            Some(code) => (true, trimmed(code), source_of(Source::Code, code)),
+            None if has_interpolation => (true, interpolated(), source_of(Source::Text, value)),
+            None => (false, value.to_string(), None),
         },
-        _ if has_interpolation => (true, interpolated()),
-        _ => (false, value.to_string()),
+        _ if has_interpolation => (true, interpolated(), source_of(Source::Text, value)),
+        _ => (false, value.to_string(), None),
     };
-    TagContent { action, self_closing: false, parse, value }
+    TagContent { action, self_closing: false, parse, value: text, source }
+}
+
+/// The byte range of `part` in `whole`, which it is a slice of.
+fn span_in(whole: &str, part: &str) -> std::ops::Range<usize> {
+    let start = part.as_ptr() as usize - whole.as_ptr() as usize;
+    start..start + part.len()
 }
 
 enum AttributeList {
@@ -848,8 +1315,15 @@ enum AttributeList {
     Unbalanced,
 }
 
-/// `parse_new_attribute` in a loop over one line of `(a=1 b="x#{y}" c)`, starting at an attribute.
-fn scan_attribute_list(segment: &str) -> AttributeList {
+/// An attribute of a `(...)` list whose value is Ruby: a variable, or a quoted string with `#{}`.
+struct DynamicAttribute {
+    name: std::ops::Range<usize>,
+    value: std::ops::Range<usize>,
+}
+
+/// `parse_new_attribute` in a loop over one line of `(a=1 b="x#{y}" c)`, starting at an attribute. The attributes whose
+/// values are Ruby go to `dynamic`.
+fn scan_attribute_list(segment: &str, dynamic: &mut Vec<DynamicAttribute>) -> AttributeList {
     let mut at = 0;
     loop {
         let rest = &segment[at..];
@@ -857,12 +1331,19 @@ fn scan_attribute_list(segment: &str) -> AttributeList {
         if name_len == 0 {
             return if rest.starts_with(')') { AttributeList::Closed(at + 1) } else { AttributeList::Invalid };
         }
+        let name = at..at + name_len;
         let after_name = rest[name_len..].trim_start_matches(REGEXP_SPACE);
         at = segment.len() - after_name.len();
         if let Some(after_equals) = after_name.strip_prefix('=') {
             let value = after_equals.trim_start_matches(REGEXP_SPACE);
             match attribute_value_len(value) {
-                Ok(value_len) => at = segment.len() - value.len() + value_len,
+                Ok((value_len, ruby)) => {
+                    let start = segment.len() - value.len();
+                    if ruby {
+                        dynamic.push(DynamicAttribute { name, value: start..start + value_len });
+                    }
+                    at = start + value_len;
+                }
                 Err(failure) => return failure,
             }
         }
@@ -873,14 +1354,16 @@ fn scan_attribute_list(segment: &str) -> AttributeList {
     }
 }
 
-/// Length of a quoted string (with `#{}` interpolation) or a variable at the start of `value`; the failure otherwise.
-fn attribute_value_len(value: &str) -> Result<usize, AttributeList> {
+/// Length of a quoted string (with `#{}` interpolation) or a variable at the start of `value`, and whether it is Ruby (a
+/// variable, or a string with `#{}`); the failure otherwise.
+fn attribute_value_len(value: &str) -> Result<(usize, bool), AttributeList> {
     let Some(quote @ ('"' | '\'')) = value.chars().next() else {
         let variable = ["@@", "@", "$"].iter().find_map(|prefix| value.strip_prefix(prefix)).unwrap_or(value);
         let name_len = variable.find(|ch: char| !is_word(ch)).unwrap_or(variable.len());
-        return if name_len > 0 { Ok(value.len() - variable.len() + name_len) } else { Err(AttributeList::Invalid) };
+        return if name_len > 0 { Ok((value.len() - variable.len() + name_len, true)) } else { Err(AttributeList::Invalid) };
     };
     let mut at = 1;
+    let mut interpolated = false;
     while let Some(ch) = value[at..].chars().next() {
         let after = &value[at + ch.len_utf8()..];
         match ch {
@@ -889,20 +1372,12 @@ fn attribute_value_len(value: &str) -> Result<usize, AttributeList> {
                 None => break,
             },
             '#' if after.starts_with('{') => {
-                // Haml's `balance`, which counts only the braces.
-                let mut depth = 1;
-                let close = after[1..].char_indices().find_map(|(offset, brace)| {
-                    depth += match brace {
-                        '{' => 1,
-                        '}' => -1,
-                        _ => 0,
-                    };
-                    (depth == 0).then_some(offset)
-                });
+                let close = closing_brace(&after[1..]);
                 let Some(close) = close else { return Err(AttributeList::Unbalanced) };
+                interpolated = true;
                 at += 2 + close + 1;
             }
-            ch if ch == quote => return Ok(at + 1),
+            ch if ch == quote => return Ok((at + 1, interpolated)),
             _ => at += ch.len_utf8(),
         }
     }

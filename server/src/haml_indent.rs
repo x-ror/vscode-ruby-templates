@@ -39,8 +39,7 @@ struct Visit {
     span: usize,
 }
 
-pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
-    let parsed = haml_parser::parse(text);
+pub fn diagnostics(text: &str, parsed: &haml_parser::Parsed) -> Vec<Diagnostic> {
     let mut out: Vec<Diagnostic> = parsed.error.iter().map(|parse_error| parse_error_diagnostic(text, parse_error)).collect();
     out.extend(parsed.void_content.iter().map(|void| void_content_diagnostic(text, void)));
     out
@@ -336,7 +335,10 @@ mod tests {
 
     /// (line, start char, end char, message) for each Haml diagnostic.
     fn haml(text: &str) -> Vec<(u32, u32, u32, String)> {
-        diagnostics(text).into_iter().map(|d| (d.range.start.line, d.range.start.character, d.range.end.character, d.message)).collect()
+        diagnostics(text, &haml_parser::parse(text))
+            .into_iter()
+            .map(|d| (d.range.start.line, d.range.start.character, d.range.end.character, d.message))
+            .collect()
     }
 
     fn at(line: u32, start: u32, end: u32, message: &str) -> (u32, u32, u32, String) {
@@ -432,7 +434,8 @@ mod tests {
 
     #[test]
     fn void_elements_with_content_warn_on_the_content() {
-        let diagnostics = diagnostics("%p\n  %br\n    x\n  %img{src: 1} y\n");
+        let text = "%p\n  %br\n    x\n  %img{src: 1} y\n";
+        let diagnostics = diagnostics(text, &haml_parser::parse(text));
         let got: Vec<_> =
             diagnostics.iter().map(|d| (d.range.start.line, d.range.start.character, d.range.end.character, &d.message)).collect();
         assert_eq!(
