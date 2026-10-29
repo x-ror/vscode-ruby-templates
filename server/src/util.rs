@@ -12,6 +12,36 @@ pub fn offset_to_position(text: &str, offset: usize) -> Position {
     Position::new(line as u32, col as u32)
 }
 
+/// The line starts of a text, so that many offsets or lines can be looked up without scanning from the start each time.
+pub struct LineIndex<'a> {
+    text: &'a str,
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    pub fn new(text: &'a str) -> Self {
+        LineIndex { text, starts: std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect() }
+    }
+
+    /// `offset_to_position` of `offset`.
+    pub fn position(&self, offset: usize) -> Position {
+        let text = self.text;
+        let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+        let line = self.starts.partition_point(|&s| s <= offset) - 1;
+        let col = text[self.starts[line]..offset].encode_utf16().count();
+        Position::new(line as u32, col as u32)
+    }
+
+    /// Line `n` as `str::lines` gives it; empty past the end.
+    pub fn line(&self, n: usize) -> &'a str {
+        let Some(&start) = self.starts.get(n) else { return "" };
+        let end = self.starts.get(n + 1).map_or(self.text.len(), |next| next - 1);
+        let line = &self.text[start..end];
+        // `lines` drops the `\r` of a CRLF ending, not a lone one at the very end.
+        line.strip_suffix('\r').filter(|_| end < self.text.len()).unwrap_or(line)
+    }
+}
+
 pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
     span_range(line, text.lines().nth(line).unwrap_or(""), start_col, end_col)
 }
@@ -184,6 +214,20 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_index_agrees_with_the_scans_it_replaces() {
+        for text in ["", "a", "a\n", "é😀b\r\nc\n\nd", "x\r", "a\r\n\r\nb\r"] {
+            let index = LineIndex::new(text);
+            for offset in 0..=text.len() + 1 {
+                assert_eq!(index.position(offset), offset_to_position(text, offset), "{text:?} at {offset}");
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            for n in 0..lines.len() + 2 {
+                assert_eq!(index.line(n), lines.get(n).copied().unwrap_or(""), "{text:?} line {n}");
+            }
+        }
+    }
 
     fn edit(range: Option<((u32, u32), (u32, u32))>, text: &str) -> TextDocumentContentChangeEvent {
         let range = range.map(|((sl, sc), (el, ec))| Range::new(Position::new(sl, sc), Position::new(el, ec)));

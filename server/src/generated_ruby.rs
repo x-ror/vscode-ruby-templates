@@ -1,7 +1,7 @@
 //! Ruby generated from a template, and the way back from its errors to the template's lines.
 
 use crate::prism;
-use crate::util::{error, leading_ws, line_range, offset_to_position};
+use crate::util::{error, leading_ws, span_range, LineIndex};
 use tower_lsp::lsp_types::{Diagnostic, Range};
 
 /// Slim and Haml compile into a method body, where `yield` is valid; Prism, parsing it alone, says otherwise.
@@ -59,20 +59,22 @@ impl Compiled {
 
     /// Prism's errors in the source, at their place in `text`, the template.
     pub fn diagnostics(&self, text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
-        let lines: Vec<&str> = text.lines().collect();
+        let index = LineIndex::new(text);
+        let last = text.lines().count().saturating_sub(1);
         prism::syntax_errors(&self.source, ruby)
             .into_iter()
             .filter(|e| e.message != IGNORED_ERROR && e.start >= self.wrapper_len)
-            .map(|e| error(self.template_range(text, &lines, e.start, e.end, e.range), e.message))
+            .map(|e| error(self.template_range(&index, last, e.start, e.end, e.range), e.message))
             .collect()
     }
 
     /// The template range of a generated one: exact inside verbatim code, else the whole content of its line.
-    fn template_range(&self, text: &str, lines: &[&str], start: usize, end: usize, generated: Range) -> Range {
-        if let Some(&(from, to, at)) = self.verbatim.iter().find(|(from, to, _)| *from <= start && start <= *to) {
-            return Range::new(offset_to_position(text, at + start - from), offset_to_position(text, at + end.min(to) - from));
+    fn template_range(&self, index: &LineIndex, last: usize, start: usize, end: usize, generated: Range) -> Range {
+        // Runs are pushed in source order: the first that ends at or after `start` is the first that holds it.
+        let run = self.verbatim.get(self.verbatim.partition_point(|&(_, to, _)| to < start)).filter(|&&(from, _, _)| from <= start);
+        if let Some(&(from, to, at)) = run {
+            return Range::new(index.position(at + start - from), index.position(at + end.min(to) - from));
         }
-        let last = lines.len().saturating_sub(1);
         let generated_line = generated.start.line as usize;
         let mut line = self.line_of.get(generated_line).copied().flatten();
         if line.is_none() {
@@ -81,8 +83,8 @@ impl Compiled {
             line = before.map(|b| self.line_of[b].unwrap_or(0).saturating_add(generated_line - b));
         }
         let line = line.unwrap_or(0).min(last);
-        let raw = lines.get(line).copied().unwrap_or("");
-        line_range(text, line, leading_ws(raw).len(), raw.trim_end().len())
+        let raw = index.line(line);
+        span_range(line, raw, leading_ws(raw).len(), raw.trim_end().len())
     }
 }
 
