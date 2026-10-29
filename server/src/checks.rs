@@ -167,17 +167,19 @@ pub(crate) fn language_diagnostics(
     let mut out = match lang {
         TemplateLang::Erb => erb::diagnostics(text, ruby),
         TemplateLang::Haml => {
-            let parsed = haml_parser::parse(text);
+            let parsed = haml_parser::parse_with_ruby(text);
             let mut out = haml_indent::diagnostics(text, &parsed);
+            let comment =
+                ruby.strict_locals.as_ref().and_then(|rails| strict_locals::find(text, rails.close).map(|comment| (comment, rails)));
             // Haml stops at its first error, so there is no Ruby to check.
             if parsed.error.is_none() {
-                out.extend(
-                    haml_ruby::diagnostics(text, &parsed, ruby.grammar, ruby.strict_locals.as_ref())
-                        .into_iter()
-                        .map(|d| util::coded(d, RUBY_SYNTAX)),
-                );
+                let ruby_errors = haml_ruby::diagnostics(text, &parsed, ruby.grammar, comment.as_ref().map(|(comment, _)| comment));
+                out.extend(ruby_errors.into_iter().map(|d| util::coded(d, RUBY_SYNTAX)));
             }
-            out.extend(locals_signature(text, ruby));
+            if let Some((comment, rails)) = &comment {
+                let signature = strict_locals::comment_diagnostics(text, comment, ruby.grammar, rails);
+                out.extend(signature.into_iter().map(|d| util::coded(d, RUBY_SYNTAX)));
+            }
             out
         }
         TemplateLang::Slim => {

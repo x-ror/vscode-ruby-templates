@@ -2,7 +2,7 @@
 
 use crate::generated_ruby::Compiled;
 use crate::haml_parser::{Chunk, Parsed, Piece, BOM};
-use crate::strict_locals::{self, Rails};
+use crate::strict_locals::{self, Comment};
 use tower_lsp::lsp_types::Diagnostic;
 
 /// The method Rails compiles a template into, up to its parameters.
@@ -13,13 +13,12 @@ const PREAMBLE: &str = "@output_buffer = output_buffer || ActionView::OutputBuff
 const ATTRIBUTES_CALL: &str = "::Haml::AttributeBuilder.build(true, \"\\\"\".freeze, :html, ";
 const VARIABLE: &str = "_haml_compiler";
 
-/// `rails` is given only where strict locals exist; its signature is checked by `strict_locals::diagnostics`.
-pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version, rails: Option<&Rails>) -> Vec<Diagnostic> {
+/// `comment` is the strict locals comment, whose signature `strict_locals::comment_diagnostics` checks.
+pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version, comment: Option<&Comment>) -> Vec<Diagnostic> {
     let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
     // Haml drops the blank lines at the end, so the source ends on the last line that holds something.
     let last_line = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()).last().map_or(0, |(index, _)| index);
-    let comment = rails.and_then(|rails| strict_locals::find(text, rails.close));
-    let wrapper = format!("{WRAPPER_DEF}{})", strict_locals::method_parameters(comment.as_ref()));
+    let wrapper = format!("{WRAPPER_DEF}{})", strict_locals::method_parameters(comment));
     compile(&parsed.pieces, bom_len, last_line, &wrapper).diagnostics(text, ruby)
 }
 
@@ -58,14 +57,14 @@ impl Generator {
             }
             Piece::Output { code, block: true } => {
                 self.part(line_of(code), |g| {
-                    g.text(&format!("{VARIABLE} = "), code);
+                    g.out.push(&format!("{VARIABLE} = "), line_of(code));
                     g.chunks(code);
                 });
                 self.newline();
             }
             Piece::Output { code, block: false } => {
                 self.part(line_of(code), |g| {
-                    g.text(&format!("{VARIABLE} = ("), code);
+                    g.out.push(&format!("{VARIABLE} = ("), line_of(code));
                     g.chunks(code);
                 });
                 self.newline();
@@ -74,9 +73,9 @@ impl Generator {
                 self.part(line, |g| g.out.push(")", line));
             }
             Piece::Text(literal) => self.part(line_of(literal), |g| {
-                g.text("(", literal);
+                g.out.push("(", line_of(literal));
                 g.chunks(literal);
-                g.text(")", literal);
+                g.out.push(")", line_of(literal));
             }),
             Piece::Attributes { object, arguments } => {
                 let line = line_of(if object.is_empty() { arguments } else { object });
@@ -91,6 +90,7 @@ impl Generator {
                     g.out.push(")", line);
                 });
             }
+            Piece::Dropped => {}
             Piece::End(line) => self.part(*line, |g| g.out.push("end", *line)),
         }
     }
@@ -111,10 +111,6 @@ impl Generator {
         }
         self.out.new_line();
         self.separate = true;
-    }
-
-    fn text(&mut self, text: &str, near: &[Chunk]) {
-        self.out.push(text, line_of(near));
     }
 
     fn chunks(&mut self, chunks: &[Chunk]) {
@@ -139,7 +135,7 @@ fn line_of(chunks: &[Chunk]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::haml_parser::parse;
+    use crate::haml_parser::parse_with_ruby as parse;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
         super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, None)
@@ -299,6 +295,11 @@ mod tests {
         // Haml joins the next line onto the code, then compiles the tag's lines and not its value.
         assert_eq!(errors("%p= a,\n%b{c: 1} x\n  %i y\n"), []);
         assert_eq!(errors("%p= foo,\n  bar\n  %b x\n"), []);
+        // Tags with code that goes on over lines, nested in one another: every piece keeps its place.
+        assert_eq!(errors("%p= foo,\n  bar\n  %i= y,\n    z\n    %b x\n"), []);
+        assert_eq!(errors("%p= foo,\n  bar\n  %b{a: 1}= y,\n    z\n    %b x\n"), []);
+        // Script code with lines nested under it keeps its block, so the `end` it gets is unmatched.
+        assert_eq!(messages("%p= foo,\n  bar\n  = y,\n    z\n    %b x\n"), ["unexpected 'end', ignoring it"]);
     }
 
     #[test]
@@ -320,12 +321,12 @@ mod tests {
 
     #[test]
     fn strict_locals_are_the_parameters() {
-        let rails = Rails { close: strict_locals::Close::default(), identifier: "t.html.haml".into() };
+        let find = |text: &str| strict_locals::find(text, strict_locals::Close::default());
         let text = "-# locals: (**)\n= render \"x\", **\n";
-        let found = super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, Some(&rails));
+        let found = super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, find(text).as_ref());
         assert!(found.is_empty(), "{found:?}");
         // A bad signature is `strict_locals::diagnostics`'s to report.
         let text = "-# locals: (a b)\n%p= a\n";
-        assert_eq!(super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, Some(&rails)).len(), 0);
+        assert_eq!(super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, find(text).as_ref()).len(), 0);
     }
 }

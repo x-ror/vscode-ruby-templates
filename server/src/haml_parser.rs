@@ -76,7 +76,6 @@ struct Line {
 }
 
 impl Line {
-    /// The length of the indentation.
     fn indent(&self) -> usize {
         self.whitespace.as_ref().map_or(0, String::len)
     }
@@ -115,6 +114,8 @@ struct Parser {
     flat_comment: bool,
     /// The first filter Haml has no compiler for; it fails at compile time, so any parser error comes first.
     unknown_filter: Option<Error>,
+    /// Whether to build `pieces`, which only the Ruby check uses.
+    ruby: bool,
     pieces: Vec<Piece>,
     /// Where each physical line starts in the template.
     line_starts: Vec<usize>,
@@ -126,8 +127,8 @@ struct Parser {
     counted_at_end: bool,
     /// What the body of the filter just read compiles to.
     filter: FilterBody,
-    /// The body of the open filter: line, text and the length of its indentation.
-    filter_lines: Vec<(usize, String, usize)>,
+    /// Where the body of the open filter starts in `compiled`.
+    filter_start: usize,
 }
 
 /// What a filter's body is to the Ruby Haml generates.
@@ -156,7 +157,6 @@ struct RubyBlock {
     ends: bool,
     /// A `case` line, whose first `when` takes the lines that nest under it.
     case: bool,
-    /// A `when` line.
     when: bool,
     /// The first `when` of a `case`: Haml moves its lines to the `case`, so it has no `end`.
     adopted: bool,
@@ -231,6 +231,8 @@ pub enum Piece {
     Attributes { object: Vec<Chunk>, arguments: Vec<Chunk> },
     /// The `end` of the block the line opened, which has lines nested under it.
     End(usize),
+    /// A tag's code that Haml leaves out because lines nest under the tag.
+    Dropped,
 }
 
 /// What Haml makes of one node, as far as the compiled source depends on it.
@@ -253,7 +255,16 @@ pub struct Parsed {
 }
 
 pub fn parse(text: &str) -> Parsed {
-    let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text));
+    parse_as(text, false)
+}
+
+/// `parse`, and the `pieces` of Ruby Haml generates, which cost more than the rest.
+pub fn parse_with_ruby(text: &str) -> Parsed {
+    parse_as(text, true)
+}
+
+fn parse_as(text: &str, ruby: bool) -> Parsed {
+    let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text), ruby);
     let error = match parser.run() {
         Err(Halt::Error(error)) => Some(error),
         Err(Halt::Done) => {
@@ -346,11 +357,11 @@ fn human_indentation(indentation: &str) -> String {
 }
 
 impl Parser {
-    fn new(text: &str) -> Parser {
+    fn new(text: &str, ruby: bool) -> Parser {
         let mut template: VecDeque<Line> = split_lines(text).into();
         let index = template.len();
         let lines = index;
-        let line_starts = line_starts(text, lines);
+        let line_starts = if ruby { line_starts(text, lines) } else { Vec::new() };
         template.push_back(Line { text: "-#".into(), full: "-#".into(), index, end_of_document: true, ..Line::default() });
         Parser {
             template,
@@ -372,13 +383,14 @@ impl Parser {
             flat_owner: 0,
             flat_comment: false,
             unknown_filter: None,
+            ruby,
             pieces: Vec::new(),
             line_starts,
             pipe_joined: vec![false; lines],
             line_block: None,
             counted_at_end: false,
             filter: FilterBody::None,
-            filter_lines: Vec::new(),
+            filter_start: 0,
         }
     }
 
@@ -436,11 +448,10 @@ impl Parser {
         parent.children += 1;
         let first = parent.children == 1;
         if let (true, Some(RubyBlock { output: Some(piece), ends, .. })) = (first, parent.ruby) {
-            if !ends {
-                // Nothing was pushed after the tag's code, so no other piece's index moves.
-                self.pieces.remove(piece);
-            } else if let Some(Piece::Output { block, .. }) = self.pieces.get_mut(piece) {
-                *block = true;
+            match self.pieces.get_mut(piece) {
+                Some(slot) if !ends => *slot = Piece::Dropped,
+                Some(Piece::Output { block, .. }) => *block = true,
+                _ => {}
             }
         }
         if let (true, Some(block), Some(RubyBlock { case: true, .. })) = (first, ruby.as_mut(), parent.ruby) {
@@ -465,9 +476,6 @@ impl Parser {
         };
         let index = self.line.index;
         self.set_role(index, Role::FlatBody { owner: self.flat_owner, prefix_len });
-        if self.filter != FilterBody::None {
-            self.filter_lines.push((index, text.clone(), prefix_len));
-        }
         self.compiled.push(Compiled::Flat { index, text });
     }
 
@@ -635,7 +643,7 @@ impl Parser {
             Node::Other => {}
         }
         if open.children > 0 && open.ruby.is_some_and(|block| block.ends && !block.adopted) {
-            self.pieces.push(Piece::End(open.line));
+            self.emit(Piece::End(open.line));
         }
     }
 
@@ -662,7 +670,7 @@ impl Parser {
             return Node::Other;
         }
         self.filter = if comment { FilterBody::None } else { body };
-        self.filter_lines.clear();
+        self.filter_start = self.compiled.len();
         self.flat = true;
         self.flat_owner = self.line.index;
         self.flat_comment = comment;
@@ -782,7 +790,7 @@ impl Parser {
             when: keyword == Some("when"),
             adopted: false,
         });
-        self.pieces.push(if silent { Piece::Statement(chunks) } else { Piece::Output { code: chunks, block: false } });
+        self.emit(if silent { Piece::Statement(chunks) } else { Piece::Output { code: chunks, block: false } });
         Ok(if opens_branch { Node::Branch } else { Node::Other })
     }
 
@@ -868,7 +876,7 @@ impl Parser {
         }
         list_hash.extend(hash_code);
         if !object.is_empty() || !list_hash.is_empty() {
-            self.pieces.push(Piece::Attributes { object, arguments: list_hash });
+            self.emit(Piece::Attributes { object, arguments: list_hash });
         }
         if let Some((source, range)) = content.source {
             let value = &rest.text[range.clone()];
@@ -880,7 +888,7 @@ impl Parser {
                     code.extend(continued);
                     self.line_block =
                         Some(RubyBlock { output: Some(self.pieces.len()), ends: false, case: false, when: false, adopted: false });
-                    self.pieces.push(Piece::Output { code, block: false });
+                    self.emit(Piece::Output { code, block: false });
                 }
             }
         }
@@ -925,8 +933,10 @@ impl Parser {
         loop {
             let mut dynamic = Vec::new();
             let scanned = scan_attribute_list(&segment, &mut dynamic);
-            for attribute in &dynamic {
-                hash.extend(self.dynamic_attribute(&segment, line, column, attribute));
+            if self.ruby {
+                for attribute in &dynamic {
+                    hash.extend(self.dynamic_attribute(&segment, line, column, attribute));
+                }
             }
             match scanned {
                 AttributeList::Closed(end) => {
@@ -1012,8 +1022,17 @@ impl Parser {
 
 /// The Ruby Haml compiles, collected as the lines are read.
 impl Parser {
+    fn emit(&mut self, piece: Piece) {
+        if self.ruby {
+            self.pieces.push(piece);
+        }
+    }
+
     /// `text` on `line`, `column` bytes from the line's start: a slice of the template, unless `|` multiline rewrote the line.
     fn chunk(&self, line: usize, text: &str, column: usize) -> Chunk {
+        if !self.ruby {
+            return Chunk::synthetic("", line);
+        }
         let rewritten = self.pipe_joined.get(line).copied().unwrap_or(false);
         let offset = self.line_starts.get(line).filter(|_| !rewritten).map(|start| start + column);
         Chunk { text: text.to_string(), line, offset }
@@ -1027,40 +1046,54 @@ impl Parser {
     /// The string literal Haml makes of plain text, a comment or a tag's content when it has `#{}`.
     fn push_text(&mut self, text: &str, line: usize, column: usize) {
         if let Some(literal) = self.interpolated(text, &[(0, line, column)], true) {
-            self.pieces.push(Piece::Text(literal));
+            self.emit(Piece::Text(literal));
         }
     }
 
     /// The body of the filter that just ended, as the Ruby Haml compiles it.
     fn finish_filter(&mut self) {
-        let lines = std::mem::take(&mut self.filter_lines);
         let body = std::mem::replace(&mut self.filter, FilterBody::None);
-        if lines.is_empty() {
+        if !self.ruby || body == FilterBody::None {
             return;
         }
-        match body {
-            FilterBody::None => {}
+        // (line, text, length of the indentation that is the body's prefix) of each line of the body.
+        let lines: Vec<(usize, &str, usize)> = self.compiled[self.filter_start..]
+            .iter()
+            .filter_map(|node| match node {
+                Compiled::Flat { index, text } => {
+                    let prefix_len = match self.roles.get(*index) {
+                        Some(Role::FlatBody { prefix_len, .. }) => *prefix_len,
+                        _ => 0,
+                    };
+                    Some((*index, text.as_str(), prefix_len))
+                }
+                Compiled::Node { .. } => None,
+            })
+            .collect();
+        let piece = match body {
+            FilterBody::None => None,
             FilterBody::Ruby => {
                 let mut code = Vec::new();
-                for (line, text, prefix_len) in &lines {
-                    code.push(self.chunk(*line, text, *prefix_len));
-                    code.push(Chunk::synthetic("\n", *line));
+                for &(line, text, prefix_len) in &lines {
+                    code.push(self.chunk(line, text, prefix_len));
+                    code.push(Chunk::synthetic("\n", line));
                 }
-                self.pieces.push(Piece::Statement(code));
+                Some(Piece::Statement(code))
             }
             FilterBody::Text => {
                 let mut body = String::new();
                 let mut segments = Vec::new();
-                for (line, text, prefix_len) in &lines {
-                    segments.push((body.len(), *line, *prefix_len));
+                for &(line, text, prefix_len) in &lines {
+                    segments.push((body.len(), line, prefix_len));
                     body.push_str(text);
                     body.push('\n');
                 }
                 body.pop();
-                if let Some(literal) = self.interpolated(&body, &segments, true) {
-                    self.pieces.push(Piece::Text(literal));
-                }
+                self.interpolated(&body, &segments, true).map(Piece::Text)
             }
+        };
+        if let Some(piece) = piece.filter(|_| !lines.is_empty()) {
+            self.pieces.push(piece);
         }
     }
 
@@ -1069,9 +1102,12 @@ impl Parser {
     /// start, line and column). Nothing when there is no interpolation, or when one never closes, which Haml fails on
     /// by itself.
     fn interpolated(&self, text: &str, segments: &[(usize, usize, usize)], variables: bool) -> Option<Vec<Chunk>> {
+        if !self.ruby {
+            return None;
+        }
         let first_line = segments.first()?.1;
         let mut chunks = vec![Chunk::synthetic("\"", first_line)];
-        let (mut copied, mut at) = (0, 0);
+        let (mut copied, mut at, mut found_any) = (0, 0, false);
         while let Some(found) = text[at..].find('#') {
             let hash = at + found;
             let sigil = text[hash + 1..].chars().next().filter(|ch| *ch == '{' || variables && matches!(ch, '@' | '$'));
@@ -1093,8 +1129,9 @@ impl Parser {
             chunks.extend(self.slice_chunks(text, segments, from, to));
             chunks.push(Chunk::synthetic("}", line));
             (copied, at) = (next, next);
+            found_any = true;
         }
-        if chunks.len() == 1 {
+        if !found_any {
             return None;
         }
         chunks.push(Chunk::synthetic(&ruby_string_body(&text[copied..]), first_line));
@@ -1335,16 +1372,7 @@ fn attribute_value_len(value: &str) -> Result<(usize, bool), AttributeList> {
                 None => break,
             },
             '#' if after.starts_with('{') => {
-                // Haml's `balance`, which counts only the braces.
-                let mut depth = 1;
-                let close = after[1..].char_indices().find_map(|(offset, brace)| {
-                    depth += match brace {
-                        '{' => 1,
-                        '}' => -1,
-                        _ => 0,
-                    };
-                    (depth == 0).then_some(offset)
-                });
+                let close = closing_brace(&after[1..]);
                 let Some(close) = close else { return Err(AttributeList::Unbalanced) };
                 interpolated = true;
                 at += 2 + close + 1;
