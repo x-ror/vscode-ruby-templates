@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - Haml: Ruby syntax errors (`ruby-syntax`) in `-`, `=`, `!=`, `&=` and `~` lines, code after a tag, `{}` attribute hashes, `#{}` in text, comments and `()` attribute values, and `:ruby` filters, as Prism finds them in the Ruby Haml generates for Rails. That includes a `- rescue`, `- ensure`, `- in` or second `- else` in the wrong place and lines nested under code that opens no block, which Haml accepts and only the generated Ruby rejects. They are checked once Haml itself accepts the template.
+- Slim: a Ruby error in code that follows closed markup (`div` / `  p` / `- x = foo(1,,2)`) is underlined where it is, not at column 1.
+- Large templates check much faster: a 20,000-line Haml or Slim file full of Ruby errors went from over 100 s to under a second, a 10,000-line ERB file with errors from 12 s to 0.25 s, and a valid 20,000-line Slim file from 3.7 s to 0.12 s.
 
 ## 0.2.0
 
