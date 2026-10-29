@@ -85,18 +85,15 @@ pub fn line(text: &str, comment: &Comment) -> usize {
     text[..comment.range.start].matches('\n').count()
 }
 
-/// Rails' errors for the `locals:` comment of a template whose body Rails compiles apart from it (Haml, Slim): Ruby's
-/// syntax errors in the method's parameters, else the parameters that aren't keywords. `identifier`, the template's
-/// name in Rails' message, is given only where strict locals exist.
+/// Rails' errors for the `locals:` comment alone; `identifier` is given only where strict locals exist.
 pub fn diagnostics(text: &str, ruby: ruby_prism::Version, identifier: Option<&str>) -> Vec<Diagnostic> {
     let (Some(identifier), Some(comment)) = (identifier, find(text)) else { return Vec::new() };
     let range = line_text_range(text, line(text, &comment));
     let source = format!("def _template({})\nend\n", method_parameters(Some(&comment)));
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&source, ruby);
     if !errors.is_empty() {
-        let mut messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
-        messages.dedup();
-        return messages.into_iter().map(|message| error(range, message)).collect();
+        let mut seen = std::collections::HashSet::new();
+        return errors.into_iter().filter(|e| seen.insert(e.message.clone())).map(|e| error(range, e.message)).collect();
     }
     non_keyword_message(positional, block, identifier).map(|message| error(range, message)).into_iter().collect()
 }
