@@ -7,7 +7,7 @@ use crate::lang::TemplateLang;
 use crate::partials::{first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, RenderKind, RenderRef};
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
-use crate::util::{lines_with_offsets, offset_to_position};
+use crate::util::{lines_with_offsets, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
 use std::collections::HashMap;
@@ -130,6 +130,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let index = LineIndex::new(&source.text);
         let named = code_refs(source, extra_engines, render_refs)
             .into_iter()
             .filter(|(start, _, r)| may_name(&stems, &r.name) && ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
@@ -137,7 +138,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
             .into_iter()
             .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
         for (start, end, _) in named.chain(models) {
-            let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+            let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
         }
     }
@@ -153,6 +154,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let index = LineIndex::new(&source.text);
         for (start, _, r) in code_refs(source, extra_engines, render_refs) {
             if !may_name(&stems, &r.name) || !ref_targets(project, source, start, &r).contains(&files[0]) {
                 continue;
@@ -163,7 +165,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
                 continue;
             }
             let at = key.as_ref().and_then(|k| k.find(&line[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
-            let position = offset_to_position(&source.text, line_start + at);
+            let position = index.position(line_start + at);
             out.push(Location::new(uri.clone(), Range::new(position, position)));
         }
     }
@@ -175,11 +177,12 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let index = LineIndex::new(&source.text);
         for (start, end, _) in code_refs(source, extra_engines, i18n_refs)
             .into_iter()
             .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
-            let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+            let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
         }
     }
@@ -251,6 +254,7 @@ pub fn render_edits(
 
     let mut out = HashMap::new();
     for source in sources {
+        let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
         for (start, end, r) in code_refs(source, extra_engines, render_refs) {
             if !folder_renamed && !may_name(&stems, &r.name) {
@@ -264,7 +268,7 @@ pub fn render_edits(
             let Some(name) = names.first().filter(|n| **n != r.name && names.iter().all(|m| m == *n)) else {
                 continue;
             };
-            let range = Range::new(offset_to_position(&source.text, start), offset_to_position(&source.text, end));
+            let range = Range::new(index.position(start), index.position(end));
             edits.push(TextEdit::new(range, name.clone()));
         }
         if let (false, Ok(uri)) = (edits.is_empty(), Url::from_file_path(&source.path)) {

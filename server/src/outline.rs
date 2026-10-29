@@ -6,7 +6,7 @@ use crate::partials::render_refs;
 use crate::ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::tags;
-use crate::util::{find_balanced, leading_ws, offset_to_position};
+use crate::util::{find_balanced, leading_ws, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, Range, SymbolKind};
@@ -165,8 +165,9 @@ pub(crate) fn indent_level(line: &str) -> Option<i64> {
 /// Outline: `content_for`, forms, Turbo Frames, `render` calls and, with an HTML host, landmark/`id` elements.
 pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
     let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
+    let index = LineIndex::new(text);
     let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(text, name, kind, range, selection)));
+        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
     };
 
     // One entry per open Ruby block: the symbol it will become once its `end` is seen.
@@ -229,8 +230,9 @@ pub fn haml_document_symbols(text: &str) -> Vec<DocumentSymbol> {
     let line_starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
     let line_end = |i: usize| line_starts[i] + lines[i].trim_end().len();
     let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
+    let index = LineIndex::new(text);
     let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(text, name, kind, range, selection)));
+        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
     };
     for (i, span) in haml_structure(text) {
         let line = lines[i];
@@ -306,8 +308,14 @@ fn haml_attribute_id(mut attrs: &str) -> Option<&str> {
     None
 }
 
-pub(crate) fn symbol(text: &str, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) -> DocumentSymbol {
-    let to_range = |(start, end)| Range::new(offset_to_position(text, start), offset_to_position(text, end));
+pub(crate) fn symbol(
+    index: &LineIndex,
+    name: String,
+    kind: SymbolKind,
+    range: (usize, usize),
+    selection: (usize, usize),
+) -> DocumentSymbol {
+    let to_range = |(start, end)| Range::new(index.position(start), index.position(end));
     #[allow(deprecated)]
     DocumentSymbol {
         name,

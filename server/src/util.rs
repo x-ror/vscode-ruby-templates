@@ -2,14 +2,65 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
 };
 
-/// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
+/// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
-    let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+    let offset = char_floor(text, offset);
     let before = &text[..offset];
-    let line = before.matches('\n').count();
-    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let col: usize = text[line_start..offset].encode_utf16().count();
-    Position::new(line as u32, col as u32)
+    column_position(text, before.matches('\n').count(), before.rfind('\n').map_or(0, |i| i + 1), offset)
+}
+
+/// `offset` clamped to `text` and moved back to a character boundary.
+fn char_floor(text: &str, offset: usize) -> usize {
+    (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0)
+}
+
+/// The position of `offset` on `line`, which starts at byte `line_start`: its column counts UTF-16 units.
+fn column_position(text: &str, line: usize, line_start: usize, offset: usize) -> Position {
+    Position::new(line as u32, text[line_start..offset].encode_utf16().count() as u32)
+}
+
+/// The line starts of a text, so that many offsets or lines can be looked up without scanning from the start each time.
+pub struct LineIndex<'a> {
+    text: &'a str,
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    pub fn new(text: &'a str) -> Self {
+        LineIndex { text, starts: std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect() }
+    }
+
+    /// The line and UTF-16 column of `offset`, moved back to a character boundary and clamped to the text.
+    pub fn position(&self, offset: usize) -> Position {
+        let offset = char_floor(self.text, offset);
+        let line = self.starts.partition_point(|&s| s <= offset) - 1;
+        column_position(self.text, line, self.starts[line], offset)
+    }
+
+    /// Line `n` as `str::lines` gives it; empty past the end.
+    pub fn line(&self, n: usize) -> &'a str {
+        let Some(&start) = self.starts.get(n) else { return "" };
+        let end = self.starts.get(n + 1).copied().unwrap_or(self.text.len());
+        without_line_ending(&self.text[start..end])
+    }
+
+    /// `line_text_range` of line `n`.
+    pub fn text_range(&self, n: usize) -> Range {
+        let raw = self.line(n);
+        let start = leading_ws(raw).len();
+        span_range(n, raw, start, raw.trim_end().len().max(start))
+    }
+
+    /// `str::lines().count()`.
+    pub fn line_count(&self) -> usize {
+        // A final line ending opens no line of its own.
+        self.starts.len() - usize::from(self.text.is_empty() || self.text.ends_with('\n'))
+    }
+}
+
+/// A line as `str::lines` yields it: without its `\n` or `\r\n`; a lone `\r` at the very end stays.
+fn without_line_ending(raw: &str) -> &str {
+    raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l))
 }
 
 pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
@@ -18,9 +69,7 @@ pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> 
 
 /// The text of `line` without its leading and trailing whitespace.
 pub fn line_text_range(text: &str, line: usize) -> Range {
-    let raw = text.lines().nth(line).unwrap_or("");
-    let start = leading_ws(raw).len();
-    span_range(line, raw, start, raw.trim_end().len().max(start))
+    LineIndex::new(text).text_range(line)
 }
 
 /// Byte columns of `line_text` (line number `line`) as an LSP range.
@@ -128,8 +177,7 @@ pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.split_inclusive('\n').scan(0, |start, raw| {
         let offset = *start;
         *start += raw.len();
-        let line = raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l));
-        Some((offset, line))
+        Some((offset, without_line_ending(raw)))
     })
 }
 
@@ -184,6 +232,25 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_index_agrees_with_scanning_the_text() {
+        for text in ["", "a", "a\n", "é😀b\r\nc\n\nd", "x\r", "a\r\n\r\nb\r"] {
+            let index = LineIndex::new(text);
+            for offset in 0..=text.len() + 1 {
+                let at = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap();
+                let before = &text[..at];
+                let column = before[before.rfind('\n').map_or(0, |i| i + 1)..].encode_utf16().count();
+                let scanned = Position::new(before.matches('\n').count() as u32, column as u32);
+                assert_eq!(index.position(offset), scanned, "{text:?} at {offset}");
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(index.line_count(), lines.len(), "{text:?}");
+            for n in 0..lines.len() + 2 {
+                assert_eq!(index.line(n), lines.get(n).copied().unwrap_or(""), "{text:?} line {n}");
+            }
+        }
+    }
 
     fn edit(range: Option<((u32, u32), (u32, u32))>, text: &str) -> TextDocumentContentChangeEvent {
         let range = range.map(|((sl, sc), (el, ec))| Range::new(Position::new(sl, sc), Position::new(el, ec)));

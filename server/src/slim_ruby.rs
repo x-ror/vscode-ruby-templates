@@ -129,8 +129,10 @@ impl Generator<'_> {
 
     /// Appends the code of `at`, remembering where it came from when it is one verbatim run.
     fn code(&mut self, code: &str, at: &Origin) {
+        // The run starts after the markup that `write` would flush first.
+        self.flush_markup(at.line);
         let from = self.out.source.len();
-        self.write(code, at.line);
+        self.raw(code, at.line);
         if let Some(offset) = at.offset {
             self.out.mark_verbatim(from, code.len(), offset);
         }
@@ -312,6 +314,15 @@ mod tests {
         ];
         assert_eq!(errors("\np\n  - test = 123\n    = \"Hello from within a block! \"\n"), expected);
         assert_eq!(errors("\np\n  = \"Hello Ruby!\"\n    = \"Hello from within a block! \"\n"), expected);
+    }
+
+    #[test]
+    fn code_after_closed_markup_keeps_its_exact_range() {
+        let range = |text| diagnostics(text)[0].range;
+        let alone = range("- x = foo(1,,2)\n");
+        let after_markup = range("div\n  p\n- x = foo(1,,2)\n");
+        assert_eq!((after_markup.start.line, after_markup.start.character), (2, alone.start.character));
+        assert_eq!(after_markup.end.character, alone.end.character);
     }
 
     #[test]

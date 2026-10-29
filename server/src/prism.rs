@@ -1,4 +1,4 @@
-use crate::util::offset_to_position;
+use crate::util::LineIndex;
 use tower_lsp::lsp_types::Range;
 
 pub(crate) struct RubyError {
@@ -18,12 +18,12 @@ pub(crate) fn syntax_errors(source: &str, version: ruby_prism::Version) -> Vec<R
 pub(crate) fn errors_and_def_parameters(source: &str, version: ruby_prism::Version) -> (Vec<RubyError>, DefParameters) {
     let options = ruby_prism::Options::default().version(version).build();
     let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
+    let index = LineIndex::new(source);
     let errors = result
         .errors()
         .map(|error| {
             let location = error.location();
-            let range =
-                Range::new(offset_to_position(source, location.start() as usize), offset_to_position(source, location.end() as usize));
+            let range = Range::new(index.position(location.start() as usize), index.position(location.end() as usize));
             RubyError {
                 message: String::from_utf8_lossy(error.message()).into_owned(),
                 range,
