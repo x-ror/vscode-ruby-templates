@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Haml, Slim, Jbuilder and Builder: the strict locals comment (`-# locals: (…)`, `/# locals: (…)`, `# locals: (…)`) gets the same `ruby-syntax` checks as ERB with `actionview` 7.1 or newer: a signature Ruby can't parse, and Rails' "`a` set as non-keyword argument for app/views/users/_card.html.haml. Locals can only be set as keyword arguments." for locals that aren't keywords.
+- Strict locals with `actionview` 7.1 to 8.0: the comment ends at the last `)` on its line, as Rails' older regexp has it, for the checks, completion and hover alike.
 
 ## 0.1.0
 

@@ -2,7 +2,7 @@
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
 use crate::prism;
-use crate::strict_locals;
+use crate::strict_locals::{self, Close, Comment, Rails};
 use crate::util::{error, line_text_range, offset_to_position};
 use regex::Regex;
 use std::ops::Range as ByteRange;
@@ -247,8 +247,8 @@ struct Compiled {
     code_line: usize,
     /// Code copied as it is: its byte range in `source` and the offset of its first byte in the template.
     verbatim: Vec<(usize, usize, usize)>,
-    /// The line of the `locals:` comment, which the wrapper's `def` line holds the parameters of.
-    signature_line: Option<usize>,
+    /// The `locals:` comment, which the wrapper's `def` line holds the parameters of.
+    strict_locals: Option<Comment>,
     /// What Rails cut out of the template before Erubi saw it.
     cut: Cut,
 }
@@ -271,8 +271,8 @@ impl Cut {
 }
 
 /// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
-fn compile(text: &str, strict_locals_exist: bool) -> Compiled {
-    let strict = strict_locals_exist.then(|| strict_locals::find(text)).flatten();
+fn compile(text: &str, close: Option<Close>) -> Compiled {
+    let strict = close.and_then(|close| strict_locals::find(text, close));
     let mut template = text.to_string();
     if let Some(strict) = &strict {
         template.replace_range(strict.range.clone(), "");
@@ -281,21 +281,19 @@ fn compile(text: &str, strict_locals_exist: bool) -> Compiled {
 
     let parameters = strict_locals::method_parameters(strict.as_ref());
     let head = format!("          def _template({parameters})\n            @virtual_path = \"template\";;");
-    let signature_line = strict.as_ref().map(|s| strict_locals::line(text, s));
     Compiled {
         code_line: head.matches('\n').count(),
         verbatim: erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect(),
         source: format!("{head}{}\n          end\n", erubi.src),
-        signature_line,
-        cut: Cut { encoding_tag, strict_locals: strict.map(|s| s.range) },
+        cut: Cut { encoding_tag, strict_locals: strict.as_ref().map(|s| s.range.clone()) },
+        strict_locals: strict,
     }
 }
 
 /// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
-/// `locals:` parameters are keywords. `strict_locals_identifier`, the template's name in that message, is given only
-/// where strict locals exist.
-pub fn diagnostics(text: &str, ruby: ruby_prism::Version, strict_locals_identifier: Option<&str>) -> Vec<Diagnostic> {
-    let compiled = compile(text, strict_locals_identifier.is_some());
+/// `locals:` parameters are keywords. `rails` is given only where strict locals exist.
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>) -> Vec<Diagnostic> {
+    let compiled = compile(text, rails.map(|r| r.close));
     let lines: Vec<&str> = text.lines().collect();
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
     let found: Vec<Diagnostic> =
@@ -303,9 +301,9 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, strict_locals_identifi
     if !found.is_empty() {
         return found;
     }
-    let (Some(line), Some(identifier)) = (compiled.signature_line, strict_locals_identifier) else { return Vec::new() };
-    let range = line_text_range(text, line);
-    strict_locals::non_keyword_message(positional, block, identifier).map(|message| error(range, message)).into_iter().collect()
+    let (Some(comment), Some(rails)) = (&compiled.strict_locals, rails) else { return Vec::new() };
+    let range = line_text_range(text, comment.line(text));
+    strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
@@ -319,7 +317,7 @@ fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::Ru
         if e.message == UNCLOSED_DEF {
             return None;
         }
-        compiled.signature_line?
+        compiled.strict_locals.as_ref()?.line(text)
     } else {
         // Past the template are the lines Erubi and the wrapper add after it.
         (generated_line - compiled.code_line).min(lines.len().saturating_sub(1))
@@ -334,8 +332,12 @@ mod tests {
 
     const IDENTIFIER: &str = "template.html.erb";
 
+    fn rails() -> Rails {
+        Rails { close: Close::default(), identifier: IDENTIFIER.into() }
+    }
+
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, ruby_prism::Version::Latest, Some(IDENTIFIER))
+        super::diagnostics(text, ruby_prism::Version::Latest, Some(&rails()))
     }
 
     /// (0-based line, message) of each error.
@@ -344,7 +346,7 @@ mod tests {
     }
 
     fn errors_in(text: &str, ruby: ruby_prism::Version) -> Vec<(u32, String)> {
-        super::diagnostics(text, ruby, Some(IDENTIFIER)).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        super::diagnostics(text, ruby, Some(&rails())).into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
     fn messages(text: &str) -> Vec<String> {
@@ -378,7 +380,7 @@ mod tests {
         ("<%# locals: (a:, &block) -%>\n<%= a %>", "          def _template(local_assigns, output_buffer, a:, &block)\n            @virtual_path = \"template\";; \n @output_buffer.append=( a );\n@output_buffer\n          end\n"),
         ];
         for (template, rails) in cases {
-            assert_eq!(compile(template, true).source, rails, "{template:?}");
+            assert_eq!(compile(template, Some(Close::default())).source, rails, "{template:?}");
         }
     }
 
@@ -467,7 +469,8 @@ mod tests {
 
     fn locals_messages(signature: &str) -> Vec<(u32, String)> {
         let text = format!("<p>\n<%# locals: {signature} -%>\nx\n");
-        let found = super::diagnostics(&text, ruby_prism::Version::Latest, Some("app/views/a.html.erb"));
+        let rails = Rails { close: Close::default(), identifier: "app/views/a.html.erb".into() };
+        let found = super::diagnostics(&text, ruby_prism::Version::Latest, Some(&rails));
         found.into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
@@ -514,7 +517,7 @@ mod tests {
     fn locals_line_is_a_plain_comment_without_strict_locals() {
         let text = "<%# locals: (a: ] ) %>\n<p>\n";
         assert!(super::diagnostics(text, ruby_prism::Version::Latest, None).is_empty());
-        assert!(compile(text, false).source.contains("(local_assigns, output_buffer, &_)"));
+        assert!(compile(text, None).source.contains("(local_assigns, output_buffer, &_)"));
         assert_eq!(errors(text)[0].1, "unexpected ']'; expected a `)` to close the parameters");
     }
 
@@ -542,7 +545,7 @@ mod tests {
     fn blank_signature_is_nil_keywords() {
         for blank in ["", " ", "\u{a0}"] {
             let template = format!("<%# locals: ({blank}) -%>\n<p>x</p>");
-            assert!(compile(&template, true).source.contains("output_buffer, **nil, &_)"), "{template:?}");
+            assert!(compile(&template, Some(Close::default())).source.contains("output_buffer, **nil, &_)"), "{template:?}");
             assert!(errors(&template).is_empty());
         }
     }

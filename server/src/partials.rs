@@ -2,6 +2,7 @@
 
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, views_root};
+use crate::strict_locals::{self, Close};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -19,8 +20,6 @@ static JSON_PARTIAL_KEY: LazyLock<Regex> =
 static RENDER_LAYOUT_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
 });
-// ActionView 8.1's `/\#\s+locals:\s+\((.*?)\)(?=\s*-?%>|\s*$)/m` without the lookahead: lazy, may span lines.
-static STRICT_LOCALS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?sm)#\s+locals:\s+\((.*?)\)\s*(?:-?%>|$)").unwrap());
 // `[^:]` keeps `Card::DEFAULTS` from reading as a `Card:` keyword.
 static KEYWORD_ARG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^(\w+):(|[^:].*)$").unwrap());
 static RENDER_COMPONENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
@@ -418,8 +417,9 @@ pub struct StrictLocals {
     pub rest: bool,
 }
 
-pub fn strict_locals(text: &str) -> Option<StrictLocals> {
-    let params = STRICT_LOCALS.captures(text)?.get(1)?.as_str().trim();
+pub fn strict_locals(text: &str, close: Close) -> Option<StrictLocals> {
+    let comment = strict_locals::find(text, close)?;
+    let params = if comment.blank() { "" } else { comment.parameters.trim() };
     let mut sig = StrictLocals { params: params.to_string(), locals: vec![], rest: false };
     for arg in split_args(params)? {
         // `**nil` is how Rails spells "no other locals".
@@ -432,8 +432,8 @@ pub fn strict_locals(text: &str) -> Option<StrictLocals> {
     Some(sig)
 }
 
-pub fn file_strict_locals(file: &Path) -> Option<StrictLocals> {
-    strict_locals(&std::fs::read_to_string(file).ok()?)
+pub fn file_strict_locals(file: &Path, close: Close) -> Option<StrictLocals> {
+    strict_locals(&std::fs::read_to_string(file).ok()?, close)
 }
 
 /// `name: value` → `(name, value)`; `value` is empty for `name:`.
@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn strict_locals_signature() {
-        let sig = strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>").unwrap();
+        let sig = strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>", Close::default()).unwrap();
         assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
         assert_eq!(
             sig.locals,
@@ -752,19 +752,25 @@ mod tests {
             ]
         );
         assert!(sig.rest);
-        let none = strict_locals("<%# locals: () -%>").unwrap();
+        let none = strict_locals("<%# locals: () -%>", Close::default()).unwrap();
         assert!(none.locals.is_empty() && !none.rest);
-        assert_eq!(strict_locals("-# locals: (user: nil)").unwrap().locals, vec![("user".to_string(), Some("nil".to_string()))]);
-        assert_eq!(strict_locals("<%# locals: (a: ')') %>").unwrap().locals, vec![("a".to_string(), Some("')'".to_string()))]);
-        let no_rest = strict_locals("<%# locals: (a:, **nil) %>").unwrap();
+        assert_eq!(
+            strict_locals("-# locals: (user: nil)", Close::default()).unwrap().locals,
+            vec![("user".to_string(), Some("nil".to_string()))]
+        );
+        assert_eq!(
+            strict_locals("<%# locals: (a: ')') %>", Close::default()).unwrap().locals,
+            vec![("a".to_string(), Some("')'".to_string()))]
+        );
+        let no_rest = strict_locals("<%# locals: (a:, **nil) %>", Close::default()).unwrap();
         assert_eq!((no_rest.locals.len(), no_rest.rest), (1, false));
         // Lazy: stops at the `)` that closes the tag, not the last one on the line.
-        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>").unwrap().params, "a:");
-        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>").unwrap();
+        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>", Close::default()).unwrap().params, "a:");
+        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>", Close::default()).unwrap();
         assert_eq!(multi.locals, vec![("a".to_string(), None), ("b".to_string(), Some("[1,\n 2]".to_string()))]);
         // ActionView needs whitespace before the parenthesis.
-        assert!(strict_locals("<%# locals:(a:) %>").is_none());
-        assert!(strict_locals("<%# just a comment %>").is_none());
+        assert!(strict_locals("<%# locals:(a:) %>", Close::default()).is_none());
+        assert!(strict_locals("<%# just a comment %>", Close::default()).is_none());
     }
 
     #[test]

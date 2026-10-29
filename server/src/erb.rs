@@ -28,10 +28,7 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
 }
 
 pub fn diagnostics(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
-    erb_ruby::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
-        .into_iter()
-        .map(|d| coded(d, code::RUBY_SYNTAX))
-        .collect()
+    erb_ruby::diagnostics(text, ruby.grammar, ruby.strict_locals.as_ref()).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)).collect()
 }
 
 /// Elements whose content the tokenizer reads as raw text or RCDATA, up to their end tag (`noscript` with scripting on).

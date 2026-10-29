@@ -120,22 +120,25 @@ pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagno
     out
 }
 
-/// How Rails evals a template: the Prism grammar of its project's Ruby, and, where strict locals exist (Rails 7.1 or
-/// newer), the template's name in Rails' messages. Without that name the `locals:` line is a plain comment.
+/// How Rails evals a template: the Prism grammar of its project's Ruby, and strict locals where they exist (Rails 7.1
+/// or newer). Without them the `locals:` line is a plain comment.
 pub(crate) struct RubyContext {
     pub grammar: ruby_prism::Version,
-    pub strict_locals_identifier: Option<String>,
+    pub strict_locals: Option<strict_locals::Rails>,
 }
 
 impl RubyContext {
     pub(crate) fn outside_project() -> Self {
-        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals_identifier: None }
+        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals: None }
     }
 
     fn of(path: &Path, project: &Project) -> Self {
         RubyContext {
             grammar: project.prism_version(),
-            strict_locals_identifier: supports_strict_locals(project).then(|| project.short_identifier(path)).flatten(),
+            strict_locals: supports_strict_locals(project)
+                .then(|| project.short_identifier(path))
+                .flatten()
+                .map(|identifier| strict_locals::Rails { close: strict_locals::Close::of(project), identifier }),
         }
     }
 }
@@ -186,10 +189,7 @@ pub(crate) fn language_diagnostics(
 }
 
 fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
-    strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
-        .into_iter()
-        .map(|d| util::coded(d, RUBY_SYNTAX))
-        .collect()
+    strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals.as_ref()).into_iter().map(|d| util::coded(d, RUBY_SYNTAX)).collect()
 }
 
 /// Diagnostic codes every language shares.
@@ -273,7 +273,7 @@ fn strict_locals_mismatches(
         // Several variants/formats: which one Rails picks depends on the request.
         let found = partials::resolve(project, path, &r);
         let [file] = found.as_slice() else { continue };
-        let Some(sig) = partials::file_strict_locals(file) else { continue };
+        let Some(sig) = partials::file_strict_locals(file, strict_locals::Close::of(project)) else { continue };
         let missing: Vec<&str> =
             sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
         let mut seen = HashSet::new();

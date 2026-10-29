@@ -8,7 +8,7 @@ use crate::lang::{file_name, html_host, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, outline, partial_rename,
     partials, project::Project, rails_paths, routes, ruby, schema, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
-    tags, util,
+    strict_locals, tags, util,
 };
 use dashmap::DashMap;
 use haml_indent::LineRole;
@@ -51,7 +51,7 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
     }
     let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
     let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
-    if let Some(sig) = partials::file_strict_locals(&found[0]) {
+    if let Some(sig) = partials::file_strict_locals(&found[0], strict_locals::Close::of(project)) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
@@ -288,6 +288,7 @@ impl Backend {
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return Ok(vec![]) };
         let Some(views) = rails_paths::views_root(path) else { return Ok(vec![]) };
         let (open, project, partial, local) = (self.open_texts(), Project::for_template(path), path.to_path_buf(), name.to_string());
+        let close = strict_locals::Close::of(&project);
         let extra_engines = self.options().extra_engines.clone();
         let passes = off_server_task(move || {
             let sources = partial_rename::sources(&views, &open);
@@ -297,7 +298,7 @@ impl Backend {
         if !passes.is_empty() {
             return Ok(passes);
         }
-        let declared = partials::strict_locals(text).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
+        let declared = partials::strict_locals(text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
         Ok(comment.filter(|_| declared).and_then(|line| line_location(path, line)).into_iter().collect())
     }
@@ -848,7 +849,8 @@ impl LanguageServer for Backend {
         if typed.is_empty() {
             return Ok(None);
         }
-        let mut found = local_completions(&doc.text, typed);
+        let close = path.as_deref().map(|p| strict_locals::Close::of(&Project::for_template(p))).unwrap_or_default();
+        let mut found = local_completions(&doc.text, typed, close);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
         let own_slots = path
             .as_deref()

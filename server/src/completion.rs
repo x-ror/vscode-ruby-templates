@@ -3,14 +3,15 @@
 
 use crate::lang::TemplateLang;
 use crate::project::Project;
+use crate::strict_locals::Close;
 use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};
 
 /// The current template's own strict locals, as completions.
-pub(crate) fn local_completions(text: &str, typed: &str) -> Vec<CompletionItem> {
-    let Some(sig) = partials::strict_locals(text) else { return vec![] };
+pub(crate) fn local_completions(text: &str, typed: &str, close: Close) -> Vec<CompletionItem> {
+    let Some(sig) = partials::strict_locals(text, close) else { return vec![] };
     sig.locals
         .into_iter()
         .filter(|(name, _)| name.starts_with(typed))
@@ -187,12 +188,13 @@ mod tests {
     #[test]
     fn local_completions_list_strict_locals() {
         let card = "<%# locals: (user:, size: :md) -%>\n<p><%= user.name %></p>\n";
-        let items: Vec<(String, Option<String>)> = local_completions(card, "").into_iter().map(|c| (c.label, c.detail)).collect();
+        let items: Vec<(String, Option<String>)> =
+            local_completions(card, "", Close::default()).into_iter().map(|c| (c.label, c.detail)).collect();
         assert_eq!(
             items,
             vec![("user".to_string(), Some("local (required)".to_string())), ("size".to_string(), Some("local = :md".to_string())),]
         );
-        assert_eq!(local_completions(card, "si").len(), 1);
-        assert!(local_completions("<p>", "").is_empty());
+        assert_eq!(local_completions(card, "si", Close::default()).len(), 1);
+        assert!(local_completions("<p>", "", Close::default()).is_empty());
     }
 }
