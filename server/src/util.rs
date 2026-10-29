@@ -2,14 +2,9 @@ use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
 };
 
-/// Convert a byte offset within `text` to an LSP position (line, UTF-16 column).
+/// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
-    let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
-    let before = &text[..offset];
-    let line = before.matches('\n').count();
-    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let col: usize = text[line_start..offset].encode_utf16().count();
-    Position::new(line as u32, col as u32)
+    LineIndex::new(text).position(offset)
 }
 
 /// The line starts of a text, so that many offsets or lines can be looked up without scanning from the start each time.
@@ -23,7 +18,7 @@ impl<'a> LineIndex<'a> {
         LineIndex { text, starts: std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect() }
     }
 
-    /// `offset_to_position` of `offset`.
+    /// The line and UTF-16 column of `offset`, moved back to a character boundary and clamped to the text.
     pub fn position(&self, offset: usize) -> Position {
         let text = self.text;
         let offset = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
@@ -35,11 +30,20 @@ impl<'a> LineIndex<'a> {
     /// Line `n` as `str::lines` gives it; empty past the end.
     pub fn line(&self, n: usize) -> &'a str {
         let Some(&start) = self.starts.get(n) else { return "" };
-        let end = self.starts.get(n + 1).map_or(self.text.len(), |next| next - 1);
-        let line = &self.text[start..end];
-        // `lines` drops the `\r` of a CRLF ending, not a lone one at the very end.
-        line.strip_suffix('\r').filter(|_| end < self.text.len()).unwrap_or(line)
+        let end = self.starts.get(n + 1).copied().unwrap_or(self.text.len());
+        without_line_ending(&self.text[start..end])
     }
+
+    /// `str::lines().count()`.
+    pub fn line_count(&self) -> usize {
+        // A final line ending opens no line of its own.
+        self.starts.len() - usize::from(self.text.is_empty() || self.text.ends_with('\n'))
+    }
+}
+
+/// A line as `str::lines` yields it: without its `\n` or `\r\n`; a lone `\r` at the very end stays.
+fn without_line_ending(raw: &str) -> &str {
+    raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l))
 }
 
 pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
@@ -158,8 +162,7 @@ pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.split_inclusive('\n').scan(0, |start, raw| {
         let offset = *start;
         *start += raw.len();
-        let line = raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l));
-        Some((offset, line))
+        Some((offset, without_line_ending(raw)))
     })
 }
 
@@ -216,13 +219,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_index_agrees_with_the_scans_it_replaces() {
+    fn line_index_agrees_with_scanning_the_text() {
         for text in ["", "a", "a\n", "é😀b\r\nc\n\nd", "x\r", "a\r\n\r\nb\r"] {
             let index = LineIndex::new(text);
             for offset in 0..=text.len() + 1 {
-                assert_eq!(index.position(offset), offset_to_position(text, offset), "{text:?} at {offset}");
+                let at = (0..=offset.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap();
+                let before = &text[..at];
+                let column = before[before.rfind('\n').map_or(0, |i| i + 1)..].encode_utf16().count();
+                let scanned = Position::new(before.matches('\n').count() as u32, column as u32);
+                assert_eq!(index.position(offset), scanned, "{text:?} at {offset}");
             }
             let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(index.line_count(), lines.len(), "{text:?}");
             for n in 0..lines.len() + 2 {
                 assert_eq!(index.line(n), lines.get(n).copied().unwrap_or(""), "{text:?} line {n}");
             }
