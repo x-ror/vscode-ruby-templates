@@ -697,6 +697,7 @@
           "items": {
             "type": "string",
             "enum": [
+              "ruby-syntax",
               "unresolved-render",
               "strict-locals"
             ]
