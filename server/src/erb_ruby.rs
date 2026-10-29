@@ -3,7 +3,7 @@
 
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
-use crate::util::{error, line_text_range, LineIndex};
+use crate::util::{error, LineIndex};
 use regex::Regex;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
@@ -304,7 +304,7 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
         return found;
     }
     let (Some(comment), Some(rails)) = (&compiled.strict_locals, rails) else { return Vec::new() };
-    let range = line_text_range(text, comment.line(text));
+    let range = index.text_range(comment.line(text));
     strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
 }
 
