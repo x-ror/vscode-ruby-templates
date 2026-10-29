@@ -260,6 +260,42 @@ const checks = {
     await until("formatter back", async () => (await format())?.length);
   },
 
+  async "ERB formatter: comments move with erb.format.alignComments"() {
+    const editor = await open("app/views/users/comment.html.erb");
+    const key = "erb.format.alignComments";
+    const global = vscode.ConfigurationTarget.Global;
+    const formatted = async () => {
+      const edits = await vscode.commands.executeCommand(
+        "vscode.executeFormatDocumentProvider",
+        editor.document.uri,
+        { tabSize: 2, insertSpaces: true },
+      );
+      if (!edits?.length) return undefined;
+      const doc = editor.document;
+      let text = doc.getText();
+      for (const e of [...edits].sort(
+        (a, b) => doc.offsetAt(b.range.start) - doc.offsetAt(a.range.start),
+      )) {
+        text =
+          text.slice(0, doc.offsetAt(e.range.start)) +
+          e.newText +
+          text.slice(doc.offsetAt(e.range.end));
+      }
+      return text;
+    };
+    const kept = "<div>\n  <!-- a\n  b -->\n</div>\n";
+    const moved = "<div>\n  <!-- a\n    b -->\n</div>\n";
+    await until("comment kept", async () => (await formatted()) === kept);
+    try {
+      // The server reads it at startup, so the change restarts it.
+      await settings().update(key, true, global);
+      await until("comment moved", async () => (await formatted()) === moved);
+    } finally {
+      await settings().update(key, undefined, global);
+    }
+    await until("comment kept again", async () => (await formatted()) === kept);
+  },
+
   async "wrap in ERB output: selection and empty cursor"() {
     const editor = await open("app/views/users/wrap.html.erb");
     try {

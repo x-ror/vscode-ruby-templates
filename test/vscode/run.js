@@ -49,6 +49,7 @@ write(
   "app/views/users/unformatted.html.erb",
   "<div>\n<% if x %>\n<p>a</p>\n<% end %>\n</div>\n",
 );
+write("app/views/users/comment.html.erb", "<div>\n<!-- a\n  b -->\n</div>\n");
 write("app/views/users/wrap.html.erb", "hello world\n");
 write("app/views/users/wrap_empty.html.erb", "\n");
 write(
