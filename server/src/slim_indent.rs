@@ -2,7 +2,7 @@
 
 use crate::slim_parser::{self, Piece, BOM, VOID_ELEMENTS};
 use crate::slim_ruby;
-use crate::util::{coded, error, find_balanced, leading_ws, line_range, warning};
+use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
 use tower_lsp::lsp_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
@@ -63,11 +63,11 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     let mut stack: Vec<Frame> = Vec::new();
     let parsed = slim_parser::parse(text, extra_engines);
     if let Some(syntax) = &parsed.syntax_error {
-        out.push(syntax_diagnostic(text, &lines, syntax));
+        out.push(syntax_diagnostic(&lines, syntax));
     }
     if let Some((line, name)) = parsed.repeated_attribute.as_ref().filter(|_| parsed.valid) {
         let raw = lines[*line];
-        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        let range = span_range(*line, raw, leading_ws(raw).len(), raw.len());
         // Temple raises this while compiling, so it carries no line; the tag's line stands in.
         out.push(coded(error(range, format!("Multiple {name} attributes specified")), code::SYNTAX_ERROR));
     }
@@ -77,7 +77,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     let invalid_doctype = parsed.invalid_doctype.as_ref().filter(|_| filters_pass);
     if let Some((line, kind)) = invalid_doctype {
         let raw = lines[*line];
-        let range = line_range(text, *line, leading_ws(raw).len(), raw.len());
+        let range = span_range(*line, raw, leading_ws(raw).len(), raw.len());
         out.push(coded(error(range, format!("Invalid doctype {kind}")), code::SYNTAX_ERROR));
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
@@ -113,7 +113,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
         let bad_dedent =
             parsed.stop_line.is_none_or(|stop| line_no < stop) && indent < deepest && !stack.iter().any(|f| f.indent == indent);
         if bad_dedent {
-            out.push(coded(error(line_range(text, line_no, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
+            out.push(coded(error(span_range(line_no, raw, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
         }
 
         // Pop to the parent level.
@@ -128,7 +128,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
         let content = raw.trim_start();
         let code_comment = content.starts_with('/') && !content.starts_with("/!");
         if let Some(parent) = stack.last_mut().filter(|_| is_child) {
-            let line_content = line_range(text, line_no, ws.len(), raw.len());
+            let line_content = span_range(line_no, raw, ws.len(), raw.len());
             let first_child = !parent.has_child && !code_comment;
             parent.has_child |= !code_comment;
             match parent.kind {
@@ -148,7 +148,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
         }
 
         // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(&lines, i, text, &mut out);
+        let (kind, consumed) = classify(&lines, i, &mut out);
         stack.push(Frame { indent, kind, line: line_no, has_child: false });
         i += consumed.max(1);
     }
@@ -161,7 +161,7 @@ fn is_lone_word_with_colon(content: &str) -> bool {
 }
 
 /// Slim's first syntax error, filed under the code of the construct it is about.
-fn syntax_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
+fn syntax_diagnostic(lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagnostic {
     let raw = lines[syntax.line];
     let start = raw.char_indices().nth(syntax.column).map_or(raw.len(), |(at, _)| at);
     let code = match syntax.message.as_str() {
@@ -171,7 +171,7 @@ fn syntax_diagnostic(text: &str, lines: &[&str], syntax: &slim_parser::SyntaxErr
         "Expected tag" if is_lone_word_with_colon(raw.trim_start()) => code::UNKNOWN_ENGINE,
         _ => code::SYNTAX_ERROR,
     };
-    coded(error(line_range(text, syntax.line, start, raw.len()), syntax.message.clone()), code)
+    coded(error(span_range(syntax.line, raw, start, raw.len()), syntax.message.clone()), code)
 }
 
 fn indent_width(ws: &str) -> usize {
@@ -179,10 +179,10 @@ fn indent_width(ws: &str) -> usize {
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, text: &str, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
     let raw = lines[i];
     let ws_len = leading_ws(raw).len();
-    let content_range = line_range(text, i, ws_len, raw.len());
+    let content_range = span_range(i, raw, ws_len, raw.len());
     let c = raw.trim_start();
 
     // Doctype
