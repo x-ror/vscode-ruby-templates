@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Haml, Slim, Jbuilder and Builder: the strict locals comment (`-# locals: (…)`, `/# locals: (…)`, `# locals: (…)`) gets the same `ruby-syntax` checks as ERB with `actionview` 7.1 or newer: a signature Ruby can't parse, and Rails' "`a` set as non-keyword argument for app/views/users/_card.html.haml. Locals can only be set as keyword arguments." for locals that aren't keywords.
+
 ## 0.1.0
 
 First release. Requires VS Code 1.100 or newer.

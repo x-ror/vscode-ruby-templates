@@ -16,6 +16,13 @@ pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> 
     span_range(line, text.lines().nth(line).unwrap_or(""), start_col, end_col)
 }
 
+/// The text of `line` without its leading and trailing whitespace.
+pub fn line_text_range(text: &str, line: usize) -> Range {
+    let raw = text.lines().nth(line).unwrap_or("");
+    let start = leading_ws(raw).len();
+    span_range(line, raw, start, raw.trim_end().len().max(start))
+}
+
 /// Byte columns of `line_text` (line number `line`) as an LSP range.
 pub fn span_range(line: usize, line_text: &str, start_col: usize, end_col: usize) -> Range {
     let s = line_text.get(..start_col.min(line_text.len())).unwrap_or("").encode_utf16().count() as u32;

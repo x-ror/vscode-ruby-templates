@@ -5,7 +5,7 @@ use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
     erb, haml_indent, html_lint, partials,
     project::{Framework, Project},
-    rails_paths, slim_indent, tags, util,
+    rails_paths, slim_indent, strict_locals, tags, util,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -155,15 +155,23 @@ pub(crate) fn language_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut out = match lang {
         TemplateLang::Erb => erb::diagnostics(text, ruby),
-        TemplateLang::Haml => haml_indent::diagnostics(text),
-        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines, ruby.grammar),
+        TemplateLang::Haml => {
+            let mut out = haml_indent::diagnostics(text);
+            out.extend(locals_signature(text, ruby));
+            out
+        }
+        TemplateLang::Slim => {
+            let mut out = slim_indent::diagnostics(text, extra_engines, ruby.grammar);
+            out.extend(locals_signature(text, ruby));
+            out
+        }
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
         TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines, ruby.grammar)
             .into_iter()
             .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
             .collect(),
-        // Syntax errors are Ruby LSP's job; only the render checks apply.
-        TemplateLang::Ruby => vec![],
+        // Syntax errors are Ruby LSP's job, but it doesn't know the `locals:` comment is code to Rails.
+        TemplateLang::Ruby => locals_signature(text, ruby),
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
@@ -177,8 +185,16 @@ pub(crate) fn language_diagnostics(
     out
 }
 
+fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
+    strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
+        .into_iter()
+        .map(|d| util::coded(d, RUBY_SYNTAX))
+        .collect()
+}
+
 /// Diagnostic codes every language shares.
 pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
+const RUBY_SYNTAX: &str = "ruby-syntax";
 const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
@@ -418,7 +434,7 @@ mod tests {
         };
         let declared = |sources: &[&str]| -> BTreeSet<String> {
             let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z0-9-]+)""#).unwrap();
-            let shared = [UNRESOLVED_RENDER, STRICT_LOCALS].map(String::from);
+            let shared = [UNRESOLVED_RENDER, STRICT_LOCALS, RUBY_SYNTAX].map(String::from);
             sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
         };
         assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs"), include_str!("html_lint.rs")]));
@@ -741,6 +757,23 @@ mod tests {
         assert!(broken_messages() > 0, "Rails 7.1");
         lock("7.0.8");
         assert_eq!(broken_messages(), 0, "Rails 7.0: a plain comment");
+        lock("7.1.0");
+        let others = [
+            (TemplateLang::Haml, "html.haml", "-#", "%p"),
+            (TemplateLang::Slim, "html.slim", "/#", "p"),
+            (TemplateLang::Ruby, "json.jbuilder", "#", "json.x"),
+        ];
+        for (lang, ext, comment, body) in others {
+            let file = root.join(format!("app/views/users/_card.{ext}"));
+            let doc = Doc { lang, text: format!("{comment} locals: (user, size:)\n{body} x\n"), version: 0 };
+            let found: Vec<_> = diagnostics(&Url::from_file_path(&file).unwrap(), &doc, &Options::default())
+                .into_iter()
+                .map(|d| (d.range.start.line, util::code(&d).map(String::from), d.message))
+                .collect();
+            let expected =
+                format!("`user` set as non-keyword argument for app/views/users/_card.{ext}. Locals can only be set as keyword arguments.");
+            assert_eq!(found, [(0, Some("ruby-syntax".to_string()), expected)], "{ext}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

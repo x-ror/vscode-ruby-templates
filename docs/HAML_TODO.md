@@ -156,6 +156,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 - [x] Strict locals `-# locals: (…)` highlighted as a signature (`syntaxes/haml.tmLanguage.json` `strict-locals`)
 - [x] Strict locals: completion and diagnostics (`server/src/lsp.rs` `local_completions`, `strict_locals_mismatches`, shared with ERB)
+- [x] Strict locals: a signature Ruby can't parse, and non-keyword locals, with Rails 7.1+ (`server/src/strict_locals.rs` `diagnostics`, `ruby-syntax`)
 - [x] ViewComponent sidecar `.html.haml` templates (`server/src/partials.rs` `resolve_component`, unit test `component_haml_sidecar`; `test/e2e.js`)
 - [x] `haml-rails` generator templates recognized as Haml: `lib/templates/haml/**/*.haml` by extension, `*.haml.tt` under `lib/templates/haml/` and `lib/generators/**/templates/` by `filenamePatterns` (`package.json` `contributes.languages[haml]`); structure diagnostics are skipped for `.tt`, whose column-0 ERB breaks Haml indentation (`server/src/lsp.rs` `diagnostics`, unit test `thor_templates_skip_haml_structure`)
 
