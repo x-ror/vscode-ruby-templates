@@ -42,6 +42,7 @@ mod slim_parser;
 mod slim_ruby;
 mod slots;
 mod stimulus;
+mod strict_locals;
 mod tags;
 mod util;
 

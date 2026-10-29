@@ -2,16 +2,13 @@
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
 use crate::prism;
-use crate::util::{error, leading_ws, line_range, offset_to_position};
+use crate::strict_locals;
+use crate::util::{error, line_text_range, offset_to_position};
 use regex::Regex;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
 
-/// Ruby's `\s`, which the regexps below are written in.
-const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
-/// `local_assigns` and `output_buffer`, which every template method takes first.
-const WRAPPER_PARAMETERS: usize = 2;
 const OUTPUT_BUFFER: &str = " @output_buffer";
 /// Prism's message for the wrapper's own `def`, which the template's code never gets to close.
 const UNCLOSED_DEF: &str = "expected an `end` to close the `def` statement";
@@ -23,39 +20,6 @@ static ENCODING_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A<%#.*codi
 // `ActionView::Template::Handlers::ERB::Erubi::BLOCK_EXPR`.
 static BLOCK_EXPR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:(?:[ \t\r\n\x0C\x0B]|\))do|\{)(?:[ \t\r\n\x0C\x0B]*\|[^|]*\|)?[ \t\r\n\x0C\x0B]*\z").unwrap());
-// The start of `ActionView::Template::STRICT_LOCALS_REGEX`; Rust's regexps have no lookahead for the rest.
-static STRICT_LOCALS_HEAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#[ \t\r\n\x0C\x0B]+locals:[ \t\r\n\x0C\x0B]+\(").unwrap());
-
-/// The `locals: (…)` magic comment Rails cuts out of the source, and the parameters it holds.
-struct StrictLocals {
-    comment: ByteRange<usize>,
-    parameters: String,
-}
-
-/// `STRICT_LOCALS_REGEX`'s first match: `# locals: (` up to the first `)` that a tag end or a line end follows.
-fn strict_locals(text: &str) -> Option<StrictLocals> {
-    let mut from = 0;
-    while let Some(head) = STRICT_LOCALS_HEAD.find_at(text, from) {
-        let closes_comment = |close: &usize| {
-            let rest = &text[close + 1..];
-            let after_tag_space = rest.trim_start_matches(RUBY_SPACE);
-            let after_line_space = rest.trim_start_matches([' ', '\t', '\r', '\x0C', '\x0B']);
-            after_tag_space.strip_prefix('-').unwrap_or(after_tag_space).starts_with("%>")
-                || after_line_space.is_empty()
-                || after_line_space.starts_with('\n')
-        };
-        let close = text[head.end()..].match_indices(')').map(|(i, _)| head.end() + i).find(closes_comment);
-        if let Some(close) = close {
-            let parameters = text[head.end()..close].trim_end_matches([' ', '\t', '\n', '\x0B', '\x0C', '\r', '\0']);
-            // ActiveSupport's `blank?` counts Unicode whitespace, which `rstrip` leaves.
-            let parameters = if parameters.chars().all(char::is_whitespace) { "**nil" } else { parameters };
-            return Some(StrictLocals { comment: head.start()..close + 1, parameters: parameters.to_string() });
-        }
-        from = head.start() + 1;
-    }
-    None
-}
-
 /// `Erubi::Engine` as `ActionView::Template::Handlers::ERB::Erubi` configures it (`trim: true`, `@output_buffer`).
 #[derive(Default)]
 struct Erubi {
@@ -308,26 +272,22 @@ impl Cut {
 
 /// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
 fn compile(text: &str, strict_locals_exist: bool) -> Compiled {
-    let strict = strict_locals_exist.then(|| strict_locals(text)).flatten();
+    let strict = strict_locals_exist.then(|| strict_locals::find(text)).flatten();
     let mut template = text.to_string();
     if let Some(strict) = &strict {
-        template.replace_range(strict.comment.clone(), "");
+        template.replace_range(strict.range.clone(), "");
     }
     let (erubi, encoding_tag) = read_after_encoding_tag(&template);
 
-    let parameters = match &strict {
-        Some(strict) if strict.parameters.contains('&') => format!("local_assigns, output_buffer, {}", strict.parameters),
-        Some(strict) => format!("local_assigns, output_buffer, {}, &_", strict.parameters),
-        None => "local_assigns, output_buffer, &_".to_string(),
-    };
+    let parameters = strict_locals::method_parameters(strict.as_ref());
     let head = format!("          def _template({parameters})\n            @virtual_path = \"template\";;");
-    let signature_line = strict.as_ref().map(|s| text[..s.comment.start].matches('\n').count());
+    let signature_line = strict.as_ref().map(|s| strict_locals::line(text, s));
     Compiled {
         code_line: head.matches('\n').count(),
         verbatim: erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect(),
         source: format!("{head}{}\n          end\n", erubi.src),
         signature_line,
-        cut: Cut { encoding_tag, strict_locals: strict.map(|s| s.comment) },
+        cut: Cut { encoding_tag, strict_locals: strict.map(|s| s.range) },
     }
 }
 
@@ -344,28 +304,8 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, strict_locals_identifi
         return found;
     }
     let (Some(line), Some(identifier)) = (compiled.signature_line, strict_locals_identifier) else { return Vec::new() };
-    // The wrapper's own `&_` is no one's mistake.
-    let non_keyword: Vec<String> = positional.into_iter().skip(WRAPPER_PARAMETERS).chain(block.filter(|name| name != "_")).collect();
-    if non_keyword.is_empty() {
-        return Vec::new();
-    }
-    let message = format!(
-        "{} set as non-keyword {} for {identifier}. Locals can only be set as keyword arguments.",
-        to_sentence(&non_keyword),
-        if non_keyword.len() == 1 { "argument" } else { "arguments" }
-    );
-    vec![error(line_text_range(text, &lines, line), message)]
-}
-
-/// ActiveSupport's `Array#to_sentence` of the names in backticks.
-fn to_sentence(names: &[String]) -> String {
-    let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
-    match quoted.as_slice() {
-        [only] => only.clone(),
-        [first, second] => format!("{first} and {second}"),
-        [init @ .., last] => format!("{}, and {last}", init.join(", ")),
-        [] => String::new(),
-    }
+    let range = line_text_range(text, line);
+    strict_locals::non_keyword_message(positional, block, identifier).map(|message| error(range, message)).into_iter().collect()
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
@@ -384,14 +324,7 @@ fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::Ru
         // Past the template are the lines Erubi and the wrapper add after it.
         (generated_line - compiled.code_line).min(lines.len().saturating_sub(1))
     };
-    Some(line_text_range(text, lines, line))
-}
-
-/// The trimmed text of `line`.
-fn line_text_range(text: &str, lines: &[&str], line: usize) -> Range {
-    let raw = lines.get(line).copied().unwrap_or("");
-    let start = leading_ws(raw).len();
-    line_range(text, line, start, raw.trim_end().len().max(start))
+    Some(line_text_range(text, line))
 }
 
 #[cfg(test)]
