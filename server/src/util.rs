@@ -20,7 +20,7 @@ pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> 
 pub fn line_text_range(text: &str, line: usize) -> Range {
     let raw = text.lines().nth(line).unwrap_or("");
     let start = leading_ws(raw).len();
-    line_range(text, line, start, raw.trim_end().len().max(start))
+    span_range(line, raw, start, raw.trim_end().len().max(start))
 }
 
 /// Byte columns of `line_text` (line number `line`) as an LSP range.
