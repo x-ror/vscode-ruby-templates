@@ -1349,6 +1349,21 @@ const check = (label, actual, expected) => {
     alignedEdits?.[0]?.newText,
     "<div>\n  <%# a\n    b %>\n</div>\n",
   );
+  const alignedRange = (
+    await aligned.send("textDocument/rangeFormatting", {
+      textDocument: { uri: commentUri },
+      options: { tabSize: 2, insertSpaces: true },
+      range: {
+        start: { line: 2, character: 0 },
+        end: { line: 2, character: 0 },
+      },
+    })
+  ).result;
+  check(
+    "erb comments kept in a range without their first line",
+    alignedRange ?? [],
+    [],
+  );
   await aligned.send("shutdown", {});
   await aligned.send("exit", {}, true);
   await send("shutdown", {});
