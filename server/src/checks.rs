@@ -3,7 +3,7 @@
 use crate::code_context::render_filter;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
-    erb, haml_indent, html_lint, partials,
+    erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
     project::{Framework, Project},
     rails_paths, slim_indent, strict_locals, tags, util,
 };
@@ -167,7 +167,16 @@ pub(crate) fn language_diagnostics(
     let mut out = match lang {
         TemplateLang::Erb => erb::diagnostics(text, ruby),
         TemplateLang::Haml => {
-            let mut out = haml_indent::diagnostics(text);
+            let parsed = haml_parser::parse(text);
+            let mut out = haml_indent::diagnostics(text, &parsed);
+            // Haml stops at its first error, so there is no Ruby to check.
+            if parsed.error.is_none() {
+                out.extend(
+                    haml_ruby::diagnostics(text, &parsed, ruby.grammar, ruby.strict_locals.as_ref())
+                        .into_iter()
+                        .map(|d| util::coded(d, RUBY_SYNTAX)),
+                );
+            }
             out.extend(locals_signature(text, ruby));
             out
         }
@@ -431,6 +440,13 @@ mod tests {
         assert_eq!(codes(haml_path, TemplateLang::Haml, void, &all), [haml_indent::code::VOID_CHILDREN]);
         let quiet = Options { disabled_haml: vec![haml_indent::code::VOID_CHILDREN.into()], ..Options::default() };
         assert!(codes(haml_path, TemplateLang::Haml, void, &quiet).is_empty());
+        // Haml's Ruby is parsed once Haml itself accepts the template.
+        let ruby = codes(haml_path, TemplateLang::Haml, "= foo(\n", &all);
+        assert!(!ruby.is_empty() && ruby.iter().all(|c| c == RUBY_SYNTAX), "{ruby:?}");
+        let ruby_off = Options { disabled_haml: vec![RUBY_SYNTAX.into()], ..Options::default() };
+        assert!(codes(haml_path, TemplateLang::Haml, "= foo(\n", &ruby_off).is_empty());
+        let after_error = codes(haml_path, TemplateLang::Haml, "- if x\n  %p\n- end\n= foo(\n", &all);
+        assert_eq!(after_error, [haml_indent::code::EXPLICIT_END]);
         // Every check carries a code, or the setting can't turn it off.
         assert!(!codes(erb_path, TemplateLang::Erb, include_str!("../../test/broken/bad.html.erb"), &all).is_empty());
         assert!(!codes(haml_path, TemplateLang::Haml, include_str!("../../test/broken/bad.html.haml"), &all).is_empty());

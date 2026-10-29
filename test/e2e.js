@@ -580,6 +580,40 @@ const check = (label, actual, expected) => {
   );
   check("slim diagnostics source", sources(slimUri), ["slim"]);
 
+  // Haml's Ruby is checked once Haml accepts the template: an error in code, and a `rescue` inside an `if`.
+  const hamlRubyUri = fileUri(path.join(views, "users", "ruby.html.haml"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: hamlRubyUri,
+        languageId: "haml",
+        version: 1,
+        text: "%p\n  - x = [1 2]\n%a{href: x} t\n- if x\n  - rescue\n",
+      },
+    },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  const hamlRuby = notes.find(
+    (n) =>
+      n.method === "textDocument/publishDiagnostics" &&
+      n.params.uri === hamlRubyUri,
+  );
+  check(
+    "haml ruby diagnostics",
+    hamlRuby.params.diagnostics.map(
+      (d) =>
+        `${d.range.start.line + 1}:${d.range.start.character + 1} ${d.code}`,
+    ),
+    [
+      "2:11 ruby-syntax",
+      "5:5 ruby-syntax",
+      "4:3 ruby-syntax",
+      "5:3 ruby-syntax",
+    ],
+  );
+
   const editUri = fileUri(path.join(views, "users", "edit.html.slim"));
   const editText =
     'div\n    p= link_\n    a hr\n    jav\n    == raw x  \n    | text lin\n    p Hi #{link_\n    = render "card"\n';

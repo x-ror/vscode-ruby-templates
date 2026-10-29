@@ -17,6 +17,7 @@ mod haml;
 mod haml_format;
 mod haml_indent;
 mod haml_parser;
+mod haml_ruby;
 mod helper_defs;
 mod helpers;
 mod html;
