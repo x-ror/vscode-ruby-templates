@@ -5,3 +5,4 @@ server/target/
 .pkg/
 .vscode-test/
 dist/
+.claude/reviews/
