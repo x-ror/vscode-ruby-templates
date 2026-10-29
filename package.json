@@ -1,7 +1,7 @@
 {
   "name": "ruby-templates",
   "displayName": "Ruby Templates: ERB, Haml, Slim",
-  "description": "Syntax highlighting, diagnostics, go-to-partial, completion and hover, plus snippets, HTML preview, tag toggling and converters for ERB, Haml and Slim templates.",
+  "description": "Rails view tooling for ERB, Haml and Slim: highlighting, errors as you type, safe formatting, and Rails-aware go to partial, completion and hover for components, routes, ivars and i18n.",
   "version": "0.3.0",
   "publisher": "x-ror",
   "icon": "images/icon.png",
@@ -13,16 +13,31 @@
   },
   "categories": [
     "Programming Languages",
-    "Snippets",
-    "Other"
+    "Linters",
+    "Formatters",
+    "Snippets"
   ],
   "keywords": [
     "ruby",
     "rails",
+    "ruby on rails",
     "erb",
     "haml",
     "slim",
-    "template"
+    "template",
+    "views",
+    "partials",
+    "html.erb",
+    "erubi",
+    "jbuilder",
+    "hotwire",
+    "turbo",
+    "stimulus",
+    "viewcomponent",
+    "formatter",
+    "linter",
+    "language server",
+    "i18n"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -825,6 +840,10 @@
     "tm-grammars": "1.32.22",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
+  },
+  "homepage": "https://github.com/x-ror/vscode-ruby-templates#readme",
+  "bugs": {
+    "url": "https://github.com/x-ror/vscode-ruby-templates/issues"
   },
   "repository": {
     "type": "git",
