@@ -34,6 +34,13 @@ impl<'a> LineIndex<'a> {
         without_line_ending(&self.text[start..end])
     }
 
+    /// `line_text_range` of line `n`.
+    pub fn text_range(&self, n: usize) -> Range {
+        let raw = self.line(n);
+        let start = leading_ws(raw).len();
+        span_range(n, raw, start, raw.trim_end().len().max(start))
+    }
+
     /// `str::lines().count()`.
     pub fn line_count(&self) -> usize {
         // A final line ending opens no line of its own.
@@ -52,9 +59,7 @@ pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> 
 
 /// The text of `line` without its leading and trailing whitespace.
 pub fn line_text_range(text: &str, line: usize) -> Range {
-    let raw = text.lines().nth(line).unwrap_or("");
-    let start = leading_ws(raw).len();
-    span_range(line, raw, start, raw.trim_end().len().max(start))
+    LineIndex::new(text).text_range(line)
 }
 
 /// Byte columns of `line_text` (line number `line`) as an LSP range.

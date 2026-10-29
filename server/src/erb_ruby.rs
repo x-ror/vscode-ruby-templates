@@ -3,7 +3,7 @@
 
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
-use crate::util::{error, line_text_range, offset_to_position};
+use crate::util::{error, line_text_range, LineIndex};
 use regex::Regex;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
@@ -296,10 +296,10 @@ fn compile(text: &str, close: Option<Close>) -> Compiled {
 /// `locals:` parameters are keywords. `rails` is given only where strict locals exist.
 pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>) -> Vec<Diagnostic> {
     let compiled = compile(text, rails.map(|r| r.close));
-    let lines: Vec<&str> = text.lines().collect();
+    let index = LineIndex::new(text);
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
     let found: Vec<Diagnostic> =
-        errors.into_iter().filter_map(|e| Some(error(template_range(text, &lines, &compiled, &e)?, e.message))).collect();
+        errors.into_iter().filter_map(|e| Some(error(template_range(text, &index, &compiled, &e)?, e.message))).collect();
     if !found.is_empty() {
         return found;
     }
@@ -309,9 +309,11 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
-fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
-    if let Some(&(from, to, at)) = compiled.verbatim.iter().find(|(from, to, _)| (*from..*to).contains(&e.start)) {
-        let position = |offset: usize| offset_to_position(text, compiled.cut.original(at + offset - from));
+fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
+    // Erubi records the runs in source order: the first that ends after `start` is the only one that may hold it.
+    let run = compiled.verbatim.get(compiled.verbatim.partition_point(|&(_, to, _)| to <= e.start));
+    if let Some(&(from, to, at)) = run.filter(|&&(from, _, _)| from <= e.start) {
+        let position = |offset: usize| index.position(compiled.cut.original(at + offset - from));
         return Some(Range::new(position(e.start), position(e.end.min(to))));
     }
     let generated_line = e.range.start.line as usize;
@@ -326,9 +328,9 @@ fn template_range(text: &str, lines: &[&str], compiled: &Compiled, e: &prism::Ru
         comment.line(text)
     } else {
         // Past the template are the lines Erubi and the wrapper add after it.
-        (generated_line - compiled.code_line).min(lines.len().saturating_sub(1))
+        (generated_line - compiled.code_line).min(index.line_count().saturating_sub(1))
     };
-    Some(line_text_range(text, line))
+    Some(index.text_range(line))
 }
 
 #[cfg(test)]
