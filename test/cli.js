@@ -101,6 +101,18 @@ try {
     "ul\n  li\n",
   );
   assert.strictEqual(r.status, 0, "stdin that needs no change");
+  const comment = "<div>\n<!-- a\n  b -->\n</div>\n";
+  r = run(["format", "--stdin-filepath", "x.html.erb"], comment);
+  assert.strictEqual(
+    r.stdout,
+    "<div>\n  <!-- a\n  b -->\n</div>\n",
+    "comments kept",
+  );
+  r = run(
+    ["format", "--align-comments", "--stdin-filepath", "x.html.erb"],
+    comment,
+  );
+  assert.strictEqual(r.stdout, "<div>\n  <!-- a\n    b -->\n</div>\n");
   r = run(["format", "--stdin-filepath", "x.txt"], "keep  \n");
   assert.strictEqual(r.stdout, "keep  \n", "unknown files pass through");
 

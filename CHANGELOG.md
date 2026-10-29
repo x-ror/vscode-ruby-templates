@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- ERB formatting: `rubyTemplates.erb.format.alignComments` (off by default; `--align-comments` on the command line) moves the lines inside HTML comments and multi-line `<%# … %>` comments with the line the comment opens on, keeping their relative indentation.
 - Haml, Slim, Jbuilder and Builder: the strict locals comment (`-# locals: (…)`, `/# locals: (…)`, `# locals: (…)`) gets the same `ruby-syntax` checks as ERB with `actionview` 7.1 or newer: a signature Ruby can't parse, and Rails' "`a` set as non-keyword argument for app/views/users/_card.html.haml. Locals can only be set as keyword arguments." for locals that aren't keywords.
 - Strict locals, all languages:
   - a syntax error in the signature is underlined where it is, not on the whole line;

@@ -123,7 +123,7 @@ One formatter for HTML ERB views (`.html.erb`, `.html+variant.erb`, `.turbo_stre
 - A file the formatter is in doubt about (broken ERB, mismatched tags, a `javascript_tag do` or `content_tag :pre do` block, a Slim file Slim would reject, a Haml file with any Haml error, indentation errors included) comes back unchanged, and the reason is logged. Files that aren't HTML ERB (`.js.erb`, `.json.erb`, `.text.erb`, …), Jbuilder views and generator templates (`*.tt`) are never formatted.
 - Every change is checked before it is returned: the result must be stable when formatted again, keep every non-whitespace character, and add no diagnostic.
 
-**Settings**: only the indentation width, from the editor (in VS Code), then `.editorconfig`, then 2 spaces; see [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md).
+**Settings**: the indentation width, from the editor (in VS Code), then `.editorconfig`, then 2 spaces; and `rubyTemplates.erb.format.alignComments` (`--align-comments` on the command line, off by default), which moves the lines inside ERB comments with the line the comment opens on. See [docs/FORMATTER_CONFIG.md](docs/FORMATTER_CONFIG.md).
 
 **Command line**: the server build includes a second binary, also published on npm as `@x-ror/ruby-templates` with prebuilt binaries for Linux x64/arm64 and Windows x64:
 
@@ -135,6 +135,7 @@ npx ruby-templates format --write app/views        # rewrite them
 npx ruby-templates format app/views/users/show.html.erb          # print one file formatted
 npx ruby-templates format --stdin-filepath show.html.erb < x     # from stdin, for editors
 npx ruby-templates format --verbose --check app/views            # also the settings, config files read and keys ignored
+npx ruby-templates format --align-comments --write app/views     # comment lines move with the line the comment opens on
 ```
 
 Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors, a formatter bug caught by its checks, or a file named to `check` that isn't a template (`format` passes such files through unchanged and says why). `ruby-templates-ls --check` takes folders too. Folders are walked for template files, skipping hidden folders and `node_modules`.

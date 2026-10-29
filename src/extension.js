@@ -52,6 +52,7 @@ const SERVER_SETTINGS = [
   "rubyTemplates.erb.disabledDiagnostics",
   "rubyTemplates.haml.disabledDiagnostics",
   "rubyTemplates.jbuilder.disabledDiagnostics",
+  "rubyTemplates.erb.format.alignComments",
   ...["erb", "haml", "slim"].flatMap((lang) => [
     `rubyTemplates.${lang}.diagnostics.enabled`,
     `rubyTemplates.${lang}.format.enabled`,

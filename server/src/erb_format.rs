@@ -50,7 +50,8 @@ struct Line<'a> {
 type Ranges = Vec<(usize, usize)>;
 
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped.
-pub(crate) fn indent(text: &str, unit: &str, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
+/// With `align_comments`, the lines inside a comment move with the line it opens on instead of keeping their bytes.
+pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
     let doubt = crate::erb::diagnostics(text, ruby)
         .into_iter()
         .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
@@ -78,7 +79,11 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, ruby: &RubyContext) 
                 if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(code) {
                     return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(e.at) + 1));
                 }
-                fixed.push((e.at + 1, e.end - 1));
+                if align_comments && text[e.at..].starts_with("<%#") {
+                    unit_spans.push(span(e.at + 1, e.end - 1, e.at));
+                } else {
+                    fixed.push((e.at + 1, e.end - 1));
+                }
                 keep_end.push((e.at + 1, e.end - 1));
             }
             Token::Open { tag, quoted, .. } | Token::Close { tag, quoted } => {
@@ -106,9 +111,14 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, ruby: &RubyContext) 
                 fixed.push((tag.end, close_start));
             }
             Token::Comment { start, end } => {
-                // The line holding `<!--` is re-indented; the lines after it, the one with `-->` too, keep every byte.
+                // The line holding `<!--` is re-indented; the lines after it, the one with `-->` too, keep every byte
+                // unless they move with it.
                 let Some(newline) = text[*start..*end].find('\n') else { continue };
-                fixed.push((start + newline + 1, end - 1));
+                if align_comments {
+                    unit_spans.push(span(start + newline + 1, end - 1, *start));
+                } else {
+                    fixed.push((start + newline + 1, end - 1));
+                }
                 keep_end.push((start + newline + 1, end - 1));
             }
             Token::Unterminated => return skip(SkipKind::Doubt, "a tag is never closed with `>`"),
@@ -428,7 +438,14 @@ mod tests {
     use super::*;
 
     fn indent(text: &str, unit: &str, partial: bool) -> Result<Indented, Skipped> {
-        super::indent(text, unit, partial, &RubyContext::outside_project())
+        super::indent(text, unit, partial, false, &RubyContext::outside_project())
+    }
+
+    fn aligned(text: &str) -> String {
+        let once = super::indent(text, "  ", false, true, &RubyContext::outside_project()).unwrap_or_else(|e| panic!("{e}: {text}")).text;
+        let again = super::indent(&once, "  ", false, true, &RubyContext::outside_project()).map(|i| i.text);
+        assert_eq!(again.as_deref(), Ok(once.as_str()), "idempotent");
+        once
     }
 
     fn fmt(text: &str) -> String {
@@ -519,6 +536,22 @@ mod tests {
         assert_eq!(fmt("<div>\n<!-- a  \n  b  \n-->  \n</div>\n"), "<div>\n  <!-- a\n  b  \n-->\n</div>\n");
         let mso = lines(&["<div>", "<!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "<p>x</p>", "</div>"]);
         assert_eq!(fmt(&mso), lines(&["<div>", "  <!--[if mso]>", "      <table><tr><td>", "  <![endif]-->", "  <p>x</p>", "</div>"]));
+    }
+
+    #[test]
+    fn aligned_comments_move_with_their_first_line() {
+        assert_eq!(aligned("<div>\n<!-- a\n  b -->\n</div>\n"), "<div>\n  <!-- a\n    b -->\n</div>\n");
+        assert_eq!(aligned("<div>\n<%# a\n  b %>\n</div>\n"), "<div>\n  <%# a\n    b %>\n</div>\n");
+        let deep = lines(&["<div>", "      <!--", "        b", "      -->", "</div>"]);
+        assert_eq!(aligned(&deep), lines(&["<div>", "  <!--", "    b", "  -->", "</div>"]));
+        // Trailing whitespace inside a comment is still the page's text.
+        assert_eq!(aligned("<div>\n<!-- a  \n  b  \n-->\n</div>"), "<div>\n  <!-- a\n    b  \n  -->\n</div>");
+        // A line left of the comment's first line can't keep its place relative to it; the comment stays where it is.
+        let behind = lines(&["<div>", "    <!-- a", "b -->", "</div>"]);
+        assert_eq!(aligned(&behind), behind);
+        // Ruby's own comments in a code tag are code: they keep their bytes.
+        let ruby = lines(&["<div>", "<% # a", "  b = 1 %>", "</div>"]);
+        assert_eq!(aligned(&ruby), lines(&["<div>", "  <% # a", "  b = 1 %>", "</div>"]));
     }
 
     #[test]

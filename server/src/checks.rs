@@ -27,6 +27,8 @@ pub(crate) struct Options {
     disabled_jbuilder: Vec<String>,
     diagnostics_off: Vec<TemplateLang>,
     format_off: Vec<TemplateLang>,
+    /// `erb.format.alignComments`.
+    pub align_erb_comments: bool,
 }
 
 /// The settings sections that switch diagnostics and formatting on or off, and the languages each covers.
@@ -72,6 +74,12 @@ impl Options {
                     Some(true) => {}
                     None => ignored.push(format!("{section}.{group}.enabled: expected a boolean, got {value}")),
                 }
+            }
+        }
+        if let Some(value) = init.and_then(|v| v.get("erb")?.get("format")?.get("alignComments")) {
+            match value.as_bool() {
+                Some(align) => options.align_erb_comments = align,
+                None => ignored.push(format!("erb.format.alignComments: expected a boolean, got {value}")),
             }
         }
         (options, ignored)
@@ -362,6 +370,10 @@ mod tests {
         });
         let (options, ignored) = Options::from_init(Some(&init));
         assert_eq!(ignored.len(), 1, "{ignored:?}");
+        assert!(!options.align_erb_comments);
+        let align = |value| Options::from_init(Some(&serde_json::json!({ "erb": { "format": { "alignComments": value } } })));
+        assert!(align(serde_json::json!(true)).0.align_erb_comments);
+        assert_eq!(align(serde_json::json!("yes")).1.len(), 1);
         let count = |lang, text: &str, options: &Options| {
             let uri = Url::parse("file:///v/show.html.erb").unwrap();
             diagnostics(&uri, &Doc { lang, text: text.into(), version: 0 }, options).len()

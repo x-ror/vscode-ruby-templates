@@ -1,10 +1,12 @@
 # Formatter settings
 
-The built-in formatter (`ruby-templates format`, and the language server's _Format Document_) has one setting: the indentation width. It comes from, highest precedence first:
+The built-in formatter (`ruby-templates format`, and the language server's _Format Document_) has two settings. The indentation width comes from, highest precedence first:
 
 1. The editor's tab size, when the language server formats.
 2. `.editorconfig`, from the file's folder up to the first `root = true`; nearer files and later sections win. `indent_size` counts; `indent_size = tab` (or `indent_size` unset with `indent_style = tab`) takes `tab_width`.
 3. The default, 2.
+
+ERB comments are the other: by default the lines of an HTML comment after the one holding `<!--`, and of a multi-line `<%# … %>` after its first line, keep every byte. `rubyTemplates.erb.format.alignComments` in VS Code, or `--align-comments` on the command line, moves them with the line the comment opens on, keeping their relative indentation; a comment with a line left of its first one stays where it is.
 
 Everything else is fixed, per language. Indentation is always written in spaces, even for a tab-indenting editor or `indent_style = tab`; each line keeps its ending.
 
