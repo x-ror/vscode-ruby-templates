@@ -41,9 +41,9 @@ function findServer(context) {
 async function doStart(context, output) {
   const config = vscode.workspace.getConfiguration("rubyTemplates");
   if (!config.get("server.enabled", true)) return;
-  const switches = (lang) => ({
+  const switches = (lang, format = {}) => ({
     diagnostics: { enabled: config.get(`${lang}.diagnostics.enabled`, true) },
-    format: { enabled: config.get(`${lang}.format.enabled`, true) },
+    format: { enabled: config.get(`${lang}.format.enabled`, true), ...format },
   });
   const command = findServer(context);
   output.appendLine(`[ruby-templates] starting language server: ${command}`);
@@ -98,11 +98,9 @@ async function doStart(context, output) {
         },
         erb: {
           disabledDiagnostics: config.get("erb.disabledDiagnostics", []),
-          ...switches("erb"),
-          format: {
-            ...switches("erb").format,
+          ...switches("erb", {
             alignComments: config.get("erb.format.alignComments", false),
-          },
+          }),
         },
         haml: {
           disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
