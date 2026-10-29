@@ -1,9 +1,12 @@
 //! Rails' strict locals (7.1+): the `locals: (…)` magic comment it cuts out of any template's source and turns
 //! into the parameters of the method it evals, whatever the handler.
 
+use crate::prism;
+use crate::util::{error, line_text_range};
 use regex::Regex;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
+use tower_lsp::lsp_types::Diagnostic;
 
 /// Ruby's `\s`, which `STRICT_LOCALS_REGEX` is written in.
 const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
@@ -80,4 +83,67 @@ fn to_sentence(names: &[String]) -> String {
 /// The 0-based line `comment` starts on.
 pub fn line(text: &str, comment: &Comment) -> usize {
     text[..comment.range.start].matches('\n').count()
+}
+
+/// Rails' errors for the `locals:` comment of a template whose body Rails compiles apart from it (Haml, Slim): Ruby's
+/// syntax errors in the method's parameters, else the parameters that aren't keywords. `identifier`, the template's
+/// name in Rails' message, is given only where strict locals exist.
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version, identifier: Option<&str>) -> Vec<Diagnostic> {
+    let (Some(identifier), Some(comment)) = (identifier, find(text)) else { return Vec::new() };
+    let range = line_text_range(text, line(text, &comment));
+    let source = format!("def _template({})\nend\n", method_parameters(Some(&comment)));
+    let (errors, (positional, block)) = prism::errors_and_def_parameters(&source, ruby);
+    if !errors.is_empty() {
+        let mut messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
+        messages.dedup();
+        return messages.into_iter().map(|message| error(range, message)).collect();
+    }
+    non_keyword_message(positional, block, identifier).map(|message| error(range, message)).into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const IDENTIFIER: &str = "app/views/users/_card.html.haml";
+
+    fn messages(text: &str) -> Vec<(u32, String)> {
+        diagnostics(text, ruby_prism::Version::Latest, Some(IDENTIFIER)).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+    }
+
+    #[test]
+    fn haml_and_slim_locals_must_be_keywords() {
+        for comment in ["-#", "/#"] {
+            let text = format!("%p\n{comment} locals: (user, size:)\np x\n");
+            let expected = format!("`user` set as non-keyword argument for {IDENTIFIER}. Locals can only be set as keyword arguments.");
+            assert_eq!(messages(&text), [(1, expected)], "{comment}");
+            let found = messages(&format!("{comment} locals: (a, *rest, &block)\n"));
+            assert_eq!(found.len(), 1);
+            assert!(found[0].1.starts_with("`a`, `rest`, and `block` set as non-keyword arguments"), "{found:?}");
+        }
+    }
+
+    #[test]
+    fn keyword_locals_are_accepted() {
+        for signature in ["(a:)", "(a:, b: 1, **rest)", "()", "(a:, &_)"] {
+            assert_eq!(messages(&format!("-# locals: {signature}\n%p\n")), [], "{signature}");
+        }
+    }
+
+    #[test]
+    fn a_broken_signature_is_a_syntax_error_on_its_line() {
+        let found = messages("%p\n  -# locals: (a: 1 +)\n");
+        assert!(!found.is_empty());
+        assert!(found.iter().all(|(line, _)| *line == 1), "{found:?}");
+        let range = diagnostics("%p\n  -# locals: (a: ] )\n", ruby_prism::Version::Latest, Some(IDENTIFIER))[0].range;
+        assert_eq!((range.start.character, range.end.character), (2, 20));
+    }
+
+    #[test]
+    fn no_check_without_strict_locals_or_a_closed_comment() {
+        assert!(diagnostics("-# locals: (a)\n", ruby_prism::Version::Latest, None).is_empty());
+        // Rails' regexp needs the `)` at the end of the line; without it the line is a plain comment.
+        assert_eq!(messages("-# locals: (a: 1\n%p\n"), []);
+        assert_eq!(messages("-# locals: (a:, b:)) x\n"), []);
+    }
 }

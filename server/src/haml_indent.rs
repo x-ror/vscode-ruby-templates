@@ -19,6 +19,8 @@ pub mod code {
     pub const UNKNOWN_FILTER: &str = "unknown-filter";
     pub const SELF_CLOSING_CONTENT: &str = "self-closing-content";
     pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
+    /// Ruby's and Rails' errors for the `locals:` comment.
+    pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

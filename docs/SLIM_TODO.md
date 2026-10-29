@@ -120,6 +120,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `SLIM_ENGINES` lists engines Slim 5 no longer registers (`erb`, `less`, `styl`, `stylus`, `builder`, `nokogiri`, `wiki`, `creole`, `mediawiki`, `org`, `typescript`, `livescript`, `babel`, `haml`), so their typos and removals go unreported (`server/src/slim_indent.rs`): trimmed to Slim 5's list (`server/src/slim_indent.rs` `SLIM_ENGINES`)
 - [x] slim-lint integration (`slim-lint --reporter json`, mapped to diagnostics) (`src/extension.js` `registerSlimLint`, `rubyTemplates.slimLint.enabled`)
 - [x] Strict locals: missing/unknown locals passed to a Slim partial (`server/src/lsp.rs` `strict_locals_mismatches`, language-independent)
+- [x] Strict locals: a signature Ruby can't parse, and non-keyword locals, with Rails 7.1+ (`server/src/strict_locals.rs` `diagnostics`, `ruby-syntax`)
 - [x] Settings to enable/disable each built-in Slim check (`rubyTemplates.slim.disabledDiagnostics`, codes in `server/src/slim_indent.rs` `code`)
 
 ## 7. Navigation, completion, hover

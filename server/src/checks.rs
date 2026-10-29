@@ -5,7 +5,7 @@ use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
     erb, haml_indent, html_lint, partials,
     project::{Framework, Project},
-    rails_paths, slim_indent, tags, util,
+    rails_paths, slim_indent, strict_locals, tags, util,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -155,8 +155,16 @@ pub(crate) fn language_diagnostics(
 ) -> Vec<Diagnostic> {
     let mut out = match lang {
         TemplateLang::Erb => erb::diagnostics(text, ruby),
-        TemplateLang::Haml => haml_indent::diagnostics(text),
-        TemplateLang::Slim => slim_indent::diagnostics(text, extra_engines, ruby.grammar),
+        TemplateLang::Haml => {
+            let mut out = haml_indent::diagnostics(text);
+            out.extend(locals_signature(text, ruby, haml_indent::code::RUBY_SYNTAX));
+            out
+        }
+        TemplateLang::Slim => {
+            let mut out = slim_indent::diagnostics(text, extra_engines, ruby.grammar);
+            out.extend(locals_signature(text, ruby, slim_indent::code::RUBY_SYNTAX));
+            out
+        }
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
         TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines, ruby.grammar)
             .into_iter()
@@ -175,6 +183,14 @@ pub(crate) fn language_diagnostics(
         out.extend(html_lint::diagnostics(text));
     }
     out
+}
+
+/// Rails' errors for the `locals:` comment, which it compiles apart from the Haml or Slim body.
+fn locals_signature(text: &str, ruby: &RubyContext, code: &str) -> Vec<Diagnostic> {
+    strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals_identifier.as_deref())
+        .into_iter()
+        .map(|d| util::coded(d, code))
+        .collect()
 }
 
 /// Diagnostic codes every language shares.
@@ -741,6 +757,19 @@ mod tests {
         assert!(broken_messages() > 0, "Rails 7.1");
         lock("7.0.8");
         assert_eq!(broken_messages(), 0, "Rails 7.0: a plain comment");
+        lock("7.1.0");
+        for (lang, ext, comment, body) in [(TemplateLang::Haml, "haml", "-#", "%p"), (TemplateLang::Slim, "slim", "/#", "p")] {
+            let file = root.join(format!("app/views/users/_card.html.{ext}"));
+            let doc = Doc { lang, text: format!("{comment} locals: (user, size:)\n{body} x\n"), version: 0 };
+            let found: Vec<_> = diagnostics(&Url::from_file_path(&file).unwrap(), &doc, &Options::default())
+                .into_iter()
+                .map(|d| (d.range.start.line, util::code(&d).map(String::from), d.message))
+                .collect();
+            let expected = format!(
+                "`user` set as non-keyword argument for app/views/users/_card.html.{ext}. Locals can only be set as keyword arguments."
+            );
+            assert_eq!(found, [(0, Some("ruby-syntax".to_string()), expected)], "{ext}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

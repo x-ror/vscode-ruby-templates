@@ -683,6 +683,7 @@
               "unclosed-attribute",
               "syntax-error",
               "void-children",
+              "ruby-syntax",
               "unresolved-render",
               "strict-locals"
             ]
