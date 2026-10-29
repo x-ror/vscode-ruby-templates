@@ -32,10 +32,15 @@ struct UnitSpan {
     first: usize,
     last: usize,
     owner: usize,
+    comment: bool,
 }
 
 struct Unit {
     owner_line: usize,
+    /// A comment's lines that can't move with its first line keep their bytes, and the first line still moves.
+    comment: bool,
+    /// The lines that start inside it.
+    lines: std::ops::Range<usize>,
 }
 
 struct Line<'a> {
@@ -70,17 +75,17 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
     let mut fixed: Ranges = Vec::new();
     let mut keep_end: Ranges = Vec::new();
     let mut unit_spans: Vec<UnitSpan> = Vec::new();
-    let span = |first, last, owner| UnitSpan { first, last, owner };
+    let span = |first, last, owner| UnitSpan { first, last, owner, comment: false };
+    let comment_span = |first, last, owner| UnitSpan { first, last, owner, comment: true };
     let paired = paired_optional(&tokens);
     for (i, token) in tokens.iter().enumerate() {
         match token {
             Token::Erb(e) => {
-                let code = erb_code(&text[e.at..e.end]);
-                if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(code) {
+                if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(erb_code(&text[e.at..e.end])) {
                     return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(e.at) + 1));
                 }
-                if align_comments && text[e.at..].starts_with("<%#") {
-                    unit_spans.push(span(e.at + 1, e.end - 1, e.at));
+                if align_comments && e.comment {
+                    unit_spans.push(comment_span(e.at + 1, e.end - 1, e.at));
                 } else {
                     fixed.push((e.at + 1, e.end - 1));
                 }
@@ -114,8 +119,9 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
                 // The line holding `<!--` is re-indented; the lines after it, the one with `-->` too, keep every byte
                 // unless they move with it.
                 let Some(newline) = text[*start..*end].find('\n') else { continue };
-                if align_comments {
-                    unit_spans.push(span(start + newline + 1, end - 1, *start));
+                // `<!DOCTYPE`, `<![CDATA[` and `<?…?>` are this token too; CDATA's text is the page's.
+                if align_comments && text[*start..].starts_with("<!--") {
+                    unit_spans.push(comment_span(start + newline + 1, end - 1, *start));
                 } else {
                     fixed.push((start + newline + 1, end - 1));
                 }
@@ -135,13 +141,13 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
     let mut units = Vec::new();
     // Inner units start later; sorting by start lets them win over the unit around them.
     unit_spans.sort_by_key(|u| u.owner);
-    for UnitSpan { first, last, owner } in unit_spans {
+    for UnitSpan { first, last, owner, comment } in unit_spans {
         let lines_inside = lines_starting_in(&starts, first, last);
         if lines_inside.is_empty() {
             continue;
         }
         let index = units.len();
-        units.push(Unit { owner_line: line_of(owner) });
+        units.push(Unit { owner_line: line_of(owner), comment, lines: lines_inside.clone() });
         for line in lines_inside {
             roles[line] = Role::Unit(index);
         }
@@ -149,6 +155,12 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
     for &(first, last) in &fixed {
         for line in lines_starting_in(&starts, first, last) {
             roles[line] = Role::Fixed;
+        }
+    }
+    // A comment holding a multi-line ERB tag can't move as one: the tag's Ruby keeps its bytes, so the rest does too.
+    for unit in units.iter().filter(|unit| unit.comment) {
+        if unit.lines.clone().any(|i| roles[i] == Role::Fixed) {
+            unit.lines.clone().for_each(|i| roles[i] = Role::Fixed);
         }
     }
     let ends: Vec<usize> = lines.iter().map(|l| l.start + l.ws.len() + l.rest.len()).collect();
@@ -202,11 +214,8 @@ fn lines_starting_in(starts: &[usize], first: usize, last: usize) -> std::ops::R
     starts.partition_point(|&s| s < first)..starts.partition_point(|&s| s <= last)
 }
 
-/// The Ruby inside an ERB tag; empty for an ERB comment, whose text never reaches the output.
+/// The Ruby inside an ERB code tag.
 fn erb_code(tag: &str) -> &str {
-    if tag.starts_with("<%#") {
-        return "";
-    }
     let inner = tag.strip_prefix("<%").unwrap_or(tag).trim_start_matches(['=', '-']);
     inner.strip_suffix("%>").unwrap_or(inner).trim_end_matches('-')
 }
@@ -419,6 +428,10 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
             return decided;
         }
         for mut u in stuck {
+            if units[u].comment {
+                moves[u] = false;
+                continue;
+            }
             loop {
                 moves[u] = false;
                 match roles[units[u].owner_line] {
@@ -546,9 +559,18 @@ mod tests {
         assert_eq!(aligned(&deep), lines(&["<div>", "  <!--", "    b", "  -->", "</div>"]));
         // Trailing whitespace inside a comment is still the page's text.
         assert_eq!(aligned("<div>\n<!-- a  \n  b  \n-->\n</div>"), "<div>\n  <!-- a\n    b  \n  -->\n</div>");
-        // A line left of the comment's first line can't keep its place relative to it; the comment stays where it is.
+        // A line left of the comment's first line can't keep its place relative to it: it keeps its bytes, as without
+        // the option, and the first line still moves.
         let behind = lines(&["<div>", "    <!-- a", "b -->", "</div>"]);
-        assert_eq!(aligned(&behind), behind);
+        assert_eq!(aligned(&behind), lines(&["<div>", "  <!-- a", "b -->", "</div>"]));
+        assert_eq!(aligned(&behind), fmt(&behind));
+        // A multi-line ERB tag inside keeps its Ruby, so the comment keeps its lines.
+        let erb = lines(&["<div>", "<!--", "  <%= link_to \"x\",", "        y %>", "-->", "</div>"]);
+        assert_eq!(aligned(&erb), fmt(&erb));
+        // `<![CDATA[`, `<!DOCTYPE` and `<?…?>` aren't comments: CDATA's text is the page's.
+        for other in ["<svg><text>\n<![CDATA[ a\n  b ]]>\n</text></svg>", "<div>\n<?php a\n  b ?>\n</div>"] {
+            assert_eq!(aligned(other), fmt(other), "{other}");
+        }
         // Ruby's own comments in a code tag are code: they keep their bytes.
         let ruby = lines(&["<div>", "<% # a", "  b = 1 %>", "</div>"]);
         assert_eq!(aligned(&ruby), lines(&["<div>", "  <% # a", "  b = 1 %>", "</div>"]));

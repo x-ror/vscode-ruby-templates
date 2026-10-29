@@ -69,6 +69,7 @@ pub(crate) struct ErbEvent<'a> {
     pub end: usize,
     pub effect: BlockEffect,
     pub keyword: &'a str,
+    pub comment: bool,
 }
 
 /// An ERB template's ERB tags and HTML markup, in source order.
@@ -163,7 +164,7 @@ fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
             }
             (analyze(snippet).0, snippet.split_whitespace().next().unwrap_or(""))
         };
-        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword });
+        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, comment: tag.is_comment() });
     }
     Some((html, events))
 }

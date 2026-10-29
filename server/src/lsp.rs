@@ -211,7 +211,8 @@ impl Backend {
         if lines_only {
             settings.final_newline = false;
         }
-        settings.align_comments = self.options().align_erb_comments;
+        // A range may hold a comment's inner lines without the line they move with.
+        settings.align_comments = self.options().align_erb_comments && !lines_only;
         match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
             Ok(formatted) => Some((text, formatted.text)),
             Err(skipped) => {
