@@ -12,6 +12,7 @@ mod erb_complete;
 mod erb_format;
 mod erb_ruby;
 mod format;
+mod generated_ruby;
 mod haml;
 mod haml_format;
 mod haml_indent;
