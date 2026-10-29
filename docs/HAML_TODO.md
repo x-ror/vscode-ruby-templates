@@ -93,10 +93,10 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 
 ## 8. Formatting
 
-- [x] Document formatting provider: built-in re-indenter (in the language server) or `haml-lint`, chosen by `rubyTemplates.haml.formatter` (`src/extension.js`, `server/src/haml_format.rs`)
+- [x] Document formatting provider: the built-in re-indenter in the language server (`src/extension.js`, `server/src/haml_format.rs`)
 - [x] Re-indent a file or selection to the indentation width (spaces, default 2) over the parser's line roles, trailing whitespace dropped where Haml ignores it, empty lines at the end collapsed into one line ending; a file with any Haml error, or whose compiled source would change (`haml_parser::same_compilation`), is left alone (`server/src/haml_format.rs`, `format.rs`, range formatting in `server/src/lsp.rs`; compiled output checked in `bun run test:format`)
 - [x] Formatting from the command line and npm: `ruby-templates format`, width from `.editorconfig` (`server/src/cli.rs`, `config.rs`)
-- [x] Configurable formatter executable plus `bundle exec` (`package.json` `rubyTemplates.commands.hamlLint`, `rubyTemplates.hamlLint.useBundler`)
+- [x] No external formatter: the settings that ran `haml-lint` were removed (`docs/DECISIONS.md` D13)
 
 ## 9. Diagnostics and linting
 
@@ -111,7 +111,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Indentation inside filter bodies relative to the filter: nothing to report. Haml 7.5 accepts bodies that dedent below their first line or use spaces in a tab file (checked with the gem)
 - [x] Unresolved `render` after a tag (`%div= render "x"`, `.a=`, `#b!=`, `%p&=`) or on a `~` / `&~` / `!~` line (`server/src/lsp.rs` `unresolved_renders`, `server/src/haml_indent.rs` `haml_code_start`; unit test `unresolved_render_warnings`)
 - [ ] Ruby syntax errors in `-`/`=` lines and `{}` attribute hashes (Prism or tree-sitter-ruby over `haml compile` output). ERB has it now (`server/src/ruby_syntax.rs`); Haml and Slim need the implicit `end`s of indented blocks synthesized, with an offset map back to the template
-- [x] haml-lint integration (`haml-lint --reporter json`, mapped to diagnostics; `*.haml.tt` generator templates skipped) (`src/extension.js`, `src/haml.js` `hamlLintOffenses`; `test/haml.js`, `bun run test:unit`)
+- [x] External linters: `haml-lint` is not run; the checks above replace it (`docs/DECISIONS.md` D13)
 - [x] Settings to enable/disable each built-in check: `rubyTemplates.haml.disabledDiagnostics`, codes in `server/src/haml_indent.rs` `code` (`server/src/lsp.rs` `Options`)
 
 ## 10. Completion
