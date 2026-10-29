@@ -63,10 +63,6 @@ fn without_line_ending(raw: &str) -> &str {
     raw.strip_suffix('\n').map_or(raw, |l| l.strip_suffix('\r').unwrap_or(l))
 }
 
-pub fn line_range(text: &str, line: usize, start_col: usize, end_col: usize) -> Range {
-    span_range(line, text.lines().nth(line).unwrap_or(""), start_col, end_col)
-}
-
 /// The text of `line` without its leading and trailing whitespace.
 pub fn line_text_range(text: &str, line: usize) -> Range {
     LineIndex::new(text).text_range(line)
