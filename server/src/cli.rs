@@ -1,11 +1,16 @@
 //! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
 
-use crate::checks::{diagnostics, Doc, Options};
+use crate::checks::{diagnostics_in, Doc, Options};
 use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
-use std::io::{Read, Write};
+use crate::project::Projects;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 
 const OK: i32 = 0;
@@ -157,38 +162,91 @@ fn file_uri(path: &Path) -> Option<Url> {
 }
 
 fn language(path: &Path) -> Option<TemplateLang> {
-    TemplateLang::from_uri_or_id(&file_uri(path)?, None)
+    TemplateLang::from_file_name(&path.file_name()?.to_string_lossy())
 }
 
 /// Prints diagnostics as `file:line:col: severity: message`; 1 when one is at least as severe as `fail_at`, `bad_file`
 /// for a file that can't be read or isn't a template.
 fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
+    let files = template_files(paths);
+    let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
+    let next = AtomicUsize::new(0);
+    let (sender, results) = mpsc::channel();
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let (sender, next, files) = (sender.clone(), &next, &files);
+            scope.spawn(move || {
+                let mut projects = Projects::new();
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(file) = files.get(index) else { break };
+                    // The printer hung up (stdout closed): nothing left to do.
+                    if sender.send((index, check_file(&file.path, fail_at, bad_file, &mut projects))).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        print_in_order(results)
+    })
+}
+
+struct Checked {
+    stdout: String,
+    stderr: String,
+    code: i32,
+}
+
+fn check_file(path: &Path, fail_at: DiagnosticSeverity, bad_file: i32, projects: &mut Projects) -> Checked {
+    let shown = path.display();
+    let failed = |stderr| Checked { stdout: String::new(), stderr, code: bad_file };
+    let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
+    let Some((uri, lang)) = file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
+    let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
+    for d in diagnostics_in(&uri, &Doc { lang, text, version: 0 }, &Options::default(), projects) {
+        let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
+        let name = match severity {
+            DiagnosticSeverity::ERROR => "error",
+            DiagnosticSeverity::WARNING => "warning",
+            _ => "info",
+        };
+        let (line, col) = (d.range.start.line + 1, d.range.start.character + 1);
+        let _ = writeln!(checked.stdout, "{shown}:{line}:{col}: {name}: {}", d.message);
+        // Lower numbers are more severe.
+        if severity <= fail_at {
+            checked.code = FINDINGS;
+        }
+    }
+    checked
+}
+
+/// Prints each file's result in walk order as it arrives; the worst exit code, `USAGE` once stdout is closed.
+fn print_in_order(results: mpsc::Receiver<(usize, Checked)>) -> i32 {
+    let mut stdout = BufWriter::new(std::io::stdout().lock());
+    let mut waiting = BTreeMap::new();
+    let mut next = 0;
     let mut code = OK;
-    for File { path, .. } in template_files(paths) {
-        let shown = path.display();
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            eprintln!("cannot read {shown}");
-            code = code.max(bad_file);
-            continue;
-        };
-        let (Some(uri), Some(lang)) = (file_uri(&path), language(&path)) else {
-            eprintln!("{shown}: unknown template type");
-            code = code.max(bad_file);
-            continue;
-        };
-        for d in diagnostics(&uri, &Doc { lang, text, version: 0 }, &Options::default()) {
-            let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
-            let name = match severity {
-                DiagnosticSeverity::ERROR => "error",
-                DiagnosticSeverity::WARNING => "warning",
-                _ => "info",
-            };
-            println!("{shown}:{}:{}: {name}: {}", d.range.start.line + 1, d.range.start.character + 1, d.message);
-            // Lower numbers are more severe.
-            if severity <= fail_at {
-                code = code.max(FINDINGS);
+    for (index, checked) in results {
+        waiting.insert(index, checked);
+        while let Some(checked) = waiting.remove(&next) {
+            next += 1;
+            code = code.max(checked.code);
+            let printed = stdout.write_all(checked.stdout.as_bytes()).and_then(|()| {
+                if checked.stderr.is_empty() {
+                    return Ok(());
+                }
+                // Keep stderr lines in place among the diagnostics.
+                stdout.flush()?;
+                std::io::stderr().write_all(checked.stderr.as_bytes())
+            });
+            if printed.is_err() {
+                return USAGE;
             }
         }
+    }
+    if stdout.flush().is_err() {
+        return USAGE;
     }
     code
 }
@@ -200,7 +258,7 @@ fn format_command(args: &FormatArgs) -> i32 {
             eprintln!("cannot read stdin: {e}");
             return USAGE;
         }
-        return format_text(path, true, &text, args);
+        return format_text(path, true, &text, args, &mut Projects::new());
     }
     let files = template_files(&args.paths);
     // Several files on stdout would run together.
@@ -208,6 +266,7 @@ fn format_command(args: &FormatArgs) -> i32 {
         return usage(&format!("printing to stdout takes one file, not {}; use --check or --write", files.len()));
     }
     let mut code = OK;
+    let mut projects = Projects::new();
     for File { path, named } in files {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -217,12 +276,12 @@ fn format_command(args: &FormatArgs) -> i32 {
                 continue;
             }
         };
-        code = code.max(format_text(&path, named, &text, args));
+        code = code.max(format_text(&path, named, &text, args, &mut projects));
     }
     code
 }
 
-fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
+fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, projects: &mut Projects) -> i32 {
     let shown = path.display();
     let result = match (file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
@@ -232,7 +291,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs) -> i32 {
                 eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
                 resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
             }
-            format::format(&uri, lang, text, &resolved.settings, &[])
+            format::format_in(&uri, lang, text, &resolved.settings, &[], projects)
         }
         _ => format::skip(SkipKind::NotHandled, "not an ERB, Haml or Slim template"),
     };

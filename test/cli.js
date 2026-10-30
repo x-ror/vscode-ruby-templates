@@ -43,6 +43,14 @@ try {
   r = run(["check", views]);
   assert.strictEqual(r.status, 1, "a broken file is a finding");
   assert.match(r.stdout, /broken\.html\.slim:\d+:\d+: error: /);
+  const reported = [...r.stdout.matchAll(/(\w+)\.html\.slim:/g)].map(
+    (m) => m[1],
+  );
+  assert.deepStrictEqual(
+    reported,
+    [...reported].sort(),
+    "files checked in parallel print in walk order",
+  );
   assert.doesNotMatch(
     r.stdout + r.stderr,
     /notes\.txt/,

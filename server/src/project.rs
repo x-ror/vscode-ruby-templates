@@ -13,6 +13,28 @@ pub enum Framework {
     Unknown,
 }
 
+/// Projects already loaded during one run, by the files they come from.
+pub type Projects = HashMap<ProjectKey, Project>;
+
+/// What `Project::for_template` reads for a template: the nearest `Gemfile.lock`'s folder (with the
+/// initializers of the template's app) and the nearest `.ruby-version`.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ProjectKey {
+    lock_dir: Option<PathBuf>,
+    template_app: Option<PathBuf>,
+    ruby_version: Option<PathBuf>,
+}
+
+impl ProjectKey {
+    fn of(template: &Path) -> Self {
+        ProjectKey {
+            lock_dir: template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file()).map(Path::to_path_buf),
+            template_app: app_root(template).and_then(|app| Some(app.parent()?.to_path_buf())),
+            ruby_version: template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub framework: Framework,
@@ -33,12 +55,21 @@ impl Project {
     /// registered by the initializers of the app that holds `template` and of the lockfile's app (Mime::SET is
     /// process-wide, so an engine's views see the host app's registrations).
     pub fn for_template(template: &Path) -> Self {
-        let lock_dir = template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file());
+        Self::load(&ProjectKey::of(template))
+    }
+
+    /// The project of `template`, loaded once per `ProjectKey` for a run over many templates.
+    pub fn memoized<'a>(projects: &'a mut Projects, template: &Path) -> &'a Self {
+        projects.entry(ProjectKey::of(template)).or_insert_with_key(Self::load)
+    }
+
+    fn load(key: &ProjectKey) -> Self {
+        let lock_dir = key.lock_dir.as_deref();
         let project = lock_dir
             .and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok())
             .map_or_else(Self::unknown, |lock| Self::from_lockfile(&lock));
-        let template_app = app_root(template).and_then(|app| Some(app.parent()?.to_path_buf()));
-        let mut formats: Vec<String> = template_app
+        let mut formats: Vec<String> = key
+            .template_app
             .iter()
             .map(PathBuf::as_path)
             .chain(lock_dir)
@@ -46,9 +77,9 @@ impl Project {
             .collect();
         formats.sort();
         formats.dedup();
-        let ruby_version_file = template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file());
-        let ruby = ruby_version_file.and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
-        Project { formats, ruby: ruby.or(project.ruby), root: lock_dir.map(Path::to_path_buf), ..project }
+        let ruby =
+            key.ruby_version.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
+        Project { formats, ruby: ruby.or(project.ruby), root: key.lock_dir.clone(), ..project }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
