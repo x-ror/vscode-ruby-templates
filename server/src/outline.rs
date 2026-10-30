@@ -1,10 +1,9 @@
 //! Folding ranges and document symbols for ERB and Haml templates.
 
-use crate::erb_ruby;
 use crate::haml_indent::{haml_code_start, haml_structure, is_haml_tag, tag_name_len};
 use crate::partials::render_refs;
 use crate::ruby;
-use crate::ruby::{analyze, BlockEffect};
+use crate::ruby::BlockEffect;
 use crate::tags;
 use crate::util::{find_balanced, leading_ws, LineIndex};
 use regex::Regex;
@@ -29,10 +28,6 @@ pub(crate) static ID_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\sid
 
 pub(crate) const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
 
-fn erb_tags(text: &str) -> Vec<erb_ruby::ErbTag<'_>> {
-    erb_ruby::tags(text).into_iter().filter(|t| !t.is_literal()).collect()
-}
-
 // VS Code's default `editor.tabSize`; only relative indentation matters, so the exact value rarely does.
 const TAB_SIZE: i64 = 4;
 
@@ -49,13 +44,14 @@ pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
     };
 
     let mut open: Vec<u32> = Vec::new();
-    for tag in erb_tags(text) {
+    let analyzed = tags::analyzed(text);
+    for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
         let at = line(tag.start);
         if tag.is_comment() {
             push(at, line(tag.end), Some(FoldingRangeKind::Comment));
             continue;
         }
-        match analyze(&text[tag.code.clone()]).0 {
+        match *effect {
             BlockEffect::Open(n) => open.extend(std::iter::repeat_n(at, n)),
             BlockEffect::Continue => {
                 if let Some(start) = open.pop() {
@@ -71,7 +67,7 @@ pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
             BlockEffect::Neutral => push(at, line(tag.end).saturating_sub(1), None),
         }
     }
-    for e in tags::elements(text) {
+    for e in tags::elements_of(text, &analyzed) {
         push(line(e.start), line(e.close_start).saturating_sub(1), None);
     }
     out.extend(region_folds(text, &REGION_START, &REGION_END));
@@ -172,14 +168,15 @@ pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
 
     // One entry per open Ruby block: the symbol it will become once its `end` is seen.
     let mut open: Vec<Option<(String, SymbolKind, usize, usize)>> = Vec::new();
-    for tag in erb_tags(text).into_iter().filter(|t| !t.is_comment()) {
+    let analyzed = tags::analyzed(text);
+    for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal() && !t.is_comment()) {
         let code = &text[tag.code.clone()];
         for r in render_refs(code) {
             let name_range = (tag.code.start + r.start, tag.code.start + r.end);
             add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
         }
         let named = erb_symbol(code);
-        match analyze(code).0 {
+        match *effect {
             BlockEffect::Open(n) => {
                 open.extend(std::iter::repeat_with(|| None).take(n - 1));
                 open.push(named.map(|(name, kind)| (name, kind, tag.start, tag.end)));
@@ -201,7 +198,7 @@ pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
     }
 
     if html {
-        for e in tags::elements(text) {
+        for e in tags::elements_of(text, &analyzed) {
             let id = ID_ATTR.captures(&text[e.start..e.open_end]).and_then(|c| c.iter().skip(1).flatten().next()).map(|m| m.as_str());
             if id.is_none() && !LANDMARKS.contains(&e.name.as_str()) {
                 continue;
