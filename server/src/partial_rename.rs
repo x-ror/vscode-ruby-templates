@@ -105,9 +105,10 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
 fn may_look_in(source: &Path, r: &RenderRef, dir: &Path) -> bool {
     let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
     match (r.name.rsplit_once('/'), views) {
-        (Some((d, _)), Some(v)) => dir.starts_with(&v) && dir.strip_prefix(&v).is_ok_and(|rel| rel == Path::new(d)),
+        // The folders `resolve` lists, compared as paths: `./users` is `users` there too.
+        (Some((d, _)), Some(v)) => v.join(d) == dir,
         (Some(_), None) => true,
-        (None, v) => source.parent() == Some(dir) || v.is_some_and(|v| dir.parent() == Some(v.as_path()) && dir.ends_with("application")),
+        (None, v) => source.parent() == Some(dir) || v.is_some_and(|v| v.join("application") == dir),
     }
 }
 
@@ -510,6 +511,7 @@ mod tests {
             t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\"\n= render \"shared/card\"\n"),
             t.source("app/views/users/index.json.jbuilder", Some(TemplateLang::Ruby), "json.partial! \"users/card\"\n"),
             t.source("app/controllers/users_controller.rb", None, "render partial: \"users/card\"\n"),
+            t.source("app/views/home/dot.html.erb", ERB, "<%= render \"./users/card\" %>\n"),
         ];
         let card = t.path("app/views/users/_card.html.slim");
         let mut got: Vec<(String, u32, u32)> = references(&Project::unknown(), &[card], &sources, &[])
@@ -524,6 +526,7 @@ mod tests {
             got,
             [
                 ("app/controllers/users_controller.rb".into(), 0, 17),
+                ("app/views/home/dot.html.erb".into(), 0, 12),
                 ("app/views/home/show.html.slim".into(), 0, 10),
                 ("app/views/users/index.html.erb".into(), 0, 12),
             ]
