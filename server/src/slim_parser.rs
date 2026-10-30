@@ -211,11 +211,11 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         owner: 0,
         indents: Vec::new(),
         expecting: false,
+        count: 0,
     };
-    // Slim's `split` drops the empty lines at the end.
-    let count = p.lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
+    p.count = p.lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
     let mut next = 0;
-    while next < count {
+    while next < p.count {
         p.i = next;
         p.parse_line();
         next = p.i + 1;
@@ -393,6 +393,8 @@ struct Parser<'a> {
     indents: Vec<usize>,
     /// The previous structural line opened a block (`@stacks.size > @indents.size`).
     expecting: bool,
+    /// The lines up to the last non-empty one: Slim's `split(/\r?\n/)` drops the empty lines at the end.
+    count: usize,
     out: Parsed,
 }
 
@@ -425,9 +427,8 @@ impl<'a> Parser<'a> {
         self.fail();
     }
 
-    /// Slim's `@lines` is `split(/\r?\n/)`, which drops trailing empty lines.
     fn has_next_line(&self) -> bool {
-        self.lines[self.i + 1..].iter().any(|l| !l.is_empty())
+        self.i + 1 < self.count
     }
 
     fn marker(&mut self, len: usize, kind: Marker) {
