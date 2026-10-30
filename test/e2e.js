@@ -30,7 +30,7 @@ fs.mkdirSync(path.join(views, "shared"), { recursive: true });
 fs.mkdirSync(path.join(views, "strict"), { recursive: true });
 fs.writeFileSync(
   path.join(views, "strict", "_row.html.erb"),
-  "<%# locals: (a:) %>\n",
+  "<%# locals: (a:, b: 1) %>\n",
 );
 fs.mkdirSync(path.join(root, "app", "components"), { recursive: true });
 fs.writeFileSync(
@@ -1086,6 +1086,33 @@ const check = (label, actual, expected) => {
     erb: [["block variable"], ["local (required)"]],
     slim: [["block variable"], []],
     haml: [["block variable"], []],
+  });
+  const keyDocs = {
+    erb: '<%= render "strict/row", a: 1, | %>\n',
+    slim: '= render partial: "strict/row", locals: { |\n',
+    haml: '= render("strict/row", |)\n',
+  };
+  const renderKeys = {};
+  for (const [lang, marked] of Object.entries(keyDocs)) {
+    const keysUri = fileUri(path.join(views, "strict", `keys.html.${lang}`));
+    const text = marked.replace("|", "");
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: keysUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const r = await req(
+      "textDocument/completion",
+      keysUri,
+      0,
+      marked.indexOf("|"),
+    );
+    renderKeys[lang] = r.result?.map((i) => `${i.insertText} (${i.detail})`);
+  }
+  check("render locals keys", renderKeys, {
+    erb: ["b:  (local = 1)"],
+    slim: ["a:  (local (required))", "b:  (local = 1)"],
+    haml: ["a:  (local (required))", "b:  (local = 1)"],
   });
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),

@@ -518,10 +518,59 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
 
 const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
+/// Where a local's name may be typed at `col` in a one-line `render "x", a: 1, ` or `render partial: "x", locals: { `:
+/// the partial's ref, the names already passed and the name typed so far.
+pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
+    let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
+    let args = line.get(r.end + 1..col)?;
+    if args.contains("%>") {
+        return None;
+    }
+    let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let typed = &args[head.len()..];
+    let head = head.trim_end();
+    let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
+    let listed = if options_form {
+        let (before, hash) = head.split_once('{')?;
+        if !before.trim_end().ends_with("locals:") {
+            return None;
+        }
+        let hash = hash.trim();
+        if hash.is_empty() {
+            ""
+        } else {
+            hash.strip_suffix(',')?
+        }
+    } else {
+        head.strip_suffix(',')?.trim_start().strip_prefix(',').unwrap_or("")
+    };
+    let names = split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name)).collect::<Option<_>>()?;
+    Some((r, names, typed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rails_paths::files_under;
+
+    #[test]
+    fn local_keys_after_a_partial_name() {
+        let key = |line: &str| {
+            let col = line.find('|').unwrap();
+            let line = line.replace('|', "");
+            local_key_at(&line, col).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
+        };
+        let card = |passed: &str, typed: &str| Some(("card".to_string(), passed.to_string(), typed.to_string()));
+        assert_eq!(key(r#"<%= render "card", | %>"#), card("", ""));
+        assert_eq!(key(r#"<%= render("card", user: @u, si|) %>"#), card("user", "si"));
+        assert_eq!(key(r#"= render partial: "card", locals: { user: @u, |"#), card("user", ""));
+        assert_eq!(key(r#"= render partial: "card", locals: {|"#), card("", ""));
+        assert_eq!(key(r#"<%= render "card", user: |"#), None, "a value, not a key");
+        assert_eq!(key(r#"<%= render "card" %> |"#), None);
+        assert_eq!(key(r#"<%= render "card", *opts, |"#), None);
+        assert_eq!(key(r#"<%= render partial: "card", |"#), None);
+        assert_eq!(key(r#"<%= render template: "users/show", |"#), None);
+    }
 
     #[test]
     fn new_template_paths() {

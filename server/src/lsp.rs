@@ -2,7 +2,7 @@ use crate::checks::{diagnostics, Doc, Options, UNRESOLVED_RENDER};
 use crate::code_context::{block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
-    local_completions, receiver_completions, render_completions, slot_setter_completions, stimulus_completions,
+    local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions, stimulus_completions,
 };
 use crate::lang::{file_name, html_host, TemplateLang};
 use crate::{
@@ -844,6 +844,14 @@ impl LanguageServer for Backend {
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
             return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
+        }
+        let engines = &self.options().extra_engines;
+        let render_key = partials::local_key_at(line, col).filter(|(r, ..)| code_at(doc.lang, &doc.text, line_start + r.call, engines));
+        if let (Some((r, passed, typed)), Some(path)) = (render_key, path.as_deref()) {
+            let found = render_local_completions(project(path), path, &r, &passed, typed);
+            if !found.is_empty() {
+                return items(found);
+            }
         }
         let i18n_prefix = i18n::completion_prefix(line, col)
             .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
