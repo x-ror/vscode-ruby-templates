@@ -13,7 +13,7 @@ use crate::{
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use haml_indent::LineRole;
-use std::cell::OnceCell;
+use std::cell::{LazyCell, OnceCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -668,7 +668,7 @@ impl LanguageServer for Backend {
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
-        let project = OnceCell::new();
+        let project = LazyCell::new(|| Project::for_template(&path));
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
@@ -677,7 +677,7 @@ impl LanguageServer for Backend {
         let quick_fixes = unresolved.filter_map(|d| {
             let (_, line, start) = util::line_at(&doc.text, d.range.start);
             let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
-            let target = partials::new_template_path(project.get_or_init(|| Project::for_template(&path)), &path, &r)?;
+            let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
                 uri: Url::from_file_path(&target).ok()?,
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
