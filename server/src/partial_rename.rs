@@ -51,23 +51,35 @@ fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, 
     qualified.rsplit('/').next().map(str::to_string)
 }
 
-/// The references `find` sees on each line that are inside code, as (byte start, byte end, reference).
-fn code_refs(source: &Source, extra_engines: &[String], find: fn(&str) -> Vec<RenderRef>) -> Vec<(usize, usize, RenderRef)> {
+/// The references `find` sees on each line that are inside code, as (byte start, byte end, reference); only those
+/// `want` keeps, so the code filter is built only for sources with a candidate.
+fn code_refs(
+    source: &Source,
+    extra_engines: &[String],
+    find: impl Fn(&str) -> Vec<RenderRef>,
+    want: impl Fn(&RenderRef) -> bool,
+) -> Vec<(usize, usize, RenderRef)> {
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
-        return spans.into_iter().flat_map(|(s, e)| find(&source.text[s..e]).into_iter().map(shift(s))).collect();
+        return spans.into_iter().flat_map(|(s, e)| find(&source.text[s..e]).into_iter().filter(&want).map(shift(s))).collect();
+    }
+    let candidates: Vec<(usize, usize, &str, RenderRef)> = lines_with_offsets(&source.text)
+        .enumerate()
+        .flat_map(|(i, (offset, line))| find(line).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
+        .collect();
+    if candidates.is_empty() {
+        return vec![];
     }
     let template_code = source.lang.map(|lang| render_filter(lang, &source.text, extra_engines));
-    let mut out = Vec::new();
-    for (i, (offset, line)) in lines_with_offsets(&source.text).enumerate() {
-        let in_code = |r: &RenderRef| match &template_code {
-            Some(in_code) => in_code(i, offset, r),
+    candidates
+        .into_iter()
+        .filter(|(i, offset, line, r)| match &template_code {
+            Some(in_code) => in_code(*i, *offset, r),
             None => ruby::code_end(&line[..r.call]) == ruby::CodeEnd::Code,
-        };
-        out.extend(find(line).into_iter().filter(in_code).map(shift(offset)));
-    }
-    out
+        })
+        .map(|(_, offset, _, r)| shift(offset)(r))
+        .collect()
 }
 
 /// The files a reference points at. Views look partials up from their own folder (and `layout:` there is a
@@ -86,6 +98,16 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
     match app_root(&source.path).map(|app| app.join("views")) {
         Some(views) if partial && r.name.contains('/') => resolve(project, &views.join("_"), &as_partial),
         _ => vec![],
+    }
+}
+
+/// Whether `resolve` could look in `dir` for `r` from `source`: a cheap test before its directory listing.
+fn may_look_in(source: &Path, r: &RenderRef, dir: &Path) -> bool {
+    let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
+    match (r.name.rsplit_once('/'), views) {
+        (Some((d, _)), Some(v)) => dir.starts_with(&v) && dir.strip_prefix(&v).is_ok_and(|rel| rel == Path::new(d)),
+        (Some(_), None) => true,
+        (None, v) => source.parent() == Some(dir) || v.is_some_and(|v| dir.parent() == Some(v.as_path()) && dir.ends_with("application")),
     }
 }
 
@@ -131,10 +153,11 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        let named = code_refs(source, extra_engines, render_refs)
+        let named = code_refs(source, extra_engines, render_refs, |r| may_name(&stems, &r.name))
             .into_iter()
-            .filter(|(start, _, r)| may_name(&stems, &r.name) && ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
-        let models = code_refs(source, extra_engines, model_refs)
+            .filter(|(_, _, r)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
+            .filter(|(start, _, r)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
+        let models = code_refs(source, extra_engines, model_refs, |r| may_name(&stems, &crate::partials::singularize(&r.name)))
             .into_iter()
             .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
         for (start, end, _) in named.chain(models) {
@@ -155,8 +178,10 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        for (start, _, r) in code_refs(source, extra_engines, render_refs) {
-            if !may_name(&stems, &r.name) || !ref_targets(project, source, start, &r).contains(&files[0]) {
+        for (start, _, r) in code_refs(source, extra_engines, render_refs, |r| may_name(&stems, &r.name)) {
+            if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
+                || !ref_targets(project, source, start, &r).contains(&files[0])
+            {
                 continue;
             }
             let line_start = start - r.start;
@@ -174,11 +199,13 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
 
 /// The `t("…")` calls in code whose full key is `key`; lazy `.x` keys count only in views, where they have a scope.
 pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    let last = key.rsplit('.').next().unwrap_or(key);
+    let find = |line: &str| if line.contains(last) { i18n_refs(line) } else { vec![] };
     let mut out = Vec::new();
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        for (start, end, _) in code_refs(source, extra_engines, i18n_refs)
+        for (start, end, _) in code_refs(source, extra_engines, find, |r| key.ends_with(r.name.as_str()))
             .into_iter()
             .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
@@ -256,10 +283,7 @@ pub fn render_edits(
     for source in sources {
         let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
-        for (start, end, r) in code_refs(source, extra_engines, render_refs) {
-            if !folder_renamed && !may_name(&stems, &r.name) {
-                continue;
-            }
+        for (start, end, r) in code_refs(source, extra_engines, render_refs, |r| folder_renamed || may_name(&stems, &r.name)) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
                 .map(|t| new_ref_name(project, &r.name, &source.path, &moved(t, renames)?, renames))
