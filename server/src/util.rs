@@ -195,6 +195,14 @@ pub fn line_at(text: &str, pos: Position) -> (usize, &str, usize) {
     (line_start, line, byte_col(line, pos.character))
 }
 
+/// `v` as a Markdown code span that shows it literally, backticks, HTML and Markdown included.
+pub fn inline_code(v: &str) -> String {
+    let longest_run = v.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest_run + 1);
+    let pad = if v.starts_with('`') || v.ends_with('`') { " " } else { "" };
+    format!("{fence}{pad}{v}{pad}{fence}")
+}
+
 /// The identifier (`?`/`!` included) around byte `col` of `line`.
 pub fn word_at(line: &str, col: usize) -> &str {
     let is_word = |c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!');
