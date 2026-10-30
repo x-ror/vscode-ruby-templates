@@ -119,6 +119,7 @@ Rails-wide features that don't depend on the template language (i18n, routes, he
 - [x] Partial names inside `render "…"` (`server/src/lsp.rs` `completion` is language-agnostic)
 - [x] Form builder methods after `f.` (`server/src/lsp.rs` `completion`)
 - [x] Rails helpers on Ruby lines (`server/src/lsp.rs` `in_ruby_context`)
+- [x] Block variables (`do |user|`) in nested lines (`server/src/haml_ruby.rs` `block_locals`, as in ERB TODO section 10)
 - [x] Ruby context only in the code part: after `-`/`=`/`~`/`!=`/`&=` (line start or after a tag head), inside a tag's `{}` hash or `[]` object ref, or an open `#{`; not in `()` attributes, plain text, or after a Ruby `#` comment (`server/src/haml.rs` `in_ruby`, unit test `ruby_only_in_code`)
 - [x] Completion and hover use each line's role: Haml completion and hover only on structural lines (never in filter or `-#` bodies or `|` text), Rails helpers also on continuation lines of `-`/`=` code and multi-line `{}` hashes and in `:ruby` bodies (`server/src/haml_indent.rs` `haml_line_roles`, unit test `line_roles`; `server/src/lsp.rs` `completion`, `hover`; `test/e2e.js`)
 - [x] Attribute-name completion on continuation lines of a multi-line `{}` / `()` hash, `data: {` and `aria: {` included (`server/src/haml.rs` `continued_head`)

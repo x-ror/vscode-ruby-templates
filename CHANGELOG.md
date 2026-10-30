@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Completion of block variables: inside `@users.each do |user|`, `us` offers `user` in ERB, Slim and Haml, and the locals assigned in the block too.
+
 ## 0.3.2
 
 - Faster, with the same results:

@@ -59,6 +59,10 @@ impl Compiled {
         self.verbatim.push((from, from + len, offset));
     }
 
+    pub fn block_locals(&self, template_offset: usize) -> Vec<String> {
+        generated_offset(&self.verbatim, template_offset).map_or_else(Vec::new, |at| prism::block_locals(&self.source, at))
+    }
+
     /// Prism's errors in the source, at their place in `text`, the template.
     pub fn diagnostics(&self, text: &str, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
         let index = LineIndex::new(text);
@@ -88,6 +92,11 @@ impl Compiled {
         let raw = index.line(line);
         span_range(line, raw, leading_ws(raw).len(), raw.trim_end().len())
     }
+}
+
+/// Where template offset `template` went in the generated source, if it is inside, or just after, verbatim code.
+pub(crate) fn generated_offset(verbatim: &[(usize, usize, usize)], template: usize) -> Option<usize> {
+    verbatim.iter().find(|&&(from, to, at)| at <= template && template <= at + (to - from)).map(|&(from, _, at)| from + template - at)
 }
 
 /// The body of a Ruby double-quoted literal for `text`, as `String#inspect` writes it.

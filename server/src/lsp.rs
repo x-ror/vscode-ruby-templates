@@ -1,8 +1,8 @@
 use crate::checks::{diagnostics, Doc, Options, UNRESOLVED_RENDER};
-use crate::code_context::{code_at, in_ruby_context, line_roles, render_filter};
+use crate::code_context::{block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
-    component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions, local_completions,
-    receiver_completions, render_completions, slot_setter_completions, stimulus_completions,
+    block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
+    local_completions, receiver_completions, render_completions, slot_setter_completions, stimulus_completions,
 };
 use crate::lang::{file_name, html_host, TemplateLang};
 use crate::{
@@ -931,7 +931,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
-        let mut found = local_completions(&doc.text, typed, close);
+        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, &self.options().extra_engines), typed);
+        // A block variable shadows the strict local of the same name.
+        let locals: Vec<_> =
+            local_completions(&doc.text, typed, close).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
+        found.extend(locals);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
         let own_slots =
             path.as_deref().and_then(|p| slots::class_of_template(project(p), p)).and_then(|class| std::fs::read_to_string(class).ok());

@@ -55,6 +55,11 @@ pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version) -> Ve
     compile(&parsed.pieces).diagnostics(text, ruby)
 }
 
+/// The block variables in scope at `offset` of the template.
+pub fn block_locals(parsed: &Parsed, offset: usize) -> Vec<String> {
+    compile(&parsed.pieces).block_locals(offset)
+}
+
 fn compile(pieces: &[Piece]) -> Compiled {
     let mut generator = Generator {
         pieces,
@@ -415,5 +420,13 @@ mod tests {
         let found = errors("ruby:\n\n  x = 1\n\n  y = (\np t\n");
         // Prism finds the unclosed `(` at the end of the code, which is the line after it.
         assert!(found.contains(&at(5, "expected a matching `)`")), "{found:?}");
+    }
+
+    #[test]
+    fn block_locals_in_nested_lines_only() {
+        let text = "- @users.each do |user|\n  p #{us}\n= us\n";
+        let at = |needle: &str| text.find(needle).unwrap() + needle.len();
+        assert_eq!(block_locals(&parse(text, &[]), at("#{us")), ["user"]);
+        assert!(block_locals(&parse(text, &[]), text.len() - 1).is_empty());
     }
 }

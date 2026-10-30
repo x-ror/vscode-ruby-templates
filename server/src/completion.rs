@@ -9,6 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};
 
+pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<CompletionItem> {
+    names
+        .into_iter()
+        .filter(|n| n.starts_with(typed))
+        .map(|n| util::completion_item(n, CompletionItemKind::VARIABLE, "block variable"))
+        .collect()
+}
+
 /// The current template's own strict locals, as completions.
 pub(crate) fn local_completions(text: &str, typed: &str, close: Close) -> Vec<CompletionItem> {
     let Some(sig) = partials::strict_locals(text, close) else { return vec![] };

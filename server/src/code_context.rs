@@ -1,7 +1,7 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
-use crate::{erb, haml, haml_indent, partials, ruby, slim_parser, util};
+use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
 
 /// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
@@ -9,6 +9,16 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
     match lang {
         TemplateLang::Slim => slim_parser::in_ruby(text, &slim_parser::parse(text, extra_engines), offset),
         _ => in_ruby_context(lang, text, &erb::code_spans(text), offset),
+    }
+}
+
+/// The block variables in scope at `offset`, from the Ruby the template compiles to.
+pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Vec<String> {
+    match lang {
+        TemplateLang::Erb => erb_ruby::block_locals(text, offset),
+        TemplateLang::Slim => slim_ruby::block_locals(&slim_parser::parse(text, extra_engines), offset),
+        TemplateLang::Haml => haml_ruby::block_locals(text, &haml_parser::parse_with_ruby(text), offset),
+        TemplateLang::Skim | TemplateLang::Ruby => Vec::new(),
     }
 }
 

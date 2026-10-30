@@ -1054,6 +1054,39 @@ const check = (label, actual, expected) => {
       ["user", "users_path", "users_url"],
     ],
   );
+  const blockDocs = {
+    erb: "<%# locals: (user:) %>\n<% @users.each do |user| %>\n<%= us %>\n<% end %>\n<%= us %>\n",
+    slim: "- @users.each do |user|\n  = us\n= us\n",
+    haml: "- @users.each do |user|\n  %p= us\n= us\n",
+  };
+  const blockVariables = {};
+  for (const [lang, text] of Object.entries(blockDocs)) {
+    const blockUri = fileUri(path.join(views, "users", `_each.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: blockUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const lines = text.split("\n");
+    const at = async (line) =>
+      (
+        await req(
+          "textDocument/completion",
+          blockUri,
+          line,
+          lines[line].indexOf("us") + 2,
+        )
+      ).result
+        ?.filter((i) => i.label === "user")
+        .map((i) => i.detail);
+    const typed = lines.flatMap((l, i) => (/\bus\b/.test(l) ? [i] : []));
+    blockVariables[lang] = [await at(typed[0]), await at(typed[1])];
+  }
+  check("block variables in scope", blockVariables, {
+    erb: [["block variable"], ["local (required)"]],
+    slim: [["block variable"], []],
+    haml: [["block variable"], []],
+  });
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),
   );
