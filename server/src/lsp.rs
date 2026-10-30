@@ -12,6 +12,7 @@ use crate::{
 };
 use dashmap::DashMap;
 use haml_indent::LineRole;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -618,7 +619,8 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let project = Project::for_template(&path);
+        // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
+        let project = OnceCell::new();
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
@@ -627,7 +629,7 @@ impl LanguageServer for Backend {
         let quick_fixes = unresolved.filter_map(|d| {
             let (_, line, start) = util::line_at(&doc.text, d.range.start);
             let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
-            let target = partials::new_template_path(&project, &path, &r)?;
+            let target = partials::new_template_path(project.get_or_init(|| Project::for_template(&path)), &path, &r)?;
             let create = CreateFile {
                 uri: Url::from_file_path(&target).ok()?,
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
@@ -787,17 +789,20 @@ impl LanguageServer for Backend {
 
         let path = uri.to_file_path().ok();
         let items = |items| Ok(Some(CompletionResponse::Array(items)));
+        // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
+        let project_cell = OnceCell::new();
+        let project = |path: &Path| project_cell.get_or_init(|| Project::for_template(path));
 
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
-            return items(render_completions(&Project::for_template(path), path, kind, &prefix, &self.template_files(path)));
+            return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
         }
         let i18n_prefix = i18n::completion_prefix(line, col)
             .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
-            return items(i18n_completions(&Project::for_template(path), &self.locale_files(path), path, prefix, range));
+            return items(i18n_completions(project(path), &self.locale_files(path), path, prefix, range));
         }
         if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
@@ -821,10 +826,8 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
-        if let Some(found) = path
-            .as_deref()
-            .and_then(|p| slot_setter_completions(&Project::for_template(p), p, &doc.text[..line_start + col]))
-            .filter(|_| code_here())
+        if let Some(found) =
+            path.as_deref().filter(|_| code_here()).and_then(|p| slot_setter_completions(project(p), p, &doc.text[..line_start + col]))
         {
             return items(found);
         }
@@ -874,18 +877,16 @@ impl LanguageServer for Backend {
         let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
         if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
             let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
-            return items(ivar_completions(&Project::for_template(path), path, typed, range));
+            return items(ivar_completions(project(path), path, typed, range));
         }
         if typed.is_empty() {
             return Ok(None);
         }
-        let close = path.as_deref().map(|p| strict_locals::Close::of(&Project::for_template(p))).unwrap_or_default();
+        let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
         let mut found = local_completions(&doc.text, typed, close);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
-        let own_slots = path
-            .as_deref()
-            .and_then(|p| slots::class_of_template(&Project::for_template(p), p))
-            .and_then(|class| std::fs::read_to_string(class).ok());
+        let own_slots =
+            path.as_deref().and_then(|p| slots::class_of_template(project(p), p)).and_then(|class| std::fs::read_to_string(class).ok());
         let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
         found.extend(
             readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
