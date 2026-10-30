@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Completion of block variables: inside `@users.each do |user|`, `us` offers `user` in ERB, Slim and Haml, and the locals assigned in the block too.
 - Completion of a partial's locals in `render "users/card", ` and `locals: {`: the names from its `locals:` comment that the call doesn't pass yet, inserted as `user: `.
