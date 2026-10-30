@@ -603,13 +603,13 @@ impl LanguageServer for Backend {
                 return Ok(markdown_hover(md.to_string()));
             }
         }
-        if let Ok(path) = uri.to_file_path() {
-            let project = Project::for_template(&path);
+        let file = uri.to_file_path().ok().map(|path| (Project::for_template(&path), path));
+        if let Some((project, path)) = &file {
             if let Some(r) = partials::render_ref_at(line, col) {
-                return Ok(markdown_hover(render_hover(&project, &path, &r)));
+                return Ok(markdown_hover(render_hover(project, path, &r)));
             }
-            if let Some(md) = i18n_key_at(&project, &doc, &path, line_start, line, col, &self.options().extra_engines)
-                .and_then(|key| i18n::hover(&self.locale_files(&path), &key))
+            if let Some(md) = i18n_key_at(project, &doc, path, line_start, line, col, &self.options().extra_engines)
+                .and_then(|key| i18n::hover(&self.locale_files(path), &key))
             {
                 return Ok(markdown_hover(md));
             }
@@ -624,14 +624,15 @@ impl LanguageServer for Backend {
         let word = util::word_at(line, col);
         // `<p>Clear the cache</p>` names no helper.
         let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        // `@tag` is a variable, though `tag` is a helper.
+        if let Some(name) = ivars::name_at(line, col).filter(|_| code_here) {
+            let assignments = file.as_ref().map(|(project, path)| ivars::for_view(project, path)).unwrap_or_default();
+            return Ok(ivars::hover(&assignments, name).and_then(markdown_hover));
+        }
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
         }
-        let ivar = ivars::name_at(line, col).filter(|_| code_here);
-        if let (Some(name), Ok(path)) = (ivar, uri.to_file_path()) {
-            return Ok(ivars::hover(&ivars::for_view(&Project::for_template(&path), &path), name).and_then(markdown_hover));
-        }
-        let routes = uri.to_file_path().map(|p| self.routes_for(&p)).unwrap_or_default();
+        let routes = file.as_ref().map(|(_, path)| self.routes_for(path)).unwrap_or_default();
         Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))
     }
 

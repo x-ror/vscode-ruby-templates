@@ -5,8 +5,9 @@ use crate::partials::snake_case;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::ruby::logical_lines;
-use crate::util::word_at;
+use crate::util::{inline_code, word_at};
 use regex::Regex;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::Url;
@@ -127,7 +128,7 @@ fn assignments_in(file: &Path, text: &str, lines: std::ops::Range<usize>) -> Vec
         .collect()
 }
 
-/// The `@ivar` whose name `col` is on, `@` included, without `@`.
+/// The name, without `@`, of the instance variable under `col`; on the `@` itself too.
 pub fn name_at(line: &str, col: usize) -> Option<&str> {
     let col = if line.get(col..).is_some_and(|rest| rest.starts_with('@')) { col + 1 } else { col };
     let before = line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
@@ -135,16 +136,18 @@ pub fn name_at(line: &str, col: usize) -> Option<&str> {
     (!word.is_empty() && before.ends_with('@') && !before.ends_with("@@")).then_some(word)
 }
 
-/// Markdown for `@name`: each assignment as a link to its line, with the line's code.
+/// Markdown for `@name`: each line assigning it as a link, named from the app's root, with the line's code.
 pub fn hover(assignments: &[Assignment], name: &str) -> Option<String> {
+    let mut seen = HashSet::new();
     let lines: Vec<String> = assignments
         .iter()
-        .filter(|a| a.name == name)
+        .filter(|a| a.name == name && seen.insert((&a.file, a.line)))
         .map(|a| {
-            let file = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-            let link = Url::from_file_path(&a.file)
-                .map_or_else(|()| file.clone(), |uri| format!("[{file}:{}]({uri}#L{})", a.line + 1, a.line + 1));
-            format!("- {link}: `{}`", a.code)
+            let root = app_root(&a.file).and_then(|app| app.parent().map(Path::to_path_buf));
+            let shown = root.and_then(|root| a.file.strip_prefix(root).ok().map(Path::to_path_buf)).unwrap_or_else(|| a.file.clone());
+            let shown = format!("{}:{}", shown.to_string_lossy().replace('\\', "/"), a.line + 1);
+            let link = Url::from_file_path(&a.file).map_or_else(|()| shown.clone(), |uri| format!("[{shown}]({uri}#L{})", a.line + 1));
+            format!("- {link}: {}", inline_code(&a.code))
         })
         .collect();
     (!lines.is_empty()).then(|| format!("`@{name}`\n\n{}", lines.join("\n")))
@@ -268,15 +271,17 @@ end
 
     #[test]
     fn hover_lists_each_assignment() {
-        let file = std::env::temp_dir().join("users_controller.rb");
+        let file = std::env::temp_dir().join("app/controllers/admin/users_controller.rb");
         let at = |line, code: &str| Assignment { name: "user".into(), file: file.clone(), line, code: code.into() };
-        let found = [at(3, "@user = User.find(params[:id])"), at(9, "@user ||= current_user")];
+        let found =
+            [at(3, "@user = User.find(params[:id])"), at(9, "@user ||= nil; @user = `whoami`"), at(9, "@user ||= nil; @user = `whoami`")];
         let md = hover(&found, "user").unwrap();
         let uri = Url::from_file_path(&file).unwrap();
+        let shown = "app/controllers/admin/users_controller.rb";
         assert_eq!(
             md,
             format!(
-                "`@user`\n\n- [users_controller.rb:4]({uri}#L4): `@user = User.find(params[:id])`\n- [users_controller.rb:10]({uri}#L10): `@user ||= current_user`"
+                "`@user`\n\n- [{shown}:4]({uri}#L4): `@user = User.find(params[:id])`\n- [{shown}:10]({uri}#L10): `` @user ||= nil; @user = `whoami` ``"
             )
         );
         assert_eq!(hover(&found, "menu"), None);

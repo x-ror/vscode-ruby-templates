@@ -909,7 +909,7 @@ const check = (label, actual, expected) => {
     "textDocument/didChange",
     {
       textDocument: { uri: helperUri, version: 2 },
-      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n" }],
+      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n<%= @tag %>\n" }],
     },
     true,
   );
@@ -942,12 +942,14 @@ const check = (label, actual, expected) => {
         (await req("textDocument/hover", helperUri, 1, 6)).result?.contents
           .value ?? "",
       ),
+      (await req("textDocument/hover", helperUri, 2, 6)).result,
     ],
     [
       [["@menu", 4]],
       ["/app/controllers/users_controller.rb:9:0"],
       ["/app/views/users/index.html.erb:0:19"],
-      "`@menu`\n\n- [users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
+      "`@menu`\n\n- [app/controllers/users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
+      null,
     ],
   );
   await send(
