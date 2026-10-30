@@ -853,8 +853,8 @@ impl LanguageServer for Backend {
                 return items(found);
             }
         }
-        let i18n_prefix = i18n::completion_prefix(line, col)
-            .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
+        let i18n_prefix =
+            i18n::completion_prefix(line, col).filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
@@ -868,7 +868,7 @@ impl LanguageServer for Backend {
         // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
         let roles = line_roles(doc.lang, &doc.text);
         let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
-        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
         if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
             if let Some(context) = erb_complete::context(&doc.text, line_start + col) {
                 return items(erb_complete::items(context, &doc.text, line_start + col));
@@ -911,7 +911,6 @@ impl LanguageServer for Backend {
         // Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
-                let engines = &self.options().extra_engines;
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
                 if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines) {
@@ -939,7 +938,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
-        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, &self.options().extra_engines), typed);
+        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, engines), typed);
         // A block variable shadows the strict local of the same name.
         let locals: Vec<_> =
             local_completions(&doc.text, typed, close).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
