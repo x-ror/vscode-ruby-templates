@@ -518,8 +518,7 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
 
 const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
-/// Where a local's name may be typed at `col` in a one-line `render "x", a: 1, ` or `render partial: "x", locals: { `:
-/// the partial's ref, the names already passed and the name typed so far.
+/// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `col`.
 pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
     let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
     let args = line.get(r.end + 1..col)?;
@@ -528,24 +527,32 @@ pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &st
     }
     let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
     let typed = &args[head.len()..];
-    let head = head.trim_end();
     let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
-    let listed = if options_form {
+    let names = if options_form {
+        // `render partial: "x", locals: { a: 1, `: only keyword options may come before `locals:`.
         let (before, hash) = head.split_once('{')?;
-        if !before.trim_end().ends_with("locals:") {
-            return None;
-        }
+        keyword_names(listed_args(before.trim_end().strip_suffix("locals:")?)?)?;
         let hash = hash.trim();
-        if hash.is_empty() {
-            ""
-        } else {
-            hash.strip_suffix(',')?
-        }
+        keyword_names(if hash.is_empty() { hash } else { hash.strip_suffix(',')? })?
     } else {
-        head.strip_suffix(',')?.trim_start().strip_prefix(',').unwrap_or("")
+        keyword_names(listed_args(head)?)?
     };
-    let names = split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name)).collect::<Option<_>>()?;
     Some((r, names, typed))
+}
+
+/// `a: 1` of the text `, a: 1, ` that follows a call's first argument; `None` when the text is anything else, such as
+/// the end of a nested call (`render("b"), `).
+fn listed_args(after_first: &str) -> Option<&str> {
+    let listed = after_first.trim().strip_prefix(',')?.trim();
+    if listed.is_empty() {
+        Some(listed)
+    } else {
+        listed.strip_suffix(',')
+    }
+}
+
+fn keyword_names(listed: &str) -> Option<Vec<&str>> {
+    split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name)).collect()
 }
 
 #[cfg(test)]
@@ -570,6 +577,10 @@ mod tests {
         assert_eq!(key(r#"<%= render "card", *opts, |"#), None);
         assert_eq!(key(r#"<%= render partial: "card", |"#), None);
         assert_eq!(key(r#"<%= render template: "users/show", |"#), None);
+        assert_eq!(key(r#"<%= render "a", body: render("b"), |"#), None, "b's call is closed");
+        assert_eq!(key(r#"<%= foo(render("card"), |"#), None);
+        assert_eq!(key(r#"= render(partial: "card") + helper(locals: { |"#), None);
+        assert_eq!(key(r#"= render partial: "card", layout: "box", locals: { |"#), card("", ""));
     }
 
     #[test]
