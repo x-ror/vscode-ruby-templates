@@ -25,7 +25,7 @@ static KEYWORD_ARG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)^(\w+):(
 static RENDER_COMPONENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 static RENDER_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RenderKind {
     Partial,
     Template,
@@ -214,13 +214,6 @@ pub fn singularize(word: &str) -> String {
         Some(stem) if !["ss", "us", "is"].iter().any(|e| word.ends_with(e)) => stem.to_string(),
         _ => word.to_string(),
     }
-}
-
-// ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
-// controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
-// neither is knowable without reading controllers or the bundle.
-pub fn in_app_views_dir(views: &Path, name: &str) -> bool {
-    name.rsplit_once('/').is_some_and(|(dir, _)| views.join(dir).is_dir())
 }
 
 /// All template files matching `dir/<prefix>name.*`.

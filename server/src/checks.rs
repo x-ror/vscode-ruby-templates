@@ -7,8 +7,8 @@ use crate::{
     project::{Framework, Project, Projects},
     rails_paths, slim_indent, strict_locals, tags, util,
 };
-use std::collections::HashSet;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
 #[derive(Clone)]
@@ -121,9 +121,7 @@ pub(crate) fn diagnostics_in(uri: &Url, doc: &Doc, options: &Options, projects: 
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
     let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
-        out.extend(unresolved_renders(path, project, &doc.text, &in_code));
-        out.extend(strict_locals_mismatches(path, project, &doc.text, &in_code));
+        out.extend(render_diagnostics(path, project, &doc.text, render_filter(doc.lang, &doc.text, &options.extra_engines)));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
@@ -223,23 +221,10 @@ const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
-/// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
-fn checked_renders<'a>(
-    views: &Path,
-    text: &'a str,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
-) -> Vec<(usize, &'a str, partials::RenderRef)> {
-    let mut out = Vec::new();
-    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let checked =
-            partials::render_refs(line).into_iter().filter(|r| partials::in_app_views_dir(views, &r.name) && in_code(i, line_start, r));
-        out.extend(checked.map(|r| (i, line, r)));
-    }
-    out
-}
+type CheckedRender<'a> = (usize, &'a str, partials::RenderRef);
 
-/// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
-fn unresolved_renders(
+/// The render checks of a Rails template in app/views: unresolved renders, then strict-locals mismatches.
+fn render_diagnostics(
     path: &Path,
     project: &Project,
     text: &str,
@@ -249,13 +234,64 @@ fn unresolved_renders(
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    checked_renders(&views, text, in_code)
-        .into_iter()
-        .filter(|(_, _, r)| partials::resolve(project, path, r).is_empty() && !is_gem_view(project, &r.name))
-        .map(|(i, line, r)| {
-            let message = missing_message(&r);
-            util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), UNRESOLVED_RENDER)
-        })
+    let renders = checked_renders(&views, text, in_code);
+    let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
+    let mut out = unresolved_renders(project, &renders, &mut partials);
+    out.extend(strict_locals_mismatches(project, &views, &renders, &mut partials));
+    out
+}
+
+/// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
+fn checked_renders<'a>(
+    views: &Path,
+    text: &'a str,
+    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+) -> Vec<CheckedRender<'a>> {
+    // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
+    // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
+    // neither is knowable without reading controllers or the bundle.
+    let mut dirs: HashMap<String, bool> = HashMap::new();
+    let mut in_views_dir = |name: &str| match name.rsplit_once('/') {
+        Some((dir, _)) => *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir()),
+        None => false,
+    };
+    let mut out = Vec::new();
+    for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
+        for r in partials::render_refs(line) {
+            if in_code(i, line_start, &r) && in_views_dir(&r.name) {
+                out.push((i, line, r));
+            }
+        }
+    }
+    out
+}
+
+/// A template's partials, each resolved and read once per pass: a view renders the same few many times.
+struct Partials<'a> {
+    project: &'a Project,
+    path: &'a Path,
+    resolved: HashMap<(partials::RenderKind, String), Vec<PathBuf>>,
+    signatures: HashMap<PathBuf, Option<partials::StrictLocals>>,
+}
+
+impl Partials<'_> {
+    fn resolve(&mut self, r: &partials::RenderRef) -> &[PathBuf] {
+        let (project, path) = (self.project, self.path);
+        self.resolved.entry((r.kind, r.name.clone())).or_insert_with(|| partials::resolve(project, path, r))
+    }
+
+    fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
+        let close = strict_locals::Close::of(self.project);
+        self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close)).as_ref()
+    }
+}
+
+/// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
+fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
+    renders
+        .iter()
+        .filter(|(_, _, r)| partials.resolve(r).is_empty() && !is_gem_view(project, &r.name))
+        .map(|(i, line, r)| util::coded(util::warning(util::span_range(*i, line, r.start, r.end), missing_message(r)), UNRESOLVED_RENDER))
         .collect()
 }
 
@@ -279,25 +315,19 @@ fn supports_strict_locals(project: &Project) -> bool {
 }
 
 /// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(
-    path: &Path,
-    project: &Project,
-    text: &str,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
-) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(project: &Project, views: &Path, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
     if !supports_strict_locals(project) {
         return vec![];
     }
-    let Some(views) = rails_paths::views_root(path) else { return vec![] };
     let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
-    for (i, line, r) in checked_renders(&views, text, in_code).into_iter().filter(|(_, _, r)| !r.from_layout) {
-        let Some(passed) = partials::passed_locals(line, &r) else { continue };
+    for (i, line, r) in renders.iter().filter(|(_, _, r)| !r.from_layout) {
+        let Some(passed) = partials::passed_locals(line, r) else { continue };
         // Several variants/formats: which one Rails picks depends on the request.
-        let found = partials::resolve(project, path, &r);
-        let [file] = found.as_slice() else { continue };
-        let Some(sig) = partials::file_strict_locals(file, strict_locals::Close::of(project)) else { continue };
+        let [file] = partials.resolve(r) else { continue };
+        let file = file.clone();
+        let Some(sig) = partials.signature(&file) else { continue };
         let missing: Vec<&str> =
             sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
         let mut seen = HashSet::new();
@@ -307,11 +337,11 @@ fn strict_locals_mismatches(
         let Some(mut message) = strict_locals_message(&missing, &unknown, no_locals) else { continue };
         if suffix_with_template {
             // Rails prints the absolute path; relative to the app folder is stable and readable.
-            let app_root = views.parent().and_then(Path::parent).unwrap_or(&views);
-            let identifier = file.strip_prefix(app_root).unwrap_or(file).to_string_lossy().replace('\\', "/");
+            let app_root = views.parent().and_then(Path::parent).unwrap_or(views);
+            let identifier = file.strip_prefix(app_root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
             message.push_str(&format!(" for {identifier}"));
         }
-        out.push(util::coded(util::warning(util::span_range(i, line, r.start, r.end), message), STRICT_LOCALS));
+        out.push(util::coded(util::warning(util::span_range(*i, line, r.start, r.end), message), STRICT_LOCALS));
     }
     out
 }
@@ -550,8 +580,13 @@ mod tests {
         Project::from_lockfile(&format!("{GEM_LOCK}    actionview ({actionview})\n"))
     }
 
+    fn render_checks(lang: TemplateLang, path: &Path, project: &Project, text: &str, code: &str) -> Vec<Diagnostic> {
+        let found = render_diagnostics(path, project, text, render_filter(lang, text, &[]));
+        found.into_iter().filter(|d| util::code(d) == Some(code)).collect()
+    }
+
     fn unresolved(lang: TemplateLang, path: &Path, text: &str) -> Vec<Diagnostic> {
-        unresolved_renders(path, &lock_with("7.1.0"), text, render_filter(lang, text, &[]))
+        render_checks(lang, path, &lock_with("7.1.0"), text, UNRESOLVED_RENDER)
     }
 
     #[test]
@@ -681,7 +716,7 @@ mod tests {
         let text = renders.map(|r| format!("<%= {r} %>\n")).concat();
         let messages = |actionview: &str| -> Vec<String> {
             let project = lock_with(actionview);
-            let found = strict_locals_mismatches(&file, &project, &text, render_filter(TemplateLang::Erb, &text, &[]));
+            let found = render_checks(TemplateLang::Erb, &file, &project, &text, STRICT_LOCALS);
             found.into_iter().map(|d| d.message).collect()
         };
         let rails_71 = [
@@ -733,7 +768,7 @@ mod tests {
             lines(unresolved(TemplateLang::Ruby, &file, text)),
             [(2, "Missing partial posts/_missing".to_string()), (5, "Missing partial posts/_missing3".to_string())]
         );
-        let mismatches = strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Ruby, text, &[]));
+        let mismatches = render_checks(TemplateLang::Ruby, &file, &lock_with("7.1.0"), text, STRICT_LOCALS);
         assert_eq!(lines(mismatches), [(4, "unknown local: :extra".to_string())]);
         assert!(!in_ruby_context(TemplateLang::Ruby, text, &[], text.find("posts/old").unwrap()));
         std::fs::remove_dir_all(&root).unwrap();
@@ -831,11 +866,10 @@ mod tests {
             "<%= render \"users/card\", Card::DEFAULTS %> <%= render \"card\" %> <%= render \"users/multi\" %>\n",
             "<%= render partial: \"users/plain\", locals: { a: 1 }, layout: \"users/card\" %>\n",
         );
-        let got: Vec<(String, Range)> =
-            strict_locals_mismatches(&file, &lock_with("7.1.0"), text, render_filter(TemplateLang::Erb, text, &[]))
-                .into_iter()
-                .map(|d| (d.message, d.range))
-                .collect();
+        let got: Vec<(String, Range)> = render_checks(TemplateLang::Erb, &file, &lock_with("7.1.0"), text, STRICT_LOCALS)
+            .into_iter()
+            .map(|d| (d.message, d.range))
+            .collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         assert_eq!(got, vec![("missing local: :user".to_string(), at(1, 12, 22))]);
         std::fs::remove_dir_all(&root).unwrap();
