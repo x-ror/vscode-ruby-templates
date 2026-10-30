@@ -117,11 +117,13 @@ fn broken_invariant(
     if format_once(uri, lang, formatted, settings, extra_engines, ruby).map(|again| again.text).as_deref() != Ok(formatted) {
         return Some("formatting is not stable");
     }
-    let before = structure_diagnostics(uri, lang, text, extra_engines, ruby);
-    if structure_diagnostics(uri, lang, formatted, extra_engines, ruby).iter().any(|d| !before.contains(d)) {
-        return Some("formatting would add a diagnostic");
+    // The original's diagnostics matter only when the result has some, which is rare.
+    let after = structure_diagnostics(uri, lang, formatted, extra_engines, ruby);
+    if after.is_empty() {
+        return None;
     }
-    None
+    let before = structure_diagnostics(uri, lang, text, extra_engines, ruby);
+    after.iter().any(|d| !before.contains(d)).then_some("formatting would add a diagnostic")
 }
 
 fn format_once(

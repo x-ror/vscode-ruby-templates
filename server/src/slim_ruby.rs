@@ -47,7 +47,7 @@ fn generated(text: &str, extra_engines: &[String]) -> String {
 
 /// Whether `Slim::Engine` would compile both texts to the same Ruby.
 pub fn same_compilation(before: &str, after: &str, extra_engines: &[String]) -> bool {
-    generated(before, extra_engines) == generated(after, extra_engines)
+    before == after || generated(before, extra_engines) == generated(after, extra_engines)
 }
 
 pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version) -> Vec<Diagnostic> {

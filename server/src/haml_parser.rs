@@ -287,6 +287,9 @@ fn parse_as(text: &str, ruby: bool) -> Parsed {
 /// the same lines and depths, with the same texts. Indentation (other than the depth and a filter body's text past its
 /// prefix), line endings, trailing whitespace and the empty lines at the end don't matter to Haml.
 pub fn same_compilation(before: &str, after: &str) -> bool {
+    if before == after {
+        return parse(before).error.is_none();
+    }
     let (before, after) = (parse(before), parse(after));
     before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
 }
