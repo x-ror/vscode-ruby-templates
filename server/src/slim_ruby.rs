@@ -1,6 +1,6 @@
 //! Ruby syntax errors in a Slim template: the Ruby `Slim::Engine` generates from the parser's output, parsed by Prism.
 
-use crate::generated_ruby::{ruby_string_body, Compiled};
+use crate::generated_ruby::{push_ruby_string_body, Compiled};
 use crate::slim_parser::{Origin, Parsed, Piece};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -15,29 +15,30 @@ static NEEDS_NO_DO: LazyLock<Regex> =
 static CAPTURES_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)\A(if|unless)\b|\bdo\s*(\|[^|]*\|)?\s*$").unwrap());
 
 /// What the last line of a depth still owes after its nested lines.
-enum Closer {
-    Markup(String),
+enum Closer<'a> {
+    Markup(&'a str),
     /// The end of a captured `=` block.
     Code(String),
 }
 
 #[derive(Default)]
-struct Level {
+struct Level<'a> {
     /// `Slim::EndInserter`'s `prev_indent`: the last sibling opened a block that still needs its `end`.
     open: bool,
-    closers: Vec<Closer>,
+    closers: Vec<Closer<'a>>,
 }
 
 struct Generator<'a> {
     pieces: &'a [Piece],
     out: Compiled,
-    levels: Vec<Level>,
+    levels: Vec<Level<'a>>,
     depth: usize,
     current_line: usize,
     has_child_lines: bool,
     has_content: bool,
     /// Markup not yet written: Temple merges neighbouring static strings into one.
     markup: String,
+    literal: String,
 }
 
 /// The Ruby `Slim::Engine` would generate, as far as this module reproduces it: markup, code and line breaks.
@@ -64,15 +65,17 @@ fn compile(pieces: &[Piece]) -> Compiled {
         has_child_lines: false,
         has_content: false,
         markup: String::new(),
+        literal: String::new(),
     };
     generator.run();
     generator.out
 }
 
-impl Generator<'_> {
+impl<'a> Generator<'a> {
     fn run(&mut self) {
         self.write("_buf = ''.dup; ", 0);
-        for (i, piece) in self.pieces.iter().enumerate() {
+        let pieces = self.pieces;
+        for (i, piece) in pieces.iter().enumerate() {
             match piece {
                 Piece::Line { depth, line } => self.start_line(i, *depth, *line),
                 Piece::Newline => {
@@ -83,7 +86,7 @@ impl Generator<'_> {
                 Piece::Static(text) => self.markup.push_str(text),
                 Piece::Close(text) => {
                     if self.has_child_lines {
-                        self.levels[self.depth].closers.push(Closer::Markup(text.clone()));
+                        self.levels[self.depth].closers.push(Closer::Markup(text));
                     } else {
                         self.markup.push_str(text);
                     }
@@ -113,8 +116,12 @@ impl Generator<'_> {
         if self.markup.is_empty() {
             return;
         }
-        let literal = format!("_buf << (\"{}\".freeze); ", ruby_string_body(&std::mem::take(&mut self.markup)));
-        self.raw(&literal, line);
+        self.literal.clear();
+        self.literal.push_str("_buf << (\"");
+        push_ruby_string_body(&mut self.literal, &self.markup);
+        self.literal.push_str("\".freeze); ");
+        self.markup.clear();
+        self.out.push(&self.literal, line);
     }
 
     /// Appends text that starts on template line `line`, after any pending markup.
@@ -173,10 +180,10 @@ impl Generator<'_> {
         }
     }
 
-    fn close(&mut self, closers: Vec<Closer>) {
+    fn close(&mut self, closers: Vec<Closer<'a>>) {
         for closer in closers {
             match closer {
-                Closer::Markup(text) => self.markup.push_str(&text),
+                Closer::Markup(text) => self.markup.push_str(text),
                 Closer::Code(code) => self.write(&code, self.current_line),
             }
         }
@@ -205,20 +212,18 @@ impl Generator<'_> {
 
     fn control(&mut self, code: &str, at: &Origin) {
         let needs_do = self.needs_do(code, true);
-        let full = if needs_do { format!("{code} do") } else { code.to_string() };
         let depth = self.depth;
-        if self.levels[depth].open && !CONTINUES_BLOCK.is_match(&full) {
+        if self.levels[depth].open && !CONTINUES_BLOCK.is_match(code) {
             self.write("end; ", at.line);
         }
         self.code(code, at);
         self.write(if needs_do { " do; " } else { "; " }, at.line);
-        self.levels[depth].open = OPENS_BLOCK.is_match(&full);
+        self.levels[depth].open = needs_do || OPENS_BLOCK.is_match(code);
     }
 
     fn output(&mut self, escape: bool, code: &str, owns_block: bool, at: &Origin) {
         let needs_do = self.needs_do(code, owns_block);
-        let full = if needs_do { format!("{code} do") } else { code.to_string() };
-        if !CAPTURES_BLOCK.is_match(&full) {
+        if !needs_do && !CAPTURES_BLOCK.is_match(code) {
             self.write(if escape { "_buf << ((::Temple::Utils.escape_html((" } else { "_buf << ((" }, at.line);
             self.code(code, at);
             self.write(if escape { "))).to_s); " } else { ").to_s); " }, at.line);

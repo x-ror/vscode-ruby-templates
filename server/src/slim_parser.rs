@@ -3,6 +3,7 @@
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
 use crate::ruby::comment_before;
+use std::borrow::Cow;
 use std::ops::Range;
 
 pub const BOM: &str = "\u{feff}";
@@ -70,9 +71,9 @@ pub enum Piece {
     /// Slim's `[:newline]`.
     Newline,
     /// Output with no Ruby in it: markup and text, as the template writes it (`Slim::Interpolation`'s unescaped `\#{`).
-    Static(String),
+    Static(Cow<'static, str>),
     /// Closing markup that follows the content of the line, nested lines included.
-    Close(String),
+    Close(Cow<'static, str>),
     /// A `-` line.
     Control {
         code: String,
@@ -256,7 +257,8 @@ fn closer(open: char) -> Option<char> {
 
 /// Length of an attribute name: anything but whitespace, NUL, quotes, `<>/=` and brackets.
 fn attr_name_len(s: &str) -> usize {
-    s.find(|c: char| is_space(c) || "\0\"'></=()[]{}".contains(c)).unwrap_or(s.len())
+    s.find(|c: char| is_space(c) || matches!(c, '\0' | '"' | '\'' | '>' | '<' | '/' | '=' | '(' | ')' | '[' | ']' | '{' | '}'))
+        .unwrap_or(s.len())
 }
 
 /// `@tag_re`: `Some((len, named))`; `.class`, `#id` and `*splat` tags consume nothing.
@@ -525,14 +527,14 @@ impl<'a> Parser<'a> {
         if let Some(after) = r.strip_prefix("/!") {
             self.marker(2, Marker::HtmlComment);
             self.skip(2 + usize::from(after.starts_with(' ')));
-            self.out.pieces.push(Piece::Static("<!--".to_string()));
+            self.out.pieces.push(Piece::Static(Cow::Borrowed("<!--")));
             self.text_block(Body::Interpolated, false, self.base_indent() + usize::from(after.starts_with(' ')) + 2);
-            self.out.pieces.push(Piece::Static("-->".to_string()));
+            self.out.pieces.push(Piece::Static(Cow::Borrowed("-->")));
         } else if r.len() > 2 && r.starts_with("/[") && r.trim_end_matches(is_space).ends_with(']') {
             self.marker(r.trim_end_matches(is_space).len(), Marker::ConditionalComment);
             let condition = r[2..].trim_end_matches(is_space).trim_end_matches(']').trim_matches(is_space);
-            self.out.pieces.push(Piece::Static(format!("<!--[{condition}]>")));
-            self.out.pieces.push(Piece::Close("<![endif]-->".to_string()));
+            self.out.pieces.push(Piece::Static(format!("<!--[{condition}]>").into()));
+            self.out.pieces.push(Piece::Close(Cow::Borrowed("<![endif]-->")));
             self.expecting = true;
         } else if r.starts_with('/') {
             self.marker(1, Marker::Comment);
@@ -562,7 +564,7 @@ impl<'a> Parser<'a> {
             if !is_known_doctype(&kind) {
                 self.out.invalid_doctype.get_or_insert((self.i, kind));
             }
-            self.out.pieces.push(Piece::Static("<!DOCTYPE html>".to_string()));
+            self.out.pieces.push(Piece::Static(Cow::Borrowed("<!DOCTYPE html>")));
         } else if let Some((len, named)) = match_tag(r) {
             self.out.tag_slots.push(self.at());
             let name = if named { &r[..len] } else { DEFAULT_TAG };
@@ -610,7 +612,7 @@ impl<'a> Parser<'a> {
             // `RubyEngine` drops the attributes.
             self.out.pieces.truncate(first_piece);
         } else {
-            self.out.pieces.push(Piece::Static(String::new()));
+            self.out.pieces.push(Piece::Static(Cow::Borrowed("")));
         }
         if self.i != line {
             // Wrapped attributes across lines put the body somewhere this port doesn't follow.
@@ -630,9 +632,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_tag(&mut self, name: &str) {
-        self.out.pieces.push(Piece::Static(format!("<{name}")));
+        self.out.pieces.push(Piece::Static(format!("<{name}").into()));
         if self.parse_tag_rest(name) {
-            self.out.pieces.push(Piece::Close(format!("</{name}>")));
+            self.out.pieces.push(Piece::Close(format!("</{name}>").into()));
         }
     }
 
@@ -686,7 +688,7 @@ impl<'a> Parser<'a> {
         let ws = r.len() - t.len();
         let closed = t.starts_with('/');
         let void = closed || VOID_ELEMENTS.contains(&name);
-        self.out.pieces.push(Piece::Static(if void { " />" } else { ">" }.to_string()));
+        self.out.pieces.push(Piece::Static(Cow::Borrowed(if void { " />" } else { ">" })));
         if let Some(after) = t.strip_prefix(':') {
             // Block expansion: `li: a`.
             self.skip(ws + 1 + after.len() - trim_start(after).len());
@@ -757,9 +759,9 @@ impl<'a> Parser<'a> {
                     self.skip(r.len() - value.len());
                     if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
                         self.skip(1);
-                        self.out.pieces.push(Piece::Static(format!(" {}=\"", &t[..name])));
+                        self.out.pieces.push(Piece::Static(format!(" {}=\"", &t[..name]).into()));
                         self.quoted_attribute(quote);
-                        self.out.pieces.push(Piece::Static("\"".to_string()));
+                        self.out.pieces.push(Piece::Static(Cow::Borrowed("\"")));
                     } else {
                         let (taken, code, at) = self.ruby_code(close);
                         if taken == 0 {
@@ -932,7 +934,7 @@ impl<'a> Parser<'a> {
                 code.push_line(self.i, &lead, self.rest());
             } else {
                 self.out.pieces.push(Piece::Newline);
-                self.out.pieces.push(Piece::Static(lead));
+                self.out.pieces.push(Piece::Static(lead.into()));
             }
             self.body_segment(body);
             continued = true;
@@ -974,6 +976,10 @@ impl<'a> Parser<'a> {
         let s = &self.lines[self.i][from..to];
         let base = self.starts[self.i];
         self.out.text.push(base + from..base + to);
+        if !s.contains("#{") {
+            self.out.pieces.push(Piece::Static(s.to_string().into()));
+            return;
+        }
         let closers = matching_braces(s);
         let mut text = String::new();
         let mut k = 0;
@@ -993,7 +999,7 @@ impl<'a> Parser<'a> {
                     let (a, b) = if unescaped { (k + 3, k + len - 1) } else { (k + 2, k + len) };
                     self.ruby(from + a, from + b);
                     let at = Origin { line: self.i, offset: Some(base + from + a) };
-                    self.out.pieces.push(Piece::Static(std::mem::take(&mut text)));
+                    self.out.pieces.push(Piece::Static(std::mem::take(&mut text).into()));
                     self.out.pieces.push(Piece::Output { escape: !unescaped, code: s[a..b].to_string(), block: false, at });
                     k += 1 + len;
                     continue;
@@ -1003,7 +1009,7 @@ impl<'a> Parser<'a> {
             text.push(c);
             k += c.len_utf8();
         }
-        self.out.pieces.push(Piece::Static(text));
+        self.out.pieces.push(Piece::Static(text.into()));
     }
 }
 
