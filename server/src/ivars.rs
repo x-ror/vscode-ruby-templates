@@ -113,19 +113,34 @@ fn ancestry(app: &Path, first: PathBuf) -> Vec<(PathBuf, String)> {
 }
 
 fn assignments_in(file: &Path, text: &str, lines: std::ops::Range<usize>) -> Vec<Assignment> {
-    text.lines()
-        .enumerate()
-        .skip(lines.start)
-        .take(lines.len())
-        .flat_map(|(i, line)| {
-            ASSIGN.captures_iter(line).map(move |cap| Assignment {
-                name: cap[1].to_string(),
-                file: file.to_path_buf(),
-                line: i,
-                code: line.trim().to_string(),
-            })
-        })
-        .collect()
+    let all: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for i in lines.filter(|&i| i < all.len()) {
+        let names: Vec<String> = ASSIGN.captures_iter(all[i]).map(|cap| cap[1].to_string()).collect();
+        if names.is_empty() {
+            continue;
+        }
+        let code = statement_at(&all, i);
+        out.extend(names.into_iter().map(|name| Assignment { name, file: file.to_path_buf(), line: i, code: code.clone() }));
+    }
+    out
+}
+
+/// How many lines one assignment shown in a hover may take.
+const MAX_STATEMENT_LINES: usize = 6;
+
+/// Line `i` and the lines that continue it (after a trailing `,` `(` `.` `\` or before a leading `.`), joined.
+fn statement_at(lines: &[&str], i: usize) -> String {
+    let mut code = lines[i].trim().to_string();
+    for next in lines.iter().skip(i + 1).take(MAX_STATEMENT_LINES - 1).map(|l| l.trim()) {
+        let continues = code.ends_with([',', '(', '.', '\\']) || next.starts_with('.') || next.starts_with("&.");
+        if !continues {
+            break;
+        }
+        let glue = if code.ends_with(['(', '.']) || next.starts_with('.') || next.starts_with("&.") { "" } else { " " };
+        code = format!("{}{glue}{next}", code.trim_end_matches('\\').trim_end());
+    }
+    code
 }
 
 /// The name, without `@`, of the instance variable under `col`; on the `@` itself too.
@@ -285,5 +300,13 @@ end
             )
         );
         assert_eq!(hover(&found, "menu"), None);
+    }
+
+    #[test]
+    fn statements_span_their_continued_lines() {
+        let lines = ["@users = User", "  .where(active: true)", "  .order(:name)", "@other = 1", "@user = find(", "  id,", "  scope)", "x"];
+        assert_eq!(statement_at(&lines, 0), "@users = User.where(active: true).order(:name)");
+        assert_eq!(statement_at(&lines, 3), "@other = 1");
+        assert_eq!(statement_at(&lines, 4), "@user = find(id, scope)");
     }
 }
