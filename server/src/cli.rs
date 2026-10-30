@@ -16,6 +16,8 @@ use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
 const OK: i32 = 0;
 const FINDINGS: i32 = 1;
 const USAGE: i32 = 2;
+/// The main thread's usual stack: Prism and the template walkers recurse with the nesting of the code.
+const WORKER_STACK: usize = 8 << 20;
 
 const HELP: &str = "\
 Usage:
@@ -175,7 +177,7 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let (sender, next, files) = (sender.clone(), &next, &files);
-            scope.spawn(move || {
+            let work = move || {
                 let mut projects = Projects::new();
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
@@ -185,7 +187,11 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
                         break;
                     }
                 }
-            });
+            };
+            // A thread the system refuses still gets its share of the files, here.
+            if std::thread::Builder::new().stack_size(WORKER_STACK).spawn_scoped(scope, work.clone()).is_err() {
+                work();
+            }
         }
         drop(sender);
         print_in_order(results)

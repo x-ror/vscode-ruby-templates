@@ -56,6 +56,13 @@ try {
     /notes\.txt/,
     "folders yield templates only",
   );
+  const nested = file(
+    "nested.html.erb",
+    `<% ${"[".repeat(5000)}${"]".repeat(5000)} %>\n`,
+  );
+  r = run(["check", nested]);
+  assert.strictEqual(r.status, 0, "deep nesting fits a worker's stack");
+  fs.rmSync(nested);
   r = run(["check", notes]);
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /notes\.txt: unknown template type/);
