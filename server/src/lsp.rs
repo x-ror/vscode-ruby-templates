@@ -10,7 +10,8 @@ use crate::{
     partials, project::Project, rails_paths, routes, ruby, schema, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
     strict_locals, tags, util,
 };
-use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
+use dashmap::{DashMap, DashSet};
 use haml_indent::LineRole;
 use std::cell::OnceCell;
 use std::collections::HashMap;
@@ -30,9 +31,14 @@ struct Backend {
     /// Open controllers, for navigation to their views only; no other request reads them.
     controllers: DashMap<Url, String>,
     /// Files under each app/views root, for render completion.
-    templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
+    templates: Arc<DashMap<PathBuf, Arc<Vec<PathBuf>>>>,
     /// Parsed locale files per config/locales directory.
-    locales: DashMap<PathBuf, LocaleFiles>,
+    locales: Arc<DashMap<PathBuf, LocaleFiles>>,
+    /// Bumped before watched-file events invalidate the caches, so a background fill started earlier doesn't
+    /// store what it read before the change.
+    cache_generation: Arc<AtomicU64>,
+    /// The cache roots a background fill is reading, so documents opened together start one fill each.
+    warming: Arc<DashSet<PathBuf>>,
     /// Routes per Rails root, as the client last sent them.
     routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
@@ -276,6 +282,43 @@ impl Backend {
         self.templates.entry(views.to_path_buf()).or_insert_with(|| Arc::new(rails_paths::files_under(views, usize::MAX))).clone()
     }
 
+    /// Fills the app/views and locale caches of `uri`'s app in the background, so the first render or i18n request
+    /// after a view opens or files change finds them ready instead of walking the app on the server task.
+    fn warm_caches(&self, uri: &Url) {
+        let Ok(path) = uri.to_file_path() else { return };
+        let claim = |root: &PathBuf, cached: bool| !cached && self.warming.insert(root.clone());
+        let views = rails_paths::views_root(&path).filter(|views| claim(views, self.templates.contains_key(views)));
+        let locales = i18n::locales_dir(&path).filter(|dir| claim(dir, self.locales.contains_key(dir)));
+        if views.is_none() && locales.is_none() {
+            return;
+        }
+        let (templates, cached_locales, generation, warming) =
+            (Arc::clone(&self.templates), Arc::clone(&self.locales), Arc::clone(&self.cache_generation), Arc::clone(&self.warming));
+        let started = generation.load(Ordering::SeqCst);
+        tokio::task::spawn_blocking(move || {
+            // Checked under the entry's lock, which an invalidation's `retain` also takes.
+            let current = || generation.load(Ordering::SeqCst) == started;
+            if let Some(views) = views {
+                let files = Arc::new(rails_paths::files_under(&views, usize::MAX));
+                if let Entry::Vacant(slot) = templates.entry(views.clone()) {
+                    if current() {
+                        slot.insert(files);
+                    }
+                }
+                warming.remove(&views);
+            }
+            if let Some(dir) = locales {
+                let parsed = Arc::new(i18n::locale_files(&dir));
+                if let Entry::Vacant(slot) = cached_locales.entry(dir.clone()) {
+                    if current() {
+                        slot.insert(parsed);
+                    }
+                }
+                warming.remove(&dir);
+            }
+        });
+    }
+
     fn locale_files(&self, current: &Path) -> LocaleFiles {
         let Some(dir) = i18n::locales_dir(current) else { return LocaleFiles::default() };
         self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
@@ -420,6 +463,7 @@ impl LanguageServer for Backend {
             return;
         };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
+        self.warm_caches(&p.text_document.uri);
         self.publish_later(p.text_document.uri, Duration::ZERO);
     }
 
@@ -444,11 +488,13 @@ impl LanguageServer for Backend {
     async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
         let events: Vec<(PathBuf, FileChangeType)> =
             p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
+        self.cache_generation.fetch_add(1, Ordering::SeqCst);
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
         let open: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
         for uri in open {
+            self.warm_caches(&uri);
             self.publish_later(uri, Duration::ZERO);
         }
     }
@@ -909,8 +955,10 @@ pub async fn serve() {
         client,
         docs: Arc::default(),
         controllers: DashMap::new(),
-        templates: DashMap::new(),
-        locales: DashMap::new(),
+        templates: Arc::default(),
+        locales: Arc::default(),
+        cache_generation: Arc::default(),
+        warming: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),
         roots: OnceLock::new(),
