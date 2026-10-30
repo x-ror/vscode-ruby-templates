@@ -134,6 +134,21 @@ fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> b
     events.iter().any(|(path, kind)| (contents || *kind != FileChangeType::CHANGED) && (path.starts_with(root) || root.starts_with(path)))
 }
 
+/// Stores `read()` under `root` unless the entry is filled meanwhile; reads again when a watched-file event came in
+/// while it read, since what it read may predate the change. The generation is checked under the entry's lock,
+/// which the event's invalidation (`retain`, after the bump) takes too.
+fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, read: impl Fn() -> T) {
+    loop {
+        let started = generation.load(Ordering::SeqCst);
+        let value = read();
+        let Entry::Vacant(slot) = cache.entry(root.to_path_buf()) else { return };
+        if generation.load(Ordering::SeqCst) == started {
+            slot.insert(value);
+            return;
+        }
+    }
+}
+
 /// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
 async fn off_server_task<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
     tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
@@ -294,26 +309,13 @@ impl Backend {
         }
         let (templates, cached_locales, generation, warming) =
             (Arc::clone(&self.templates), Arc::clone(&self.locales), Arc::clone(&self.cache_generation), Arc::clone(&self.warming));
-        let started = generation.load(Ordering::SeqCst);
         tokio::task::spawn_blocking(move || {
-            // Checked under the entry's lock, which an invalidation's `retain` also takes.
-            let current = || generation.load(Ordering::SeqCst) == started;
             if let Some(views) = views {
-                let files = Arc::new(rails_paths::files_under(&views, usize::MAX));
-                if let Entry::Vacant(slot) = templates.entry(views.clone()) {
-                    if current() {
-                        slot.insert(files);
-                    }
-                }
+                fill(&templates, &views, &generation, || Arc::new(rails_paths::files_under(&views, usize::MAX)));
                 warming.remove(&views);
             }
             if let Some(dir) = locales {
-                let parsed = Arc::new(i18n::locale_files(&dir));
-                if let Entry::Vacant(slot) = cached_locales.entry(dir.clone()) {
-                    if current() {
-                        slot.insert(parsed);
-                    }
-                }
+                fill(&cached_locales, &dir, &generation, || Arc::new(i18n::locale_files(&dir)));
                 warming.remove(&dir);
             }
         });
