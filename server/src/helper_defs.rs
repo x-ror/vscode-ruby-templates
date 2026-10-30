@@ -35,7 +35,8 @@ pub fn definitions(current: &Path, name: &str) -> Vec<(PathBuf, usize)> {
     for (dir, needs_helper_method) in [("helpers", false), ("controllers", true)] {
         for entry in WalkDir::new(app.join(dir)).into_iter().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "rb")) {
             let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
-            if needs_helper_method && !exposed(&text) {
+            // Necessary for a match, and far cheaper than the line scans below.
+            if !text.contains(name) || needs_helper_method && !(text.contains("helper_method") && exposed(&text)) {
                 continue;
             }
             out.extend(text.lines().enumerate().filter(|(_, l)| def.is_match(l)).map(|(i, _)| (entry.path().to_path_buf(), i)));
