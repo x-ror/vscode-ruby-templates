@@ -909,7 +909,7 @@ const check = (label, actual, expected) => {
     "textDocument/didChange",
     {
       textDocument: { uri: helperUri, version: 2 },
-      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n" }],
+      contentChanges: [{ text: "<%= @m %>\n<%= @menu.name %>\n<%= @tag %>\n" }],
     },
     true,
   );
@@ -938,11 +938,18 @@ const check = (label, actual, expected) => {
       ),
       at(await req("textDocument/definition", helperUri, 1, 6)),
       at(await req("textDocument/definition", cardUri, 0, 5)),
+      rel(
+        (await req("textDocument/hover", helperUri, 1, 6)).result?.contents
+          .value ?? "",
+      ),
+      (await req("textDocument/hover", helperUri, 2, 6)).result,
     ],
     [
       [["@menu", 4]],
       ["/app/controllers/users_controller.rb:9:0"],
       ["/app/views/users/index.html.erb:0:19"],
+      "`@menu`\n\n- [app/controllers/users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
+      null,
     ],
   );
   await send(
@@ -1089,7 +1096,7 @@ const check = (label, actual, expected) => {
   });
   const keyDocs = {
     erb: '<%= render "strict/row", a: 1, | %>\n',
-    slim: '= render partial: "strict/row", locals: { |\n',
+    slim: '= render "strict/row",\n    b: 2,\n    |\n',
     haml: '= render("strict/row", |)\n',
   };
   const renderKeys = {};
@@ -1101,17 +1108,18 @@ const check = (label, actual, expected) => {
       { textDocument: { uri: keysUri, languageId: lang, version: 1, text } },
       true,
     );
+    const before = marked.slice(0, marked.indexOf("|")).split("\n");
     const r = await req(
       "textDocument/completion",
       keysUri,
-      0,
-      marked.indexOf("|"),
+      before.length - 1,
+      before.at(-1).length,
     );
     renderKeys[lang] = r.result?.map((i) => `${i.insertText} (${i.detail})`);
   }
   check("render locals keys", renderKeys, {
     erb: ["b:  (local = 1)"],
-    slim: ["a:  (local (required))", "b:  (local = 1)"],
+    slim: ["a:  (local (required))"],
     haml: ["a:  (local (required))", "b:  (local = 1)"],
   });
   const streamUri = fileUri(

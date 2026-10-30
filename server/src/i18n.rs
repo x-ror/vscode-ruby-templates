@@ -3,6 +3,7 @@
 use crate::erb::truncate;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::util::inline_code;
 use regex::Regex;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -130,14 +131,6 @@ pub fn hover(files: &Locales, key: &str) -> Option<String> {
         md.push_str(&format!("\n\nMissing in {}", missing.join(", ")));
     }
     Some(md)
-}
-
-/// `v` as a Markdown code span, so HTML and Markdown in translations show literally.
-fn inline_code(v: &str) -> String {
-    let longest_run = v.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest_run + 1);
-    let pad = if v.starts_with('`') || v.ends_with('`') { " " } else { "" };
-    format!("{fence}{pad}{v}{pad}{fence}")
 }
 
 /// Leaf keys of every locale starting with `prefix` and a preview value; `.x` prefixes list the view's lazy keys as `.x`.

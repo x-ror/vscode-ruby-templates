@@ -4,7 +4,9 @@
 
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
-use crate::partials::{first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, RenderKind, RenderRef};
+use crate::partials::{
+    call_text, first_folder_only, model_renders, passed_locals, render_refs, resolve, resolve_model, RenderKind, RenderRef,
+};
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::util::{lines_with_offsets, LineIndex};
@@ -186,11 +188,11 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
                 continue;
             }
             let line_start = start - r.start;
-            let line = source.text[line_start..].lines().next().unwrap_or("");
-            if !passed_locals(line, &r).is_some_and(|names| names.contains(&local)) {
+            let call = call_text(&source.text[line_start..], &r);
+            if !passed_locals(call, &r).is_some_and(|names| names.contains(&local)) {
                 continue;
             }
-            let at = key.as_ref().and_then(|k| k.find(&line[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
+            let at = key.as_ref().and_then(|k| k.find(&call[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
             let position = index.position(line_start + at);
             out.push(Location::new(uri.clone(), Range::new(position, position)));
         }
@@ -464,6 +466,7 @@ mod tests {
             ),
             t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\", user: current_user\n"),
             t.source("app/views/home/other.html.erb", ERB, "<%= render \"other\", user: u %>\n"),
+            t.source("app/views/home/list.html.slim", SLIM, "= render \"users/card\",\n    size: 1,\n    user: u\n"),
         ];
         let card = t.path("app/views/users/_card.html.erb");
         let mut got: Vec<(String, u32, u32)> = local_passes(&Project::unknown(), &card, "user", &sources, &[])
@@ -471,7 +474,14 @@ mod tests {
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
         got.sort();
-        assert_eq!(got, [("app/views/home/show.html.slim".into(), 0, 23), ("app/views/users/index.html.erb".into(), 0, 37)]);
+        assert_eq!(
+            got,
+            [
+                ("app/views/home/list.html.slim".into(), 2, 4),
+                ("app/views/home/show.html.slim".into(), 0, 23),
+                ("app/views/users/index.html.erb".into(), 0, 37)
+            ]
+        );
         assert!(local_passes(&Project::unknown(), &card, "missing", &sources, &[]).is_empty());
     }
 

@@ -58,7 +58,7 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 | ------------------------------------- | -------------------------------------------------------------------------------------- |
 | `render "users/card"`, `render @user` | Go to the partial, hover shows the file, completion of partial names, find all renders |
 | `render ButtonComponent.new`          | Completion of ViewComponents, go to class and template, `with_*` slot completion       |
-| `@user`                               | Completion and go to definition from the controller action and its `before_action`s    |
+| `@user`                               | Completion, hover and go to definition from the action and its `before_action`s        |
 | `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`       |
 | `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references     |
 | `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`                           |

@@ -221,7 +221,8 @@ const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
-type CheckedRender<'a> = (usize, &'a str, partials::RenderRef);
+/// Line index, line, the call's text from the line's start to the end of its arguments, and the render.
+type CheckedRender<'a> = (usize, &'a str, &'a str, partials::RenderRef);
 
 /// The render checks of a Rails template in app/views: unresolved renders, then strict-locals mismatches.
 fn render_diagnostics(
@@ -259,7 +260,7 @@ fn checked_renders<'a>(
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         for r in partials::render_refs(line) {
             if in_code(i, line_start, &r) && in_views_dir(&r.name) {
-                out.push((i, line, r));
+                out.push((i, line, partials::call_text(&text[line_start..], &r), r));
             }
         }
     }
@@ -290,8 +291,10 @@ impl Partials<'_> {
 fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
     renders
         .iter()
-        .filter(|(_, _, r)| partials.resolve(r).is_empty() && !is_gem_view(project, &r.name))
-        .map(|(i, line, r)| util::coded(util::warning(util::span_range(*i, line, r.start, r.end), missing_message(r)), UNRESOLVED_RENDER))
+        .filter(|(.., r)| partials.resolve(r).is_empty() && !is_gem_view(project, &r.name))
+        .map(|(i, line, _, r)| {
+            util::coded(util::warning(util::span_range(*i, line, r.start, r.end), missing_message(r)), UNRESOLVED_RENDER)
+        })
         .collect()
 }
 
@@ -314,7 +317,7 @@ fn supports_strict_locals(project: &Project) -> bool {
     project.framework == Framework::Rails && project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_SINCE))
 }
 
-/// Literal one-line renders whose locals don't fit the partial's `locals: (…)` signature.
+/// Literal renders whose locals don't fit the partial's `locals: (…)` signature.
 fn strict_locals_mismatches(project: &Project, views: &Path, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
     if !supports_strict_locals(project) {
         return vec![];
@@ -322,8 +325,8 @@ fn strict_locals_mismatches(project: &Project, views: &Path, renders: &[CheckedR
     let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
-    for (i, line, r) in renders.iter().filter(|(_, _, r)| !r.from_layout) {
-        let Some(passed) = partials::passed_locals(line, r) else { continue };
+    for (i, line, call, r) in renders.iter().filter(|(.., r)| !r.from_layout) {
+        let Some(passed) = partials::passed_locals(call, r) else { continue };
         // Several variants/formats: which one Rails picks depends on the request.
         let [file] = partials.resolve(r) else { continue };
         let file = file.clone();
@@ -865,13 +868,16 @@ mod tests {
             "<%= render partial: \"users/card\", locals: { user: u } %> <%= render \"users/card\", **opts %>\n",
             "<%= render \"users/card\", Card::DEFAULTS %> <%= render \"card\" %> <%= render \"users/multi\" %>\n",
             "<%= render partial: \"users/plain\", locals: { a: 1 }, layout: \"users/card\" %>\n",
+            "<%= render \"users/card\",\n      user: u %>\n",
+            "<%= render(\"users/card\",\n  size: :lg) %>\n",
         );
         let got: Vec<(String, Range)> = render_checks(TemplateLang::Erb, &file, &lock_with("7.1.0"), text, STRICT_LOCALS)
             .into_iter()
             .map(|d| (d.message, d.range))
             .collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
-        assert_eq!(got, vec![("missing local: :user".to_string(), at(1, 12, 22))]);
+        let missing = |line| ("missing local: :user".to_string(), at(line, 12, 22));
+        assert_eq!(got, vec![missing(1), missing(7)]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
