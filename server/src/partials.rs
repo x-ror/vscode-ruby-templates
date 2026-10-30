@@ -566,16 +566,28 @@ pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &st
     let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
     let typed = &args[head.len()..];
     let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
-    let names = if options_form {
+    // Jbuilder also reads a `locals:` hash next to the partial's name.
+    let jbuilder = line[r.call..].starts_with("json.");
+    let names = if options_form || (jbuilder && head.contains('{')) {
         // `render partial: "x", locals: { a: 1, `: only keyword options may come before `locals:`.
         let (before, hash) = head.split_once('{')?;
-        keyword_names(listed_args(before.trim_end().strip_suffix("locals:")?)?)?;
+        key_names(listed_args(without_locals_key(before)?)?)?;
         let hash = hash.trim();
-        keyword_names(if hash.is_empty() { hash } else { hash.strip_suffix(',')? })?
+        key_names(if hash.is_empty() { hash } else { hash.strip_suffix(',')? })?
     } else {
-        keyword_names(listed_args(head)?)?
+        key_names(listed_args(head)?)?
     };
+    // Jbuilder takes these out of the locals and renders a collection, which the keys can't describe.
+    if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
+        return None;
+    }
     Some((r, names, typed))
+}
+
+/// `before` less a trailing `locals:` or `:locals =>`.
+fn without_locals_key(before: &str) -> Option<&str> {
+    let before = before.trim_end();
+    before.strip_suffix("locals:").or_else(|| before.strip_suffix("=>")?.trim_end().strip_suffix(":locals"))
 }
 
 /// `a: 1` of the text `, a: 1, ` that follows a call's first argument; `None` when the text is anything else, such as
@@ -589,8 +601,16 @@ fn listed_args(after_first: &str) -> Option<&str> {
     }
 }
 
-fn keyword_names(listed: &str) -> Option<Vec<&str>> {
-    split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name)).collect()
+/// The keys of `a: 1, :b => 2`; `None` when an argument isn't a pair with a literal key.
+fn key_names(listed: &str) -> Option<Vec<&str>> {
+    split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name).or_else(|| rocket_key(arg))).collect()
+}
+
+/// `b` of `:b => 2`.
+fn rocket_key(arg: &str) -> Option<&str> {
+    let rest = arg.strip_prefix(':')?;
+    let name = &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len())];
+    (!name.is_empty() && rest[name.len()..].trim_start().starts_with("=>")).then_some(name)
 }
 
 #[cfg(test)]
@@ -619,6 +639,10 @@ mod tests {
         assert_eq!(key(r#"<%= foo(render("card"), |"#), None);
         assert_eq!(key(r#"= render(partial: "card") + helper(locals: { |"#), None);
         assert_eq!(key(r#"= render partial: "card", layout: "box", locals: { |"#), card("", ""));
+        assert_eq!(key(r#"<%= render :partial => "card", :locals => { :user => u, | } %>"#), card("user", ""));
+        assert_eq!(key(r#"json.partial! "card", locals: { user: u, |"#), card("user", ""));
+        assert_eq!(key(r#"json.partial! "card", |"#), card("", ""));
+        assert_eq!(key(r#"json.partial! "card", collection: @c, as: :c, |"#), None, "Jbuilder's own options");
     }
 
     #[test]
