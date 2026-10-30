@@ -40,8 +40,12 @@ struct Visit {
 }
 
 pub fn diagnostics(text: &str, parsed: &haml_parser::Parsed) -> Vec<Diagnostic> {
-    let mut out: Vec<Diagnostic> = parsed.error.iter().map(|parse_error| parse_error_diagnostic(text, parse_error)).collect();
-    out.extend(parsed.void_content.iter().map(|void| void_content_diagnostic(text, void)));
+    if parsed.error.is_none() && parsed.void_content.is_empty() {
+        return vec![];
+    }
+    let lines = haml_parser::physical_lines(text);
+    let mut out: Vec<Diagnostic> = parsed.error.iter().map(|parse_error| parse_error_diagnostic(&lines, parse_error)).collect();
+    out.extend(parsed.void_content.iter().map(|void| void_content_diagnostic(&lines, void)));
     out
 }
 
@@ -115,8 +119,8 @@ fn indent_width(ws: &str) -> usize {
 }
 
 /// `<br>x</br>`: the end tag of a void element is a parse error in HTML (WHATWG 13.2.6.4.7).
-fn void_content_diagnostic(text: &str, void: &haml_parser::VoidContent) -> Diagnostic {
-    let raw = haml_parser::physical_lines(text).get(void.line).copied().unwrap_or("");
+fn void_content_diagnostic(lines: &[&str], void: &haml_parser::VoidContent) -> Diagnostic {
+    let raw = lines.get(void.line).copied().unwrap_or("");
     let start = leading_ws(raw).len();
     let what = if void.nested { "children" } else { "content" };
     let message = format!("`{}` is a void element and can't have {what}", void.name);
@@ -124,8 +128,8 @@ fn void_content_diagnostic(text: &str, void: &haml_parser::VoidContent) -> Diagn
 }
 
 /// The first error Haml's parser raises: indentation errors are shown over the indentation, the others over the line.
-fn parse_error_diagnostic(text: &str, parse_error: &haml_parser::Error) -> Diagnostic {
-    let raw = haml_parser::physical_lines(text).get(parse_error.line).copied().unwrap_or("");
+fn parse_error_diagnostic(lines: &[&str], parse_error: &haml_parser::Error) -> Diagnostic {
+    let raw = lines.get(parse_error.line).copied().unwrap_or("");
     let body = raw.strip_prefix(haml_parser::BOM).filter(|_| parse_error.line == 0).unwrap_or(raw);
     let indent = leading_ws(body).len();
     let bom_len = raw.len() - body.len();

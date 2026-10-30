@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1
+
+- Faster in large apps, with the same results:
+  - the language server keeps diagnostics, formatting, outline, folding and helper lookups off the thread that answers requests, so completion and hover no longer wait behind them, and it publishes only a document's latest diagnostics;
+  - `ruby-templates check` loads each app's Gemfile.lock and initializers once and checks files in parallel: GitLab's views take 0.12 s instead of 1.5 s;
+  - ERB tags are found without a regular expression, so ERB checks run up to twice as fast and the tag lookups behind code actions about 20 times faster;
+  - render checks resolve each partial once per file, and find references, i18n references, route and translation completion and translation hover skip what can't match.
+- `ruby-templates check` no longer panics when its output is closed early (`check app | head`).
+- Go to definition and slots find components with acronyms (`UI::ButtonComponent` in `ui/button_component.rb`, `HTMLCardComponent` in `html_card_component.rb`).
+- Haml: `- café = if x` no longer hides the `Got "else" with no preceding "if"` error after it, and block balance in ERB, Haml and Slim no longer finds a keyword inside an identifier that starts with a non-ASCII letter (`éif`).
+- Templates with thousands of unclosed `<%`, void elements with content, `<script>`/`<style>` bodies or repeated ids, and Slim attributes left open before many empty lines, check in linear time.
+
 ## 0.3.0
 
 - Haml: Ruby syntax errors (`ruby-syntax`) in `-`, `=`, `!=`, `&=` and `~` lines, code after a tag, `{}` attribute hashes, `#{}` in text, comments and `()` attribute values, and `:ruby` filters, as Prism finds them in the Ruby Haml generates for Rails. That includes a `- rescue`, `- ensure`, `- in` or second `- else` in the wrong place and lines nested under code that opens no block, which Haml accepts and only the generated Ruby rejects. They are checked once Haml itself accepts the template.

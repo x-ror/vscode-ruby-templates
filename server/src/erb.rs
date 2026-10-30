@@ -2,7 +2,7 @@
 
 use crate::checks::RubyContext;
 use crate::erb_ruby;
-use crate::util::{coded, offset_to_position, warning};
+use crate::util::{coded, warning, LineIndex};
 use tower_lsp::lsp_types::{Diagnostic, Position, Range};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
@@ -223,10 +223,15 @@ pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
     for rendered in &texts {
         html.feed(rendered);
     }
-    html.feed(&text[tail_at..])
+    let openers = html.feed(&text[tail_at..]);
+    if openers.is_empty() {
+        return vec![];
+    }
+    let index = LineIndex::new(text);
+    openers
         .into_iter()
         .map(|at| {
-            let start = offset_to_position(text, tail_at + at);
+            let start = index.position(tail_at + at);
             let range = Range::new(start, Position::new(start.line, u32::MAX));
             let message =
                 "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";

@@ -320,17 +320,23 @@ fn camel_case(s: &str) -> String {
         .collect()
 }
 
+/// ActiveSupport's `underscore` of one constant: `UI` → `ui`, `HTMLCard` → `html_card`, `Card2Component` → `card2_component`.
 pub fn snake_case(s: &str) -> String {
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if ch.is_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.extend(ch.to_lowercase());
-        } else {
-            out.push(ch);
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, &ch) in chars.iter().enumerate() {
+        let prev = i.checked_sub(1).map(|p| chars[p]);
+        let next = chars.get(i + 1);
+        // `([a-z\d])([A-Z])` and `([A-Z\d]+)([A-Z][a-z])`: a word starts after a lowercase letter or digit, or
+        // where an acronym meets a capitalized word.
+        let starts_word = ch.is_ascii_uppercase()
+            && prev.is_some_and(|p| {
+                p.is_ascii_lowercase() || p.is_ascii_digit() || (p.is_ascii_uppercase() && next.is_some_and(char::is_ascii_lowercase))
+            });
+        if starts_word {
+            out.push('_');
         }
+        out.extend(ch.to_lowercase());
     }
     out
 }
@@ -573,6 +579,11 @@ mod tests {
         assert_eq!(render_string_prefix(r#"json.partial! "po"#, 17).unwrap(), (RenderKind::Partial, "po".to_string()));
         assert_eq!(render_string_prefix(r#"json.partial! partial: 'po"#, 26).unwrap(), (RenderKind::Partial, "po".to_string()));
         assert_eq!(snake_case("CardComponent"), "card_component");
+        for (constant, file) in
+            [("UI", "ui"), ("HTMLCardComponent", "html_card_component"), ("Card2Component", "card2_component"), ("APIv2", "ap_iv2")]
+        {
+            assert_eq!(snake_case(constant), file, "{constant}");
+        }
         let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.kind, r.name)).collect::<Vec<_>>();
         let p = |n: &str| (RenderKind::Partial, n.to_string());
         assert_eq!(refs(r#"<%= render layout: "box" do %>"#), [p("box")]);

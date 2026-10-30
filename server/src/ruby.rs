@@ -6,7 +6,8 @@ use std::sync::LazyLock;
 
 static STRINGS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
-static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[A-Za-z_]\w*[?!]?|\d+|[^\w\s]").unwrap());
+// Identifiers start at any letter, as in Ruby, so a keyword inside `éif` isn't one.
+static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[^\W\d]\w*[?!]?|\d+|[^\w\s]").unwrap());
 // `=begin` … `=end` at line starts; kaminari's generated partials open with one.
 static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?ms)^=begin\b.*?(?:^=end\b[^\n]*|\z)").unwrap());
 
@@ -219,6 +220,14 @@ mod tests {
         for code in ["def x=(v)", "def f(a)", "def ==(o)", "def f"] {
             assert_eq!(analyze(code).0, BlockEffect::Open(1), "{code}");
         }
+    }
+
+    #[test]
+    fn non_ascii_identifiers_hold_no_keywords() {
+        for code in ["x = éif", "ñdo |a|", "café = 1", "naïve_end"] {
+            assert_eq!(analyze(code).0, BlockEffect::Neutral, "{code}");
+        }
+        assert_eq!(analyze("éléments.each do |e|").0, BlockEffect::Open(1));
     }
 
     #[test]
