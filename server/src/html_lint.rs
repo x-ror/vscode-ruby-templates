@@ -3,8 +3,9 @@
 
 use crate::erb;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{coded, offset_to_position, warning, LineIndex};
+use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use tower_lsp::lsp_types::{Diagnostic, Range};
 
@@ -51,7 +52,11 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
                 body = gt + 1;
                 break;
             }
-            let close = text[body..].to_ascii_lowercase().find(&format!("</{name}")).map_or(text.len(), |e| body + e);
+            let close = text[body..]
+                .match_indices("</")
+                .map(|(e, _)| body + e)
+                .find(|&e| text.get(e + 2..e + 2 + name.len()).is_some_and(|n| n.eq_ignore_ascii_case(name)))
+                .unwrap_or(text.len());
             out.push((body, close));
             at = close.max(i + 1);
         } else {
@@ -212,20 +217,20 @@ fn duplicate_ids(
         .filter(|a| a.name == "id")
         .filter_map(|a| a.value)
         .filter(|&(s, e)| s < e && !text[s..e].contains("<%"));
-    let mut seen: Vec<(&str, usize)> = Vec::new();
+    // Each id's latest earlier occurrence.
+    let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut out = Vec::new();
     for (s, e) in ids {
         let id = &text[s..e];
-        if let Some(&(_, first)) = seen.iter().rev().find(|(seen_id, _)| *seen_id == id) {
+        if let Some(first) = seen.insert(id, s) {
             if !branch_between(text, spans, first, s) {
                 let message = format!(
                     "Duplicate id `{id}` (first on line {}): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
-                    offset_to_position(text, first).line + 1
+                    range(first, first).start.line + 1
                 );
                 out.push(coded(warning(range(s, e), message), code::DUPLICATE_ID));
             }
         }
-        seen.push((id, s));
     }
     out
 }
@@ -248,7 +253,8 @@ fn template_bodies(text: &str, regions: &[(usize, usize)]) -> Vec<(usize, usize)
 
 /// Any ERB control flow (`if`, `else`, `when`, a loop) between the two offsets, which may render only one of them.
 fn branch_between(text: &str, spans: &[(usize, usize)], from: usize, to: usize) -> bool {
-    spans.iter().filter(|&&(s, _)| s > from && s < to).any(|&(s, e)| {
+    let first = spans.partition_point(|&(s, _)| s <= from);
+    spans[first..].iter().take_while(|&&(s, _)| s < to).any(|&(s, e)| {
         let code = &text[s..e.min(text.len())];
         !matches!(analyze(code).0, BlockEffect::Neutral)
             || code.split_whitespace().next().is_some_and(|w| matches!(w, "else" | "elsif" | "when" | "in"))
