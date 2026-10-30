@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
+#[derive(Clone)]
 pub(crate) struct Doc {
     pub lang: TemplateLang,
     pub text: String,

@@ -205,17 +205,28 @@ impl Backend {
         if !self.options().format_enabled(lang) {
             return None;
         }
-        let path = uri.to_file_path().ok();
-        let mut settings = path.map_or_else(format::Settings::default, |path| config::settings_for(&path).settings).with_editor(options);
-        if lines_only {
-            settings.final_newline = false;
-        }
+        let (uri, options) = (uri.clone(), options.clone());
         // A range may hold a comment's inner lines without the line they move with.
-        settings.align_comments = self.options().align_erb_comments && !lines_only;
-        match format::format(uri, lang, &text, &settings, &self.options().extra_engines) {
-            Ok(formatted) => Some((text, formatted.text)),
-            Err(skipped) => {
-                self.client.log_message(MessageType::INFO, format!("{}: left unchanged: {skipped}", file_name(uri))).await;
+        let align_comments = self.options().align_erb_comments && !lines_only;
+        let extra_engines = self.options().extra_engines.clone();
+        // Reads .editorconfig and the project from disk, and formats a whole file: off the server task.
+        let result = off_server_task(move || {
+            let path = uri.to_file_path().ok();
+            let mut settings =
+                path.map_or_else(format::Settings::default, |path| config::settings_for(&path).settings).with_editor(&options);
+            if lines_only {
+                settings.final_newline = false;
+            }
+            settings.align_comments = align_comments;
+            let result = format::format(&uri, lang, &text, &settings, &extra_engines);
+            (uri, text, result)
+        })
+        .await
+        .ok()?;
+        match result {
+            (_, text, Ok(formatted)) => Some((text, formatted.text)),
+            (uri, _, Err(skipped)) => {
+                self.client.log_message(MessageType::INFO, format!("{}: left unchanged: {skipped}", file_name(&uri))).await;
                 None
             }
         }
@@ -225,23 +236,21 @@ impl Backend {
         self.options.get_or_init(Options::default)
     }
 
-    async fn publish(&self, uri: Url) {
-        let Some((diags, version)) = self.docs.get(&uri).map(|doc| (diagnostics(&uri, &doc, self.options()), doc.version)) else {
-            return;
-        };
-        self.client.publish_diagnostics(uri, diags, Some(version)).await;
-    }
-
-    /// Publish after `DIAGNOSTICS_DEBOUNCE`, unless a newer change to the document supersedes this one.
-    fn publish_later(&self, uri: Url, version: i32) {
+    /// Publish the diagnostics of `version` after `delay`, unless a newer change to the document supersedes it.
+    /// They are computed on a copy, off the server task: holding the `docs` guard would block the next `did_change`.
+    fn publish_later(&self, uri: Url, version: i32, delay: Duration) {
         let (client, docs, options) = (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.options));
         tokio::spawn(async move {
-            tokio::time::sleep(DIAGNOSTICS_DEBOUNCE).await;
-            let options = options.get_or_init(Options::default);
-            let Some(diags) = docs.get(&uri).filter(|doc| doc.version == version).map(|doc| diagnostics(&uri, &doc, options)) else {
+            tokio::time::sleep(delay).await;
+            let current = |docs: &DashMap<Url, Doc>, uri: &Url| docs.get(uri).filter(|doc| doc.version == version).map(|doc| doc.clone());
+            let Some(doc) = current(&docs, &uri) else { return };
+            let checked = uri.clone();
+            let Ok(diags) = off_server_task(move || diagnostics(&checked, &doc, options.get_or_init(Options::default))).await else {
                 return;
             };
-            client.publish_diagnostics(uri, diags, Some(version)).await;
+            if current(&docs, &uri).is_some() {
+                client.publish_diagnostics(uri, diags, Some(version)).await;
+            }
         });
     }
 
@@ -400,8 +409,9 @@ impl LanguageServer for Backend {
             }
             return;
         };
-        self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
-        self.publish(p.text_document.uri).await;
+        let version = p.text_document.version;
+        self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version });
+        self.publish_later(p.text_document.uri, version, Duration::ZERO);
     }
 
     async fn did_change(&self, p: DidChangeTextDocumentParams) {
@@ -419,7 +429,7 @@ impl LanguageServer for Backend {
             }
             doc.version = version;
         }
-        self.publish_later(p.text_document.uri, version);
+        self.publish_later(p.text_document.uri, version, DIAGNOSTICS_DEBOUNCE);
     }
 
     async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
@@ -428,9 +438,9 @@ impl LanguageServer for Backend {
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
-        let open: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
-        for uri in open {
-            self.publish(uri).await;
+        let open: Vec<(Url, i32)> = self.docs.iter().map(|d| (d.key().clone(), d.version)).collect();
+        for (uri, version) in open {
+            self.publish_later(uri, version, Duration::ZERO);
         }
     }
 
@@ -473,18 +483,21 @@ impl LanguageServer for Backend {
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
-        {
-            let helper = helper_defs::name_at(line, col);
-            let at_line = |(file, line): (PathBuf, usize)| line_location(file, line);
-            let route = helper.and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
-            match route {
-                Some(source) => locs.extend(at_line(source)),
-                None => locs.extend(helper.into_iter().flat_map(|name| helper_defs::definitions(&path, name)).filter_map(at_line)),
+        let helper = helper_defs::name_at(line, col).map(str::to_string);
+        let route = helper.as_deref().and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
+        let (text, line) = (doc.text.clone(), line.to_string());
+        // The guard would block the next `did_change` while the work below waits.
+        drop(doc);
+        let at_line = |(file, line): (PathBuf, usize)| line_location(file, line);
+        match (route, helper) {
+            (Some(source), _) => locs.extend(at_line(source)),
+            (None, Some(name)) => {
+                let current = path.clone();
+                locs.extend(off_server_task(move || helper_defs::definitions(&current, &name)).await?.into_iter().filter_map(at_line));
             }
+            (None, None) => {}
         }
         if locs.is_empty() {
-            let (text, line) = (doc.text.clone(), line.to_string());
-            drop(doc);
             locs.extend(self.variable_definitions(&text, &path, &line, col).await?);
         }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
@@ -563,27 +576,33 @@ impl LanguageServer for Backend {
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
+        let Some((lang, text)) = self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
+        let (html, extra_engines) = (html_host(&p.text_document.uri), self.options().extra_engines.clone());
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
-        match doc.lang {
-            TemplateLang::Haml => Ok(Some(outline::haml_folding_ranges(&doc.text))),
-            TemplateLang::Slim | TemplateLang::Skim => Ok(Some(slim_outline::folding_ranges(&doc.text, &self.options().extra_engines))),
-            TemplateLang::Erb if html_host(&p.text_document.uri) => Ok(Some(outline::folding_ranges(&doc.text))),
-            TemplateLang::Erb | TemplateLang::Ruby => Ok(None),
-        }
+        off_server_task(move || match lang {
+            TemplateLang::Haml => Some(outline::haml_folding_ranges(&text)),
+            TemplateLang::Slim | TemplateLang::Skim => Some(slim_outline::folding_ranges(&text, &extra_engines)),
+            TemplateLang::Erb if html => Some(outline::folding_ranges(&text)),
+            TemplateLang::Erb | TemplateLang::Ruby => None,
+        })
+        .await
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let symbols = match doc.lang {
-            TemplateLang::Erb => outline::document_symbols(&doc.text, html_host(&uri)),
-            TemplateLang::Haml => outline::haml_document_symbols(&doc.text),
-            TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&doc.text, &self.options().extra_engines),
-            TemplateLang::Ruby => return Ok(None),
-        };
-        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        let Some((lang, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
+        let (html, extra_engines) = (html_host(&uri), self.options().extra_engines.clone());
+        off_server_task(move || {
+            let symbols = match lang {
+                TemplateLang::Erb => outline::document_symbols(&text, html),
+                TemplateLang::Haml => outline::haml_document_symbols(&text),
+                TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&text, &extra_engines),
+                TemplateLang::Ruby => return None,
+            };
+            Some(DocumentSymbolResponse::Nested(symbols))
+        })
+        .await
     }
 
     async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {

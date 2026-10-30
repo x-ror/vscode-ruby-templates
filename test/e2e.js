@@ -1294,6 +1294,27 @@ const check = (label, actual, expected) => {
       ?.params.diagnostics.map((d) => d.message),
     ["unexpected '&&', ignoring it"],
   );
+  // Diagnostics run off the server task: edits typed meanwhile supersede them, and only the latest version publishes.
+  for (const version of [2, 3, 4]) {
+    await send(
+      "textDocument/didChange",
+      {
+        textDocument: { uri: versionedUri, version },
+        contentChanges: [{ text: `<%= f(${version},,) %>\n` }],
+      },
+      true,
+    );
+  }
+  await new Promise((r) => setTimeout(r, 400));
+  const lastPublished = publishedFor(versionedUri).at(-1)?.params;
+  check(
+    "diagnostics for the latest edit only",
+    [
+      lastPublished?.version,
+      publishedFor(versionedUri).some((n) => [2, 3].includes(n.params.version)),
+    ],
+    [4, false],
+  );
   // Per-language switches from the client's initializationOptions: no diagnostics, no formatting edits.
   const off = startServer();
   await off.send("initialize", {
