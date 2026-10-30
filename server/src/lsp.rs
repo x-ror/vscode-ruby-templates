@@ -2,7 +2,7 @@ use crate::checks::{diagnostics, Doc, Options, UNRESOLVED_RENDER};
 use crate::code_context::{block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
-    local_completions, receiver_completions, render_completions, slot_setter_completions, stimulus_completions,
+    local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions, stimulus_completions,
 };
 use crate::lang::{file_name, html_host, TemplateLang};
 use crate::{
@@ -845,8 +845,16 @@ impl LanguageServer for Backend {
             let Some(path) = path.as_deref() else { return Ok(None) };
             return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
         }
-        let i18n_prefix = i18n::completion_prefix(line, col)
-            .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
+        let engines = &self.options().extra_engines;
+        let render_key = partials::local_key_at(line, col).filter(|(r, ..)| code_at(doc.lang, &doc.text, line_start + r.call, engines));
+        if let (Some((r, passed, typed)), Some(path)) = (render_key, path.as_deref()) {
+            let found = render_local_completions(project(path), path, &r, &passed, typed);
+            if !found.is_empty() {
+                return items(found);
+            }
+        }
+        let i18n_prefix =
+            i18n::completion_prefix(line, col).filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
@@ -860,7 +868,7 @@ impl LanguageServer for Backend {
         // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
         let roles = line_roles(doc.lang, &doc.text);
         let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
-        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
         if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
             if let Some(context) = erb_complete::context(&doc.text, line_start + col) {
                 return items(erb_complete::items(context, &doc.text, line_start + col));
@@ -903,7 +911,6 @@ impl LanguageServer for Backend {
         // Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
-                let engines = &self.options().extra_engines;
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
                 if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines) {
@@ -931,7 +938,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
-        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, &self.options().extra_engines), typed);
+        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, engines), typed);
         // A block variable shadows the strict local of the same name.
         let locals: Vec<_> =
             local_completions(&doc.text, typed, close).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();

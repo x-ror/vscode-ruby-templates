@@ -2,6 +2,7 @@
 //! instance variables, component slots and classes, receivers' methods, helpers and partial locals.
 
 use crate::lang::TemplateLang;
+use crate::partials::RenderRef;
 use crate::project::Project;
 use crate::strict_locals::Close;
 use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
@@ -20,14 +21,25 @@ pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<Co
 /// The current template's own strict locals, as completions.
 pub(crate) fn local_completions(text: &str, typed: &str, close: Close) -> Vec<CompletionItem> {
     let Some(sig) = partials::strict_locals(text, close) else { return vec![] };
+    sig.locals.into_iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, default)| local_item(name, default)).collect()
+}
+
+/// The strict locals of the partial `r` renders that the call doesn't pass yet, inserted as `name: `.
+pub(crate) fn render_local_completions(project: &Project, path: &Path, r: &RenderRef, passed: &[&str], typed: &str) -> Vec<CompletionItem> {
+    let close = Close::of(project);
+    let Some(sig) = partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close)) else {
+        return vec![];
+    };
     sig.locals
         .into_iter()
-        .filter(|(name, _)| name.starts_with(typed))
-        .map(|(name, default)| {
-            let detail = default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"));
-            util::completion_item(name, CompletionItemKind::VARIABLE, detail)
-        })
+        .filter(|(name, _)| name.starts_with(typed) && !passed.contains(&name.as_str()))
+        .map(|(name, default)| CompletionItem { insert_text: Some(format!("{name}: ")), ..local_item(name, default) })
         .collect()
+}
+
+fn local_item(name: String, default: Option<String>) -> CompletionItem {
+    let detail = default.map_or_else(|| "local (required)".to_string(), |d| format!("local = {d}"));
+    util::completion_item(name, CompletionItemKind::VARIABLE, detail)
 }
 
 /// Partial, template or layout names for the `render "…"` string being typed.

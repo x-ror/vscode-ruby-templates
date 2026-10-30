@@ -518,10 +518,70 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
 
 const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
+/// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `col`.
+pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
+    let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
+    let args = line.get(r.end + 1..col)?;
+    if args.contains("%>") {
+        return None;
+    }
+    let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let typed = &args[head.len()..];
+    let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
+    let names = if options_form {
+        // `render partial: "x", locals: { a: 1, `: only keyword options may come before `locals:`.
+        let (before, hash) = head.split_once('{')?;
+        keyword_names(listed_args(before.trim_end().strip_suffix("locals:")?)?)?;
+        let hash = hash.trim();
+        keyword_names(if hash.is_empty() { hash } else { hash.strip_suffix(',')? })?
+    } else {
+        keyword_names(listed_args(head)?)?
+    };
+    Some((r, names, typed))
+}
+
+/// `a: 1` of the text `, a: 1, ` that follows a call's first argument; `None` when the text is anything else, such as
+/// the end of a nested call (`render("b"), `).
+fn listed_args(after_first: &str) -> Option<&str> {
+    let listed = after_first.trim().strip_prefix(',')?.trim();
+    if listed.is_empty() {
+        Some(listed)
+    } else {
+        listed.strip_suffix(',')
+    }
+}
+
+fn keyword_names(listed: &str) -> Option<Vec<&str>> {
+    split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rails_paths::files_under;
+
+    #[test]
+    fn local_keys_after_a_partial_name() {
+        let key = |line: &str| {
+            let col = line.find('|').unwrap();
+            let line = line.replace('|', "");
+            local_key_at(&line, col).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
+        };
+        let card = |passed: &str, typed: &str| Some(("card".to_string(), passed.to_string(), typed.to_string()));
+        assert_eq!(key(r#"<%= render "card", | %>"#), card("", ""));
+        assert_eq!(key(r#"<%= render("card", user: @u, si|) %>"#), card("user", "si"));
+        assert_eq!(key(r#"= render partial: "card", locals: { user: @u, |"#), card("user", ""));
+        assert_eq!(key(r#"= render partial: "card", locals: {|"#), card("", ""));
+        assert_eq!(key(r#"<%= render "card", user: |"#), None, "a value, not a key");
+        assert_eq!(key(r#"<%= render "card" %> |"#), None);
+        assert_eq!(key(r#"<%= render "card", *opts, |"#), None);
+        assert_eq!(key(r#"<%= render partial: "card", |"#), None);
+        assert_eq!(key(r#"<%= render template: "users/show", |"#), None);
+        assert_eq!(key(r#"<%= render "a", body: render("b"), |"#), None, "b's call is closed");
+        assert_eq!(key(r#"<%= foo(render("card"), |"#), None);
+        assert_eq!(key(r#"= render(partial: "card") + helper(locals: { |"#), None);
+        assert_eq!(key(r#"= render partial: "card", layout: "box", locals: { |"#), card("", ""));
+    }
 
     #[test]
     fn new_template_paths() {

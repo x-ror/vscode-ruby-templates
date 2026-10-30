@@ -163,6 +163,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `render template:` / `layout:` completion lists templates/layouts (today it always lists `_partials`) (`server/src/partials.rs` `render_candidates`; `render layout:` resolves to a partial like Rails)
 - [x] Instance variables assigned in the matching controller action and its `before_action` callbacks (`only:` / `except:`, ApplicationController's too); every action's for a partial
 - [x] Locals from `<%# locals: %>` or from callers' `render … locals:` (`server/src/lsp.rs` `local_completions`; callers' `render … locals:` still open)
+- [x] Keys of the rendered partial's strict locals in `render "card", ` and `render partial: "card", locals: { `, less those already passed, in ERB, Slim and Haml (`server/src/partials.rs` `local_key_at`, `server/src/completion.rs` `render_local_completions`; one-line calls; `test/e2e.js` "render locals keys")
 - [x] Block variables (`do |user|`, `{ |x| }`, `->(x)`) and the locals assigned in those blocks, where the cursor is inside them; they shadow strict locals of the same name (`server/src/prism.rs` `block_locals`, on the Ruby each template compiles to; `test/e2e.js` "block variables in scope")
 - [x] i18n keys from `config/locales` (`server/src/i18n.rs` `completion_prefix`)
 - [x] Route helpers from the app's routes (`bin/rails runner src/routes.rb`, cached per app, reloaded when config/routes* change; `rubyTemplates.routes.enabled`)
