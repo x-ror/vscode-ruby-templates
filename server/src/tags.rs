@@ -141,18 +141,28 @@ fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
     None
 }
 
+/// Every Erubi tag with its block effect; comments and `<%%` literals are `Neutral`.
+pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
+    erb_ruby::tags(text)
+        .into_iter()
+        .map(|t| {
+            let effect = if t.is_literal() || t.is_comment() { BlockEffect::Neutral } else { analyze(&text[t.code.clone()]).0 };
+            (t, effect)
+        })
+        .collect()
+}
+
 /// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
 /// renders as text, so it stays in the HTML.
-fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
-    let found = erb_ruby::tags(text);
+fn split<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Option<(Vec<u8>, Vec<ErbEvent<'a>>)> {
     // An unclosed `<%` is reported elsewhere; tag positions would be guesswork. `<%%` is text.
-    let tail = &text[found.last().map_or(0, |t| t.end)..];
+    let tail = &text[analyzed.last().map_or(0, |(t, _)| t.end)..];
     if tail.match_indices("<%").any(|(at, _)| !tail[at..].starts_with("<%%")) {
         return None;
     }
     let mut html = text.as_bytes().to_ascii_lowercase();
     let mut events = Vec::new();
-    for tag in found.iter().filter(|t| !t.is_literal()) {
+    for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
         html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
         let (effect, keyword) = if tag.is_comment() {
             (BlockEffect::Neutral, "")
@@ -162,7 +172,7 @@ fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
             if RAW_BLOCK.is_match(snippet) {
                 return None;
             }
-            (analyze(snippet).0, snippet.split_whitespace().next().unwrap_or(""))
+            (*effect, snippet.split_whitespace().next().unwrap_or(""))
         };
         events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, comment: tag.is_comment() });
     }
@@ -171,7 +181,11 @@ fn split(text: &str) -> Option<(Vec<u8>, Vec<ErbEvent<'_>>)> {
 
 /// The template's tokens; `None` for broken ERB or a JS/CSS block helper, where tag positions are guesswork.
 pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
-    let (html, events) = split(text)?;
+    tokens_of(text, &analyzed(text))
+}
+
+fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Option<Vec<Token<'a>>> {
+    let (html, events) = split(text, analyzed)?;
     let mut events = events.into_iter().peekable();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -287,8 +301,12 @@ pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
 
 /// Matched element pairs up to the first point where the tag stack becomes uncertain.
 pub fn elements(text: &str) -> Vec<Element> {
+    elements_of(text, &analyzed(text))
+}
+
+pub(crate) fn elements_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Vec<Element> {
     let mut elements = Vec::new();
-    scan(text, true, &mut Vec::new(), &mut elements);
+    scan_tokens(text, tokens_of(text, analyzed), true, &mut Vec::new(), &mut elements);
     elements
 }
 
@@ -318,7 +336,11 @@ fn void_close_tag(name: &str, range: Range) -> Diagnostic {
 }
 
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
-    let Some(tokens) = tokens(text) else { return };
+    scan_tokens(text, tokens(text), partial, out, elements)
+}
+
+fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
+    let Some(tokens) = tokens else { return };
     let index = LineIndex::new(text);
     let range = |start, end| Range::new(index.position(start), index.position(end));
     let mut stack: Vec<Tag> = Vec::new();

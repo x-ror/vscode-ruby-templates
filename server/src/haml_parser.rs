@@ -67,18 +67,18 @@ fn halt(message: impl Into<String>, line: usize) -> Halt {
 }
 
 #[derive(Debug, Default, Clone)]
-struct Line {
-    whitespace: Option<String>,
-    text: String,
-    full: String,
+struct Line<'a> {
+    whitespace: Option<&'a str>,
+    text: std::borrow::Cow<'a, str>,
+    full: &'a str,
     index: usize,
     end_of_document: bool,
     tabs: Option<usize>,
 }
 
-impl Line {
+impl Line<'_> {
     fn indent(&self) -> usize {
-        self.whitespace.as_ref().map_or(0, String::len)
+        self.whitespace.map_or(0, str::len)
     }
 }
 
@@ -88,11 +88,11 @@ enum Which {
     Next,
 }
 
-struct Parser {
-    template: VecDeque<Line>,
-    line: Line,
+struct Parser<'a> {
+    template: VecDeque<Line<'a>>,
+    line: Line<'a>,
     line_defined: bool,
-    next_line: Line,
+    next_line: Line<'a>,
     indentation: Option<String>,
     flat: bool,
     flat_spaces: Option<String>,
@@ -207,14 +207,14 @@ pub enum Role {
 /// is a verbatim slice of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chunk {
-    pub text: String,
+    pub text: std::borrow::Cow<'static, str>,
     pub line: usize,
     pub offset: Option<usize>,
 }
 
 impl Chunk {
-    pub(crate) fn synthetic(text: &str, line: usize) -> Chunk {
-        Chunk { text: text.to_string(), line, offset: None }
+    pub(crate) fn synthetic(text: impl Into<std::borrow::Cow<'static, str>>, line: usize) -> Chunk {
+        Chunk { text: text.into(), line, offset: None }
     }
 }
 
@@ -287,6 +287,9 @@ fn parse_as(text: &str, ruby: bool) -> Parsed {
 /// the same lines and depths, with the same texts. Indentation (other than the depth and a filter body's text past its
 /// prefix), line endings, trailing whitespace and the empty lines at the end don't matter to Haml.
 pub fn same_compilation(before: &str, after: &str) -> bool {
+    if before == after {
+        return parse(before).error.is_none();
+    }
     let (before, after) = (parse(before), parse(after));
     before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
 }
@@ -315,7 +318,7 @@ pub fn physical_lines(text: &str) -> Vec<&str> {
     lines_with_endings(text).into_iter().map(|(line, _)| line).collect()
 }
 
-fn split_lines(text: &str) -> Vec<Line> {
+fn split_lines(text: &str) -> Vec<Line<'_>> {
     let lines = physical_lines(text.trim_end_matches(RUBY_WHITESPACE));
     lines
         .into_iter()
@@ -323,9 +326,9 @@ fn split_lines(text: &str) -> Vec<Line> {
         .map(|(index, full)| {
             let indent_len = full.len() - full.trim_start_matches([' ', '\t']).len();
             Line {
-                whitespace: (indent_len > 0).then(|| full[..indent_len].to_string()),
-                text: full[indent_len..].trim_end_matches(RUBY_WHITESPACE).to_string(),
-                full: full.to_string(),
+                whitespace: (indent_len > 0).then(|| &full[..indent_len]),
+                text: full[indent_len..].trim_end_matches(RUBY_WHITESPACE).into(),
+                full,
                 index,
                 ..Line::default()
             }
@@ -357,13 +360,13 @@ fn human_indentation(indentation: &str) -> String {
     format!("{} {noun}{plural}", indentation.len())
 }
 
-impl Parser {
-    fn new(text: &str, ruby: bool) -> Parser {
-        let mut template: VecDeque<Line> = split_lines(text).into();
+impl<'a> Parser<'a> {
+    fn new(text: &'a str, ruby: bool) -> Parser<'a> {
+        let mut template: VecDeque<Line<'a>> = split_lines(text).into();
         let index = template.len();
         let lines = index;
         let line_starts = if ruby { line_starts(text, lines) } else { Vec::new() };
-        template.push_back(Line { text: "-#".into(), full: "-#".into(), index, end_of_document: true, ..Line::default() });
+        template.push_back(Line { text: "-#".into(), full: "-#", index, end_of_document: true, ..Line::default() });
         Parser {
             template,
             line: Line::default(),
@@ -487,7 +490,8 @@ impl Parser {
         let (index, tabs) = (self.line.index, self.line.tabs.unwrap_or(0));
         self.set_role(index, Role::Structural { depth: tabs });
         let comment = self.line.text.starts_with("-#");
-        let text = if comment { String::new() } else { self.line.text.clone() };
+        // Only `same_compilation`, which parses without Ruby, compares the nodes' text.
+        let text = if comment || self.ruby { String::new() } else { self.line.text.to_string() };
         let node = Compiled::Node { index, tabs, text, joined: std::mem::take(&mut self.joined) };
         self.compiled.push(node);
     }
@@ -520,7 +524,7 @@ impl Parser {
         Ok(tabs)
     }
 
-    fn slot(&mut self, which: Which) -> &mut Line {
+    fn slot(&mut self, which: Which) -> &mut Line<'a> {
         match which {
             Which::Current => &mut self.line,
             Which::Next => &mut self.next_line,
@@ -528,9 +532,9 @@ impl Parser {
     }
 
     fn compute_tabs(&mut self, line: &Line) -> Result<usize, Halt> {
-        let Some(whitespace) = line.whitespace.as_ref().filter(|_| !line.text.is_empty()) else { return Ok(0) };
+        let Some(whitespace) = line.whitespace.filter(|_| !line.text.is_empty()) else { return Ok(0) };
         let Some(indentation) = &self.indentation else {
-            self.indentation = Some(whitespace.clone());
+            self.indentation = Some(whitespace.to_string());
             if whitespace.contains('\t') && whitespace.contains(' ') {
                 return Err(halt(MIXED_INDENTATION, line.index));
             }
@@ -540,7 +544,8 @@ impl Parser {
             return Ok(1);
         };
         let tabs = whitespace.len() / indentation.len();
-        if *whitespace == indentation.repeat(tabs) {
+        let unit = indentation.as_bytes();
+        if whitespace.len() % unit.len() == 0 && whitespace.as_bytes().chunks(unit.len()).all(|c| c == unit) {
             return Ok(tabs);
         }
         if self.flat && whitespace.starts_with(self.flat_spaces.as_deref().unwrap_or("")) {
@@ -591,7 +596,7 @@ impl Parser {
         if !is_haml_multiline(&line.text) {
             return;
         }
-        line.text.pop();
+        line.text.to_mut().pop();
         if let Some(joined) = self.pipe_joined.get_mut(line.index) {
             *joined = true;
         }
@@ -600,7 +605,7 @@ impl Parser {
             if next.end_of_document || (!text.is_empty() && !is_haml_multiline(text)) {
                 break;
             }
-            line.text.push_str(text.strip_suffix('|').unwrap_or(text));
+            line.text.to_mut().push_str(text.strip_suffix('|').unwrap_or(text));
             let (index, owner) = (next.index, line.index);
             if !text.is_empty() {
                 self.set_role(index, Role::Inner { owner, counted: false });
@@ -864,7 +869,7 @@ impl Parser {
             let message = format!("Illegal nesting: content can't be both given on the same line as %{name} and nested within it.");
             return Err(self.nested_line_error(&message));
         }
-        if VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) && !content.self_closing {
+        if VOID_ELEMENTS.iter().any(|void| void.eq_ignore_ascii_case(name)) && !content.self_closing {
             if !content.value.is_empty() {
                 self.void_content.push(VoidContent { line: self.line.index, name: name.to_string(), nested: false });
             } else if block_opened {
@@ -915,7 +920,7 @@ impl Parser {
             }
             code.push(self.chunk(line, &segment, column));
             code.push(Chunk::synthetic("\n", line));
-            segment = self.next_line.text.clone();
+            segment = self.next_line.text.to_string();
             (line, column) = (self.next_line.index, self.next_line.indent());
             self.join_line(self.next_line.index, self.line.index, &segment);
             last_line += 1;
@@ -956,7 +961,7 @@ impl Parser {
                 AttributeList::Continues => {
                     joined.push(' ');
                     joined.push_str(&self.next_line.text);
-                    segment = self.next_line.text.clone();
+                    segment = self.next_line.text.to_string();
                     (line, column) = (self.next_line.index, self.next_line.indent());
                     self.join_line(self.next_line.index, self.line.index, &segment);
                     continuations += 1;
@@ -980,7 +985,7 @@ impl Parser {
             None => Some(vec![self.chunk(line, value, at)]),
         };
         let Some(ruby) = ruby else { return Vec::new() };
-        let mut chunks = vec![Chunk::synthetic(&name, line)];
+        let mut chunks = vec![Chunk::synthetic(name, line)];
         chunks.extend(ruby);
         chunks.push(Chunk::synthetic(",", line));
         chunks
@@ -1022,7 +1027,7 @@ impl Parser {
 }
 
 /// The Ruby Haml compiles, collected as the lines are read.
-impl Parser {
+impl Parser<'_> {
     fn emit(&mut self, piece: Piece) {
         if self.ruby {
             self.pieces.push(piece);
@@ -1036,7 +1041,7 @@ impl Parser {
         }
         let rewritten = self.pipe_joined.get(line).copied().unwrap_or(false);
         let offset = self.line_starts.get(line).filter(|_| !rewritten).map(|start| start + column);
-        Chunk { text: text.to_string(), line, offset }
+        Chunk { text: text.to_string().into(), line, offset }
     }
 
     /// The column of `part`, a slice of `text`, the current line without its indentation.
@@ -1125,7 +1130,7 @@ impl Parser {
                 (hash + 1, hash + 2 + word, hash + 2 + word)
             };
             let line = segments[segments.partition_point(|segment| segment.0 <= hash).saturating_sub(1)].1;
-            chunks.push(Chunk::synthetic(&ruby_string_body(&text[copied..hash]), line));
+            chunks.push(Chunk::synthetic(ruby_string_body(&text[copied..hash]), line));
             chunks.push(Chunk::synthetic("#{", line));
             chunks.extend(self.slice_chunks(text, segments, from, to));
             chunks.push(Chunk::synthetic("}", line));
@@ -1135,7 +1140,7 @@ impl Parser {
         if !found_any {
             return None;
         }
-        chunks.push(Chunk::synthetic(&ruby_string_body(&text[copied..]), first_line));
+        chunks.push(Chunk::synthetic(ruby_string_body(&text[copied..]), first_line));
         chunks.push(Chunk::synthetic("\"", first_line));
         Some(chunks)
     }
@@ -1658,6 +1663,9 @@ impl BraceScanner {
 }
 
 fn block_keyword(code: &str) -> Option<&str> {
+    if !BLOCK_KEYWORD.is_match(code) {
+        return None;
+    }
     let caps = BLOCK_KEYWORD.captures(code)?;
     caps.get(1).or_else(|| caps.get(2)).map(|m| m.as_str())
 }

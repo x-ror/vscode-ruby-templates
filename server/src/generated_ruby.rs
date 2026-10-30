@@ -93,6 +93,11 @@ impl Compiled {
 /// The body of a Ruby double-quoted literal for `text`, as `String#inspect` writes it.
 pub(crate) fn ruby_string_body(text: &str) -> String {
     let mut out = String::new();
+    push_ruby_string_body(&mut out, text);
+    out
+}
+
+pub(crate) fn push_ruby_string_body(out: &mut String, text: &str) {
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
@@ -107,5 +112,4 @@ pub(crate) fn ruby_string_body(text: &str) -> String {
             c => out.push(c),
         }
     }
-    out
 }
