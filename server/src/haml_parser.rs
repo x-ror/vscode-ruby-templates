@@ -44,7 +44,8 @@ pub const HAML_FILTERS: &[&str] = &[
 const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
 /// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
 static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless))\b").unwrap()
+    // ASCII `\w`/`\s` like Ruby's; Ruby's `\b` is Unicode-aware like this one.
+    Regex::new(r"(?-u:^\s*(?:(else|elsif|rescue|ensure|end|when|in)|(?:\w+(?:,\s*\w+)*\s*=\s*)?(if|begin|case|unless)))\b").unwrap()
 });
 static BLOCK_WITH_SPACES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"do\s*\|\s*[^|]*\s+\|$").unwrap());
 
@@ -1683,7 +1684,7 @@ pub(crate) fn strip_output_prefix(s: &str) -> Option<&str> {
 
 /// Haml's `is_multiline?`: ends in ` |`, unless it's a block argument list (`do | x |`).
 pub(crate) fn is_haml_multiline(line: &str) -> bool {
-    let t = line.trim_end();
+    let t = line.trim_end_matches(RUBY_WHITESPACE);
     t.ends_with(" |") && !BLOCK_WITH_SPACES.is_match(t)
 }
 
@@ -2103,6 +2104,8 @@ mod tests {
             ("- elsif a", 0, missing("elsif")),
             ("- when 1", 0, missing("when")),
             ("- foo if a\n- else", 1, missing("else")),
+            // Ruby's `\w` is ASCII, so `café =` isn't the assignment the opener may start with.
+            ("- café = if x\n  %p a\n- else", 2, missing("else")),
             ("- if a\n  - else", 1, level("else", 0, 1)),
             ("- if a\n  %p\n  - else", 2, level("else", 0, 1)),
             ("- case x\n  - when 1\n  - when 2\n    - else", 3, level("else", 1, 2)),
