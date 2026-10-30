@@ -338,12 +338,10 @@ impl Backend {
     /// Where the `@ivar` or partial local under `col` comes from: its assignments in the controller, or the
     /// `render` calls passing the local (else the strict-locals comment declaring it).
     async fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Result<Vec<Location>> {
-        let word = util::word_at(line, col);
-        let before = &line[..line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len()];
-        if before.ends_with('@') && !before.ends_with("@@") {
+        if let Some(name) = ivars::name_at(line, col) {
             return Ok(ivars::for_view(&Project::for_template(path), path)
                 .into_iter()
-                .filter(|a| a.name == word)
+                .filter(|a| a.name == name)
                 .filter_map(|a| line_location(&a.file, a.line))
                 .collect());
         }
@@ -628,6 +626,10 @@ impl LanguageServer for Backend {
         let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
+        }
+        let ivar = ivars::name_at(line, col).filter(|_| code_here);
+        if let (Some(name), Ok(path)) = (ivar, uri.to_file_path()) {
+            return Ok(ivars::hover(&ivars::for_view(&Project::for_template(&path), &path), name).and_then(markdown_hover));
         }
         let routes = uri.to_file_path().map(|p| self.routes_for(&p)).unwrap_or_default();
         Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))

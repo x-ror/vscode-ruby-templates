@@ -938,11 +938,16 @@ const check = (label, actual, expected) => {
       ),
       at(await req("textDocument/definition", helperUri, 1, 6)),
       at(await req("textDocument/definition", cardUri, 0, 5)),
+      rel(
+        (await req("textDocument/hover", helperUri, 1, 6)).result?.contents
+          .value ?? "",
+      ),
     ],
     [
       [["@menu", 4]],
       ["/app/controllers/users_controller.rb:9:0"],
       ["/app/views/users/index.html.erb:0:19"],
+      "`@menu`\n\n- [users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
     ],
   );
   await send(

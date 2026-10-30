@@ -5,9 +5,11 @@ use crate::partials::snake_case;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::ruby::logical_lines;
+use crate::util::word_at;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use tower_lsp::lsp_types::Url;
 
 static DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*)def\s+(?:self\.)?([a-z_]\w*[?!]?)").unwrap());
 // Not `@@class_var`, not `==` / `=~` / `=>`.
@@ -22,12 +24,13 @@ static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[
 /// Deep enough for `UsersController < Admin::BaseController < ApplicationController < ActionController::Base`.
 const MAX_ANCESTORS: usize = 4;
 
-/// An instance variable assignment: the variable without `@`, its file and 0-based line.
+/// An instance variable assignment: the variable without `@`, its file, 0-based line and the line's code.
 #[derive(Debug, PartialEq)]
 pub struct Assignment {
     pub name: String,
     pub file: PathBuf,
     pub line: usize,
+    pub code: String,
 }
 
 /// The controller (or mailer) of the view folder `views/<dir>`, and the action the view renders (`None` for a
@@ -114,9 +117,37 @@ fn assignments_in(file: &Path, text: &str, lines: std::ops::Range<usize>) -> Vec
         .skip(lines.start)
         .take(lines.len())
         .flat_map(|(i, line)| {
-            ASSIGN.captures_iter(line).map(move |cap| Assignment { name: cap[1].to_string(), file: file.to_path_buf(), line: i })
+            ASSIGN.captures_iter(line).map(move |cap| Assignment {
+                name: cap[1].to_string(),
+                file: file.to_path_buf(),
+                line: i,
+                code: line.trim().to_string(),
+            })
         })
         .collect()
+}
+
+/// The `@ivar` whose name `col` is on, `@` included, without `@`.
+pub fn name_at(line: &str, col: usize) -> Option<&str> {
+    let col = if line.get(col..).is_some_and(|rest| rest.starts_with('@')) { col + 1 } else { col };
+    let before = line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let word = word_at(line, col);
+    (!word.is_empty() && before.ends_with('@') && !before.ends_with("@@")).then_some(word)
+}
+
+/// Markdown for `@name`: each assignment as a link to its line, with the line's code.
+pub fn hover(assignments: &[Assignment], name: &str) -> Option<String> {
+    let lines: Vec<String> = assignments
+        .iter()
+        .filter(|a| a.name == name)
+        .map(|a| {
+            let file = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+            let link = Url::from_file_path(&a.file)
+                .map_or_else(|()| file.clone(), |uri| format!("[{file}:{}]({uri}#L{})", a.line + 1, a.line + 1));
+            format!("- {link}: `{}`", a.code)
+        })
+        .collect();
+    (!lines.is_empty()).then(|| format!("`@{name}`\n\n{}", lines.join("\n")))
 }
 
 /// Assignments the view at `view` can see: from the action and the callbacks its controller and the controller's
@@ -223,5 +254,31 @@ end
             for_view(&Project::unknown(), &root.join("app/views/users/show.html.erb")).into_iter().find(|a| a.name == "user").unwrap();
         assert_eq!((user.file.file_name().unwrap().to_str().unwrap(), user.line), ("users_controller.rb", 18));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn ivar_names_under_the_cursor() {
+        let line = "<%= @user.name, @@count, user %>";
+        assert_eq!(name_at(line, 4), Some("user"), "on the @");
+        assert_eq!(name_at(line, 7), Some("user"));
+        assert_eq!(name_at(line, 11), None, "a method");
+        assert_eq!(name_at(line, 19), None, "a class variable");
+        assert_eq!(name_at(line, 27), None);
+    }
+
+    #[test]
+    fn hover_lists_each_assignment() {
+        let file = std::env::temp_dir().join("users_controller.rb");
+        let at = |line, code: &str| Assignment { name: "user".into(), file: file.clone(), line, code: code.into() };
+        let found = [at(3, "@user = User.find(params[:id])"), at(9, "@user ||= current_user")];
+        let md = hover(&found, "user").unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        assert_eq!(
+            md,
+            format!(
+                "`@user`\n\n- [users_controller.rb:4]({uri}#L4): `@user = User.find(params[:id])`\n- [users_controller.rb:10]({uri}#L10): `@user ||= current_user`"
+            )
+        );
+        assert_eq!(hover(&found, "menu"), None);
     }
 }
