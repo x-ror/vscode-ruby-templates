@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Strict-locals checks, partial-local completion and go to definition from a partial's local to its callers also read `render` calls whose arguments continue on later lines, such as `user: u` on the line after `render "card",`.
+
 ## 0.4.0
 
 - Completion of block variables: inside `@users.each do |user|`, `us` offers `user` in ERB, Slim and Haml, and the locals assigned in the block too.

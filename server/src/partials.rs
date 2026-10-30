@@ -479,8 +479,8 @@ fn split_args(s: &str) -> Option<Vec<&str>> {
     Some(out)
 }
 
-/// Local names passed by a one-line literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }`;
-/// `None` for anything less simple (splats, `collection:`, variables, continued lines).
+/// Local names passed by a literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }` in `line`, the call's
+/// `call_text`; `None` for anything less simple (splats, `collection:`, variables).
 pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
     if r.kind != RenderKind::Partial {
         return None;
@@ -518,11 +518,49 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
 
 const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
+/// How many lines up from the cursor a multi-line render call may start.
+const MAX_CALL_LINES: usize = 20;
+
+/// `text`, which starts at `r`'s line, up to where the call's arguments end: on later lines while a bracket is open or a
+/// line ends in `,`, never past an ERB `%>`; all of `text` when the call doesn't close.
+pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
+    let (mut depth, mut quote, mut escaped, mut last) = (0u32, None, false, None);
+    let args_at = (r.end + 1).min(text.len());
+    for (i, c) in text[args_at..].char_indices().map(|(i, c)| (args_at + i, c)) {
+        match (quote, c) {
+            _ if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '%') if text[i..].starts_with("%>") => return &text[..i],
+            (None, '(' | '[' | '{') => depth += 1,
+            (None, ')' | ']' | '}') if depth == 0 => return &text[..=i],
+            (None, ')' | ']' | '}') => depth -= 1,
+            (None, '\n') if depth == 0 && last != Some(',') => return &text[..i],
+            _ => {}
+        }
+        if !c.is_whitespace() {
+            last = Some(c);
+        }
+    }
+    text
+}
+
+/// `local_key_at` for the text before `offset`, whose render call may start up to `MAX_CALL_LINES` lines higher.
+pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
+    let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
+    line_starts.into_iter().find_map(|start| {
+        local_key_at(&text[start..offset], offset - start)
+            .map(|(r, names, typed)| (RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
+    })
+}
+
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `col`.
 pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
     let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
     let args = line.get(r.end + 1..col)?;
-    if args.contains("%>") {
+    if args.contains("%>") || call_text(line, &r).len() < col {
         return None;
     }
     let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
@@ -842,6 +880,33 @@ mod tests {
         // ActionView needs whitespace before the parenthesis.
         assert!(strict_locals("<%# locals:(a:) %>", Close::default()).is_none());
         assert!(strict_locals("<%# just a comment %>", Close::default()).is_none());
+    }
+
+    #[test]
+    fn call_text_spans_continued_lines() {
+        let call = |text: &str| call_text(text, &render_refs(text.lines().next().unwrap())[0]).to_string();
+        assert_eq!(call("= render \"card\",\n  user: u,\n  size: 1\np next"), "= render \"card\",\n  user: u,\n  size: 1");
+        assert_eq!(call("<%= render(\"card\",\n user: u) %>\nx"), "<%= render(\"card\",\n user: u)");
+        assert_eq!(call("<%= render \"card\", locals: {\n a: \"),\" } %>"), "<%= render \"card\", locals: {\n a: \"),\" } ");
+        assert_eq!(call("<%= render \"card\" %>, x\ny"), "<%= render \"card\" ");
+        assert_eq!(call("= render \"card\"\n= x,"), "= render \"card\"");
+        assert_eq!(call("= render(\"card\", f("), "= render(\"card\", f(", "never closed");
+        let text = "= render \"card\",\n  user: u,\n  size: 1\n";
+        let refs = render_refs(text.lines().next().unwrap());
+        assert_eq!(passed_locals(call_text(text, &refs[0]), &refs[0]), Some(vec!["user", "size"]));
+    }
+
+    #[test]
+    fn local_keys_on_a_continued_line() {
+        let key = |text: &str| {
+            let offset = text.find('|').unwrap();
+            let text = text.replace('|', "");
+            local_key_before(&text, offset).map(|(r, passed, typed)| (r.name, r.start, passed.join(" "), typed.to_string()))
+        };
+        let card = |passed: &str, typed: &str| Some(("card".to_string(), 12, passed.to_string(), typed.to_string()));
+        assert_eq!(key("p\n= render \"card\",\n  user: u,\n  si|"), card("user", "si"));
+        assert_eq!(key("p\n= render(\"card\",\n  |)"), card("", ""));
+        assert_eq!(key("p\n= render \"card\", user: u\n= link_to x, |"), None, "the call ended on its line");
     }
 
     #[test]

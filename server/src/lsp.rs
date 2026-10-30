@@ -846,7 +846,8 @@ impl LanguageServer for Backend {
             return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
         }
         let engines = &self.options().extra_engines;
-        let render_key = partials::local_key_at(line, col).filter(|(r, ..)| code_at(doc.lang, &doc.text, line_start + r.call, engines));
+        let render_key =
+            partials::local_key_before(&doc.text, line_start + col).filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
         if let (Some((r, passed, typed)), Some(path)) = (render_key, path.as_deref()) {
             let found = render_local_completions(project(path), path, &r, &passed, typed);
             if !found.is_empty() {

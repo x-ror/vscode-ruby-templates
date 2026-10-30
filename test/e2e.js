@@ -1089,7 +1089,7 @@ const check = (label, actual, expected) => {
   });
   const keyDocs = {
     erb: '<%= render "strict/row", a: 1, | %>\n',
-    slim: '= render partial: "strict/row", locals: { |\n',
+    slim: '= render "strict/row",\n    b: 2,\n    |\n',
     haml: '= render("strict/row", |)\n',
   };
   const renderKeys = {};
@@ -1101,17 +1101,18 @@ const check = (label, actual, expected) => {
       { textDocument: { uri: keysUri, languageId: lang, version: 1, text } },
       true,
     );
+    const before = marked.slice(0, marked.indexOf("|")).split("\n");
     const r = await req(
       "textDocument/completion",
       keysUri,
-      0,
-      marked.indexOf("|"),
+      before.length - 1,
+      before.at(-1).length,
     );
     renderKeys[lang] = r.result?.map((i) => `${i.insertText} (${i.detail})`);
   }
   check("render locals keys", renderKeys, {
     erb: ["b:  (local = 1)"],
-    slim: ["a:  (local (required))", "b:  (local = 1)"],
+    slim: ["a:  (local (required))"],
     haml: ["a:  (local (required))", "b:  (local = 1)"],
   });
   const streamUri = fileUri(
