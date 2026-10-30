@@ -57,6 +57,10 @@ pub struct RenderRef {
 /// ActionView 7.0 to 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
+    // Every pattern below needs one of these; most lines have neither, and the regexes cost per line.
+    if !line.contains("render") && !line.contains("partial") {
+        return vec![];
+    }
     let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
         let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
         RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), call: call.start(), from_layout }
@@ -93,6 +97,9 @@ pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
 /// `render @user` / `@users` / `@post.comments`: byte range of the expression and the name its partial follows.
 /// Longer chains and calls (`@posts.page(1)`, `@post.comments.order(:id)`) name a query, not a model.
 pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
+    if !line.contains("render") {
+        return vec![];
+    }
     RENDER_MODEL
         .captures_iter(line)
         .filter_map(|cap| {
