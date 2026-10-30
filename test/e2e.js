@@ -1024,6 +1024,36 @@ const check = (label, actual, expected) => {
     ],
     [["users_path"], "`users_path` → `/users`", ["/config/routes.rb:1"]],
   );
+  const slimRubyUri = fileUri(path.join(views, "users", "_ruby.html.slim"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: slimRubyUri,
+        languageId: "slim",
+        version: 1,
+        text: '/# locals: (user:)\n= @m\np #{users_p}\n= t("users.index.ti")\na href=us\n= t("users.index.title")\n',
+      },
+    },
+    true,
+  );
+  check(
+    "Slim: ivars, routes, i18n, locals",
+    [
+      labels(await req("textDocument/completion", slimRubyUri, 1, 4)),
+      labels(await req("textDocument/completion", slimRubyUri, 2, 11)),
+      labels(await req("textDocument/completion", slimRubyUri, 3, 19)),
+      firstLine(await req("textDocument/hover", slimRubyUri, 5, 8)),
+      labels(await req("textDocument/completion", slimRubyUri, 4, 9)),
+    ],
+    [
+      ["@menu"],
+      ["users_path"],
+      ["users.index.title"],
+      "`users.index.title`",
+      ["user", "users_path", "users_url"],
+    ],
+  );
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),
   );
