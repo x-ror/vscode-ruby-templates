@@ -21,7 +21,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-type LocaleFiles = Arc<Vec<(PathBuf, Vec<i18n::Translation>)>>;
+type LocaleFiles = Arc<i18n::Locales>;
 
 struct Backend {
     client: Client,
@@ -102,7 +102,7 @@ fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
 }
 
 /// The line of `key` in each locale file that defines it.
-fn translation_locations(files: &[(PathBuf, Vec<i18n::Translation>)], key: &str) -> Vec<Location> {
+fn translation_locations(files: &i18n::Locales, key: &str) -> Vec<Location> {
     let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
     i18n::lookup(files, key)
         .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start(t), start(t)))))

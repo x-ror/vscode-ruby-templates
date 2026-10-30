@@ -4,7 +4,7 @@ use crate::erb::truncate;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use regex::Regex;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -67,22 +67,49 @@ pub fn locales_dir(current: &Path) -> Option<PathBuf> {
     Some(app_root(current)?.parent()?.join("config/locales"))
 }
 
-pub fn locale_files(dir: &Path) -> Vec<(PathBuf, Vec<Translation>)> {
-    WalkDir::new(dir)
+/// An app's translations sorted by key, for lookups by key and prefix; equal keys keep the files' order.
+#[derive(Default)]
+pub struct Locales {
+    files: Vec<PathBuf>,
+    /// (index in `files`, translation).
+    by_key: Vec<(usize, Translation)>,
+    locales: BTreeSet<String>,
+}
+
+impl Locales {
+    /// The translations whose key starts with `prefix`, in key order.
+    fn starting_with<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = (&'a Path, &'a Translation)> {
+        let first = self.by_key.partition_point(|(_, t)| t.key.as_str() < prefix);
+        self.by_key[first..].iter().take_while(move |(_, t)| t.key.starts_with(prefix)).map(|(file, t)| (self.files[*file].as_path(), t))
+    }
+}
+
+pub fn locale_files(dir: &Path) -> Locales {
+    let parsed: Vec<(PathBuf, Vec<Translation>)> = WalkDir::new(dir)
         .sort_by_file_name()
         .into_iter()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "yml" || x == "yaml"))
         .filter_map(|e| Some((e.path().to_path_buf(), parse(&std::fs::read_to_string(e.path()).ok()?))))
-        .collect()
+        .collect();
+    let mut files = Vec::with_capacity(parsed.len());
+    let mut by_key = Vec::new();
+    for (index, (path, translations)) in parsed.into_iter().enumerate() {
+        files.push(path);
+        by_key.extend(translations.into_iter().map(|t| (index, t)));
+    }
+    // Stable: the first file's translation of a key stays first.
+    by_key.sort_by(|(_, a), (_, b)| a.key.cmp(&b.key));
+    let locales = by_key.iter().map(|(_, t)| t.locale.clone()).collect();
+    Locales { files, by_key, locales }
 }
 
-pub fn lookup<'a>(files: &'a [(PathBuf, Vec<Translation>)], key: &'a str) -> impl Iterator<Item = (&'a Path, &'a Translation)> {
-    files.iter().flat_map(|(path, keys)| keys.iter().map(move |t| (path.as_path(), t))).filter(move |(_, t)| t.key == key)
+pub fn lookup<'a>(files: &'a Locales, key: &'a str) -> impl Iterator<Item = (&'a Path, &'a Translation)> {
+    files.starting_with(key).filter(move |(_, t)| t.key == key)
 }
 
 /// Markdown with each locale's value of `key` and the locales missing it.
-pub fn hover(files: &[(PathBuf, Vec<Translation>)], key: &str) -> Option<String> {
+pub fn hover(files: &Locales, key: &str) -> Option<String> {
     let found: Vec<&Translation> = lookup(files, key).map(|(_, t)| t).collect();
     if found.is_empty() {
         return None;
@@ -98,8 +125,7 @@ pub fn hover(files: &[(PathBuf, Vec<Translation>)], key: &str) -> Option<String>
         })
         .collect();
     let mut md = format!("`{key}`\n\n{}", values.join("\n"));
-    let locales: BTreeSet<&str> = files.iter().flat_map(|(_, keys)| keys.iter().map(|t| t.locale.as_str())).collect();
-    let missing: Vec<String> = locales.into_iter().filter(|l| !found.iter().any(|t| t.locale == *l)).map(|l| format!("`{l}`")).collect();
+    let missing: Vec<String> = files.locales.iter().filter(|l| !found.iter().any(|t| &t.locale == *l)).map(|l| format!("`{l}`")).collect();
     if !missing.is_empty() {
         md.push_str(&format!("\n\nMissing in {}", missing.join(", ")));
     }
@@ -115,16 +141,20 @@ fn inline_code(v: &str) -> String {
 }
 
 /// Leaf keys of every locale starting with `prefix` and a preview value; `.x` prefixes list the view's lazy keys as `.x`.
-pub fn completions(project: &Project, files: &[(PathBuf, Vec<Translation>)], current: &Path, prefix: &str) -> Vec<(String, String)> {
+pub fn completions(project: &Project, files: &Locales, current: &Path, prefix: &str) -> Vec<(String, String)> {
     let scope = if prefix.starts_with('.') { lazy_scope(project, current) } else { Some(String::new()) };
     let Some(scope) = scope else { return vec![] };
-    let mut out: BTreeMap<String, String> = BTreeMap::new();
-    for t in files.iter().flat_map(|(_, keys)| keys) {
+    let wanted = format!("{scope}{prefix}");
+    let mut out: Vec<(String, String)> = Vec::new();
+    for (_, t) in files.starting_with(&wanted) {
         let Some(value) = &t.value else { continue };
-        let Some(label) = t.key.strip_prefix(scope.as_str()).filter(|l| l.starts_with(prefix)) else { continue };
-        out.entry(label.to_string()).or_insert_with(|| format!("{}: {}", t.locale, truncate(value, VALUE_PREVIEW)));
+        // Keys come sorted, so a repeat of the last label is the same key from a later file.
+        let label = &t.key[scope.len()..];
+        if out.last().is_none_or(|(last, _)| last != label) {
+            out.push((label.to_string(), format!("{}: {}", t.locale, truncate(value, VALUE_PREVIEW))));
+        }
     }
-    out.into_iter().collect()
+    out
 }
 
 // ponytail: line-based YAML subset (block mappings, scalars, `|`/`>` blocks); flow mappings `{a: 1}` and
