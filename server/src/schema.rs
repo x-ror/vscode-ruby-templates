@@ -44,7 +44,10 @@ pub fn columns(current: &Path, table: &str) -> Vec<(String, String)> {
     let Some(schema) = app_root(current).and_then(|app| std::fs::read_to_string(app.parent()?.join("db/schema.rb")).ok()) else {
         return vec![];
     };
-    let mut lines = schema.lines().skip_while(|l| CREATE_TABLE.captures(l).is_none_or(|c| &c[1] != table)).skip(1);
+    // The quoted name is in every line that opens the table, and far cheaper to look for than the regex.
+    let quoted = format!("\"{table}\"");
+    let opens = |l: &str| l.contains(&quoted) && CREATE_TABLE.captures(l).is_some_and(|c| &c[1] == table);
+    let mut lines = schema.lines().skip_while(|l| !opens(l)).skip(1);
     let mut out = Vec::new();
     for line in lines.by_ref() {
         if line.trim() == "end" {
