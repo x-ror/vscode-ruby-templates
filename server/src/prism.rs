@@ -73,6 +73,51 @@ fn parameter_name(node: &ruby_prism::Node, anonymous: &str) -> String {
     }
 }
 
+/// The local variables of the blocks and lambdas around `offset`, outermost first. Names starting with `_` are left out:
+/// numbered parameters, unused ones, and the variables Slim and Haml generate.
+pub(crate) fn block_locals(source: &str, offset: usize) -> Vec<String> {
+    let result = ruby_prism::parse(source.as_bytes());
+    let mut scopes = Scopes { offset, names: Vec::new() };
+    ruby_prism::Visit::visit(&mut scopes, &result.node());
+    scopes.names
+}
+
+struct Scopes {
+    offset: usize,
+    names: Vec<String>,
+}
+
+impl Scopes {
+    fn holds(&self, location: &ruby_prism::Location) -> bool {
+        (location.start() as usize) < self.offset && self.offset <= location.end() as usize
+    }
+
+    fn add(&mut self, locals: &ruby_prism::ConstantList) {
+        for local in locals {
+            let name = String::from_utf8_lossy(local.as_slice()).into_owned();
+            if !name.starts_with('_') && !self.names.contains(&name) {
+                self.names.push(name);
+            }
+        }
+    }
+}
+
+impl<'pr> ruby_prism::Visit<'pr> for Scopes {
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
+        if self.holds(&node.location()) {
+            self.add(&node.locals());
+            ruby_prism::visit_block_node(self, node);
+        }
+    }
+
+    fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
+        if self.holds(&node.location()) {
+            self.add(&node.locals());
+            ruby_prism::visit_lambda_node(self, node);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +152,23 @@ mod tests {
 
         let errors = summary("a = \"é😀\" +");
         assert_eq!((errors[0].1, errors[0].2), (0, 11));
+    }
+
+    #[test]
+    fn block_locals_are_those_of_the_blocks_around_the_offset() {
+        let source = "users.each do |user, (a, b)|\n  x = 1\n  user.posts.map { |post| post }\n  HERE\nend\nlater { |gone| }\n";
+        let here = source.find("HERE").unwrap();
+        assert_eq!(block_locals(source, here), ["user", "a", "b", "x"]);
+        let inner = source.find("post }").unwrap();
+        assert_eq!(block_locals(source, inner), ["user", "a", "b", "x", "post"]);
+        assert!(block_locals(source, 0).is_empty());
+        assert_eq!(block_locals("f = ->(n) { n }", 12), ["n"]);
+        assert!(block_locals("[1].map { _1 }", 11).is_empty());
+        assert!(block_locals("x.each { |_unused, _slim_controls1| }", 20).is_empty());
+    }
+
+    #[test]
+    fn block_locals_without_the_end_typed_yet() {
+        assert_eq!(block_locals("users.each do |user|\n  us", 25), ["user"]);
     }
 }

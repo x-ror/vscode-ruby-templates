@@ -15,11 +15,20 @@ const VARIABLE: &str = "_haml_compiler";
 
 /// `comment` is the strict locals comment, whose signature `strict_locals::comment_diagnostics` checks.
 pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version, comment: Option<&Comment>) -> Vec<Diagnostic> {
+    compile_template(text, parsed, comment).diagnostics(text, ruby)
+}
+
+/// The block variables in scope at `offset` of the template.
+pub fn block_locals(text: &str, parsed: &Parsed, offset: usize) -> Vec<String> {
+    compile_template(text, parsed, None).block_locals(offset)
+}
+
+fn compile_template(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Compiled {
     let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
     // Haml drops the blank lines at the end, so the source ends on the last line that holds something.
     let last_line = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()).last().map_or(0, |(index, _)| index);
     let wrapper = format!("{WRAPPER_DEF}{})", strict_locals::method_parameters(comment));
-    compile(&parsed.pieces, bom_len, last_line, &wrapper).diagnostics(text, ruby)
+    compile(&parsed.pieces, bom_len, last_line, &wrapper)
 }
 
 /// Temple joins the code parts it generates with `; `, and a newline is a part of its own.
@@ -328,5 +337,13 @@ mod tests {
         // A bad signature is `strict_locals::diagnostics`'s to report.
         let text = "-# locals: (a b)\n%p= a\n";
         assert_eq!(super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, find(text).as_ref()).len(), 0);
+    }
+
+    #[test]
+    fn block_locals_in_nested_lines_only() {
+        let text = "- @users.each do |user|\n  %p= us\n= us\n";
+        let at = |needle: &str| text.find(needle).unwrap() + needle.len();
+        assert_eq!(block_locals(text, &parse(text), at("%p= us")), ["user"]);
+        assert!(block_locals(text, &parse(text), text.len() - 1).is_empty());
     }
 }

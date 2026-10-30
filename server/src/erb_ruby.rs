@@ -1,6 +1,7 @@
 //! Ruby syntax errors in an ERB template: the method source Rails 8.1.4 evals for it (Erubi 1.13.1 with the
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
+use crate::generated_ruby::generated_offset;
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
 use crate::util::{error, LineIndex};
@@ -347,6 +348,13 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
     strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
 }
 
+/// The block variables in scope at `offset` of the template.
+pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
+    let compiled = compile(text, None);
+    let Some(read_at) = offset.checked_sub(compiled.cut.encoding_tag) else { return Vec::new() };
+    generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
+}
+
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
 fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
     // Erubi records the runs in source order: the first that ends after `start` is the only one that may hold it.
@@ -641,5 +649,14 @@ mod tests {
         assert_eq!(diagnostics("<%# locals: (a:) -%>\n<% 1 + ) %>")[0].range, expected);
         assert_eq!(diagnostics("<%# encoding: utf-8 %>\n<% 1 + ) %>")[0].range, expected);
         assert_eq!(diagnostics("é <%# locals: (a:) %> <% 1 + ) %>")[0].range, Range::new(Position::new(0, 29), Position::new(0, 30)));
+    }
+
+    #[test]
+    fn block_locals_after_an_encoding_tag_and_before_the_end() {
+        let text = "<%# encoding: utf-8 %>\n<% @users.each do |user| %>\n<%= us %>\n<% end %>\n<%= us %>\n";
+        let first = text.find("us %>").unwrap() + 2;
+        assert_eq!(block_locals(text, first), ["user"]);
+        assert!(block_locals(text, text.rfind("us").unwrap() + 2).is_empty());
+        assert!(block_locals(text, 5).is_empty());
     }
 }
