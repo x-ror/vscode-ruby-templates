@@ -59,11 +59,21 @@ pub fn hover(routes: &[Route], word: &str) -> Option<String> {
 
 /// `(helper, detail)` for each `_path` / `_url` helper starting with `typed`.
 pub fn completions(routes: &[Route], typed: &str) -> Vec<(String, String)> {
+    // `name + suffix` starts with `typed`, tested before formatting either: this runs on every word typed in code.
+    let typed = typed.as_bytes();
+    let helper_starts = |name: &str, suffix: &str| {
+        let split = typed.len().min(name.len());
+        name.as_bytes().starts_with(&typed[..split]) && suffix.as_bytes().starts_with(&typed[split..])
+    };
     routes
         .iter()
         .filter(|r| !r.name.is_empty())
-        .flat_map(|r| SUFFIXES.map(|s| (format!("{}{s}", r.name), format!("{} {}", r.verb, r.path))))
-        .filter(|(helper, _)| helper.starts_with(typed))
+        .flat_map(|r| {
+            SUFFIXES
+                .into_iter()
+                .filter(|s| helper_starts(&r.name, s))
+                .map(move |s| (format!("{}{s}", r.name), format!("{} {}", r.verb, r.path)))
+        })
         .collect()
 }
 
@@ -104,5 +114,10 @@ mod tests {
         let labels: Vec<String> = completions(&sample(), "user").into_iter().map(|(l, _)| l).collect();
         assert_eq!(labels, ["users_path", "users_url", "user_path", "user_url"]);
         assert_eq!(completions(&sample(), "user_p")[0].1, "GET /users/:id");
+        let labels = |typed| completions(&sample(), typed).into_iter().map(|(l, _)| l).collect::<Vec<_>>();
+        assert_eq!(labels("users_u"), ["users_url"]);
+        assert_eq!(labels("").len(), 6);
+        assert_eq!(labels("usé"), Vec::<String>::new());
+        assert_eq!(labels("old_path_x"), Vec::<String>::new());
     }
 }

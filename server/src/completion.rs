@@ -41,13 +41,7 @@ pub(crate) fn render_completions(
 }
 
 /// i18n keys for the `t("…")` string being typed; each replaces `range`.
-pub(crate) fn i18n_completions(
-    project: &Project,
-    locales: &[(PathBuf, Vec<i18n::Translation>)],
-    path: &Path,
-    prefix: &str,
-    range: Range,
-) -> Vec<CompletionItem> {
+pub(crate) fn i18n_completions(project: &Project, locales: &i18n::Locales, path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
     i18n::completions(project, locales, path, prefix)
         .into_iter()
         .map(|(key, value)| CompletionItem {
