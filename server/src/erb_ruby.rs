@@ -15,8 +15,51 @@ const WRAPPER_DEF: &str = "          def _template(";
 /// Prism's message for the wrapper's own `def`, which the template's code never gets to close.
 const UNCLOSED_DEF: &str = "expected an `end` to close the `def` statement";
 
-// `Erubi::Engine::DEFAULT_REGEXP`.
-static ERUBI_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?").unwrap());
+/// One match of `Erubi::Engine::DEFAULT_REGEXP`, `<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?`, by its groups.
+struct Match<'a> {
+    whole: ByteRange<usize>,
+    indicator: Option<&'a str>,
+    code: ByteRange<usize>,
+    tail: Option<&'a str>,
+    rspace: Option<&'a str>,
+}
+
+/// The regex's matches, scanned by hand: the lazy `(.*?)` with captures made the `regex` crate's slow engines run per tag.
+fn erubi_tags(text: &str) -> impl Iterator<Item = Match<'_>> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    std::iter::from_fn(move || {
+        let open = pos + text.get(pos..)?.find("<%")?;
+        let longest = match &bytes[open + 2..] {
+            [b'=', b'=', ..] => 2,
+            [b'=' | b'-' | b'#' | b'%', ..] => 1,
+            _ => 0,
+        };
+        // The regex tries the longest indicator first; only `<%%>` matches without the one it has.
+        let (indicator_len, code_start, close) = (0..=longest).rev().find_map(|len| {
+            let code_start = open + 2 + len;
+            text[code_start..].find("%>").map(|at| (len, code_start, code_start + at))
+        })?;
+        let tail = close > code_start && matches!(bytes[close - 1], b'-' | b'=');
+        let code_end = close - usize::from(tail);
+        let end = close + 2;
+        let spaces = bytes[end..].iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+        let newline = match &bytes[end + spaces..] {
+            [b'\r', b'\n', ..] => 2,
+            [b'\n', ..] => 1,
+            _ => 0,
+        };
+        let rspace = (newline > 0).then(|| &text[end..end + spaces + newline]);
+        pos = end + rspace.map_or(0, str::len);
+        Some(Match {
+            whole: open..pos,
+            indicator: (indicator_len > 0).then(|| &text[open + 2..code_start]),
+            code: code_start..code_end,
+            tail: tail.then(|| &text[code_end..close]),
+            rspace,
+        })
+    })
+}
 // `ActionView::Template::Handlers::ERB::ENCODING_TAG`.
 static ENCODING_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A<%#.*coding[:=][ \t\r\n\x0C\x0B]*\S+[ \t]*-?%>[ \t]*").unwrap());
 // `ActionView::Template::Handlers::ERB::Erubi::BLOCK_EXPR`.
@@ -115,14 +158,13 @@ impl Erubi {
     fn compile(&mut self, template: &str) {
         let mut pos = 0;
         let mut is_bol = true;
-        for tag in ERUBI_TAG.captures_iter(template) {
-            let Some(whole) = tag.get(0) else { continue };
-            let indicator = tag.get(1).map(|m| m.as_str());
-            let (code_text, code_at) = tag.get(2).map_or(("", 0), |m| (m.as_str(), m.start()));
-            let tail = tag.get(3).map(|m| m.as_str());
-            let mut rspace = tag.get(4).map(|m| m.as_str());
-            let mut text = &template[pos..whole.start()];
-            pos = whole.end();
+        for tag in erubi_tags(template) {
+            let indicator = tag.indicator;
+            let (code_text, code_at) = (&template[tag.code.clone()], tag.code.start);
+            let tail = tag.tail;
+            let mut rspace = tag.rspace;
+            let mut text = &template[pos..tag.whole.start];
+            pos = tag.whole.end;
             let kind = indicator.and_then(|i| i.chars().next());
 
             let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
@@ -217,13 +259,10 @@ impl ErbTag<'_> {
 
 /// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
 pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
-    ERUBI_TAG
-        .captures_iter(text)
-        .filter_map(|tag| {
-            let whole = tag.get(0)?;
-            let code = tag.get(2)?;
-            let trimmed = tag.get(4).map_or(0, |m| m.len());
-            Some(ErbTag { start: whole.start(), end: whole.end() - trimmed, indicator: tag.get(1).map(|m| m.as_str()), code: code.range() })
+    erubi_tags(text)
+        .map(|tag| {
+            let trimmed = tag.rspace.map_or(0, str::len);
+            ErbTag { start: tag.whole.start, end: tag.whole.end - trimmed, indicator: tag.indicator, code: tag.code }
         })
         .collect()
 }
@@ -339,6 +378,28 @@ mod tests {
     use tower_lsp::lsp_types::Position;
 
     const IDENTIFIER: &str = "template.html.erb";
+
+    #[test]
+    fn tag_scan_matches_erubis_regexp() {
+        let erubi = Regex::new(r"(?s)<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?").unwrap();
+        let texts = [
+            "a <%= x %> b <% y -%>\n<%# c %>  \r\n<%- z =%>",
+            "<%%> a %> <%% b %> <%== c %> <%=%> <%==%> <%=-%> <%-%> <%#%>",
+            "<%= a\nb %>\t \n<% open <% inner %> <% unclosed",
+            "<% é = 1 %>\u{00a0}\n<%= \"%\" %>%>",
+        ];
+        for text in texts {
+            let ours: Vec<_> = erubi_tags(text).map(|m| (m.whole, m.indicator, &text[m.code], m.tail, m.rspace)).collect();
+            let regex: Vec<_> = erubi
+                .captures_iter(text)
+                .map(|c| {
+                    let group = |i| c.get(i).map(|m| m.as_str());
+                    (c.get(0).unwrap().range(), group(1), group(2).unwrap(), group(3), group(4))
+                })
+                .collect();
+            assert_eq!(ours, regex, "{text:?}");
+        }
+    }
 
     fn rails() -> Rails {
         Rails { close: Close::default(), identifier: IDENTIFIER.into() }

@@ -34,7 +34,12 @@ impl TemplateLang {
             Some("skim") => return Some(Self::Skim),
             _ => {}
         }
-        let path = uri.path().to_ascii_lowercase();
+        Self::from_file_name(uri.path())
+    }
+
+    /// The language of a file named `name` (a bare name or a whole path), by its extension.
+    pub fn from_file_name(name: &str) -> Option<Self> {
+        let path = name.to_ascii_lowercase();
         if path.ends_with(".jbuilder") || path.ends_with(".builder") {
             return Some(Self::Ruby);
         }

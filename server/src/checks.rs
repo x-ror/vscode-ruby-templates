@@ -4,13 +4,14 @@ use crate::code_context::render_filter;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
     erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
-    project::{Framework, Project},
+    project::{Framework, Project, Projects},
     rails_paths, slim_indent, strict_locals, tags, util,
 };
 use std::collections::HashSet;
 use std::path::Path;
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
+#[derive(Clone)]
 pub(crate) struct Doc {
     pub lang: TemplateLang,
     pub text: String,
@@ -105,17 +106,21 @@ impl Options {
 }
 
 pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
+    diagnostics_in(uri, doc, options, &mut Projects::new())
+}
+
+/// `diagnostics`, taking the template's project from `projects` when a run already loaded it.
+pub(crate) fn diagnostics_in(uri: &Url, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
     if uri.path().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
         return vec![];
     }
     let path = uri.to_file_path().ok();
-    let project = path.as_deref().map(Project::for_template);
-    let ruby =
-        path.as_deref().zip(project.as_ref()).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
+    let project = path.as_deref().map(|path| Project::memoized(projects, path));
+    let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
     let mut out = language_diagnostics(uri, doc.lang, &doc.text, &options.extra_engines, &ruby);
-    if let (Some(path), Some(project)) = (&path, &project) {
+    if let (Some(path), Some(project)) = (&path, project) {
         let in_code = render_filter(doc.lang, &doc.text, &options.extra_engines);
         out.extend(unresolved_renders(path, project, &doc.text, &in_code));
         out.extend(strict_locals_mismatches(path, project, &doc.text, &in_code));
@@ -152,8 +157,8 @@ impl RubyContext {
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
-pub(crate) fn ruby_context(uri: &Url) -> RubyContext {
-    uri.to_file_path().map_or_else(|_| RubyContext::outside_project(), |path| RubyContext::of(&path, &Project::for_template(&path)))
+pub(crate) fn ruby_context(uri: &Url, projects: &mut Projects) -> RubyContext {
+    uri.to_file_path().map_or_else(|_| RubyContext::outside_project(), |path| RubyContext::of(&path, Project::memoized(projects, &path)))
 }
 
 /// The template language's own checks, without the render checks that need app/views.

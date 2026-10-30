@@ -43,11 +43,26 @@ try {
   r = run(["check", views]);
   assert.strictEqual(r.status, 1, "a broken file is a finding");
   assert.match(r.stdout, /broken\.html\.slim:\d+:\d+: error: /);
+  const reported = [...r.stdout.matchAll(/(\w+)\.html\.slim:/g)].map(
+    (m) => m[1],
+  );
+  assert.deepStrictEqual(
+    reported,
+    [...reported].sort(),
+    "files checked in parallel print in walk order",
+  );
   assert.doesNotMatch(
     r.stdout + r.stderr,
     /notes\.txt/,
     "folders yield templates only",
   );
+  const nested = file(
+    "nested.html.erb",
+    `<% ${"[".repeat(5000)}${"]".repeat(5000)} %>\n`,
+  );
+  r = run(["check", nested]);
+  assert.strictEqual(r.status, 0, "deep nesting fits a worker's stack");
+  fs.rmSync(nested);
   r = run(["check", notes]);
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /notes\.txt: unknown template type/);

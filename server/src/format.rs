@@ -3,6 +3,7 @@
 
 use crate::checks::{language_diagnostics, ruby_context, RubyContext};
 use crate::lang::{html_host, is_partial, TemplateLang};
+use crate::project::Projects;
 use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim_ruby, util};
 use std::fmt;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
@@ -72,12 +73,24 @@ pub struct Formatted {
 
 /// `text` formatted, or why it is left as it is.
 pub fn format(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, extra_engines: &[String]) -> Result<Formatted, Skipped> {
+    format_in(uri, lang, text, settings, extra_engines, &mut Projects::new())
+}
+
+/// `format`, taking the template's project from `projects` when a run already loaded it.
+pub(crate) fn format_in(
+    uri: &Url,
+    lang: TemplateLang,
+    text: &str,
+    settings: &Settings,
+    extra_engines: &[String],
+    projects: &mut Projects,
+) -> Result<Formatted, Skipped> {
     if uri.path().to_ascii_lowercase().ends_with(".tt") {
         return skip(SkipKind::NotHandled, "generator template: the generator's ERB is mixed in");
     }
     let settings = &effective_settings(lang, settings);
     // The formatter refuses on errors, so it must see the ones the server shows: those of the project's Ruby.
-    let ruby = ruby_context(uri);
+    let ruby = ruby_context(uri, projects);
     let formatted = format_once(uri, lang, text, settings, extra_engines, &ruby)?;
     if formatted.text == text {
         return Ok(formatted);
