@@ -10,8 +10,10 @@ use crate::{
     partials, project::Project, rails_paths, routes, ruby, schema, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
     strict_locals, tags, util,
 };
-use dashmap::DashMap;
+use dashmap::mapref::entry::Entry;
+use dashmap::{DashMap, DashSet};
 use haml_indent::LineRole;
+use std::cell::{LazyCell, OnceCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,9 +31,14 @@ struct Backend {
     /// Open controllers, for navigation to their views only; no other request reads them.
     controllers: DashMap<Url, String>,
     /// Files under each app/views root, for render completion.
-    templates: DashMap<PathBuf, Arc<Vec<PathBuf>>>,
+    templates: Arc<DashMap<PathBuf, Arc<Vec<PathBuf>>>>,
     /// Parsed locale files per config/locales directory.
-    locales: DashMap<PathBuf, LocaleFiles>,
+    locales: Arc<DashMap<PathBuf, LocaleFiles>>,
+    /// Bumped before watched-file events invalidate the caches, so a background fill started earlier doesn't
+    /// store what it read before the change.
+    cache_generation: Arc<AtomicU64>,
+    /// The cache roots a background fill is reading, so documents opened together start one fill each.
+    warming: Arc<DashSet<PathBuf>>,
     /// Routes per Rails root, as the client last sent them.
     routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
@@ -125,6 +132,21 @@ fn helper_hover(h: &helpers::Helper) -> String {
 /// created or deleted; `contents` caches also on edits. Deleting an ancestor of `root` counts too.
 fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> bool {
     events.iter().any(|(path, kind)| (contents || *kind != FileChangeType::CHANGED) && (path.starts_with(root) || root.starts_with(path)))
+}
+
+/// Stores `read()` under `root` unless the entry is filled meanwhile; reads again when a watched-file event came in
+/// while it read, since what it read may predate the change. The generation is checked under the entry's lock,
+/// which the event's invalidation (`retain`, after the bump) takes too.
+fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, read: impl Fn() -> T) {
+    loop {
+        let started = generation.load(Ordering::SeqCst);
+        let value = read();
+        let Entry::Vacant(slot) = cache.entry(root.to_path_buf()) else { return };
+        if generation.load(Ordering::SeqCst) == started {
+            slot.insert(value);
+            return;
+        }
+    }
 }
 
 /// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
@@ -275,6 +297,30 @@ impl Backend {
         self.templates.entry(views.to_path_buf()).or_insert_with(|| Arc::new(rails_paths::files_under(views, usize::MAX))).clone()
     }
 
+    /// Fills the app/views and locale caches of `uri`'s app in the background, so the first render or i18n request
+    /// after a view opens or files change finds them ready instead of walking the app on the server task.
+    fn warm_caches(&self, uri: &Url) {
+        let Ok(path) = uri.to_file_path() else { return };
+        let claim = |root: &PathBuf, cached: bool| !cached && self.warming.insert(root.clone());
+        let views = rails_paths::views_root(&path).filter(|views| claim(views, self.templates.contains_key(views)));
+        let locales = i18n::locales_dir(&path).filter(|dir| claim(dir, self.locales.contains_key(dir)));
+        if views.is_none() && locales.is_none() {
+            return;
+        }
+        let (templates, cached_locales, generation, warming) =
+            (Arc::clone(&self.templates), Arc::clone(&self.locales), Arc::clone(&self.cache_generation), Arc::clone(&self.warming));
+        tokio::task::spawn_blocking(move || {
+            if let Some(views) = views {
+                fill(&templates, &views, &generation, || Arc::new(rails_paths::files_under(&views, usize::MAX)));
+                warming.remove(&views);
+            }
+            if let Some(dir) = locales {
+                fill(&cached_locales, &dir, &generation, || Arc::new(i18n::locale_files(&dir)));
+                warming.remove(&dir);
+            }
+        });
+    }
+
     fn locale_files(&self, current: &Path) -> LocaleFiles {
         let Some(dir) = i18n::locales_dir(current) else { return LocaleFiles::default() };
         self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
@@ -419,6 +465,7 @@ impl LanguageServer for Backend {
             return;
         };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
+        self.warm_caches(&p.text_document.uri);
         self.publish_later(p.text_document.uri, Duration::ZERO);
     }
 
@@ -443,11 +490,13 @@ impl LanguageServer for Backend {
     async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
         let events: Vec<(PathBuf, FileChangeType)> =
             p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
+        self.cache_generation.fetch_add(1, Ordering::SeqCst);
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
         let open: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
         for uri in open {
+            self.warm_caches(&uri);
             self.publish_later(uri, Duration::ZERO);
         }
     }
@@ -618,7 +667,8 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
-        let project = Project::for_template(&path);
+        // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
+        let project = LazyCell::new(|| Project::for_template(&path));
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
@@ -787,17 +837,20 @@ impl LanguageServer for Backend {
 
         let path = uri.to_file_path().ok();
         let items = |items| Ok(Some(CompletionResponse::Array(items)));
+        // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
+        let project_cell = OnceCell::new();
+        let project = |path: &Path| project_cell.get_or_init(|| Project::for_template(path));
 
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
-            return items(render_completions(&Project::for_template(path), path, kind, &prefix, &self.template_files(path)));
+            return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
         }
         let i18n_prefix = i18n::completion_prefix(line, col)
             .filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, &self.options().extra_engines));
         if let Some((start, end, prefix)) = i18n_prefix {
             let Some(path) = path.as_deref() else { return Ok(None) };
             let range = util::span_range(pos.line as usize, line, start, end);
-            return items(i18n_completions(&Project::for_template(path), &self.locale_files(path), path, prefix, range));
+            return items(i18n_completions(project(path), &self.locale_files(path), path, prefix, range));
         }
         if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
@@ -821,10 +874,8 @@ impl LanguageServer for Backend {
                 columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
             );
         }
-        if let Some(found) = path
-            .as_deref()
-            .and_then(|p| slot_setter_completions(&Project::for_template(p), p, &doc.text[..line_start + col]))
-            .filter(|_| code_here())
+        if let Some(found) =
+            path.as_deref().filter(|_| code_here()).and_then(|p| slot_setter_completions(project(p), p, &doc.text[..line_start + col]))
         {
             return items(found);
         }
@@ -874,18 +925,16 @@ impl LanguageServer for Backend {
         let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
         if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
             let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
-            return items(ivar_completions(&Project::for_template(path), path, typed, range));
+            return items(ivar_completions(project(path), path, typed, range));
         }
         if typed.is_empty() {
             return Ok(None);
         }
-        let close = path.as_deref().map(|p| strict_locals::Close::of(&Project::for_template(p))).unwrap_or_default();
+        let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
         let mut found = local_completions(&doc.text, typed, close);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
-        let own_slots = path
-            .as_deref()
-            .and_then(|p| slots::class_of_template(&Project::for_template(p), p))
-            .and_then(|class| std::fs::read_to_string(class).ok());
+        let own_slots =
+            path.as_deref().and_then(|p| slots::class_of_template(project(p), p)).and_then(|class| std::fs::read_to_string(class).ok());
         let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
         found.extend(
             readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
@@ -908,8 +957,10 @@ pub async fn serve() {
         client,
         docs: Arc::default(),
         controllers: DashMap::new(),
-        templates: DashMap::new(),
-        locales: DashMap::new(),
+        templates: Arc::default(),
+        locales: Arc::default(),
+        cache_generation: Arc::default(),
+        warming: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),
         roots: OnceLock::new(),

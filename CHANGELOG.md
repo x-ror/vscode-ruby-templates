@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.2
+
+- Faster, with the same results:
+  - formatting skips the checks whose answer is already known, so `format --check` on an already formatted app is up to 8 times faster (freeats' Slim views: 0.50 s to 0.06 s);
+  - ERB folding and outline analyse each tag once;
+  - Slim and Haml templates are parsed and compiled with far fewer allocations;
+  - completion and code actions read the project's Gemfile.lock and initializers only when they need them, at most once per request;
+  - the app/views file list and the locale files are read in the background after a view opens or files change, so the first partial or translation completion doesn't wait for them;
+  - `f.text_field :` completion finds the table in `db/schema.rb` faster.
+
 ## 0.3.1
 
 - Faster in large apps, with the same results:
