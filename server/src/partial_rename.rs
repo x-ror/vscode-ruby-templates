@@ -253,11 +253,16 @@ pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> 
 }
 
 fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>, keep: fn(&str) -> bool) -> Vec<Source> {
+    let roots: Vec<PathBuf> = roots.collect();
+    // A document opened but not saved yet is on no disk walk.
+    let unsaved = open.keys().filter(|path| !path.exists() && roots.iter().any(|root| path.starts_with(root))).cloned();
     roots
+        .iter()
         .flat_map(|root| WalkDir::new(root).follow_links(true).into_iter().flatten())
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| {
-            let path = e.into_path();
+        .map(walkdir::DirEntry::into_path)
+        .chain(unsaved)
+        .filter_map(|path| {
             let lang = match path.extension() {
                 Some(ext) if ext == "rb" => None,
                 _ => Some(TemplateLang::from_uri_or_id(&Url::from_file_path(&path).ok()?, None)?),
@@ -605,7 +610,10 @@ mod tests {
         let controller = "render partial: 'users/card'";
         std::fs::write(t.path("app/controllers/users_controller.rb"), controller).unwrap();
         std::fs::write(t.path("app/helpers/h.rb"), "def h = 1").unwrap();
-        let open = HashMap::from([(t.path("app/views/users/index.html.erb"), "<%= render 'unsaved' %>".to_string())]);
+        let open = HashMap::from([
+            (t.path("app/views/users/index.html.erb"), "<%= render 'unsaved' %>".to_string()),
+            (t.path("app/views/users/new.html.erb"), "<%= render 'never saved' %>".to_string()),
+        ]);
         let mut found: Vec<_> =
             sources(&t.path("app/views"), &open).into_iter().map(|s| (t.rel(&s.path), s.lang.is_none(), s.text)).collect();
         found.sort();
@@ -614,6 +622,7 @@ mod tests {
             [
                 ("app/controllers/users_controller.rb".to_string(), true, controller.to_string()),
                 ("app/views/users/index.html.erb".to_string(), false, "<%= render 'unsaved' %>".to_string()),
+                ("app/views/users/new.html.erb".to_string(), false, "<%= render 'never saved' %>".to_string()),
             ]
         );
     }

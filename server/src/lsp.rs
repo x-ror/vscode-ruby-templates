@@ -48,6 +48,8 @@ struct Backend {
     /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration and `slim.format.enabled` is on:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
+    /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
+    local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
     publishes: Arc<DashMap<Url, u64>>,
     next_publish: AtomicU64,
@@ -66,6 +68,13 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
+}
+
+/// Is the word under `col` a hash or keyword key (`size: 1`) rather than a value?
+fn is_key(line: &str, col: usize) -> bool {
+    let rest = &line[col.min(line.len())..];
+    let after = rest.trim_start_matches(|c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!'));
+    after.starts_with(':') && !after.starts_with("::")
 }
 
 /// A partial's strict local: required or its default, and how many `render` calls pass it.
@@ -360,20 +369,21 @@ impl Backend {
         // `link_to` or `t` is never a local; the scan below reads every view.
         let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return Ok(vec![]) };
-        let passes = self.local_passes(path, name).await?;
+        let project = Project::for_template(path);
+        let close = strict_locals::Close::of(&project);
+        let passes = self.local_passes(project, path, name).await?;
         if !passes.is_empty() {
             return Ok(passes);
         }
-        let close = strict_locals::Close::of(&Project::for_template(path));
         let declared = partials::strict_locals(text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
         Ok(comment.filter(|_| declared).and_then(|line| line_location(path, line)).into_iter().collect())
     }
 
     /// The `render` calls that pass `local` to the partial at `path`, read from app/views and the open documents.
-    async fn local_passes(&self, path: &Path, local: &str) -> Result<Vec<Location>> {
+    async fn local_passes(&self, project: Project, path: &Path, local: &str) -> Result<Vec<Location>> {
         let Some(views) = rails_paths::views_root(path) else { return Ok(vec![]) };
-        let (open, project, partial, local) = (self.open_texts(), Project::for_template(path), path.to_path_buf(), local.to_string());
+        let (open, partial, local) = (self.open_texts(), path.to_path_buf(), local.to_string());
         let extra_engines = self.options().extra_engines.clone();
         off_server_task(move || {
             let sources = partial_rename::sources(&views, &open);
@@ -479,6 +489,7 @@ impl LanguageServer for Backend {
             return;
         };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
+        self.local_callers.clear();
         self.warm_caches(&p.text_document.uri);
         self.publish_later(p.text_document.uri, Duration::ZERO);
     }
@@ -498,6 +509,7 @@ impl LanguageServer for Backend {
             }
             doc.version = version;
         }
+        self.local_callers.clear();
         self.publish_later(p.text_document.uri, DIAGNOSTICS_DEBOUNCE);
     }
 
@@ -505,6 +517,7 @@ impl LanguageServer for Backend {
         let events: Vec<(PathBuf, FileChangeType)> =
             p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
+        self.local_callers.clear();
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
@@ -521,6 +534,7 @@ impl LanguageServer for Backend {
         }
         self.publishes.remove(&p.text_document.uri);
         self.docs.remove(&p.text_document.uri);
+        self.local_callers.clear();
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
     }
 
@@ -646,14 +660,25 @@ impl LanguageServer for Backend {
             return Ok(ivars::hover(&assignments, name).and_then(markdown_hover));
         }
         let declared_local = file.as_ref().filter(|_| code_here && is_partial(&uri)).and_then(|(project, _)| {
-            let name = helper_defs::name_at(line, col)?;
+            let name = helper_defs::name_at(line, col).filter(|_| !is_key(line, col))?;
             let sig = partials::strict_locals(&doc.text, strict_locals::Close::of(project))?;
-            sig.locals.into_iter().find(|(local, _)| local == name)
+            let local = sig.locals.into_iter().find(|(local, _)| local == name)?;
+            // A block variable of the same name shadows the local.
+            let engines = &self.options().extra_engines;
+            (!block_locals(doc.lang, &doc.text, line_start + col, engines).contains(&local.0)).then_some(local)
         });
-        if let (Some((name, default)), Some((_, path))) = (declared_local, &file) {
+        if let (Some((name, default)), Some((project, path))) = (declared_local, &file) {
             // The guard would block the next `did_change` while the views are read.
             drop(doc);
-            let passes = self.local_passes(path, &name).await?.len();
+            let key = (path.clone(), name.clone());
+            let passes = match self.local_callers.get(&key).map(|count| *count) {
+                Some(count) => count,
+                None => {
+                    let count = self.local_passes(project.clone(), path, &name).await?.len();
+                    self.local_callers.insert(key, count);
+                    count
+                }
+            };
             return Ok(markdown_hover(local_hover(&name, default.as_deref(), passes)));
         }
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
@@ -1002,6 +1027,7 @@ pub async fn serve() {
         templates: Arc::default(),
         locales: Arc::default(),
         cache_generation: Arc::default(),
+        local_callers: DashMap::new(),
         warming: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),
