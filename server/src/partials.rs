@@ -2,6 +2,7 @@
 
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, views_root};
+use crate::ruby;
 use crate::strict_locals::{self, Close};
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -507,6 +508,10 @@ pub const NEW_LOCAL_VALUE: &str = "nil";
 
 /// The edit to `call`, a literal render's `call_text`, that passes `names` too.
 pub fn add_locals_edit(call: &str, r: &RenderRef, names: &[&str]) -> Option<ByteEdit> {
+    // An edit after a Ruby comment would land in the comment.
+    if render_args(call, r)?.lines().any(ruby::comment_before) {
+        return None;
+    }
     let new = names.iter().map(|n| format!("{n}: {NEW_LOCAL_VALUE}")).collect::<Vec<_>>().join(", ");
     let (pairs, form) = (render_pairs(call, r)?, RenderForm::of(call, r));
     let keys: Vec<&str> = pairs.iter().map(|&(key, _, _)| key).collect();
@@ -557,7 +562,12 @@ pub fn remove_local_edit(call: &str, r: &RenderRef, name: &str) -> Option<ByteEd
 
 /// Each `key: value` after a literal render's partial name, with the whole argument it is.
 fn render_pairs<'a>(call: &'a str, r: &RenderRef) -> Option<Vec<(&'a str, &'a str, &'a str)>> {
-    match split_args(render_args(call, r)?)?.as_slice() {
+    arg_pairs(render_args(call, r)?)
+}
+
+/// Each `key: value` of `args`, the text `, a: 1, :b => 2` after a call's first argument, with the whole argument.
+fn arg_pairs(args: &str) -> Option<Vec<(&str, &str, &str)>> {
+    match split_args(args)?.as_slice() {
         [] => Some(vec![]),
         ["", rest @ ..] => rest.iter().map(|&arg| key_value(arg).map(|(key, value)| (key, value, arg))).collect(),
         _ => None,
@@ -600,18 +610,14 @@ fn changes_locals(key: &str, form: &RenderForm) -> bool {
 
 /// The local names in `args`, the text after a partial's name up to the call's end; `None` unless every key is literal.
 fn passed_names<'a>(args: &'a str, form: &RenderForm) -> Option<Vec<&'a str>> {
-    let pairs: Vec<(&str, &str)> = match split_args(args)?.as_slice() {
-        [] => vec![],
-        ["", rest @ ..] => rest.iter().map(|arg| key_value(arg)).collect::<Option<_>>()?,
-        _ => return None,
-    };
-    let keys: Vec<&str> = pairs.iter().map(|&(key, _)| key).collect();
+    let pairs = arg_pairs(args)?;
+    let keys: Vec<&str> = pairs.iter().map(|&(key, _, _)| key).collect();
     let names = if form.locals_in_hash(&keys) {
         if keys.iter().any(|k| changes_locals(k, form)) {
             return None;
         }
-        match pairs.iter().find(|&&(key, _)| key == "locals") {
-            Some((_, hash)) => split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?
+        match pairs.iter().find(|&&(key, _, _)| key == "locals") {
+            Some((_, hash, _)) => split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?
                 .into_iter()
                 .map(|p| key_value(p).map(|(k, _)| k))
                 .collect::<Option<_>>()?,
@@ -750,6 +756,7 @@ mod tests {
         assert_eq!(add(r#"= render partial: "card", locals: {}"#, &["user"]), s(r#"= render partial: "card", locals: { user: nil }"#));
         assert_eq!(add(r#"= render partial: "card""#, &["user"]), s(r#"= render partial: "card", locals: { user: nil }"#));
         assert_eq!(add(r#"= render partial: "card", object: @u"#, &["user"]), None, "the object is a local of its own");
+        assert_eq!(add(r#"<%= render "card", size: 1 # TODO %>"#, &["user"]), None, "it would land in the comment");
         assert_eq!(remove(r#"<%= render "card", colour: 1 %>"#, "colour"), s(r#"<%= render "card" %>"#));
         assert_eq!(remove(r#"<%= render "card", user: u, colour: 1 %>"#, "colour"), s(r#"<%= render "card", user: u %>"#));
         assert_eq!(

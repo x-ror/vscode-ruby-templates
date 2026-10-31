@@ -429,7 +429,8 @@ impl Backend {
         let quoted = |names: &[&str]| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
         let mut out = Vec::new();
         if let Some(edit) = (!missing.is_empty()).then(|| partials::add_locals_edit(call, &r, &missing)).flatten() {
-            out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), true));
+            // Not preferred: `nil` silences the warning without passing what the partial needs.
+            out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), false));
         }
         let shown = partial.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
         for name in unknown {
@@ -772,7 +773,8 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = p.text_document.uri;
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        // A copy, so no guard is held while the fixes below read the partial from the same map.
+        let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Ok(path) = uri.to_file_path() else { return Ok(None) };
         // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
         let project = LazyCell::new(|| Project::for_template(&path));

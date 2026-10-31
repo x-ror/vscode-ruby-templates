@@ -445,8 +445,6 @@ const check = (label, actual, expected) => {
         diagnostics: [{ range: at, code: "strict-locals", message: "" }],
       },
     });
-    // Unsaved documents count as callers in later checks.
-    await send("textDocument/didClose", { textDocument: { uri: u } }, true);
     return result
       .filter((a) => a.kind === "quickfix")
       .map((a) => {
@@ -454,14 +452,12 @@ const check = (label, actual, expected) => {
         return `${a.title} | ${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.character} "${e.newText}"`;
       });
   };
+  const extraUri = fileUri(path.join(views, "strict", "extra.html.erb"));
   check(
     "strict locals quick fixes",
     [
       await strictFixes(strictUri, '<%= render "strict/row" %>\n'),
-      await strictFixes(
-        fileUri(path.join(views, "strict", "extra.html.erb")),
-        '<%= render "strict/row", a: 1, c: 2 %>\n',
-      ),
+      await strictFixes(extraUri, '<%= render "strict/row", a: 1, c: 2 %>\n'),
     ],
     [
       [
@@ -472,6 +468,11 @@ const check = (label, actual, expected) => {
         'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
       ],
     ],
+  ); // An unsaved document counts as a caller in later checks.
+  await send(
+    "textDocument/didClose",
+    { textDocument: { uri: extraUri } },
+    true,
   );
 
   await send(

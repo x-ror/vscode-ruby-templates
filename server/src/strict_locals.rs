@@ -106,8 +106,19 @@ impl Comment {
     pub fn declare(&self, name: &str, value: &str) -> (ByteRange<usize>, String) {
         match self.parameters_at {
             Some(at) => {
-                let end = at + self.parameters.len();
-                (end..end, format!(", {name}: {value}"))
+                let params = &self.parameters;
+                let last_at = params.rfind(',').map_or(0, |comma| comma + 1);
+                let last = &params[last_at..];
+                let local = format!("{name}: {value}");
+                // Ruby takes no keyword after `**`: the new one goes before, and replaces a lone `**nil`.
+                match last.trim() {
+                    "**nil" if last_at == 0 => (at..at + params.len(), local),
+                    splat if splat.starts_with("**") => {
+                        let before = at + last_at + (last.len() - last.trim_start().len());
+                        (before..before, format!("{local}, "))
+                    }
+                    _ => (at + params.len()..at + params.len(), format!(", {local}")),
+                }
             }
             None => {
                 let close = self.range.end - 1;
@@ -217,6 +228,8 @@ mod tests {
         };
         assert_eq!(declared("<%# locals: (user:) %>"), "<%# locals: (user:, colour: nil) %>");
         assert_eq!(declared("<%# locals: () %>"), "<%# locals: (colour: nil) %>");
+        assert_eq!(declared("<%# locals: (**nil) %>"), "<%# locals: (colour: nil) %>");
+        assert_eq!(declared("<%# locals: (user:, **nil) %>"), "<%# locals: (user:, colour: nil, **nil) %>");
     }
 
     #[test]
