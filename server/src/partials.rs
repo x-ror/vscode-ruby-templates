@@ -515,8 +515,12 @@ impl RenderForm {
 /// Options that pass locals of their own: the object or each collection item under the partial's name, or `as:`.
 const ADDS_LOCALS: [&str; 3] = ["object", "collection", "as"];
 
-/// The local names in `args`, the text after a partial's name up to the call's end: `, a: 1, :b => 2` or
-/// `, locals: { a: 1 }`; `None` when an argument isn't a pair with a literal key.
+/// Does option `key` change the locals the partial gets? Jbuilder also takes `cached:` out of them.
+fn changes_locals(key: &str, form: &RenderForm) -> bool {
+    ADDS_LOCALS.contains(&key) || (form.jbuilder && key == "cached")
+}
+
+/// The local names in `args`, the text after a partial's name up to the call's end; `None` unless every key is literal.
 fn passed_names<'a>(args: &'a str, form: &RenderForm) -> Option<Vec<&'a str>> {
     let pairs: Vec<(&str, &str)> = match split_args(args)?.as_slice() {
         [] => vec![],
@@ -525,7 +529,7 @@ fn passed_names<'a>(args: &'a str, form: &RenderForm) -> Option<Vec<&'a str>> {
     };
     let keys: Vec<&str> = pairs.iter().map(|&(key, _)| key).collect();
     let names = if form.locals_in_hash(&keys) {
-        if keys.iter().any(|k| ADDS_LOCALS.contains(k)) {
+        if keys.iter().any(|k| changes_locals(k, form)) {
             return None;
         }
         match pairs.iter().find(|&&(key, _)| key == "locals") {
@@ -538,7 +542,7 @@ fn passed_names<'a>(args: &'a str, form: &RenderForm) -> Option<Vec<&'a str>> {
     } else {
         keys
     };
-    if form.jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
+    if form.jbuilder && names.iter().any(|n| changes_locals(n, form)) {
         return None;
     }
     Some(names)
@@ -553,8 +557,6 @@ fn key_value(arg: &str) -> Option<(&str, &str)> {
         (!name.is_empty()).then_some((name, value.trim()))
     })
 }
-
-const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
 
 /// How many lines up from the cursor a multi-line render call may start.
 const MAX_CALL_LINES: usize = 20;
@@ -618,18 +620,24 @@ pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<String>, &
     Some((r, names, typed))
 }
 
-/// Where the last `{` that `text` leaves open is.
+/// Where the last `{` that `text` leaves open is, braces in string literals aside.
 fn open_brace(text: &str) -> Option<usize> {
-    let mut depth = 0usize;
-    for (i, c) in text.char_indices().rev() {
-        match c {
-            '}' => depth += 1,
-            '{' if depth == 0 => return Some(i),
-            '{' => depth -= 1,
+    let (mut open, mut quote, mut escaped) = (Vec::new(), None, false);
+    for (i, c) in text.char_indices() {
+        match (quote, c) {
+            _ if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => open.push(i),
+            (None, '}') => {
+                open.pop();
+            }
             _ => {}
         }
     }
-    None
+    open.pop()
 }
 
 /// `before` less a trailing `locals:` or `:locals =>`.
@@ -668,6 +676,8 @@ mod tests {
         assert_eq!(key(r#"json.partial! "card", locals: { user: u, |"#), card("user", ""));
         assert_eq!(key(r#"json.partial! "card", |"#), card("", ""));
         assert_eq!(key(r#"json.partial! "card", collection: @c, as: :c, |"#), None, "Jbuilder's own options");
+        assert_eq!(key(r#"<%= render "card", title: "{", | %>"#), card("title", ""), "a brace in a string");
+        assert_eq!(key(r#"= render partial: "card", locals: { t: "}", |"#), card("t", ""));
     }
 
     #[test]
