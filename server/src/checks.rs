@@ -217,7 +217,7 @@ fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
 /// Diagnostic codes every language shares.
 pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
 const RUBY_SYNTAX: &str = "ruby-syntax";
-const STRICT_LOCALS: &str = "strict-locals";
+pub(crate) const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 

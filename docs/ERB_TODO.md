@@ -124,6 +124,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt` (`server/src/html_lint.rs`)
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/lsp.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
 - [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/lsp.rs` `strict_locals_mismatches`; literal `dir/name` renders, also when their arguments continue on later lines, in hash-rocket and Jbuilder spellings; one argument reader with the local keys completion, `partials::passed_names`)
+- [x] Quick fixes on strict-locals warnings: pass the missing locals (`user: nil`), remove an unknown local from the call, or declare it in the partial's `locals:` (`server/src/lsp.rs` `strict_locals_fixes`, `partials::add_locals_edit` / `remove_local_edit`, `strict_locals::Comment::declare`; `test/e2e.js` "strict locals quick fixes")
 - [x] `raw` / `html_safe` / `<%==` are valid Erubi, so they aren't reported (`unsafe-output` removed)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)
