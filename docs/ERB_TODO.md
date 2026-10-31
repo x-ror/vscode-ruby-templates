@@ -182,6 +182,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Partial hover shows its strict locals signature (`server/src/lsp.rs` `render_hover`)
 - [x] i18n key hover shows the translations (`server/src/i18n.rs`; missing locales listed)
 - [x] Route helper hover shows verb + path, with every verb on that path and its controller#action
+- [x] Hover on a partial's strict local: required or its default, and how many `render` calls pass it (`server/src/lsp.rs` `local_hover`; `test/e2e.js` "partial local hover")
 - [x] `@ivar` hover lists the controller lines that assign it, each linked, with its code (a statement continued on later lines in full); in ERB, Slim and Haml (`server/src/ivars.rs` `hover`; `test/e2e.js` "ivars and locals")
 - [x] Hover on ERB tag punctuation explains the tag type (`<%==` = raw, `-%>` = trim) (`server/src/erb.rs` `tag_doc`)
 - [x] Helper docs link to api.rubyonrails.org (`server/src/helpers.rs` `doc_url`)

@@ -4,7 +4,7 @@ use crate::completion::{
     block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
     local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions, stimulus_completions,
 };
-use crate::lang::{file_name, html_host, TemplateLang};
+use crate::lang::{file_name, html_host, is_partial, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, outline, partial_rename,
     partials, project::Project, rails_paths, routes, ruby, schema, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
@@ -48,6 +48,8 @@ struct Backend {
     /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration and `slim.format.enabled` is on:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
+    /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
+    local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
     publishes: Arc<DashMap<Url, u64>>,
     next_publish: AtomicU64,
@@ -66,6 +68,24 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
+}
+
+/// Is the word under `col` a hash or keyword key (`size: 1`) rather than a value?
+fn is_key(line: &str, col: usize) -> bool {
+    let rest = &line[col.min(line.len())..];
+    let after = rest.trim_start_matches(|c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!'));
+    after.starts_with(':') && !after.starts_with("::")
+}
+
+/// A partial's strict local: required or its default, and how many `render` calls pass it.
+fn local_hover(name: &str, default: Option<&str>, passes: usize) -> String {
+    let declared = default.map_or_else(|| "required".to_string(), |d| format!("default {}", util::inline_code(d)));
+    let passed = match passes {
+        0 => "No `render` passes it".to_string(),
+        1 => "Passed by 1 `render` call".to_string(),
+        n => format!("Passed by {n} `render` calls"),
+    };
+    format!("`{name}`: local, {declared}\n\n{passed}")
 }
 
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
@@ -349,21 +369,27 @@ impl Backend {
         // `link_to` or `t` is never a local; the scan below reads every view.
         let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return Ok(vec![]) };
-        let Some(views) = rails_paths::views_root(path) else { return Ok(vec![]) };
-        let (open, project, partial, local) = (self.open_texts(), Project::for_template(path), path.to_path_buf(), name.to_string());
+        let project = Project::for_template(path);
         let close = strict_locals::Close::of(&project);
-        let extra_engines = self.options().extra_engines.clone();
-        let passes = off_server_task(move || {
-            let sources = partial_rename::sources(&views, &open);
-            partial_rename::local_passes(&project, &partial, &local, &sources, &extra_engines)
-        })
-        .await?;
+        let passes = self.local_passes(project, path, name).await?;
         if !passes.is_empty() {
             return Ok(passes);
         }
         let declared = partials::strict_locals(text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
         Ok(comment.filter(|_| declared).and_then(|line| line_location(path, line)).into_iter().collect())
+    }
+
+    /// The `render` calls that pass `local` to the partial at `path`, read from app/views and the open documents.
+    async fn local_passes(&self, project: Project, path: &Path, local: &str) -> Result<Vec<Location>> {
+        let Some(views) = rails_paths::views_root(path) else { return Ok(vec![]) };
+        let (open, partial, local) = (self.open_texts(), path.to_path_buf(), local.to_string());
+        let extra_engines = self.options().extra_engines.clone();
+        off_server_task(move || {
+            let sources = partial_rename::sources(&views, &open);
+            partial_rename::local_passes(&project, &partial, &local, &sources, &extra_engines)
+        })
+        .await
     }
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
@@ -463,6 +489,7 @@ impl LanguageServer for Backend {
             return;
         };
         self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
+        self.local_callers.clear();
         self.warm_caches(&p.text_document.uri);
         self.publish_later(p.text_document.uri, Duration::ZERO);
     }
@@ -482,6 +509,7 @@ impl LanguageServer for Backend {
             }
             doc.version = version;
         }
+        self.local_callers.clear();
         self.publish_later(p.text_document.uri, DIAGNOSTICS_DEBOUNCE);
     }
 
@@ -489,6 +517,7 @@ impl LanguageServer for Backend {
         let events: Vec<(PathBuf, FileChangeType)> =
             p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
+        self.local_callers.clear();
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
@@ -505,6 +534,7 @@ impl LanguageServer for Backend {
         }
         self.publishes.remove(&p.text_document.uri);
         self.docs.remove(&p.text_document.uri);
+        self.local_callers.clear();
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
     }
 
@@ -628,6 +658,28 @@ impl LanguageServer for Backend {
         if let Some(name) = ivars::name_at(line, col).filter(|_| code_here) {
             let assignments = file.as_ref().map(|(project, path)| ivars::for_view(project, path)).unwrap_or_default();
             return Ok(ivars::hover(&assignments, name).and_then(markdown_hover));
+        }
+        let declared_local = file.as_ref().filter(|_| code_here && is_partial(&uri)).and_then(|(project, _)| {
+            let name = helper_defs::name_at(line, col).filter(|_| !is_key(line, col))?;
+            let sig = partials::strict_locals(&doc.text, strict_locals::Close::of(project))?;
+            let local = sig.locals.into_iter().find(|(local, _)| local == name)?;
+            // A block variable of the same name shadows the local.
+            let engines = &self.options().extra_engines;
+            (!block_locals(doc.lang, &doc.text, line_start + col, engines).contains(&local.0)).then_some(local)
+        });
+        if let (Some((name, default)), Some((project, path))) = (declared_local, &file) {
+            // The guard would block the next `did_change` while the views are read.
+            drop(doc);
+            let key = (path.clone(), name.clone());
+            let passes = match self.local_callers.get(&key).map(|count| *count) {
+                Some(count) => count,
+                None => {
+                    let count = self.local_passes(project.clone(), path, &name).await?.len();
+                    self.local_callers.insert(key, count);
+                    count
+                }
+            };
+            return Ok(markdown_hover(local_hover(&name, default.as_deref(), passes)));
         }
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
             return Ok(markdown_hover(helper_hover(h)));
@@ -975,6 +1027,7 @@ pub async fn serve() {
         templates: Arc::default(),
         locales: Arc::default(),
         cache_generation: Arc::default(),
+        local_callers: DashMap::new(),
         warming: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),

@@ -32,6 +32,10 @@ fs.writeFileSync(
   path.join(views, "strict", "_row.html.erb"),
   "<%# locals: (a:, b: 1) %>\n",
 );
+fs.writeFileSync(
+  path.join(views, "strict", "list.html.erb"),
+  '<%= render "strict/row", a: 1 %>\n',
+);
 fs.mkdirSync(path.join(root, "app", "components"), { recursive: true });
 fs.writeFileSync(
   path.join(views, "users", "_card.html.slim"),
@@ -1122,6 +1126,69 @@ const check = (label, actual, expected) => {
     slim: ["a:  (local (required))"],
     haml: ["a:  (local (required))", "b:  (local = 1)"],
   });
+  const rowUri = fileUri(path.join(views, "strict", "_row.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: rowUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%# locals: (a:, b: 1) %>\n<%= a %> <%= b %> <%= link_to %>\n<% [1].each do |a| %><%= a %><% end %><%= f(b: 1) %>\n",
+      },
+    },
+    true,
+  );
+  const hoverText = async (character) =>
+    (await req("textDocument/hover", rowUri, 1, character)).result?.contents
+      .value ?? null;
+  check(
+    "partial local hover",
+    [
+      await hoverText(4),
+      await hoverText(13),
+      (await hoverText(23))?.split("\n")[0],
+      (await req("textDocument/hover", rowUri, 2, 25)).result,
+      (await req("textDocument/hover", rowUri, 2, 44)).result,
+    ],
+    [
+      "`a`: local, required\n\nPassed by 1 `render` call",
+      "`b`: local, default `1`\n\nNo `render` passes it",
+      "```ruby",
+      null,
+      null,
+    ],
+  );
+  const i18nDocs = {
+    slim: '= t(".title")\n= t(".ti")\n',
+    haml: '= t(".title")\n%p= t(".ti")\n',
+  };
+  const i18nResults = {};
+  for (const [lang, text] of Object.entries(i18nDocs)) {
+    const i18nUri = fileUri(path.join(views, "users", `index.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: i18nUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const typed = text.split("\n")[1].length;
+    i18nResults[lang] = [
+      firstLine(await req("textDocument/hover", i18nUri, 0, 8)),
+      (await req("textDocument/definition", i18nUri, 0, 8)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+      labels(await req("textDocument/completion", i18nUri, 1, typed - 2)),
+    ];
+  }
+  const i18nExpected = [
+    "`users.index.title`",
+    ["/config/locales/en.yml:3", "/config/locales/uk.yml:3"],
+    [".title"],
+  ];
+  check("lazy i18n keys in Slim and Haml", i18nResults, {
+    slim: i18nExpected,
+    haml: i18nExpected,
+  });
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),
   );
@@ -1347,6 +1414,8 @@ const check = (label, actual, expected) => {
     .sort();
   check("willRenameFiles _card", renameEdits, [
     "/app/views/users/edit.html+phone.slim 0:10 tile",
+    // Open and never saved: renamed in the buffer too.
+    "/app/views/users/edit.html.slim 7:14 tile",
     "/app/views/users/index.html.erb 0:12 tile",
     "/app/views/users/index.html.erb 9:12 tile",
     "/app/views/users/outline.html.slim 2:18 tile",
