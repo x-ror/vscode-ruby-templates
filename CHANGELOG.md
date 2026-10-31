@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The strict-locals check reads the same `render` calls as partial-local completion: `:locals => {` and `:a => 1` keys, and `render partial:` with other options such as `layout:` next to `locals:`.
+
 ## 0.5.0
 
 - Hover on `@user` in a view lists where its controller assigns it (the action and its `before_action` callbacks), with the code of each assignment, in full when it continues on later lines, and a link to it.

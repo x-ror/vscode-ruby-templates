@@ -870,6 +870,8 @@ mod tests {
             "<%= render partial: \"users/plain\", locals: { a: 1 }, layout: \"users/card\" %>\n",
             "<%= render \"users/card\",\n      user: u %>\n",
             "<%= render(\"users/card\",\n  size: :lg) %>\n",
+            "<%= render partial: \"users/card\", formats: [:html] %>\n",
+            "<%= render partial: \"users/card\", object: u %> <%= render :partial => \"users/card\", :locals => { :user => u } %>\n",
         );
         let got: Vec<(String, Range)> = render_checks(TemplateLang::Erb, &file, &lock_with("7.1.0"), text, STRICT_LOCALS)
             .into_iter()
@@ -877,7 +879,9 @@ mod tests {
             .collect();
         let at = |l, s, e| Range::new(Position::new(l, s), Position::new(l, e));
         let missing = |line| ("missing local: :user".to_string(), at(line, 12, 22));
-        assert_eq!(got, vec![missing(1), missing(7)]);
+        // `formats:` passes no locals; `object:` passes the partial's own, which the check can't see.
+        let options_missing = ("missing local: :user".to_string(), at(9, 21, 31));
+        assert_eq!(got, vec![missing(1), missing(7), options_missing]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

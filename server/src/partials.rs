@@ -480,43 +480,83 @@ fn split_args(s: &str) -> Option<Vec<&str>> {
 }
 
 /// Local names passed by a literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }` in `line`, the call's
-/// `call_text`; `None` for anything less simple (splats, `collection:`, variables).
+/// `call_text`; `None` for anything less simple (splats, variables, options that add locals).
 pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
     if r.kind != RenderKind::Partial {
         return None;
     }
     let rest = line.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
     // `render("x", a: 1)`: the call's closing paren is the one that doesn't balance.
-    let args = split_args(rest).or_else(|| split_args(rest.strip_suffix(')')?))?;
-    let args = match args.as_slice() {
-        [] => &[][..],
-        ["", args @ ..] => args,
+    let args = if split_args(rest).is_some() { rest } else { rest.strip_suffix(')')? };
+    passed_names(args, &RenderForm::of(line, r))
+}
+
+/// How a partial render spells its locals.
+struct RenderForm {
+    /// `render partial: "x", locals: {…}` rather than `render "x", a: 1`.
+    options: bool,
+    /// `json.partial!`, which also reads a `locals:` hash next to the name, and takes its own options out of the locals.
+    jbuilder: bool,
+}
+
+impl RenderForm {
+    fn of(line: &str, r: &RenderRef) -> Self {
+        RenderForm {
+            options: line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']),
+            jbuilder: line[r.call..].starts_with("json."),
+        }
+    }
+
+    fn locals_in_hash(&self, keys: &[&str]) -> bool {
+        self.options || (self.jbuilder && keys.contains(&"locals"))
+    }
+}
+
+/// Options that pass locals of their own: the object or each collection item under the partial's name, or `as:`.
+const ADDS_LOCALS: [&str; 3] = ["object", "collection", "as"];
+
+/// Does option `key` change the locals the partial gets? Jbuilder also takes `cached:` out of them.
+fn changes_locals(key: &str, form: &RenderForm) -> bool {
+    ADDS_LOCALS.contains(&key) || (form.jbuilder && key == "cached")
+}
+
+/// The local names in `args`, the text after a partial's name up to the call's end; `None` unless every key is literal.
+fn passed_names<'a>(args: &'a str, form: &RenderForm) -> Option<Vec<&'a str>> {
+    let pairs: Vec<(&str, &str)> = match split_args(args)?.as_slice() {
+        [] => vec![],
+        ["", rest @ ..] => rest.iter().map(|arg| key_value(arg)).collect::<Option<_>>()?,
         _ => return None,
     };
-    let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
-    let jbuilder = line[r.call..].starts_with("json.");
-    let pairs = match (options_form, args) {
-        // Jbuilder reads a lone `locals:` as the locals hash, like the options form.
-        (false, [locals]) if jbuilder && keyword_arg(locals).is_some_and(|(name, _)| name == "locals") => {
-            split_args(keyword_arg(locals)?.1.strip_prefix('{')?.strip_suffix('}')?)?
+    let keys: Vec<&str> = pairs.iter().map(|&(key, _)| key).collect();
+    let names = if form.locals_in_hash(&keys) {
+        if keys.iter().any(|k| changes_locals(k, form)) {
+            return None;
         }
-        (false, args) => args.to_vec(),
-        (true, []) => vec![],
-        (true, [locals]) => match keyword_arg(locals)? {
-            ("locals", hash) => split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?,
-            _ => return None,
-        },
-        (true, _) => return None,
+        match pairs.iter().find(|&&(key, _)| key == "locals") {
+            Some((_, hash)) => split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?
+                .into_iter()
+                .map(|p| key_value(p).map(|(k, _)| k))
+                .collect::<Option<_>>()?,
+            None => vec![],
+        }
+    } else {
+        keys
     };
-    let names: Vec<&str> = pairs.into_iter().map(|p| keyword_arg(p).map(|(name, _)| name)).collect::<Option<_>>()?;
-    // Jbuilder takes these out of the locals; `as:` names the local the collection items arrive in.
-    if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
+    if form.jbuilder && names.iter().any(|n| changes_locals(n, form)) {
         return None;
     }
     Some(names)
 }
 
-const JBUILDER_OPTIONS: [&str; 3] = ["collection", "as", "cached"];
+/// `a: 1` or `:a => 1` as `(a, 1)`.
+fn key_value(arg: &str) -> Option<(&str, &str)> {
+    keyword_arg(arg).or_else(|| {
+        let rest = arg.strip_prefix(':')?;
+        let name = &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len())];
+        let value = rest[name.len()..].trim_start().strip_prefix("=>")?;
+        (!name.is_empty()).then_some((name, value.trim()))
+    })
+}
 
 /// How many lines up from the cursor a multi-line render call may start.
 const MAX_CALL_LINES: usize = 20;
@@ -548,7 +588,7 @@ pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
 }
 
 /// `local_key_at` for the text before `offset`, whose render call may start up to `MAX_CALL_LINES` lines higher.
-pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
+pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<String>, &str)> {
     let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
     line_starts.into_iter().find_map(|start| {
         local_key_at(&text[start..offset], offset - start)
@@ -557,7 +597,7 @@ pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<&st
 }
 
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `col`.
-pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &str)> {
+pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<String>, &str)> {
     let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
     let args = line.get(r.end + 1..col)?;
     if args.contains("%>") || call_text(line, &r).len() < col {
@@ -565,52 +605,45 @@ pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<&str>, &st
     }
     let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
     let typed = &args[head.len()..];
-    let options_form = line[..r.start.saturating_sub(1)].trim_end().ends_with([':', '>']);
-    // Jbuilder also reads a `locals:` hash next to the partial's name.
-    let jbuilder = line[r.call..].starts_with("json.");
-    let names = if options_form || (jbuilder && head.contains('{')) {
-        // `render partial: "x", locals: { a: 1, `: only keyword options may come before `locals:`.
-        let (before, hash) = head.split_once('{')?;
-        key_names(listed_args(without_locals_key(before)?)?)?;
-        let hash = hash.trim();
-        key_names(if hash.is_empty() { hash } else { hash.strip_suffix(',')? })?
-    } else {
-        key_names(listed_args(head)?)?
-    };
-    // Jbuilder takes these out of the locals and renders a collection, which the keys can't describe.
-    if jbuilder && names.iter().any(|n| JBUILDER_OPTIONS.contains(n)) {
-        return None;
+    let head = head.trim_end();
+    let form = RenderForm::of(line, &r);
+    // In the options form keys are typed inside `locals: {`; next to the name, only Jbuilder reads that hash.
+    let open = open_brace(head);
+    match open {
+        Some(at) if (form.options || form.jbuilder) && without_locals_key(&head[..at]).is_some() => {}
+        None if !form.options => {}
+        _ => return None,
     }
+    let listed = if head.ends_with('{') { head } else { head.strip_suffix(',')? };
+    let closed = if open.is_some() { format!("{listed}}}") } else { listed.to_string() };
+    let names = passed_names(&closed, &form)?.into_iter().map(str::to_string).collect();
     Some((r, names, typed))
+}
+
+/// Where the last `{` that `text` leaves open is, braces in string literals aside.
+fn open_brace(text: &str) -> Option<usize> {
+    let (mut open, mut quote, mut escaped) = (Vec::new(), None, false);
+    for (i, c) in text.char_indices() {
+        match (quote, c) {
+            _ if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => open.push(i),
+            (None, '}') => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    open.pop()
 }
 
 /// `before` less a trailing `locals:` or `:locals =>`.
 fn without_locals_key(before: &str) -> Option<&str> {
     let before = before.trim_end();
     before.strip_suffix("locals:").or_else(|| before.strip_suffix("=>")?.trim_end().strip_suffix(":locals"))
-}
-
-/// `a: 1` of the text `, a: 1, ` that follows a call's first argument; `None` when the text is anything else, such as
-/// the end of a nested call (`render("b"), `).
-fn listed_args(after_first: &str) -> Option<&str> {
-    let listed = after_first.trim().strip_prefix(',')?.trim();
-    if listed.is_empty() {
-        Some(listed)
-    } else {
-        listed.strip_suffix(',')
-    }
-}
-
-/// The keys of `a: 1, :b => 2`; `None` when an argument isn't a pair with a literal key.
-fn key_names(listed: &str) -> Option<Vec<&str>> {
-    split_args(listed)?.into_iter().map(|arg| keyword_arg(arg).map(|(name, _)| name).or_else(|| rocket_key(arg))).collect()
-}
-
-/// `b` of `:b => 2`.
-fn rocket_key(arg: &str) -> Option<&str> {
-    let rest = arg.strip_prefix(':')?;
-    let name = &rest[..rest.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(rest.len())];
-    (!name.is_empty() && rest[name.len()..].trim_start().starts_with("=>")).then_some(name)
 }
 
 #[cfg(test)]
@@ -643,6 +676,8 @@ mod tests {
         assert_eq!(key(r#"json.partial! "card", locals: { user: u, |"#), card("user", ""));
         assert_eq!(key(r#"json.partial! "card", |"#), card("", ""));
         assert_eq!(key(r#"json.partial! "card", collection: @c, as: :c, |"#), None, "Jbuilder's own options");
+        assert_eq!(key(r#"<%= render "card", title: "{", | %>"#), card("title", ""), "a brace in a string");
+        assert_eq!(key(r#"= render partial: "card", locals: { t: "}", |"#), card("t", ""));
     }
 
     #[test]
@@ -947,6 +982,12 @@ mod tests {
         assert_eq!(passed(r#"json.partial! partial: "posts/post", locals: { post: p }"#), Some(vec!["post"]));
         assert_eq!(passed(r#"json.partial! "posts/post", collection: @posts, as: :post"#), None);
         assert_eq!(passed(r#"json.array! @posts, partial: "posts/post", as: :post"#), None);
+        assert_eq!(passed(r#"<%= render :partial => "card", :locals => { :a => 1, b: 2 } %>"#), Some(vec!["a", "b"]));
+        assert_eq!(passed(r#"<%= render "card", :a => 1 %>"#), Some(vec!["a"]));
+        assert_eq!(passed(r#"<%= render partial: "card", layout: "box", locals: { a: 1 } %>"#), Some(vec!["a"]));
+        assert_eq!(passed(r#"<%= render partial: "card", formats: [:html] %>"#), Some(vec![]));
+        assert_eq!(passed(r#"<%= render partial: "card", object: @u %>"#), None, "the object arrives as a local");
+        assert_eq!(passed(r#"<%= render partial: "card", collection: @us, locals: { a: 1 } %>"#), None);
         assert_eq!(passed(r#"<%= render "card", collection: @cards %>"#), Some(vec!["collection"]));
         assert_eq!(passed(r#"json.partial! "posts/post", locals: { post: @post }"#), Some(vec!["post"]));
         assert_eq!(passed(r#"<%= @x.to_json.html_safe %><%= render "card", as: 1 %>"#), Some(vec!["as"]));
