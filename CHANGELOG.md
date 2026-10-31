@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Quick fixes on strict-locals warnings: pass the missing locals to the `render` call, or remove an unknown local from it or declare it in the partial's `locals:` comment.
+
 ## 0.6.0
 
 - Hover on a local in a partial with strict locals shows whether it is required or its default, and how many `render` calls pass it.

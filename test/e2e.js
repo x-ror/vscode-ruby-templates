@@ -428,6 +428,52 @@ const check = (label, actual, expected) => {
   check("strict locals under actionview 7.1", diagnostics(strictUri), [
     "1: missing local: :a",
   ]);
+  const strictFixes = async (u, text) => {
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: u, languageId: "erb", version: 1, text } },
+      true,
+    );
+    const at = {
+      start: { line: 0, character: 12 },
+      end: { line: 0, character: 22 },
+    };
+    const { result } = await send("textDocument/codeAction", {
+      textDocument: { uri: u },
+      range: at,
+      context: {
+        diagnostics: [{ range: at, code: "strict-locals", message: "" }],
+      },
+    });
+    return result
+      .filter((a) => a.kind === "quickfix")
+      .map((a) => {
+        const [[target, [e]]] = Object.entries(a.edit.changes);
+        return `${a.title} | ${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.character} "${e.newText}"`;
+      });
+  };
+  const extraUri = fileUri(path.join(views, "strict", "extra.html.erb"));
+  check(
+    "strict locals quick fixes",
+    [
+      await strictFixes(strictUri, '<%= render "strict/row" %>\n'),
+      await strictFixes(extraUri, '<%= render "strict/row", a: 1, c: 2 %>\n'),
+    ],
+    [
+      [
+        'Pass `a` to the render | /app/views/strict/show.html.erb 0:23-23 ", a: nil"',
+      ],
+      [
+        'Remove `c` from the render | /app/views/strict/extra.html.erb 0:29-35 ""',
+        'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+      ],
+    ],
+  ); // An unsaved document counts as a caller in later checks.
+  await send(
+    "textDocument/didClose",
+    { textDocument: { uri: extraUri } },
+    true,
+  );
 
   await send(
     "textDocument/didOpen",
