@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
 - Hover on `@user` in a view lists where its controller assigns it (the action and its `before_action` callbacks), with the code of each assignment, in full when it continues on later lines, and a link to it.
 - Partial-local completion also in `render :partial => "card", :locals => {` and Jbuilder's `json.partial! "card", locals: {`.
