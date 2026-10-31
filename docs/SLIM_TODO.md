@@ -133,7 +133,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] Exact Ruby spans for Slim completion and unresolved-render warnings: `-`/`=`/`==` (also `p= x`), `attr=ruby` in inline and wrapped attributes, splats, `#{}` in text, quoted values and interpolating engines, `ruby:` bodies, `,`/`\` continuations; Skim never counts as Ruby (`server/src/slim_parser.rs` `parse`, `in_ruby`, a port of `Slim::Parser`; `server/src/lsp.rs` `completion`, `unresolved_renders`). An unclosed `#{` before the cursor counts as Ruby for completion only (`in_open_interpolation`)
 - [x] Completion of embedded engine names (Slim 5 engines plus `rubyTemplates.slim.extraEngines`) where a tag starts (`server/src/slim_complete.rs`, `test/e2e.js`)
 - [x] HTML tag and attribute completion where a tag or attribute name may start (`server/src/slim_complete.rs`, `server/src/html.rs`; a modest static list, ERB has none to reuse)
-- [x] Locals, instance variables, i18n keys, route helpers: the ERB code paths take Slim's Ruby spans as they are (`server/src/ivars.rs`, `server/src/i18n.rs`, `server/src/routes.rs`; `test/e2e.js` "Slim: ivars, routes, i18n, locals")
+- [x] Locals, instance variables, i18n keys, route helpers: the ERB code paths take Slim's Ruby spans as they are (`server/src/ivars.rs`, `server/src/i18n.rs`, `server/src/routes.rs`; `test/e2e.js` "Slim: ivars, routes, i18n, locals", "lazy i18n keys in Slim and Haml")
 - [x] Block variables (`do |user|`) in nested lines (`server/src/slim_ruby.rs` `block_locals`, as in ERB TODO section 10)
 - [x] Hover on Slim line markers: `-`, `=`, `==` with `<`/`>`, `/`, `/!`, `/[if]`, `|`, `'`, engines (`server/src/slim_hover.rs`, `test/e2e.js`)
 

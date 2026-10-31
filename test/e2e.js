@@ -1156,6 +1156,36 @@ const check = (label, actual, expected) => {
       "```ruby",
     ],
   );
+  const i18nDocs = {
+    slim: '= t(".title")\n= t(".ti")\n',
+    haml: '= t(".title")\n%p= t(".ti")\n',
+  };
+  const i18nResults = {};
+  for (const [lang, text] of Object.entries(i18nDocs)) {
+    const i18nUri = fileUri(path.join(views, "users", `index.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: i18nUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const typed = text.split("\n")[1].length;
+    i18nResults[lang] = [
+      firstLine(await req("textDocument/hover", i18nUri, 0, 8)),
+      (await req("textDocument/definition", i18nUri, 0, 8)).result?.map(
+        (l) => `${rel(l.uri)}:${l.range.start.line}`,
+      ),
+      labels(await req("textDocument/completion", i18nUri, 1, typed - 2)),
+    ];
+  }
+  const i18nExpected = [
+    "`users.index.title`",
+    ["/config/locales/en.yml:3", "/config/locales/uk.yml:3"],
+    [".title"],
+  ];
+  check("lazy i18n keys in Slim and Haml", i18nResults, {
+    slim: i18nExpected,
+    haml: i18nExpected,
+  });
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),
   );
