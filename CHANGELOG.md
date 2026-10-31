@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 - Hover on a local in a partial with strict locals shows whether it is required or its default, and how many `render` calls pass it.
 - The strict-locals check reads the same `render` calls as partial-local completion: `:locals => {` and `:a => 1` keys, and `render partial:` with other options such as `layout:` next to `locals:`.
