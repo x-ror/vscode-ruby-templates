@@ -123,7 +123,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 - [x] `<% form_with … do %>` renders nothing but is valid Ruby, so it isn't reported (`silent-output-helper` removed)
 - [x] Duplicate HTML `id` attributes, `<img>`/`image_tag` without `alt` (`server/src/html_lint.rs`)
 - [x] Unresolved `render "partial"` reported as a warning (`server/src/lsp.rs` `unresolved_renders`; only `dir/name` with an existing dir — bare names need controller lookup)
-- [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/lsp.rs` `strict_locals_mismatches`; literal `dir/name` renders, also when their arguments continue on later lines)
+- [x] Strict locals: missing required local / unknown local passed to `render` (`server/src/lsp.rs` `strict_locals_mismatches`; literal `dir/name` renders, also when their arguments continue on later lines, in hash-rocket and Jbuilder spellings; one argument reader with the local keys completion, `partials::passed_names`)
 - [x] `raw` / `html_safe` / `<%==` are valid Erubi, so they aren't reported (`unsafe-output` removed)
 - [x] erb_lint integration (`erb_lint --format json --stdin` on open and save, `rubyTemplates.erbLint.enabled`; `src/extension.js` `registerErbLint`, `src/erbLint.js`)
 - [x] Herb (`@herb-tools/linter`) as an optional linter: `herb-lint --json` on open and save, the project's `node_modules/.bin` first (`rubyTemplates.herbLint.enabled`, `src/herbLint.js`)

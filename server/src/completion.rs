@@ -25,14 +25,20 @@ pub(crate) fn local_completions(text: &str, typed: &str, close: Close) -> Vec<Co
 }
 
 /// The strict locals of the partial `r` renders that the call doesn't pass yet, inserted as `name: `.
-pub(crate) fn render_local_completions(project: &Project, path: &Path, r: &RenderRef, passed: &[&str], typed: &str) -> Vec<CompletionItem> {
+pub(crate) fn render_local_completions(
+    project: &Project,
+    path: &Path,
+    r: &RenderRef,
+    passed: &[String],
+    typed: &str,
+) -> Vec<CompletionItem> {
     let close = Close::of(project);
     let Some(sig) = partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close)) else {
         return vec![];
     };
     sig.locals
         .into_iter()
-        .filter(|(name, _)| name.starts_with(typed) && !passed.contains(&name.as_str()))
+        .filter(|(name, _)| name.starts_with(typed) && !passed.contains(name))
         .map(|(name, default)| CompletionItem { insert_text: Some(format!("{name}: ")), ..local_item(name, default) })
         .collect()
 }
