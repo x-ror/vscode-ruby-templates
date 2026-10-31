@@ -1122,6 +1122,40 @@ const check = (label, actual, expected) => {
     slim: ["a:  (local (required))"],
     haml: ["a:  (local (required))", "b:  (local = 1)"],
   });
+  // Callers are read from app/views on disk; open documents only override their text.
+  fs.writeFileSync(
+    path.join(views, "strict", "list.html.erb"),
+    '<%= render "strict/row", a: 1 %>\n',
+  );
+  const rowUri = fileUri(path.join(views, "strict", "_row.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: rowUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%# locals: (a:, b: 1) %>\n<%= a %> <%= b %> <%= link_to %>\n",
+      },
+    },
+    true,
+  );
+  const hoverText = async (character) =>
+    (await req("textDocument/hover", rowUri, 1, character)).result?.contents
+      .value ?? null;
+  check(
+    "partial local hover",
+    [
+      await hoverText(4),
+      await hoverText(13),
+      (await hoverText(23))?.split("\n")[0],
+    ],
+    [
+      "`a`: local, required\n\nPassed by 1 `render` call",
+      "`b`: local, default `1`\n\nNo `render` passes it",
+      "```ruby",
+    ],
+  );
   const streamUri = fileUri(
     path.join(views, "users", "create.turbo_stream.erb"),
   );
