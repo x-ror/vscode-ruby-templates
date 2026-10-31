@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- The strict-locals check reads the same `render` calls as partial-local completion: `:locals => {` and `:a => 1` keys, Jbuilder's `json.partial! "card", locals: {`, and `render partial:` with other options such as `layout:` next to `locals:`.
+- The strict-locals check reads the same `render` calls as partial-local completion: `:locals => {` and `:a => 1` keys, and `render partial:` with other options such as `layout:` next to `locals:`.
 
 ## 0.5.0
 
