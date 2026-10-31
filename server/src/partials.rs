@@ -485,10 +485,88 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
     if r.kind != RenderKind::Partial {
         return None;
     }
-    let rest = line.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
+    passed_names(render_args(line, r)?, &RenderForm::of(line, r))
+}
+
+/// The arguments after a literal render's partial name in `call`, its `call_text`, without the call's closing `)`.
+fn render_args<'a>(call: &'a str, r: &RenderRef) -> Option<&'a str> {
+    let rest = call.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
     // `render("x", a: 1)`: the call's closing paren is the one that doesn't balance.
-    let args = if split_args(rest).is_some() { rest } else { rest.strip_suffix(')')? };
-    passed_names(args, &RenderForm::of(line, r))
+    if split_args(rest).is_some() {
+        Some(rest)
+    } else {
+        rest.strip_suffix(')')
+    }
+}
+
+/// A replacement for the bytes `range` of a text.
+pub type ByteEdit = (std::ops::Range<usize>, String);
+
+/// The value a quick fix gives a local it adds, for the author to replace.
+pub const NEW_LOCAL_VALUE: &str = "nil";
+
+/// The edit to `call`, a literal render's `call_text`, that passes `names` too.
+pub fn add_locals_edit(call: &str, r: &RenderRef, names: &[&str]) -> Option<ByteEdit> {
+    let new = names.iter().map(|n| format!("{n}: {NEW_LOCAL_VALUE}")).collect::<Vec<_>>().join(", ");
+    let (pairs, form) = (render_pairs(call, r)?, RenderForm::of(call, r));
+    let keys: Vec<&str> = pairs.iter().map(|&(key, _, _)| key).collect();
+    let end = pairs.last().map_or(r.end + 1, |&(_, _, arg)| offset_in(call, arg) + arg.len());
+    if !form.locals_in_hash(&keys) {
+        return Some((end..end, format!(", {new}")));
+    }
+    if keys.iter().any(|k| changes_locals(k, &form)) {
+        return None;
+    }
+    let Some(&(_, hash, _)) = pairs.iter().find(|&&(key, _, _)| key == "locals") else {
+        return Some((end..end, format!(", locals: {{ {new} }}")));
+    };
+    let inner = hash.strip_prefix('{')?.strip_suffix('}')?;
+    Some(match split_args(inner)?.last() {
+        Some(last) => {
+            let at = offset_in(call, last) + last.len();
+            (at..at, format!(", {new}"))
+        }
+        None => {
+            let at = offset_in(call, inner);
+            (at..at + inner.len(), format!(" {new} "))
+        }
+    })
+}
+
+/// The edit to `call`, a literal render's `call_text`, that stops passing `name`.
+pub fn remove_local_edit(call: &str, r: &RenderRef, name: &str) -> Option<ByteEdit> {
+    let (pairs, form) = (render_pairs(call, r)?, RenderForm::of(call, r));
+    let keys: Vec<&str> = pairs.iter().map(|&(key, _, _)| key).collect();
+    let span = |arg: &str| offset_in(call, arg)..offset_in(call, arg) + arg.len();
+    if !form.locals_in_hash(&keys) {
+        let i = keys.iter().position(|&k| k == name)?;
+        // `, name: value`, from the end of what comes before.
+        let from = if i == 0 { r.end + 1 } else { span(pairs[i - 1].2).end };
+        return Some((from..span(pairs[i].2).end, String::new()));
+    }
+    let &(_, hash, _) = pairs.iter().find(|&&(key, _, _)| key == "locals")?;
+    let items = split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?;
+    let i = items.iter().position(|item| key_value(item).is_some_and(|(key, _)| key == name))?;
+    let range = match (i, items.get(i + 1)) {
+        (0, Some(next)) => span(items[0]).start..span(next).start,
+        (0, None) => span(items[0]),
+        (i, _) => span(items[i - 1]).end..span(items[i]).end,
+    };
+    Some((range, String::new()))
+}
+
+/// Each `key: value` after a literal render's partial name, with the whole argument it is.
+fn render_pairs<'a>(call: &'a str, r: &RenderRef) -> Option<Vec<(&'a str, &'a str, &'a str)>> {
+    match split_args(render_args(call, r)?)?.as_slice() {
+        [] => Some(vec![]),
+        ["", rest @ ..] => rest.iter().map(|&arg| key_value(arg).map(|(key, value)| (key, value, arg))).collect(),
+        _ => None,
+    }
+}
+
+/// Where `part`, a slice of `whole`, starts in it.
+fn offset_in(whole: &str, part: &str) -> usize {
+    part.as_ptr() as usize - whole.as_ptr() as usize
 }
 
 /// How a partial render spells its locals.
@@ -650,6 +728,40 @@ fn without_locals_key(before: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::rails_paths::files_under;
+
+    #[test]
+    fn local_edits_on_render_calls() {
+        let apply = |line: &str, edit: Option<ByteEdit>| {
+            edit.map(|(range, new)| {
+                let mut out = line.to_string();
+                out.replace_range(range, &new);
+                out
+            })
+        };
+        let add = |line: &str, names: &[&str]| apply(line, add_locals_edit(line, &render_refs(line)[0], names));
+        let remove = |line: &str, name: &str| apply(line, remove_local_edit(line, &render_refs(line)[0], name));
+        let s = |line: &str| Some(line.to_string());
+        assert_eq!(add(r#"<%= render "card" %>"#, &["user"]), s(r#"<%= render "card", user: nil %>"#));
+        assert_eq!(add(r#"<%= render("card", size: 1) %>"#, &["a", "b"]), s(r#"<%= render("card", size: 1, a: nil, b: nil) %>"#));
+        assert_eq!(
+            add(r#"= render partial: "card", locals: { size: 1 }"#, &["user"]),
+            s(r#"= render partial: "card", locals: { size: 1, user: nil }"#)
+        );
+        assert_eq!(add(r#"= render partial: "card", locals: {}"#, &["user"]), s(r#"= render partial: "card", locals: { user: nil }"#));
+        assert_eq!(add(r#"= render partial: "card""#, &["user"]), s(r#"= render partial: "card", locals: { user: nil }"#));
+        assert_eq!(add(r#"= render partial: "card", object: @u"#, &["user"]), None, "the object is a local of its own");
+        assert_eq!(remove(r#"<%= render "card", colour: 1 %>"#, "colour"), s(r#"<%= render "card" %>"#));
+        assert_eq!(remove(r#"<%= render "card", user: u, colour: 1 %>"#, "colour"), s(r#"<%= render "card", user: u %>"#));
+        assert_eq!(
+            remove(r#"= render partial: "card", locals: { colour: 1, user: u }"#, "colour"),
+            s(r#"= render partial: "card", locals: { user: u }"#)
+        );
+        assert_eq!(
+            remove(r#"= render partial: "card", locals: { user: u, colour: 1 }"#, "colour"),
+            s(r#"= render partial: "card", locals: { user: u }"#)
+        );
+        assert_eq!(remove(r#"<%= render "card", user: u %>"#, "colour"), None);
+    }
 
     #[test]
     fn local_keys_after_a_partial_name() {

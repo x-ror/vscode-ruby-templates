@@ -102,6 +102,20 @@ pub fn method_parameters(comment: Option<&Comment>) -> String {
 }
 
 impl Comment {
+    /// The edit to the template that declares `name` with `value` as its default: a byte range and its replacement.
+    pub fn declare(&self, name: &str, value: &str) -> (ByteRange<usize>, String) {
+        match self.parameters_at {
+            Some(at) => {
+                let end = at + self.parameters.len();
+                (end..end, format!(", {name}: {value}"))
+            }
+            None => {
+                let close = self.range.end - 1;
+                (close..close, format!("{name}: {value}"))
+            }
+        }
+    }
+
     /// Whether the list was blank, which Rails reads as `**nil`.
     pub fn blank(&self) -> bool {
         self.parameters_at.is_none()
@@ -191,6 +205,18 @@ mod tests {
 
     fn messages(text: &str) -> Vec<(u32, String)> {
         found(text, Close::default()).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+    }
+
+    #[test]
+    fn declare_adds_a_local_to_the_list() {
+        let declared = |text: &str| {
+            let (range, new) = find(text, Close::BeforeTagOrLineEnd).unwrap().declare("colour", "nil");
+            let mut out = text.to_string();
+            out.replace_range(range, &new);
+            out
+        };
+        assert_eq!(declared("<%# locals: (user:) %>"), "<%# locals: (user:, colour: nil) %>");
+        assert_eq!(declared("<%# locals: () %>"), "<%# locals: (colour: nil) %>");
     }
 
     #[test]

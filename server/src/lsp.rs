@@ -1,4 +1,4 @@
-use crate::checks::{diagnostics, Doc, Options, UNRESOLVED_RENDER};
+use crate::checks::{diagnostics, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
 use crate::code_context::{block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
@@ -392,6 +392,58 @@ impl Backend {
         .await
     }
 
+    /// Quick fixes for the strict-locals warning `d` on a render in `text`: pass the missing locals, or drop an unknown one
+    /// from the call or declare it in the partial.
+    fn strict_locals_fixes(&self, project: &Project, path: &Path, text: &str, d: &Diagnostic) -> Vec<CodeAction> {
+        let (line_start, line, start) = util::line_at(text, d.range.start);
+        let Some(r) = partials::render_refs(line).into_iter().find(|r| r.start == start) else { return vec![] };
+        let call = partials::call_text(&text[line_start..], &r);
+        let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
+        // Several variants or formats: which one Rails picks depends on the request, as the check says.
+        let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
+        let (Ok(uri), Ok(partial_uri)) = (Url::from_file_path(path), Url::from_file_path(&partial)) else { return vec![] };
+        let partial_text = match self.docs.get(&partial_uri) {
+            Some(doc) => doc.text.clone(),
+            None => std::fs::read_to_string(&partial).unwrap_or_default(),
+        };
+        let close = strict_locals::Close::of(project);
+        let (Some(sig), Some(comment)) = (partials::strict_locals(&partial_text, close), strict_locals::find(&partial_text, close)) else {
+            return vec![];
+        };
+        let missing: Vec<&str> =
+            sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
+        let unknown: Vec<&str> = passed.iter().copied().filter(|p| !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
+        let at = |text: &str, offset: usize| util::offset_to_position(text, offset);
+        let here = |(range, new): partials::ByteEdit| {
+            let range = Range::new(at(text, line_start + range.start), at(text, line_start + range.end));
+            HashMap::from([(uri.clone(), vec![TextEdit::new(range, new)])])
+        };
+        let action = |title: String, changes, preferred| CodeAction {
+            title,
+            kind: Some(CodeActionKind::QUICKFIX),
+            diagnostics: Some(vec![d.clone()]),
+            edit: Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+            is_preferred: Some(preferred),
+            ..Default::default()
+        };
+        let quoted = |names: &[&str]| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
+        let mut out = Vec::new();
+        if let Some(edit) = (!missing.is_empty()).then(|| partials::add_locals_edit(call, &r, &missing)).flatten() {
+            out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), true));
+        }
+        let shown = partial.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+        for name in unknown {
+            if let Some(edit) = partials::remove_local_edit(call, &r, name) {
+                out.push(action(format!("Remove `{name}` from the render"), here(edit), false));
+            }
+            let (range, new) = comment.declare(name, partials::NEW_LOCAL_VALUE);
+            let range = Range::new(at(&partial_text, range.start), at(&partial_text, range.end));
+            let changes = HashMap::from([(partial_uri.clone(), vec![TextEdit::new(range, new)])]);
+            out.push(action(format!("Declare `{name}` in the locals of `{shown}`"), changes, false));
+        }
+        out
+    }
+
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
         let root = rails_paths::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
@@ -727,6 +779,9 @@ impl LanguageServer for Backend {
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
+        }
+        for d in p.context.diagnostics.iter().filter(|d| util::code(d) == Some(STRICT_LOCALS)) {
+            actions.extend(self.strict_locals_fixes(&project, &path, &doc.text, d).into_iter().map(CodeActionOrCommand::CodeAction));
         }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
         let quick_fixes = unresolved.filter_map(|d| {
