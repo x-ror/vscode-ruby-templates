@@ -6,9 +6,15 @@ use crate::html::{ATTRIBUTES, BOOLEAN_ATTRIBUTES, TAGS};
 use crate::slim_parser::{Parsed, SLIM_ENGINES};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
-/// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name. `stimulus` are the
+/// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name. `stimulus` gives the
 /// attributes the element's Stimulus controllers read.
-pub fn items(text: &str, offset: usize, parsed: &Parsed, extra_engines: &[String], stimulus: &[String]) -> Option<Vec<CompletionItem>> {
+pub fn items(
+    text: &str,
+    offset: usize,
+    parsed: &Parsed,
+    extra_engines: &[String],
+    stimulus: impl FnOnce() -> Vec<String>,
+) -> Option<Vec<CompletionItem>> {
     let before = &text[text[..offset].rfind('\n').map_or(0, |i| i + 1)..offset];
     let tag = word_start(before, |c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':'));
     if parsed.tag_slots.contains(&(offset - tag.len())) && may_start(before, tag) {
@@ -32,7 +38,7 @@ pub fn items(text: &str, offset: usize, parsed: &Parsed, extra_engines: &[String
         return None;
     }
     let data = DATA_KEYS.iter().map(|key| format!("data-{}", key.replace('_', "-"))).filter(|name| !ATTRIBUTES.contains(&name.as_str()));
-    let names = ATTRIBUTES.iter().map(|name| name.to_string()).chain(data).chain(stimulus.iter().cloned());
+    let names = ATTRIBUTES.iter().map(|name| name.to_string()).chain(data).chain(stimulus());
     let valued = names.map(|name| CompletionItem {
         label: name.clone(),
         kind: Some(CompletionItemKind::FIELD),
@@ -68,7 +74,7 @@ mod tests {
         let offset = text.find('|').expect("cursor");
         let text = text.replacen('|', "", 1);
         let parsed = parse(&text, &[]);
-        items(&text, offset, &parsed, &["mjml".into()], &[]).map(|items| items.into_iter().map(|i| i.label).collect())
+        items(&text, offset, &parsed, &["mjml".into()], Vec::new).map(|items| items.into_iter().map(|i| i.label).collect())
     }
 
     #[test]
@@ -94,7 +100,7 @@ mod tests {
         let turbo = labels("a data-tu|").unwrap();
         assert!(turbo.contains(&"data-turbo-method".into()) && turbo.contains(&"data-turbo-confirm".into()), "{turbo:?}");
         let parsed = parse("div data-controller=\"x\" da", &[]);
-        let stimulus = items("div data-controller=\"x\" da", 26, &parsed, &[], &["data-x-target".into()]).unwrap();
+        let stimulus = items("div data-controller=\"x\" da", 26, &parsed, &[], || vec!["data-x-target".into()]).unwrap();
         assert!(stimulus.iter().any(|i| i.label == "data-x-target"));
     }
 }

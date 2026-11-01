@@ -24,6 +24,7 @@ static STATIC_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+(ta
 static STATIC_VALUES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+values\s*=\s*\{").unwrap());
 // A `data:` hash still open where the element's text ends, as in Haml's `%div{ data: { controller: "x", x_` while typing.
 static OPEN_DATA_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdata:\s*\{([^}]*)$").unwrap());
+static ERB_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<%.*?%>").unwrap());
 static HASH_CONTROLLER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\bcontroller:\s*["']([^"']*)["']"#).unwrap());
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']([\w-]+)["']"#).unwrap());
 // `name(args) {`, `async name() {`, TS `name(): void {`, or a `name = (e) =>` class field, at the start of a line.
@@ -99,8 +100,26 @@ fn static_list(source: &str, kind: &str) -> Vec<String> {
 /// The keys of a controller's `static values = { name: Type, other: { type: String, default: "" } }`.
 fn static_values(source: &str) -> Vec<String> {
     let Some(open) = STATIC_VALUES.find(source) else { return vec![] };
-    let (mut depth, mut key, mut out) = (1, String::new(), Vec::new());
-    for c in source[open.end()..].chars() {
+    let body = &source[open.end()..];
+    let (mut depth, mut key, mut out, mut at) = (1, String::new(), Vec::new(), 0);
+    while let Some(c) = body[at..].chars().next() {
+        let rest = &body[at..];
+        // A comment or a string says nothing about the keys.
+        let skipped = if rest.starts_with("//") {
+            Some(rest.find('\n').unwrap_or(rest.len()))
+        } else if rest.starts_with("/*") {
+            Some(rest.find("*/").map_or(rest.len(), |end| end + 2))
+        } else if matches!(c, '"' | '\'' | '`') {
+            Some(rest[1..].find(c).map_or(rest.len(), |end| end + 2))
+        } else {
+            None
+        };
+        if let Some(len) = skipped {
+            key.clear();
+            at += len;
+            continue;
+        }
+        at += c.len_utf8();
         match c {
             '{' | '[' | '(' => depth += 1,
             '}' | ']' | ')' if depth == 1 => break,
@@ -120,12 +139,33 @@ pub fn element_controllers(text: &str) -> Vec<String> {
     let hashes = DATA_HASH.captures_iter(text).chain(OPEN_DATA_HASH.captures_iter(text)).filter_map(|cap| cap.get(1));
     let in_hashes = hashes.flat_map(|hash| HASH_CONTROLLER.captures_iter(hash.as_str()).map(|cap| cap[1].to_string()).collect::<Vec<_>>());
     let mut out: Vec<String> = Vec::new();
-    for id in attributes.chain(in_hashes).flat_map(|value| value.split_whitespace().map(str::to_string).collect::<Vec<_>>()) {
-        if !out.contains(&id) {
+    // ERB output in the value names a controller only at runtime.
+    let literal = |value: String| ERB_TAG.replace_all(&value, " ").split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    for id in attributes.chain(in_hashes).flat_map(literal) {
+        if is_identifier(&id) && !out.contains(&id) {
             out.push(id);
         }
     }
     out
+}
+
+/// How many lines up an element's attributes may start, wrapped in `(`, `[` or `{` over several lines.
+const MAX_ATTRIBUTE_LINES: usize = 20;
+
+/// The text of the indentation-based (Haml, Slim) element the end of `before` is in: from the line that opens the
+/// attribute wrapper still unclosed there, else the current line.
+pub fn indented_element(before: &str) -> &str {
+    let line_starts = before.rmatch_indices('\n').map(|(at, _)| at + 1).chain([0]).take(MAX_ATTRIBUTE_LINES);
+    let unclosed = |text: &str| {
+        text.chars().fold(0i32, |depth, c| match c {
+            '(' | '[' | '{' => depth + 1,
+            ')' | ']' | '}' => depth - 1,
+            _ => depth,
+        }) > 0
+    };
+    let current = before.rfind('\n').map_or(0, |at| at + 1);
+    let start = line_starts.into_iter().find(|&start| unclosed(&before[start..])).unwrap_or(current);
+    &before[start..]
 }
 
 /// The attributes the controller `id` reads from its element, given its source: `data-id-target`, and a `-value`,
@@ -278,6 +318,7 @@ mod tests {
         assert_eq!(element_controllers(r#"%div{ data: { controller: "search", sea"#), ["search"]);
         assert_eq!(element_controllers(r#"div data-controller="a" data-controller="a b" "#), ["a", "b"]);
         assert!(element_controllers(r#"<div data-action="click->search#go" "#).is_empty());
+        assert_eq!(element_controllers(r#"<div data-controller="<%= name %> search" "#), ["search"], "ERB output names nothing");
     }
 
     #[test]
@@ -299,6 +340,14 @@ mod tests {
             ]
         );
         assert_eq!(element_attributes("plain", ""), ["data-plain-target"]);
+        let commented = "static values = {\n  // note: in seconds\n  delay: Number, /* skip: x */ label: { default: \"a: b\" }\n}";
+        assert_eq!(static_values(commented), ["delay", "label"]);
+    }
+
+    #[test]
+    fn indented_elements_span_wrapped_attributes() {
+        assert_eq!(indented_element("p\ndiv(\n  data-controller=\"a\"\n  data-"), "div(\n  data-controller=\"a\"\n  data-");
+        assert_eq!(indented_element("div(a=\"1\")\np data-"), "p data-");
     }
 
     #[test]

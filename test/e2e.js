@@ -327,8 +327,12 @@ const check = (label, actual, expected) => {
     haml: '%div(data-controller="hello" data-hel',
     haml_hash: '%div{ data: { controller: "hello", hel',
     slim: 'div data-controller="hello" data-hel',
+    erb_tag: '<div data-controller="hello" <%= attrs %> data-hel',
+    haml_lines: '%div(data-controller="hello"\n     data-hel',
+    haml_rocket: '%div{ "data-controller" => "hello", data',
+    slim_lines: 'div(\n  data-controller="hello"\n  data-hel',
   })) {
-    const ext = lang === "haml_hash" ? "haml" : lang;
+    const ext = lang.split("_")[0];
     const attrUri = fileUri(
       path.join(views, "users", `stimulus_${lang}.html.${ext}`),
     );
@@ -354,6 +358,10 @@ const check = (label, actual, expected) => {
       haml: ["data-hello-target", "data-hello-greeting-text-value"],
       haml_hash: ["hello_target", "hello_greeting_text_value"],
       slim: ["data-hello-target", "data-hello-greeting-text-value"],
+      erb_tag: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml_lines: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml_rocket: ["data-hello-target", "data-hello-greeting-text-value"],
+      slim_lines: ["data-hello-target", "data-hello-greeting-text-value"],
     },
   );
   check("definition on a block variable", blockDefinitions, {
