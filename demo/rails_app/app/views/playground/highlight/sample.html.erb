@@ -20,3 +20,7 @@
 <style>.a { color: <%= color %>; }</style>
 <% x = { a: "}" } %><p>after hash</p>
 <%= link_to "a %", b %><p>after percent</p>
+<a title="<%== raw_title %>" data-y="<%- y -%>" data-z="<%# note %>" data-l="<%% not code %>">x</a>
+<script>const a = "<%== json %>"; <%# in script %> <%- b -%></script>
+<style><%# in style %>.b { width: <%== w %>px; }</style>
+<%_ underscore _%>
