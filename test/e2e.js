@@ -350,12 +350,13 @@ const check = (label, actual, expected) => {
       await send("textDocument/documentLink", { textDocument: { uri: u } }),
     ];
     const published = () =>
-      notes.filter(
-        (n) =>
-          n.method === "textDocument/publishDiagnostics" &&
-          n.params.uri === u &&
-          n.params.diagnostics.length > 0,
-      );
+      notes
+        .filter(
+          (n) =>
+            n.method === "textDocument/publishDiagnostics" &&
+            n.params.uri === u,
+        )
+        .flatMap((n) => n.params.diagnostics.map((d) => d.code));
     for (let waited = 0; waited < 2000 && !published().length; waited += 50) {
       await new Promise((r) => setTimeout(r, 50));
     }
@@ -364,6 +365,7 @@ const check = (label, actual, expected) => {
       symbols: replies[0].result?.length > 0,
       definition: replies[2].result ?? null,
       diagnostics: published().length > 0,
+      unclosed: published().includes("unclosed-element"),
     };
   }
   const untitledOk = {
@@ -371,12 +373,64 @@ const check = (label, actual, expected) => {
     symbols: true,
     definition: null,
     diagnostics: true,
+    unclosed: false,
   };
   check("untitled documents", untitled, {
-    erb: untitledOk,
+    erb: { ...untitledOk, unclosed: true },
     haml: untitledOk,
     slim: untitledOk,
   });
+  const erbUntitled = "untitled:Untitled-fmt";
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: erbUntitled,
+        languageId: "erb",
+        version: 1,
+        text: "<div>\n<p>hi</p>\n</div>\n",
+      },
+    },
+    true,
+  );
+  const untitledEdits =
+    (
+      await send("textDocument/formatting", {
+        textDocument: { uri: erbUntitled },
+        options: { tabSize: 2, insertSpaces: true },
+      })
+    ).result || [];
+  check(
+    "untitled erb formatting",
+    untitledEdits[0]?.newText,
+    "<div>\n  <p>hi</p>\n</div>\n",
+  );
+  const jsUri = "untitled:Untitled-erb-js";
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: jsUri,
+        languageId: "erb-js",
+        version: 1,
+        text: "<div>\n<% end %>\n",
+      },
+    },
+    true,
+  );
+  const jsCodes = () =>
+    notes
+      .filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" &&
+          n.params.uri === jsUri,
+      )
+      .flatMap((n) => n.params.diagnostics.map((d) => d.code));
+  // The stray `end` is a non-HTML diagnostic, so its arrival proves the server has published.
+  for (let waited = 0; waited < 2000 && !jsCodes().length; waited += 50) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  check("untitled erb-js gets no HTML diagnostics", jsCodes(), ["ruby-syntax"]);
   const stimulusAttributes = {};
   for (const [lang, text] of Object.entries({
     erb: '<div class="x"\n     data-controller="hello" data-hel',

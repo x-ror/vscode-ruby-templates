@@ -210,7 +210,7 @@ fn check_file(path: &Path, fail_at: DiagnosticSeverity, bad_file: i32, projects:
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
-    for d in diagnostics_in(&uri, &Doc { lang, text, version: 0 }, &Options::default(), projects) {
+    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, version: 0 }, &Options::default(), projects) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
         let name = match severity {
             DiagnosticSeverity::ERROR => "error",
@@ -297,7 +297,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, projects
                 eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
                 resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
             }
-            format::format_in(&uri, lang, text, &resolved.settings, &[], projects)
+            format::format_in(&uri, lang, false, text, &resolved.settings, &[], projects)
         }
         _ => format::skip(SkipKind::NotHandled, "not an ERB, Haml or Slim template"),
     };
