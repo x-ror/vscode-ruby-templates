@@ -23,6 +23,11 @@ pub fn local_uses(text: &str, parsed: &Parsed, comment: Option<&Comment>, name: 
     compile_template(text, parsed, comment).local_uses(name)
 }
 
+/// Where the template declares the local variable at `offset`.
+pub fn local_definition(text: &str, parsed: &Parsed, offset: usize) -> Option<(usize, usize)> {
+    compile_template(text, parsed, None).local_definition(offset)
+}
+
 /// The block variables in scope at `offset` of the template.
 pub fn block_locals(text: &str, parsed: &Parsed, offset: usize) -> Vec<String> {
     compile_template(text, parsed, None).block_locals(offset)

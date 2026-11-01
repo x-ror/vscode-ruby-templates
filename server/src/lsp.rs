@@ -686,9 +686,16 @@ impl LanguageServer for Backend {
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
         let helper = helper_defs::name_at(line, col).map(str::to_string);
         let route = helper.as_deref().and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
-        let (text, line) = (doc.text.clone(), line.to_string());
+        let (text, line, lang) = (doc.text.clone(), line.to_string(), doc.lang);
         // The guard would block the next `did_change` while the work below waits.
         drop(doc);
+        // A block variable or a local the template assigns hides a helper of the same name.
+        let local =
+            helper.as_ref().and_then(|_| code_context::local_definition(lang, &text, line_start + col, &self.options().extra_engines));
+        if let Some((start, end)) = local {
+            let index = util::LineIndex::new(&text);
+            return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, Range::new(index.position(start), index.position(end))))));
+        }
         let at_line = |(file, line): (PathBuf, usize)| line_location(file, line);
         match (route, helper) {
             (Some(source), _) => locs.extend(at_line(source)),

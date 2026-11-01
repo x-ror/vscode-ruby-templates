@@ -66,6 +66,7 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 | `data-controller`, `data-action`      | Stimulus controller names, actions and targets                                         |
 | `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                    |
 | `def show` in a controller            | Go to the action's templates                                                           |
+| `user` in `@users.each do \|user\|`   | Go to the block parameter or the assignment that declares it                           |
 
 Plus: rename or move a partial in the Explorer and every `render` that points to it is updated; <kbd>F2</kbd> on a partial's strict local renames it in the partial and in every `render` that passes it; <kbd>Ctrl+T</kbd> finds templates by render name (`uscard` → `users/card`); outline and breadcrumbs for every template; Jbuilder and Builder views get partial navigation too.
 

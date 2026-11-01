@@ -279,6 +279,29 @@ const check = (label, actual, expected) => {
     haml: ["name", snippet],
     slim: ["name", snippet],
   });
+  const blockDefinitions = {};
+  for (const [lang, text] of Object.entries({
+    erb: "<% @users.each do |user| %>\n  <p><%= user.name %></p>\n<% end %>\n",
+    haml: "- @users.each do |user|\n  %p= user.name\n",
+    slim: "- @users.each do |user|\n  p = user.name\n",
+  })) {
+    const blockUri = fileUri(path.join(views, "users", `block.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: blockUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const read = text.split("\n")[1].indexOf("user.name") + 1;
+    const r = (await req("textDocument/definition", blockUri, 1, read)).result;
+    blockDefinitions[lang] = r
+      ? `${r.range.start.line}:${r.range.start.character}-${r.range.end.character}`
+      : null;
+  }
+  check("definition on a block variable", blockDefinitions, {
+    erb: "0:19-23",
+    haml: "0:18-22",
+    slim: "0:18-22",
+  });
   check(
     "definition render @users",
     targets(await req("textDocument/definition", uri, 15, 12)),

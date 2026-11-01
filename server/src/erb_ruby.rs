@@ -356,6 +356,15 @@ pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
     generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
 }
 
+/// Where the template declares the local variable at `offset`: its block parameter or first assignment.
+pub fn local_definition(text: &str, offset: usize) -> Option<(usize, usize)> {
+    let compiled = compile(text, None);
+    let at = generated_offset(&compiled.verbatim, offset.checked_sub(compiled.cut.encoding_tag)?)?;
+    let (start, end) = prism::local_definition(&compiled.source, at)?;
+    let (start, end) = template_span(&compiled.verbatim, start, end)?;
+    Some((compiled.cut.original(start), compiled.cut.original(end)))
+}
+
 /// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
 /// method's parameters.
 pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {

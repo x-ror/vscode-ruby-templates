@@ -66,6 +66,12 @@ impl Compiled {
         prism::LocalUses { spans, ..uses }
     }
 
+    /// Where the template declares the local variable at `template_offset`, within the code the template wrote.
+    pub fn local_definition(&self, template_offset: usize) -> Option<(usize, usize)> {
+        let (start, end) = prism::local_definition(&self.source, generated_offset(&self.verbatim, template_offset)?)?;
+        template_span(&self.verbatim, start, end)
+    }
+
     pub fn block_locals(&self, template_offset: usize) -> Vec<String> {
         generated_offset(&self.verbatim, template_offset).map_or_else(Vec::new, |at| prism::block_locals(&self.source, at))
     }
