@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# A stand-in for Rails: answers only the extension's routes query (`bin/rails runner <ext>/ruby/routes.rb`)
+# with the routes of config/routes.rb, so route helpers can be tried without installing Rails.
+require "json"
+
+script = ARGV[1].to_s
+unless ARGV[0] == "runner" && File.basename(script) == "routes.rb"
+  warn "demo bin/rails only answers the routes query; use a real Rails app for `#{ARGV.join(" ")}`"
+  exit 1
+end
+
+def route(name, verb, path, action, line)
+  { name: name, verb: verb, path: "#{path}(.:format)", action: action, source: "config/routes.rb:#{line}" }
+end
+
+routes = [
+  route("root", "GET", "/", "users#index", 2),
+  route("users", "GET", "/users", "users#index", 4),
+  route("", "POST", "/users", "users#create", 4),
+  route("new_user", "GET", "/users/new", "users#new", 4),
+  route("edit_user", "GET", "/users/:id/edit", "users#edit", 4),
+  route("user", "GET", "/users/:id", "users#show", 4),
+  route("", "PATCH", "/users/:id", "users#update", 4),
+  route("", "PUT", "/users/:id", "users#update", 4),
+  route("", "DELETE", "/users/:id", "users#destroy", 4),
+  route("admin_reports", "GET", "/admin/reports", "admin/reports#index", 7)
+]
+puts "", "__RUBY_TEMPLATES_ROUTES__", JSON.generate(routes)

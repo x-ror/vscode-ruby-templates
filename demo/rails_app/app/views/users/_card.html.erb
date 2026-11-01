@@ -1,0 +1,7 @@
+<%# locals: (user:, compact: false) %>
+<div class="card <%= "card--compact" if compact %>">
+  <strong><%= user.name %></strong>
+  <% unless compact %>
+    <small><%= user.email %></small>
+  <% end %>
+</div>

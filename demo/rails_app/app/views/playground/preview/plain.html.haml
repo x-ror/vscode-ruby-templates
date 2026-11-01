@@ -1,0 +1,5 @@
+- items = %w[one two three]
+%ul
+  - items.each do |item|
+    %li= item.upcase
+%p= "Rendered at #{Time.now.year}"

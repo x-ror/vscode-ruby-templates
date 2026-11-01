@@ -1,0 +1,6 @@
+ul.items
+  - for item in @items
+    li class=item.kind = item.name
+p Hello #{@user.name}
+coffee:
+  alert "hi"

@@ -6,6 +6,7 @@
 .ruby-lsp/**
 .pkg/**
 artifacts/**
+demo/**
 docs/**
 images/screenshots/**
 npm/**

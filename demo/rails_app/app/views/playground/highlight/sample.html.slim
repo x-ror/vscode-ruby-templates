@@ -1,0 +1,73 @@
+doctype html
+/ code comment
+/! html comment
+html lang="en"
+  head
+    title = content_for(:title) || "App"
+    javascript:
+      console.log("hi");
+  body.main#page
+    - @users.each do |user|
+      .user class=user.role data-id=user.id *{role: "row"}
+        a href=user_path(user) class="name" = user.name
+        span.badge Admin #{user.role}
+        li: a href="/" Home
+        p
+          | Plain text
+            block
+    = render "footer"
+    == raw_html
+    input type="checkbox" checked
+    input(type="checkbox" checked disabled=@locked)
+    a[href="/x" title=t(".x")] Link
+    li: a href="/" Home
+    div *{role: "row"} *attrs text
+    = form_with model: @user,
+        class: "form" do |f|
+      = f.text_field :name
+    span{title="x" data-id=1} Braces
+    a(href="/"
+      class="wrapped") Multi-line
+    =< link_to "Left", "/"
+    ==<> raw_html
+    p =' @user.name
+    a> Trailing
+    a<> Both
+    img/
+    p Inline text
+      continues here, not a tag
+    li: a href="/" Home
+      more text
+    /[if IE]
+      p IE only
+    | Raw #{{ html_safe_value }} and #{escaped}
+    <div class="inline" id='#{dom_id}'>
+    </div>
+    a title='Hi #{name}' Single
+    button @click="open = true" :class="cls" x-on:click.prevent="go" Open
+    - items = [1,
+        2]
+    include partials/header
+    scss class="theme":
+      .a { color: red; }
+    javascript nonce=content_security_policy_nonce:
+      var data = #{raw data.to_json};
+    css:
+      .b { content: "#{label}"; }
+    <p>Don't panic</p>
+    p after inline html
+    p Config #{{a: 1}.to_json} stays escaped
+    span after interpolation
+    p= attached
+    p==unescaped
+    a>= trailing
+    a(href="/")= after_wrapped
+    a' legacy
+    |< leading space
+    |no space
+    '> trailing space
+    p #{{ {a: 1}.to_json }} raw
+    div *{data: {x: 1}} text after the splat
+    p title='it''= text after a quote
+    a>text
+    p a="b"text

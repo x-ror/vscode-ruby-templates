@@ -1,0 +1,12 @@
+-# Haml playground: completion after %, :, {; hover on prefixes and filters.
+%h1= t(".heading")
+%section#profile
+  = render "users/card", user: @user
+  %p.email= @user.email
+  - if @user.admin
+    %span.badge Admin
+  = link_to "Edit", edit_user_path(@user)
+  :javascript
+    console.log("profile #{@user.id}");
+  :css
+    .badge { color: red; }

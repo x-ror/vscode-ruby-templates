@@ -1,0 +1,4 @@
+{
+  "[erb]": { "editor.linkedEditing": true },
+  "rubyTemplates.slim.extraEngines": ["mjml"]
+}

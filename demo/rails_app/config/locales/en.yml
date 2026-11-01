@@ -1,0 +1,12 @@
+en:
+  users:
+    index:
+      title: Users
+      empty: No users yet
+    show:
+      heading: Profile
+    edit:
+      save: Save
+  shared:
+    footer:
+      copyright: "© Demo Inc."

@@ -1,0 +1,6 @@
+<%# Rails checks: every render below except the first and last gets a warning. %>
+<%= render "users/card", user: @user %>
+<%= render "users/card" %>
+<%= render "users/card", user: @user, colour: "red" %>
+<%= render "users/missing_partial" %>
+<%= render "devise/shared/links" %>

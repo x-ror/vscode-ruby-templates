@@ -1,0 +1,9 @@
+<img src="/logo.png">
+<%= image_tag "logo.png" %>
+<img src="<%= @user.avatar_url %>" alt="Avatar">
+<div id="main"></div>
+<div id="main"></div>
+<%== @user.bio %>
+<%= raw @user.bio %>
+<%= @user.bio.html_safe %>
+<%=@user.name%>

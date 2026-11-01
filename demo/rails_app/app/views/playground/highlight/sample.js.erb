@@ -1,0 +1,5 @@
+<%# Comment here %>
+const users = <%= raw @users.to_json %>;
+<% if current_user %>
+alert("Hi <%= j current_user.name %>");
+<% end %>
