@@ -1,6 +1,6 @@
 # Contributing
 
-Issues and pull requests are welcome. Coding standards, checks and commit rules are in [CLAUDE.md](CLAUDE.md); open questions and past decisions in [docs/DECISIONS.md](docs/DECISIONS.md); open tasks are [GitHub issues](https://github.com/x-ror/vscode-ruby-templates/issues).
+Issues and pull requests are welcome. Coding standards, checks and commit rules are in [CLAUDE.md](CLAUDE.md); open tasks and questions are [GitHub issues](https://github.com/x-ror/vscode-ruby-templates/issues).
 
 ## Development
 
