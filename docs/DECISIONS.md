@@ -31,7 +31,7 @@ Status: pending
 
 - **Locale-only ERB views are HTML** (D1): `<name>.<locale>.erb` under `app/views` gets the HTML checks (`html_host`).
 - **turbo_stream views keep the HTML partial fallback** (D2): turbo-rails registers no lookup fallback itself, but Turbo sends `Accept: text/vnd.turbo-stream.html, text/html`, so ActionView looks up both formats. A missed warning is the worse case of being wrong.
-- **Erubi, Jbuilder and Builder are supported; Liquid is deferred** (D5) until someone asks, since Shopify ships its own extension. Plans stay in `docs/*_TODO.md`.
+- **Erubi, Jbuilder and Builder are supported; Liquid is deferred** (D5) until someone asks, since Shopify ships its own extension. The plan is in [#98](https://github.com/x-ror/vscode-ruby-templates/issues/98).
 - **Formats an app registers itself are read into the project context** (D11): `KNOWN_FORMATS` (`partials.rs`) is a fresh app's `Mime::SET`; `Mime::Type.register` / `register_alias "…", :name` in `config/initializers/**/*.rb` (the template's app and the lockfile's app, as `Mime::SET` is process-wide) are added by `Project::is_format`, used wherever a template name is split, so `_card.mobile.erb` is the partial `card`. Not read: gem registrations (a setting only when one comes up), multi-line or indirect calls; not `bin/rails runner` (boots the app).
 - **Symlinked folders under `app/views` are followed** (D7), by completion, partial rename and the template index; walkdir detects loops.
 - **Form-builder completion and helper hover only inside Ruby code** (D8), not in template text.
