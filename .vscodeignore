@@ -7,7 +7,6 @@
 .pkg/**
 artifacts/**
 demo/**
-docs/**
 images/screenshots/**
 npm/**
 node_modules/**

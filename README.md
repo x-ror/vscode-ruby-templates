@@ -71,7 +71,13 @@ Plus: rename or move a partial in the Explorer and every `render` that points to
 
 ### Formatting
 
-_Format Document_, _Format Selection_ and format on save for ERB, Haml and Slim. The formatter fixes indentation, trailing whitespace and blank lines and nothing else: it never rewraps lines or reorders attributes, never touches Ruby code, and verifies every result before applying it. The indentation width comes from the editor or `.editorconfig`.
+_Format Document_, _Format Selection_ and format on save for HTML ERB views, Haml and Slim. The formatter changes **only whitespace**: leading indentation, trailing whitespace, blank lines and the final newline. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
+
+- **ERB**: one indent per open HTML element and ERB block (`if`/`else`/`end`, `do … end`, `case`/`when`); multi-line tags move with their first line. `<script>`, `<style>`, `<pre>`, `<textarea>` and `<title>` bodies, quoted attribute values and the continuation lines of multi-line ERB tags keep every byte. Only HTML views are formatted, not `.js.erb`, `.json.erb`, `.text.erb`, Jbuilder or generator templates.
+- **Haml** and **Slim**: every level becomes the indentation width in spaces; filter and engine bodies, text blocks and continuation lines move with their line. A file Haml or Slim would reject is left unchanged, and so is any result that wouldn't compile to the same output.
+- **Safe by construction**: every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic; otherwise the file comes back unchanged and the reason is logged.
+- **Settings**: the indentation width comes from the editor's tab size, then `.editorconfig` (`indent_size`; `tab_width` for `indent_size = tab`), then 2. Indentation is always written in spaces and each line keeps its ending. `rubyTemplates.erb.format.alignComments` (`--align-comments` on the command line) moves the lines inside HTML and multi-line `<%#` comments with the comment's first line; by default they keep every byte.
+- **Not supported**: reflowing long lines, indenting embedded JavaScript or CSS by their own syntax, Ruby formatting (use RuboCop), Haml files with errors and tab-indented Slim files.
 
 ### Commands
 
@@ -96,7 +102,11 @@ npm install --save-dev @x-ror/ruby-templates
 npx ruby-templates check app/views            # errors and warnings; exit 1 if any
 npx ruby-templates format --check app/views   # files that would change; exit 1 if any
 npx ruby-templates format --write app/views   # format them
+npx ruby-templates format --stdin-filepath show.html.erb < show.html.erb   # from stdin, for editors
+npx ruby-templates format --verbose --check app/views   # also the settings and .editorconfig files used
 ```
+
+Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors. Folders are walked for template files, skipping hidden folders and `node_modules`.
 
 ## Getting started
 
@@ -121,10 +131,17 @@ Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, In
 | `rubyTemplates.commands.*`                                        |                            | Paths of the Ruby tools used by preview and converters             |
 | `rubyTemplates.server.enabled` / `server.path`                    | `true` / bundled           | Run the language server, or use your own build                     |
 
+## Compatibility
+
+- **Ruby LSP** and this extension both register the `erb` language id and work side by side: Ruby LSP for `.rb` files, this extension for templates.
+- **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises. To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
+- **Emmet** works in ERB out of the box (`"emmet.includeLanguages": { "erb": "html" }` is a default); VS Code's Emmet expands to Slim syntax in Slim and Skim.
+- **Partials and formats**: partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`.
+- **Generator templates** (`lib/templates/**/*.tt`, `lib/generators/**/templates/**`) open in their template language, without diagnostics or formatting, since the generator's own ERB is mixed in.
+- **Slim options set per app** aren't reflected in highlighting: custom shortcuts and attribute delimiters, smart text's implicit text lines, logic-less mode.
+
 ## Learn more
 
-- [Full feature reference](docs/FEATURES.md): every check, completion, command and formatter rule.
-- [Formatter settings](docs/FORMATTER_CONFIG.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md): building, testing, project layout.
 
