@@ -258,11 +258,8 @@ fn checked_renders<'a>(
     };
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        for r in partials::render_refs(line) {
-            if in_code(i, line_start, &r) && in_views_dir(&r.name) {
-                out.push((i, line, partials::call_text(&text[line_start..], &r), r));
-            }
-        }
+        let refs = partials::render_refs_in(text, line_start, line, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        out.extend(refs.into_iter().map(|r| (i, line, partials::call_text(&text[line_start..], &r), r)));
     }
     out
 }
@@ -271,14 +268,14 @@ fn checked_renders<'a>(
 struct Partials<'a> {
     project: &'a Project,
     path: &'a Path,
-    resolved: HashMap<(partials::RenderKind, String), Vec<PathBuf>>,
+    resolved: HashMap<(partials::RenderKind, String, partials::Lookup), Vec<PathBuf>>,
     signatures: HashMap<PathBuf, Option<partials::StrictLocals>>,
 }
 
 impl Partials<'_> {
     fn resolve(&mut self, r: &partials::RenderRef) -> &[PathBuf] {
         let (project, path) = (self.project, self.path);
-        self.resolved.entry((r.kind, r.name.clone())).or_insert_with(|| partials::resolve(project, path, r))
+        self.resolved.entry((r.kind, r.name.clone(), r.lookup.clone())).or_insert_with(|| partials::resolve(project, path, r))
     }
 
     fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
@@ -690,6 +687,39 @@ mod tests {
         assert_eq!(lines, ["Missing partial admin/_x"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn block_layout_keeps_the_calls_formats() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-block-layout-{}", std::process::id()));
+        let shared = root.join("app/views/shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("_wrap.json.erb"), "").unwrap();
+        let file = root.join("app/views/index.html.erb");
+        let text = "<%= render layout: \"shared/wrap\", formats: [:json] do %>x<% end %>";
+        assert!(unresolved(TemplateLang::Erb, &file, text).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lookup_options_decide_unresolved_renders() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-lookup-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.json.jbuilder"), "").unwrap();
+        let file = users.join("index.html.erb");
+        let missing = |text: &str| -> Vec<(u32, String)> {
+            unresolved(TemplateLang::Erb, &file, text).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        };
+        assert!(missing(r#"<%= render partial: "users/card", formats: [:json] %>"#).is_empty());
+        assert_eq!(missing(r#"<%= render partial: "users/card", formats: [:xml] %>"#), [(0, "Missing partial users/_card".to_string())]);
+        // One partial, two lookups: the first result must not be reused.
+        let twice = "<%= render partial: \"users/card\", formats: [:json] %>\n<%= render partial: \"users/card\", formats: [:xml] %>\n";
+        assert_eq!(missing(twice), [(1, "Missing partial users/_card".to_string())]);
+        let multi_line =
+            "<%= render partial: \"users/card\",\n  formats: [:json] %>\n<%= render(partial: \"users/card\",\n  formats: [:xml]) %>\n";
+        assert_eq!(missing(multi_line), [(2, "Missing partial users/_card".to_string())]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

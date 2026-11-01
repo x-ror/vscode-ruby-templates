@@ -57,7 +57,7 @@ pub struct RenderRef {
 }
 
 /// The lookup details a `render partial:|template:` call names; `None` where it names none (or not literally).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Lookup {
     pub formats: Option<Vec<String>>,
     pub variants: Option<Vec<String>>,
@@ -68,6 +68,12 @@ pub struct Lookup {
 /// ActionView 7.0 to 8.1: a view's `render layout: "x"` (with a block, or next to `partial:`) renders the `_x` partial;
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
+    let mut refs = refs_without_lookups(line);
+    set_lookups(&mut refs, |_| line);
+    refs
+}
+
+fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
     // Every pattern below needs one of these; most lines have neither, and the regexes cost per line.
     if !line.contains("render") && !line.contains("partial") {
         return vec![];
@@ -95,17 +101,49 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     refs.sort_by_key(|r| r.start);
     // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
     refs.dedup_by_key(|r| r.start);
-    for r in &mut refs {
-        r.lookup = lookup(line, r);
-    }
     refs
+}
+
+/// `render_refs` for the line of `text` at `line_start`, keeping the refs `keep` accepts, with lookups read from the whole
+/// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep.
+pub fn render_refs_in(text: &str, line_start: usize, line: &str, mut keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
+    let mut refs = refs_without_lookups(line);
+    if !refs.iter().any(&mut keep) {
+        return vec![];
+    }
+    set_lookups(&mut refs, |r| call_text(&text[line_start..], r));
+    refs.retain(keep);
+    refs
+}
+
+/// Give each ref the lookup of its call, read from `call_of(ref)`, the text of the call from its start; a `layout:` takes
+/// its partial's (the nearest one before it, else after), since Rails resolves both with the same details; a `layout:` alone
+/// (block form) reads its own call.
+fn set_lookups<'a>(refs: &mut [RenderRef], call_of: impl Fn(&RenderRef) -> &'a str) {
+    for r in refs.iter_mut().filter(|r| !r.from_layout) {
+        r.lookup = lookup(call_of(r), r);
+    }
+    for i in 0..refs.len() {
+        if !refs[i].from_layout {
+            continue;
+        }
+        let layout = &refs[i];
+        let partners = refs.iter().filter(|r| !r.from_layout && r.call == layout.call);
+        let partner = partners.clone().rfind(|r| r.start < layout.start).or_else(|| partners.clone().next());
+        refs[i].lookup = match partner {
+            Some(partner) => partner.lookup.clone(),
+            None => lookup(call_of(layout), layout),
+        };
+    }
 }
 
 /// The `formats:`, `variants:` and `handlers:` of `r`'s call in `call`. Only the options form has them: in
 /// `render "x", formats: [:json]` the hash is the partial's locals.
 fn lookup(call: &str, r: &RenderRef) -> Lookup {
-    let form = RenderForm::of(call, r);
-    let Some(pairs) = render_pairs(call, r).filter(|_| form.options && !r.from_layout) else { return Lookup::default() };
+    if !RenderForm::of(call, r).options {
+        return Lookup::default();
+    }
+    let Some(pairs) = render_pairs(call, r) else { return Lookup::default() };
     let option = |name: &str| pairs.iter().find(|&&(key, _, _)| key == name).and_then(|&(_, value, _)| literal_names(value));
     Lookup { formats: option("formats"), variants: option("variants"), handlers: option("handlers") }
 }
@@ -322,13 +360,23 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
     for d in dirs {
         let mut found: Vec<PathBuf> =
             matching_templates(project, &d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
-        // Rails tries the variants it was given before the template without one.
-        if r.lookup.variants.is_some() {
-            found.sort_by_key(|p| template_variant(p).is_none());
-        }
+        found.sort_by_key(|p| {
+            (
+                preference(&r.lookup.formats, template_format(|f| project.is_format(f), p)),
+                preference(&r.lookup.variants, template_variant(p)),
+                preference(&r.lookup.handlers, p.extension().and_then(|e| e.to_str())),
+            )
+        });
         out.extend(found);
     }
     out
+}
+
+/// Rails tries the values it was given in order, and a template without that detail after them all. (The locale, unknown
+/// here, isn't ordered.)
+fn preference(names: &Option<Vec<String>>, value: Option<&str>) -> usize {
+    let Some(names) = names else { return 0 };
+    value.and_then(|value| names.iter().position(|name| name == value)).unwrap_or(names.len())
 }
 
 /// Whether Rails could pick `candidate` for a render in `current` with the call's `lookup`: its format among
@@ -338,9 +386,10 @@ fn looked_up(project: &Project, current: &Path, candidate: &Path, lookup: &Looku
     let among = |names: &Option<Vec<String>>, value: Option<&str>| {
         names.as_ref().is_none_or(|names| value.is_none_or(|value| names.iter().any(|name| name == value)))
     };
-    let format_ok = match lookup.formats {
-        Some(_) => among(&lookup.formats, template_format(|f| project.is_format(f), candidate)),
-        None => renders_format(project, current, candidate),
+    let format_ok = if lookup.formats.is_some() {
+        among(&lookup.formats, template_format(|f| project.is_format(f), candidate))
+    } else {
+        renders_format(project, current, candidate)
     };
     format_ok
         && among(&lookup.variants, template_variant(candidate))
@@ -579,6 +628,8 @@ pub fn local_key_span(call: &str, r: &RenderRef, name: &str) -> Option<(usize, u
 /// The arguments after a literal render's partial name in `call`, its `call_text`, without the call's closing `)`.
 fn render_args<'a>(call: &'a str, r: &RenderRef) -> Option<&'a str> {
     let rest = call.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
+    // The block of `render layout: "x", formats: [:json] do`.
+    let rest = rest.strip_suffix("do").filter(|before| before.ends_with(char::is_whitespace)).map_or(rest, str::trim_end);
     // `render("x", a: 1)`: the call's closing paren is the one that doesn't balance.
     if split_args(rest).is_some() {
         Some(rest)
@@ -1317,6 +1368,94 @@ mod tests {
             ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]
         );
         assert!(names(r#"render partial: "card", formats: [:xml]"#).is_empty(), "Rails raises Missing partial");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lookup_options_apply_to_render_template() {
+        let (root, views) = partial_tree("lookup-template", &["users/card.html.erb", "users/card.json.jbuilder"]);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert_eq!(names(r#"render template: "users/card", formats: [:json]"#), ["card.json.jbuilder"]);
+        assert_eq!(names(r#"render template: "users/card", handlers: [:erb]"#), ["card.html.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lookup_handlers_can_exclude_the_format_match() {
+        let (root, views) = partial_tree("lookup-handlers", &["users/_card.json.jbuilder", "users/_card.html.erb"]);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert!(names(r#"render partial: "card", formats: [:json], handlers: [:erb]"#).is_empty());
+        assert_eq!(names(r#"render partial: "card", formats: %i(json html), handlers: %i(erb)"#), ["_card.html.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn layout_next_to_partial_takes_the_lookup() {
+        let json = Some(vec!["json".to_string()]);
+        for line in
+            [r#"render partial: "card", layout: "wrap", formats: [:json]"#, r#"render partial: "card", formats: [:json], layout: "wrap""#]
+        {
+            let lookups: Vec<_> = render_refs(line).iter().map(|r| (r.name.clone(), r.lookup.formats.clone())).collect();
+            assert_eq!(lookups, [("card".to_string(), json.clone()), ("wrap".to_string(), json.clone())], "{line}");
+        }
+    }
+
+    #[test]
+    fn block_layout_reads_its_own_call_lookup() {
+        let refs = render_refs(r#"render layout: "shared/wrap", formats: [:json] do"#);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].lookup.formats, Some(vec!["json".to_string()]));
+    }
+
+    #[test]
+    fn refs_sharing_a_call_keep_their_own_lookup() {
+        let formats = |line: &str| {
+            render_refs(line).iter().map(|r| (r.name.clone(), r.lookup.formats.clone().unwrap_or_default())).collect::<Vec<_>>()
+        };
+        let json = vec!["json".to_string()];
+        assert_eq!(
+            formats(r#"json.partial! "a"; json.c @c, partial: "b", formats: [:json]"#),
+            [("a".to_string(), vec![]), ("b".to_string(), json.clone())]
+        );
+        assert_eq!(
+            formats(r#"<%= render partial: "a", formats: [:json] %> <%= render partial: "b", layout: "w" %>"#),
+            [("a".to_string(), json), ("b".to_string(), vec![]), ("w".to_string(), vec![])]
+        );
+    }
+
+    #[test]
+    fn lookup_orders_by_the_given_formats_and_variants() {
+        let files = ["users/_card.html.erb", "users/_card.json.jbuilder", "users/_card.erb", "users/_card.en.json.jbuilder"];
+        let (root, views) = partial_tree("lookup-order", &files);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert_eq!(
+            names(r#"render partial: "card", formats: [:json, :html]"#),
+            ["_card.en.json.jbuilder", "_card.json.jbuilder", "_card.html.erb", "_card.erb"]
+        );
+        assert_eq!(names(r#"render partial: "card", formats: [:html, :json]"#)[..2], ["_card.html.erb", "_card.en.json.jbuilder"]);
+        assert_eq!(names(r#"render partial: "card", formats: [:json]"#), ["_card.en.json.jbuilder", "_card.json.jbuilder", "_card.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let files = ["users/_card.html+tablet.erb", "users/_card.html+phone.erb", "users/_card.html.erb"];
+        let (root, views) = partial_tree("lookup-variant-order", &files);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert_eq!(
+            names(r#"render partial: "card", variants: [:phone, :tablet]"#),
+            ["_card.html+phone.erb", "_card.html+tablet.erb", "_card.html.erb"]
+        );
+        assert_eq!(names(r#"render partial: "card", variants: [:tablet, :phone]"#)[..2], ["_card.html+tablet.erb", "_card.html+phone.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let (root, views) = partial_tree("lookup-handler-order", &["users/_card.json.erb", "users/_card.json.jbuilder"]);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert_eq!(
+            names(r#"render partial: "card", formats: [:json], handlers: [:jbuilder, :erb]"#),
+            ["_card.json.jbuilder", "_card.json.erb"]
+        );
+        assert_eq!(
+            names(r#"render partial: "card", formats: [:json], handlers: [:erb, :jbuilder]"#),
+            ["_card.json.erb", "_card.json.jbuilder"]
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

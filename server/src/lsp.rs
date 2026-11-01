@@ -416,7 +416,7 @@ impl Backend {
     /// from the call or declare it in the partial.
     fn strict_locals_fixes(&self, project: &Project, path: &Path, text: &str, d: &Diagnostic) -> Vec<CodeAction> {
         let (line_start, line, start) = util::line_at(text, d.range.start);
-        let Some(r) = partials::render_refs(line).into_iter().find(|r| r.start == start) else { return vec![] };
+        let Some(r) = partials::render_refs_in(text, line_start, line, |r| r.start == start).pop() else { return vec![] };
         let call = partials::call_text(&text[line_start..], &r);
         let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
@@ -741,9 +741,8 @@ impl LanguageServer for Backend {
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
             // Same renders as diagnostics and references: code only, and the file Rails would pick.
-            let renders = partials::render_refs(line)
+            let renders = partials::render_refs_in(&doc.text, line_start, line, |r| in_code(i, line_start, r))
                 .into_iter()
-                .filter(|r| in_code(i, line_start, r))
                 .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&project, &path, line, None)) {
                 links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target, &path)));
@@ -871,8 +870,8 @@ impl LanguageServer for Backend {
         }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
         let quick_fixes = unresolved.filter_map(|d| {
-            let (_, line, start) = util::line_at(&doc.text, d.range.start);
-            let r = partials::render_refs(line).into_iter().find(|r| r.start == start)?;
+            let (line_start, line, start) = util::line_at(&doc.text, d.range.start);
+            let r = partials::render_refs_in(&doc.text, line_start, line, |r| r.start == start).pop()?;
             let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
                 uri: Url::from_file_path(&target).ok()?,

@@ -174,6 +174,15 @@ mod tests {
     }
 
     #[test]
+    fn template_variants() {
+        let variant = |fname: &str| template_variant(Path::new(fname)).map(str::to_string);
+        assert_eq!(variant("show.html+phone.erb"), Some("phone".to_string()));
+        assert_eq!(variant("show.en.html+phone.erb"), Some("phone".to_string()));
+        assert_eq!(variant("show.html.erb"), None);
+        assert_eq!(variant("show.html+.erb"), None);
+    }
+
+    #[test]
     fn template_file_names() {
         let cases = [
             ("user.html.erb", "user", Some(Some("html"))),
