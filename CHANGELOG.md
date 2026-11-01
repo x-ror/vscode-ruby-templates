@@ -1,15 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - Instance variables from a parent controller are found when a controller inside `module Admin` names it without the module (`class ReportsController < BaseController`), as Ruby resolves it.
 - Completing a helper whose call already has arguments (`link_to user.name, path`, `link_to(`) inserts only its name, not the argument snippet in front of them.
 - A stray `<% end %>` in ERB is reported on the `end` itself, not on the last line of the file.
+- Slim formatting collapses the blank lines at the end of a file in one save: also after a `|` text block or a `/` comment, and when the last line holds only the indentation the editor put there.
 
 ## 0.8.0
 
 - Rename a partial's strict local with F2: the `locals:` comment (and the defaults that read it), every read and assignment in the partial and the keys of the `render` calls that pass it change together, in ERB, Slim and Haml. A name the partial already uses, or a Ruby keyword, is refused, and a warning lists the `render` calls whose locals can't be read. Find all references on the local lists the same places.
-- Slim formatting collapses the blank lines at the end of a file in one save: also after a `|` text block or a `/` comment, and when the last line holds only the indentation the editor put there.
 
 ## 0.7.0
 
