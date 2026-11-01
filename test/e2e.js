@@ -321,6 +321,62 @@ const check = (label, actual, expected) => {
     [await assignedAt(48), await assignedAt(28)],
     ["0:0", "2:16"],
   );
+  const untitled = {};
+  for (const [lang, text] of Object.entries({
+    erb: '<div>\n<%= render "card" %>\n',
+    haml: '%div\n  = render "card"\n- end\n',
+    slim: 'div\n  = render "card"\n  p(class="x"\n',
+  })) {
+    const u = `untitled:Untitled-${lang}`;
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: u, languageId: lang, version: 1, text } },
+      true,
+    );
+    const at = {
+      textDocument: { uri: u },
+      position: { line: 1, character: 14 },
+    };
+    const replies = [
+      await send("textDocument/documentSymbol", { textDocument: { uri: u } }),
+      await send("textDocument/foldingRange", { textDocument: { uri: u } }),
+      await send("textDocument/definition", at),
+      await send("textDocument/hover", at),
+      await send("textDocument/references", {
+        ...at,
+        context: { includeDeclaration: true },
+      }),
+      await send("textDocument/prepareRename", at),
+      await send("textDocument/documentLink", { textDocument: { uri: u } }),
+    ];
+    const published = () =>
+      notes.filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" &&
+          n.params.uri === u &&
+          n.params.diagnostics.length > 0,
+      );
+    for (let waited = 0; waited < 2000 && !published().length; waited += 50) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    untitled[lang] = {
+      errors: replies.filter((r) => r.error).length,
+      symbols: replies[0].result?.length > 0,
+      definition: replies[2].result ?? null,
+      diagnostics: published().length > 0,
+    };
+  }
+  const untitledOk = {
+    errors: 0,
+    symbols: true,
+    definition: null,
+    diagnostics: true,
+  };
+  check("untitled documents", untitled, {
+    erb: untitledOk,
+    haml: untitledOk,
+    slim: untitledOk,
+  });
   const stimulusAttributes = {};
   for (const [lang, text] of Object.entries({
     erb: '<div class="x"\n     data-controller="hello" data-hel',
