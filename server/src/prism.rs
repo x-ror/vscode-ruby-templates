@@ -103,17 +103,9 @@ pub(crate) fn local_uses(source: &str, name: &str) -> LocalUses {
 pub(crate) fn keyword_parameter_at(parameters: &str, name: &str) -> Option<usize> {
     let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
     let result = ruby_prism::parse(source.as_bytes());
-    let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
-    let keywords = def.parameters()?.keywords();
-    let at = keywords.iter().find_map(|node| {
-        let (found, at) = match (node.as_required_keyword_parameter_node(), node.as_optional_keyword_parameter_node()) {
-            (Some(required), _) => (required.name(), required.name_loc()),
-            (_, Some(optional)) => (optional.name(), optional.name_loc()),
-            _ => return None,
-        };
-        (found.as_slice() == name.as_bytes()).then(|| at.start() as usize)
-    })?;
-    Some(at - PARAMETERS_DEF.len())
+    let mut declaration = Declaration::new(name.as_bytes(), METHOD_SCOPE);
+    ruby_prism::Visit::visit(&mut declaration, &result.node());
+    declaration.found.filter(|found| found.parameter).map(|found| found.start - PARAMETERS_DEF.len())
 }
 
 /// Where `parameters`, a method's parameter list, reads the parameter `name` in the defaults of the others.
@@ -132,11 +124,53 @@ pub(crate) fn parameter_reads(parameters: &str, name: &str) -> Vec<(usize, usize
 pub(crate) fn wrapper_end(source: &str) -> Option<(usize, usize)> {
     let result = ruby_prism::parse(source.as_bytes());
     let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
-    let end = def.end_keyword_loc()?;
-    Some((end.start() as usize, end.end() as usize))
+    Some(span(&def.end_keyword_loc()?))
 }
 
 const PARAMETERS_DEF: &str = "def _(";
+
+/// The scope index of the one method in `def _(…); end`: the program is scope 0.
+const METHOD_SCOPE: usize = 1;
+
+type Span = (usize, usize);
+
+fn span(at: &ruby_prism::Location) -> Span {
+    (at.start() as usize, at.end() as usize)
+}
+
+/// The visits of every local-variable node, each handed to `self.$on(name, depth, location, read)`; an assignment's
+/// location is its name's.
+macro_rules! visit_local_variables {
+    ($pr:lifetime, $on:ident) => {
+        fn visit_local_variable_read_node(&mut self, node: &ruby_prism::LocalVariableReadNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.location(), true);
+        }
+
+        fn visit_local_variable_target_node(&mut self, node: &ruby_prism::LocalVariableTargetNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.location(), false);
+        }
+
+        fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.name_loc(), false);
+            ruby_prism::visit_local_variable_write_node(self, node);
+        }
+
+        fn visit_local_variable_or_write_node(&mut self, node: &ruby_prism::LocalVariableOrWriteNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.name_loc(), false);
+            ruby_prism::visit_local_variable_or_write_node(self, node);
+        }
+
+        fn visit_local_variable_and_write_node(&mut self, node: &ruby_prism::LocalVariableAndWriteNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.name_loc(), false);
+            ruby_prism::visit_local_variable_and_write_node(self, node);
+        }
+
+        fn visit_local_variable_operator_write_node(&mut self, node: &ruby_prism::LocalVariableOperatorWriteNode<$pr>) {
+            self.$on(node.name(), node.depth(), node.name_loc(), false);
+            ruby_prism::visit_local_variable_operator_write_node(self, node);
+        }
+    };
+}
 
 struct Uses<'a> {
     name: &'a [u8],
@@ -146,9 +180,9 @@ struct Uses<'a> {
 }
 
 impl Uses<'_> {
-    fn local(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location) {
+    fn local(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location, _read: bool) {
         if name.as_slice() == self.name && depth == self.blocks {
-            self.found.spans.push((at.start() as usize, at.end() as usize));
+            self.found.spans.push(span(&at));
         }
     }
 
@@ -158,6 +192,8 @@ impl Uses<'_> {
 }
 
 impl<'pr> ruby_prism::Visit<'pr> for Uses<'_> {
+    visit_local_variables!('pr, local);
+
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
         self.declares(&node.locals());
         self.blocks += 1;
@@ -172,187 +208,176 @@ impl<'pr> ruby_prism::Visit<'pr> for Uses<'_> {
         self.blocks -= 1;
     }
 
-    fn visit_local_variable_read_node(&mut self, node: &ruby_prism::LocalVariableReadNode<'pr>) {
-        self.local(node.name(), node.depth(), node.location());
-    }
-
-    fn visit_local_variable_target_node(&mut self, node: &ruby_prism::LocalVariableTargetNode<'pr>) {
-        self.local(node.name(), node.depth(), node.location());
-    }
-
-    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
-        self.local(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_write_node(self, node);
-    }
-
-    fn visit_local_variable_or_write_node(&mut self, node: &ruby_prism::LocalVariableOrWriteNode<'pr>) {
-        self.local(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_or_write_node(self, node);
-    }
-
-    fn visit_local_variable_and_write_node(&mut self, node: &ruby_prism::LocalVariableAndWriteNode<'pr>) {
-        self.local(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_and_write_node(self, node);
-    }
-
-    fn visit_local_variable_operator_write_node(&mut self, node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>) {
-        self.local(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_operator_write_node(self, node);
-    }
-
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
         if node.is_variable_call() && node.name().as_slice() == self.name {
-            let at = node.location();
-            self.found.spans.push((at.start() as usize, at.end() as usize));
+            self.found.spans.push(span(&node.location()));
         }
         ruby_prism::visit_call_node(self, node);
     }
 }
 
+/// Where a local variable is declared, and whether as a parameter (else by an assignment).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LocalDefinition {
+    pub start: usize,
+    pub end: usize,
+    pub parameter: bool,
+}
+
 /// Where the local variable read or assigned at `offset` is declared: the block or lambda parameter, or else its first
-/// assignment in the scope it belongs to.
-pub(crate) fn local_definition(source: &str, offset: usize) -> Option<(usize, usize)> {
+/// assignment in the scope it belongs to. An implicit block parameter (`it`, `_1`) is declared by its block's `{`/`do`.
+pub(crate) fn local_definition(source: &str, offset: usize) -> Option<LocalDefinition> {
     let result = ruby_prism::parse(source.as_bytes());
-    let mut lookup = Lookup { offset, scopes: Vec::new(), found: None };
+    let mut lookup = Lookup { offset, scopes: Vec::new(), visited: 0, found: None };
     ruby_prism::Visit::visit(&mut lookup, &result.node());
-    let (name, scope) = lookup.found?;
-    let mut declaration = Declaration { name: &name, scope, nesting: None, found: None };
+    let (name, scope) = match lookup.found? {
+        Target::Implicit((start, end)) => return Some(LocalDefinition { start, end, parameter: true }),
+        Target::Named(name, scope) => (name, scope),
+    };
+    let mut declaration = Declaration::new(&name, scope);
     ruby_prism::Visit::visit(&mut declaration, &result.node());
     declaration.found
 }
 
-type Span = (usize, usize);
-
-fn span(at: &ruby_prism::Location) -> Span {
-    (at.start() as usize, at.end() as usize)
+/// The variable under the cursor.
+enum Target {
+    /// A named variable and its scope, by the scope's place in a pre-order walk.
+    Named(Vec<u8>, usize),
+    /// `it` or `_1`: the opening of the block that declares it.
+    Implicit(Span),
 }
 
-/// The variable at `offset` and the scope (program, method, block or lambda) its depth points to.
+/// Whether `name` is a numbered block parameter, `_1` to `_9`.
+fn is_numbered_parameter(name: &[u8]) -> bool {
+    matches!(name, [b'_', b'1'..=b'9'])
+}
+
+/// Finds the variable at `offset` and the scope (program, method, block or lambda) its depth points to.
 struct Lookup {
     offset: usize,
-    scopes: Vec<Span>,
-    found: Option<(Vec<u8>, Span)>,
+    /// The scopes around the visitor: their place in a pre-order walk, and a block's or lambda's opening.
+    scopes: Vec<(usize, Option<Span>)>,
+    visited: usize,
+    found: Option<Target>,
 }
 
 impl Lookup {
-    fn scoped(&mut self, at: ruby_prism::Location, visit: impl FnOnce(&mut Self)) {
-        self.scopes.push(span(&at));
+    fn scoped(&mut self, opening: Option<ruby_prism::Location>, visit: impl FnOnce(&mut Self)) {
+        self.scopes.push((self.visited, opening.as_ref().map(span)));
+        self.visited += 1;
         visit(self);
         self.scopes.pop();
     }
 
-    fn variable(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location) {
-        let (start, end) = span(&at);
-        if self.found.is_some() || !(start..=end).contains(&self.offset) {
+    fn holds(&self, at: &ruby_prism::Location) -> bool {
+        let (start, end) = span(at);
+        self.found.is_none() && (start..=end).contains(&self.offset)
+    }
+
+    fn variable(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location, _read: bool) {
+        if !self.holds(&at) {
             return;
         }
-        let scope = self.scopes.len().checked_sub(1 + depth as usize).and_then(|i| self.scopes.get(i));
-        self.found = scope.map(|&scope| (name.as_slice().to_vec(), scope));
+        let Some(&(scope, opening)) = self.scopes.len().checked_sub(1 + depth as usize).and_then(|i| self.scopes.get(i)) else {
+            return;
+        };
+        self.found = match is_numbered_parameter(name.as_slice()) {
+            true => opening.map(Target::Implicit),
+            false => Some(Target::Named(name.as_slice().to_vec(), scope)),
+        };
     }
 }
 
 impl<'pr> ruby_prism::Visit<'pr> for Lookup {
+    visit_local_variables!('pr, variable);
+
     fn visit_program_node(&mut self, node: &ruby_prism::ProgramNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_program_node(v, node));
+        self.scoped(None, |v| ruby_prism::visit_program_node(v, node));
     }
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_def_node(v, node));
+        self.scoped(None, |v| ruby_prism::visit_def_node(v, node));
     }
 
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_block_node(v, node));
+        self.scoped(Some(node.opening_loc()), |v| ruby_prism::visit_block_node(v, node));
     }
 
     fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_lambda_node(v, node));
+        self.scoped(Some(node.opening_loc()), |v| ruby_prism::visit_lambda_node(v, node));
     }
 
-    fn visit_local_variable_read_node(&mut self, node: &ruby_prism::LocalVariableReadNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.location());
-    }
-
-    fn visit_local_variable_target_node(&mut self, node: &ruby_prism::LocalVariableTargetNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.location());
-    }
-
-    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_write_node(self, node);
-    }
-
-    fn visit_local_variable_or_write_node(&mut self, node: &ruby_prism::LocalVariableOrWriteNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_or_write_node(self, node);
-    }
-
-    fn visit_local_variable_and_write_node(&mut self, node: &ruby_prism::LocalVariableAndWriteNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_and_write_node(self, node);
-    }
-
-    fn visit_local_variable_operator_write_node(&mut self, node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>) {
-        self.variable(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_operator_write_node(self, node);
+    fn visit_it_local_variable_read_node(&mut self, node: &ruby_prism::ItLocalVariableReadNode<'pr>) {
+        if self.holds(&node.location()) {
+            self.found = self.scopes.last().and_then(|&(_, opening)| opening).map(Target::Implicit);
+        }
     }
 }
 
-/// The first declaration of `name` in `scope`: a parameter of the scope itself, else an assignment at its level.
+/// The first declaration of `name` in the scope at `scope` in a pre-order walk: a parameter of the scope itself, else an
+/// assignment at its level.
 struct Declaration<'a> {
     name: &'a [u8],
-    scope: Span,
-    /// How many blocks deep inside `scope` the visitor is; `None` outside it.
+    scope: usize,
+    visited: usize,
+    /// How many blocks deep inside the scope the visitor is; `None` outside it.
     nesting: Option<u32>,
-    found: Option<Span>,
+    found: Option<LocalDefinition>,
 }
 
-impl Declaration<'_> {
-    fn scoped(&mut self, at: ruby_prism::Location, visit: impl FnOnce(&mut Self)) {
-        let outer = self.nesting;
+impl<'a> Declaration<'a> {
+    fn new(name: &'a [u8], scope: usize) -> Self {
+        Declaration { name, scope, visited: 0, nesting: None, found: None }
+    }
+
+    /// Enters a scope; a method's (`boundary`) sees nothing of the scope around it.
+    fn scoped(&mut self, boundary: bool, visit: impl FnOnce(&mut Self)) {
+        let (index, outer) = (self.visited, self.nesting);
+        self.visited += 1;
         self.nesting = match outer {
-            Some(depth) => Some(depth + 1),
-            None if span(&at) == self.scope => Some(0),
-            None => None,
+            _ if index == self.scope => Some(0),
+            Some(depth) if !boundary => Some(depth + 1),
+            _ => None,
         };
         visit(self);
         self.nesting = outer;
     }
 
-    fn parameter(&mut self, name: ruby_prism::ConstantId, at: ruby_prism::Location) {
-        if self.nesting == Some(0) {
-            self.declares(name, 0, at);
+    fn local(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location, read: bool) {
+        if !read {
+            self.found_at(name, depth, at, false);
         }
     }
 
-    fn declares(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location) {
+    fn parameter(&mut self, name: ruby_prism::ConstantId, at: ruby_prism::Location) {
+        self.found_at(name, 0, at, true);
+    }
+
+    fn found_at(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location, parameter: bool) {
         if self.found.is_none() && self.nesting == Some(depth) && name.as_slice() == self.name {
             let start = at.start() as usize;
-            self.found = Some((start, start + self.name.len()));
+            self.found = Some(LocalDefinition { start, end: start + self.name.len(), parameter });
         }
     }
 }
 
 impl<'pr> ruby_prism::Visit<'pr> for Declaration<'_> {
+    visit_local_variables!('pr, local);
+
     fn visit_program_node(&mut self, node: &ruby_prism::ProgramNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_program_node(v, node));
+        self.scoped(true, |v| ruby_prism::visit_program_node(v, node));
     }
 
     fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
-        // A method is a new scope: nothing inside it declares the variables of the scope around it.
-        let outer = self.nesting.take();
-        if span(&node.location()) == self.scope {
-            self.nesting = Some(0);
-        }
-        ruby_prism::visit_def_node(self, node);
-        self.nesting = outer;
+        self.scoped(true, |v| ruby_prism::visit_def_node(v, node));
     }
 
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_block_node(v, node));
+        self.scoped(false, |v| ruby_prism::visit_block_node(v, node));
     }
 
     fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
-        self.scoped(node.location(), |v| ruby_prism::visit_lambda_node(v, node));
+        self.scoped(false, |v| ruby_prism::visit_lambda_node(v, node));
     }
 
     fn visit_required_parameter_node(&mut self, node: &ruby_prism::RequiredParameterNode<'pr>) {
@@ -393,20 +418,6 @@ impl<'pr> ruby_prism::Visit<'pr> for Declaration<'_> {
 
     fn visit_block_local_variable_node(&mut self, node: &ruby_prism::BlockLocalVariableNode<'pr>) {
         self.parameter(node.name(), node.location());
-    }
-
-    fn visit_local_variable_target_node(&mut self, node: &ruby_prism::LocalVariableTargetNode<'pr>) {
-        self.declares(node.name(), node.depth(), node.location());
-    }
-
-    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
-        self.declares(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_write_node(self, node);
-    }
-
-    fn visit_local_variable_or_write_node(&mut self, node: &ruby_prism::LocalVariableOrWriteNode<'pr>) {
-        self.declares(node.name(), node.depth(), node.name_loc());
-        ruby_prism::visit_local_variable_or_write_node(self, node);
     }
 }
 
@@ -517,7 +528,10 @@ mod tests {
     fn local_definitions_go_to_the_declaring_block() {
         let at = |source: &str, cursor: &str, target: &str| {
             let offset = source.find(cursor).unwrap();
-            (local_definition(source, offset), source.find(target).map(|t| (t, t + target.trim_end_matches(['|', ',', ')']).len())))
+            (
+                local_definition(source, offset).map(|d| (d.start, d.end)),
+                source.find(target).map(|t| (t, t + target.trim_end_matches(['|', ',', ')']).len())),
+            )
         };
         let (found, want) = at("items.each do |item|\n  item.name\nend\n", "item.name", "item|");
         assert_eq!(found, want);
@@ -532,8 +546,29 @@ mod tests {
         assert_eq!(found.map(|(s, _)| s), want.map(|(s, _)| s), "an assignment in the block");
         let source = "x.each { |user| }\n[1].each { |user| user }\n";
         let second = source.rfind("|user|").unwrap() + 1;
-        assert_eq!(local_definition(source, source.rfind("user }").unwrap()), Some((second, second + 4)), "not a sibling block's");
+        let sibling = local_definition(source, source.rfind("user }").unwrap());
+        assert_eq!(sibling, Some(LocalDefinition { start: second, end: second + 4, parameter: true }), "not a sibling block's");
+        let source = "x.each do |row|\n  total = row.price\n  total + 1\nend\n";
+        assert!(!local_definition(source, source.find("total + 1").unwrap()).unwrap().parameter, "an assignment");
         assert_eq!(local_definition("helper_call\n", 2), None, "not a local");
+    }
+
+    #[test]
+    fn local_definitions_in_other_scopes() {
+        fn definition<'a>(source: &'a str, cursor: &str) -> Option<&'a str> {
+            local_definition(source, source.find(cursor)?).map(|d| &source[d.start..d.end])
+        }
+        let declared = |source: &str, cursor: &str, target: &str| {
+            local_definition(source, source.find(cursor).unwrap()).map(|d| d.start) == source.find(target)
+        };
+        assert!(declared("f = ->(x) { x + 1 }\n", "x + 1", "x)"), "a lambda parameter");
+        assert!(declared("def helper(a)\n  a * 2\nend\n", "a * 2", "a)"), "a method parameter");
+        assert!(declared("a = 1\ndef helper\n  a = 2\n  a\nend\n", "a\nend", "a = 2"), "a method sees nothing outside it");
+        assert!(declared("begin\n  x\nrescue => error\n  error.message\nend\n", "error.message", "error\n"), "rescue");
+        assert!(declared("items.each { |a:, b: 1| a + b }\n", "a + b", "a:"), "a keyword block parameter");
+        assert!(declared("items.each { |x; tmp| tmp = x }\n", "tmp = x", "tmp|"), "a block-local variable");
+        assert_eq!(definition("items.each { _1.name }\n", "_1.name"), Some("{"), "a numbered parameter");
+        assert_eq!(definition("items.each do it.name end\n", "it.name"), Some("do"), "it");
     }
 
     #[test]

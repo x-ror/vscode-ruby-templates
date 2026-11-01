@@ -1,7 +1,7 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
-use crate::prism::LocalUses;
+use crate::prism::{LocalDefinition, LocalUses};
 use crate::strict_locals::{self, Close};
 use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
@@ -26,7 +26,7 @@ pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_
 
 /// Where the template declares the local variable at `offset` (a block parameter or an assignment), from the Ruby it
 /// compiles to.
-pub(crate) fn local_definition(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Option<(usize, usize)> {
+pub(crate) fn local_definition(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Option<LocalDefinition> {
     match lang {
         TemplateLang::Erb => erb_ruby::local_definition(text, offset),
         TemplateLang::Slim => slim_ruby::local_definition(&slim_parser::parse(text, extra_engines), offset),
@@ -153,8 +153,8 @@ mod tests {
     #[test]
     fn local_definitions_in_every_language() {
         fn definition(lang: TemplateLang, text: &str) -> Option<(usize, &str)> {
-            let (start, end) = local_definition(lang, text, text.find("item.name").unwrap(), &[])?;
-            Some((start, &text[start..end]))
+            let found = local_definition(lang, text, text.find("item.name").unwrap(), &[])?;
+            Some((found.start, &text[found.start..found.end]))
         }
         let erb = "<% @items.each do |item| %>\n  <p><%= item.name %></p>\n<% end %>\n";
         assert_eq!(definition(TemplateLang::Erb, erb), Some((erb.find("item|").unwrap(), "item")));

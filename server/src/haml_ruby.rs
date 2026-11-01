@@ -24,7 +24,7 @@ pub fn local_uses(text: &str, parsed: &Parsed, comment: Option<&Comment>, name: 
 }
 
 /// Where the template declares the local variable at `offset`.
-pub fn local_definition(text: &str, parsed: &Parsed, offset: usize) -> Option<(usize, usize)> {
+pub fn local_definition(text: &str, parsed: &Parsed, offset: usize) -> Option<crate::prism::LocalDefinition> {
     compile_template(text, parsed, None).local_definition(offset)
 }
 

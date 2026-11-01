@@ -78,6 +78,11 @@ fn is_key(line: &str, col: usize) -> bool {
     after.starts_with(':') && !after.starts_with("::")
 }
 
+/// A Rails or Haml helper this extension knows, never a local of the template.
+fn is_builtin_helper(name: &str) -> bool {
+    helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name)
+}
+
 /// Whether `name` can be a Ruby local variable's name.
 fn is_local_name(name: &str) -> bool {
     helper_defs::name_at(name, 0) == Some(name) && !name.ends_with(['?', '!']) && !ruby::KEYWORDS.contains(&name)
@@ -382,8 +387,7 @@ impl Backend {
         }
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
         // `link_to` or `t` is never a local; the scan below reads every view.
-        let builtin = |name: &str| helpers::HELPERS.iter().chain(helpers::HAML_HELPERS).any(|h| h.name == name);
-        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !builtin(name)) else { return Ok(vec![]) };
+        let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !is_builtin_helper(name)) else { return Ok(vec![]) };
         let project = Project::for_template(path);
         let close = strict_locals::Close::of(&project);
         let passes = self.local_passes(project, path, name).await?;
@@ -690,11 +694,20 @@ impl LanguageServer for Backend {
         // The guard would block the next `did_change` while the work below waits.
         drop(doc);
         // A block variable or a local the template assigns hides a helper of the same name.
-        let local =
-            helper.as_ref().and_then(|_| code_context::local_definition(lang, &text, line_start + col, &self.options().extra_engines));
-        if let Some((start, end)) = local {
-            let index = util::LineIndex::new(&text);
-            return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, Range::new(index.position(start), index.position(end))))));
+        if let Some(name) = helper.as_deref().filter(|name| !is_builtin_helper(name)) {
+            let (source, offset, engines) = (text.clone(), line_start + col, self.options().extra_engines.clone());
+            let found = off_server_task(move || code_context::local_definition(lang, &source, offset, &engines)).await?;
+            // A partial's strict local that the template also assigns (`user ||= …`) is defined by its callers.
+            let strict_local = || {
+                let close = strict_locals::Close::of(&project);
+                is_partial(&uri)
+                    && partials::strict_locals(&text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name))
+            };
+            if let Some(found) = found.filter(|found| found.parameter || !strict_local()) {
+                let index = util::LineIndex::new(&text);
+                let range = Range::new(index.position(found.start), index.position(found.end));
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, range))));
+            }
         }
         let at_line = |(file, line): (PathBuf, usize)| line_location(file, line);
         match (route, helper) {
