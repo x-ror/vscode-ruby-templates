@@ -60,6 +60,11 @@ pub fn local_uses(parsed: &Parsed, name: &str) -> crate::prism::LocalUses {
     compile(&parsed.pieces).local_uses(name)
 }
 
+/// Where the template declares the local variable at `offset`.
+pub fn local_definition(parsed: &Parsed, offset: usize) -> Option<crate::prism::LocalDefinition> {
+    compile(&parsed.pieces).local_definition(offset)
+}
+
 /// The block variables in scope at `offset` of the template.
 pub fn block_locals(parsed: &Parsed, offset: usize) -> Vec<String> {
     compile(&parsed.pieces).block_locals(offset)

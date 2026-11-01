@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Go to definition on a block variable (`|user|`, `|(a, b)|`, an outer block's variable) or a local the template assigns (`<% total = … %>`) jumps to where it is declared, in ERB, Haml and Slim.
+
 ## 0.8.1
 
 - Instance variables from a parent controller are found when a controller inside `module Admin` names it without the module (`class ReportsController < BaseController`), as Ruby resolves it.

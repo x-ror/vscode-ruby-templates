@@ -279,6 +279,53 @@ const check = (label, actual, expected) => {
     haml: ["name", snippet],
     slim: ["name", snippet],
   });
+  const blockDefinitions = {};
+  for (const [lang, text] of Object.entries({
+    erb: "<% @users.each do |user| %>\n  <p><%= user.name %></p>\n<% end %>\n",
+    haml: "- @users.each do |user|\n  %p= user.name\n",
+    slim: "- @users.each do |user|\n  p = user.name\n",
+  })) {
+    const blockUri = fileUri(path.join(views, "users", `block.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: blockUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const read = text.split("\n")[1].indexOf("user.name") + 1;
+    const r = (await req("textDocument/definition", blockUri, 1, read)).result;
+    blockDefinitions[lang] = r
+      ? `${r.range.start.line}:${r.range.start.character}-${r.range.end.character}`
+      : null;
+  }
+  const assignedUri = fileUri(path.join(views, "users", "_assigned.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: assignedUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%# locals: (user: nil) %>\n<% user ||= 1 %>\n<% [1].each do |user| %><%= user %><% end %><%= user %>\n",
+      },
+    },
+    true,
+  );
+  const assignedAt = async (character) => {
+    const r = (await req("textDocument/definition", assignedUri, 2, character))
+      .result;
+    const l = Array.isArray(r) ? r[0] : r;
+    return l ? `${l.range.start.line}:${l.range.start.character}` : null;
+  };
+  check(
+    "definition on a strict local the partial assigns",
+    [await assignedAt(48), await assignedAt(28)],
+    ["0:0", "2:16"],
+  );
+  check("definition on a block variable", blockDefinitions, {
+    erb: "0:19-23",
+    haml: "0:18-22",
+    slim: "0:18-22",
+  });
   check(
     "definition render @users",
     targets(await req("textDocument/definition", uri, 15, 12)),

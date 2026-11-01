@@ -1,7 +1,7 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
-use crate::prism::LocalUses;
+use crate::prism::{LocalDefinition, LocalUses};
 use crate::strict_locals::{self, Close};
 use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
@@ -21,6 +21,17 @@ pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_
         TemplateLang::Slim => slim_ruby::block_locals(&slim_parser::parse(text, extra_engines), offset),
         TemplateLang::Haml => haml_ruby::block_locals(text, &haml_parser::parse_with_ruby(text), offset),
         TemplateLang::Skim | TemplateLang::Ruby => Vec::new(),
+    }
+}
+
+/// Where the template declares the local variable at `offset` (a block parameter or an assignment), from the Ruby it
+/// compiles to.
+pub(crate) fn local_definition(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Option<LocalDefinition> {
+    match lang {
+        TemplateLang::Erb => erb_ruby::local_definition(text, offset),
+        TemplateLang::Slim => slim_ruby::local_definition(&slim_parser::parse(text, extra_engines), offset),
+        TemplateLang::Haml => haml_ruby::local_definition(text, &haml_parser::parse_with_ruby(text), offset),
+        TemplateLang::Skim | TemplateLang::Ruby => None,
     }
 }
 
@@ -137,6 +148,23 @@ mod tests {
         assert_eq!(reads(TemplateLang::Slim, slim), [slim.find("user.name").unwrap()]);
         let haml = "-# locals: (user:)\n%p= user.name\n- [1].each do |user|\n  = user\n";
         assert_eq!(reads(TemplateLang::Haml, haml), [haml.find("user.name").unwrap()]);
+    }
+
+    #[test]
+    fn local_definitions_in_every_language() {
+        fn definition(lang: TemplateLang, text: &str) -> Option<(usize, &str)> {
+            let found = local_definition(lang, text, text.find("item.name").unwrap(), &[])?;
+            Some((found.start, &text[found.start..found.end]))
+        }
+        let erb = "<% @items.each do |item| %>\n  <p><%= item.name %></p>\n<% end %>\n";
+        assert_eq!(definition(TemplateLang::Erb, erb), Some((erb.find("item|").unwrap(), "item")));
+        let slim = "- @items.each do |item|\n  p = item.name\n";
+        assert_eq!(definition(TemplateLang::Slim, slim), Some((slim.find("item|").unwrap(), "item")));
+        let haml = "- @items.each do |item|\n  %p= item.name\n";
+        assert_eq!(definition(TemplateLang::Haml, haml), Some((haml.find("item|").unwrap(), "item")));
+        let assigned = "<% item = @items.first %>\n<%= item.name %>\n";
+        assert_eq!(definition(TemplateLang::Erb, assigned), Some((3, "item")));
+        assert_eq!(definition(TemplateLang::Erb, "<%= item.name %>\n"), None, "a helper call");
     }
 
     #[test]
