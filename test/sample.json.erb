@@ -1,5 +1,8 @@
 {
   "name": "<%= @user.name %>",
   <% if @admin %>"admin": true, <% end %>
+  "raw": "<%== @html %>",
+  "literal": "<%% not code %>",
+  "trimmed": "<%= @name -%>",
   "count": <%= @count -%>
 }

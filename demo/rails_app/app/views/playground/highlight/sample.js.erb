@@ -3,3 +3,7 @@ const users = <%= raw @users.to_json %>;
 <% if current_user %>
 alert("Hi <%= j current_user.name %>");
 <% end %>
+const raw = "<%== @html %>"; // <%% not code %>
+<%- if admin -%>
+alert("<%# note %>");
+<%- end -%>

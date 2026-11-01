@@ -251,4 +251,83 @@
    "</"                        meta.tag.structure.p.end.html > punctuation.definition.tag.begin.html
    "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
    ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
+"<a title=\"<%== raw_title %>\" data-y=\"<%= y -%>\" data-z=\"<%# note %>\" data-l=\"<%% not code %>\">x</a>"
+   "<"                         meta.tag.inline.a.start.html > punctuation.definition.tag.begin.html
+   "a"                         meta.tag.inline.a.start.html > entity.name.tag.html
+   "title"                     meta.tag.inline.a.start.html > meta.attribute.title.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.title.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.title.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "<%=="                      meta.tag.inline.a.start.html > meta.attribute.title.html > string.quoted.double.html > meta.embedded.line > punctuation.section.embedded.begin
+   " raw_title "               meta.tag.inline.a.start.html > meta.attribute.title.html > string.quoted.double.html > meta.embedded.line > source.ruby
+   "%>"                        meta.tag.inline.a.start.html > meta.attribute.title.html > string.quoted.double.html > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.title.html > string.quoted.double.html > punctuation.definition.string.end.html
+   "data-y"                    meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "<%="                       meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > string.quoted.double.html > meta.embedded.line > punctuation.section.embedded.begin
+   " y "                       meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > string.quoted.double.html > meta.embedded.line > source.ruby
+   "-%>"                       meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > string.quoted.double.html > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-y.html > string.quoted.double.html > punctuation.definition.string.end.html
+   "data-z"                    meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "<%#"                       meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > string.quoted.double.html > comment.block > punctuation.definition.comment.begin
+   " note "                    meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > string.quoted.double.html > comment.block
+   "%>"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > string.quoted.double.html > comment.block > punctuation.definition.comment.end
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-z.html > string.quoted.double.html > punctuation.definition.string.end.html
+   "data-l"                    meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "<%%"                       meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > string.quoted.double.html > constant.character.escape
+   " not code %>"              meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > string.quoted.double.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-l.html > string.quoted.double.html > punctuation.definition.string.end.html
+   ">"                         meta.tag.inline.a.start.html > punctuation.definition.tag.end.html
+   "x"                         
+   "</"                        meta.tag.inline.a.end.html > punctuation.definition.tag.begin.html
+   "a"                         meta.tag.inline.a.end.html > entity.name.tag.html
+   ">"                         meta.tag.inline.a.end.html > punctuation.definition.tag.end.html
+"<script>const a = \"<%== json %>\"; <%# in script %> <%= b -%></script>"
+   "<"                         meta.embedded.block.html > meta.tag.metadata.script.start.html > punctuation.definition.tag.begin.html
+   "script"                    meta.embedded.block.html > meta.tag.metadata.script.start.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.script.start.html > punctuation.definition.tag.end.html
+   "const"                     meta.embedded.block.html > source.js > meta.var.expr.js > storage.type.js
+   "a"                         meta.embedded.block.html > source.js > meta.var.expr.js > meta.var-single-variable.expr.js > meta.definition.variable.js > variable.other.constant.js
+   "="                         meta.embedded.block.html > source.js > meta.var.expr.js > keyword.operator.assignment.js
+   "\""                        meta.embedded.block.html > source.js > meta.var.expr.js > string.quoted.double.js > punctuation.definition.string.begin.js
+   "<%=="                      meta.embedded.block.html > source.js > meta.var.expr.js > string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.begin
+   " json "                    meta.embedded.block.html > source.js > meta.var.expr.js > string.quoted.double.js > meta.embedded.line > source.ruby
+   "%>"                        meta.embedded.block.html > source.js > meta.var.expr.js > string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.embedded.block.html > source.js > meta.var.expr.js > string.quoted.double.js > punctuation.definition.string.end.js
+   ";"                         meta.embedded.block.html > source.js > punctuation.terminator.statement.js
+   "<%#"                       meta.embedded.block.html > source.js > comment.block > punctuation.definition.comment.begin
+   " in script "               meta.embedded.block.html > source.js > comment.block
+   "%>"                        meta.embedded.block.html > source.js > comment.block > punctuation.definition.comment.end
+   "<%="                       meta.embedded.block.html > source.js > meta.embedded.line > punctuation.section.embedded.begin
+   " b "                       meta.embedded.block.html > source.js > meta.embedded.line > source.ruby
+   "-%>"                       meta.embedded.block.html > source.js > meta.embedded.line > punctuation.section.embedded.end
+   "<"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.begin.html > source.js-ignored-vscode
+   "/"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.begin.html
+   "script"                    meta.embedded.block.html > meta.tag.metadata.script.end.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.end.html
+"<style><%# in style %>.b { width: <%== w %>px; }</style>"
+   "<"                         meta.embedded.block.html > meta.tag.metadata.style.start.html > punctuation.definition.tag.begin.html
+   "style"                     meta.embedded.block.html > meta.tag.metadata.style.start.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.style.start.html > punctuation.definition.tag.end.html
+   "<%#"                       meta.embedded.block.html > comment.block > punctuation.definition.comment.begin
+   " in style "                meta.embedded.block.html > comment.block
+   "%>"                        meta.embedded.block.html > comment.block > punctuation.definition.comment.end
+   ".b "                       meta.embedded.block.html > source.css
+   "{"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.section.property-list.begin.bracket.curly.css
+   "width"                     meta.embedded.block.html > source.css > meta.property-list.css > meta.property-name.css > support.type.property-name.css
+   ":"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.separator.key-value.css
+   "<%=="                      meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line > punctuation.section.embedded.begin
+   " w "                       meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line > source.ruby
+   "%>"                        meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line > punctuation.section.embedded.end
+   "px"                        meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css
+   ";"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.terminator.rule.css
+   "}"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.section.property-list.end.bracket.curly.css
+   "<"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.begin.html > source.css-ignored-vscode
+   "/"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.begin.html
+   "style"                     meta.embedded.block.html > meta.tag.metadata.style.end.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.end.html
 ""
