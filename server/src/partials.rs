@@ -1,7 +1,7 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
 use crate::project::Project;
-use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, views_root};
+use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
 use crate::ruby;
 use crate::strict_locals::{self, Close};
 use regex::Regex;
@@ -52,6 +52,16 @@ pub struct RenderRef {
     pub call: usize,
     /// The `layout:` of a `render partial:|template:` call; it receives that call's locals.
     pub from_layout: bool,
+    /// The call's literal `formats:`, `variants:` and `handlers:`, which narrow the files Rails picks.
+    pub lookup: Lookup,
+}
+
+/// The lookup details a `render partial:|template:` call names; `None` where it names none (or not literally).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Lookup {
+    pub formats: Option<Vec<String>>,
+    pub variants: Option<Vec<String>>,
+    pub handlers: Option<Vec<String>>,
 }
 
 /// Every `render "..."` reference on a line, in order.
@@ -64,7 +74,15 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     }
     let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
         let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
-        RenderRef { kind, name: m.as_str().to_string(), start: m.start(), end: m.end(), call: call.start(), from_layout }
+        RenderRef {
+            kind,
+            name: m.as_str().to_string(),
+            start: m.start(),
+            end: m.end(),
+            call: call.start(),
+            from_layout,
+            lookup: Lookup::default(),
+        }
     };
     let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(2)?, false)));
     // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
@@ -77,7 +95,39 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     refs.sort_by_key(|r| r.start);
     // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
     refs.dedup_by_key(|r| r.start);
+    for r in &mut refs {
+        r.lookup = lookup(line, r);
+    }
     refs
+}
+
+/// The `formats:`, `variants:` and `handlers:` of `r`'s call in `call`. Only the options form has them: in
+/// `render "x", formats: [:json]` the hash is the partial's locals.
+fn lookup(call: &str, r: &RenderRef) -> Lookup {
+    let form = RenderForm::of(call, r);
+    let Some(pairs) = render_pairs(call, r).filter(|_| form.options && !r.from_layout) else { return Lookup::default() };
+    let option = |name: &str| pairs.iter().find(|&&(key, _, _)| key == name).and_then(|&(_, value, _)| literal_names(value));
+    Lookup { formats: option("formats"), variants: option("variants"), handlers: option("handlers") }
+}
+
+/// The names in a literal `:json`, `"json"`, `[:json, :html]` or `%i[json html]`; `None` for anything computed.
+fn literal_names(value: &str) -> Option<Vec<String>> {
+    let value = value.trim();
+    let words = value.strip_prefix("%i").or_else(|| value.strip_prefix("%w"));
+    let is_name = |name: &str| !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if let Some(list) = words {
+        let names = list.trim_start_matches(['[', '(']).trim_end_matches([']', ')']).split_whitespace();
+        return names.map(|name| is_name(name).then(|| name.to_string())).collect();
+    }
+    let list = value.strip_prefix('[').and_then(|list| list.strip_suffix(']')).unwrap_or(value);
+    list.split(',')
+        .map(|item| {
+            let item = item.trim();
+            // A bare word is a variable; only a symbol or a string names a value.
+            let name = item.strip_prefix(':').or_else(|| item.strip_prefix(['"', '\'']).and_then(|rest| rest.strip_suffix(['"', '\''])))?;
+            is_name(name).then(|| name.to_string())
+        })
+        .collect()
 }
 
 /// Find a render reference whose string spans `col` (byte column) on `line`.
@@ -270,9 +320,31 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
     }
     let mut out = Vec::new();
     for d in dirs {
-        out.extend(matching_templates(project, &d, &basename).into_iter().filter(|p| renders_format(project, current, p)));
+        let mut found: Vec<PathBuf> =
+            matching_templates(project, &d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
+        // Rails tries the variants it was given before the template without one.
+        if r.lookup.variants.is_some() {
+            found.sort_by_key(|p| template_variant(p).is_none());
+        }
+        out.extend(found);
     }
     out
+}
+
+/// Whether Rails could pick `candidate` for a render in `current` with the call's `lookup`: its format among
+/// `formats:` (else one `current` renders), its variant among `variants:`, its handler among `handlers:`.
+fn looked_up(project: &Project, current: &Path, candidate: &Path, lookup: &Lookup) -> bool {
+    // A template without that detail (`_card.erb` has no format) is the fallback for every value.
+    let among = |names: &Option<Vec<String>>, value: Option<&str>| {
+        names.as_ref().is_none_or(|names| value.is_none_or(|value| names.iter().any(|name| name == value)))
+    };
+    let format_ok = match lookup.formats {
+        Some(_) => among(&lookup.formats, template_format(|f| project.is_format(f), candidate)),
+        None => renders_format(project, current, candidate),
+    };
+    format_ok
+        && among(&lookup.variants, template_variant(candidate))
+        && among(&lookup.handlers, candidate.extension().and_then(|e| e.to_str()))
 }
 
 /// `Users::CardComponent` → app/components/users/card_component.rb (+ sidecar templates).
@@ -1222,6 +1294,39 @@ mod tests {
         assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "event""#).is_empty());
         assert_eq!(resolved_names(&views, "users/index.ics.erb", r#"render "event""#), ["_event.ics.erb"]);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lookup_options_pick_the_files() {
+        let files = ["users/_card.html.erb", "users/_card.html+phone.erb", "users/_card.json.jbuilder", "users/_card.html.haml"];
+        let (root, views) = partial_tree("lookup", &files);
+        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        assert_eq!(names(r#"render partial: "card", formats: [:json]"#), ["_card.json.jbuilder"]);
+        assert_eq!(names(r#"render partial: "card", formats: :json, handlers: [:jbuilder]"#), ["_card.json.jbuilder"]);
+        assert_eq!(names(r#"render partial: "card", handlers: %i[haml]"#), ["_card.html.haml"]);
+        assert_eq!(names(r#"render partial: "card", variants: [:phone]"#), ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]);
+        assert_eq!(
+            names(r#"render partial: "card", variants: [:tablet]"#),
+            ["_card.html.erb", "_card.html.haml"],
+            "only the variant-less ones"
+        );
+        // In the short form the hash is locals, and a computed value names nothing literal.
+        assert_eq!(names(r#"render "card", formats: [:json]"#), ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]);
+        assert_eq!(
+            names(r#"render partial: "card", formats: request_formats"#),
+            ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]
+        );
+        assert!(names(r#"render partial: "card", formats: [:xml]"#).is_empty(), "Rails raises Missing partial");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn literal_lookup_names() {
+        assert_eq!(literal_names(":json"), Some(vec!["json".to_string()]));
+        assert_eq!(literal_names(r#"["json", :html]"#), Some(vec!["json".to_string(), "html".to_string()]));
+        assert_eq!(literal_names("%w(phone tablet)"), Some(vec!["phone".to_string(), "tablet".to_string()]));
+        assert_eq!(literal_names("[:json, fmt]"), None, "a variable in the list");
+        assert_eq!(literal_names("request.format"), None);
     }
 
     #[test]
