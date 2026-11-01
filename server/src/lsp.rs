@@ -1329,8 +1329,11 @@ mod tests {
             ]
         );
         assert!(rename(&[(card.clone(), views.join("users/card.html.erb"))]).is_empty());
-        // Nothing names a partial directly in app/views.
-        assert!(rename(&[(card, views.join("_card.html.erb"))]).is_empty());
+        // Rails finds a partial directly in app/views as `/card`: the slash drops the controller prefixes.
+        assert_eq!(
+            rename(&[(card, views.join("_card.html.erb"))]),
+            ["box.html.haml 1:12 /card", "index.html.erb 0:12 /card", "index.html.erb 0:33 /card", "show.html.slim 0:10 /card",]
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
