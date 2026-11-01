@@ -355,15 +355,14 @@ pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
     generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
 }
 
-/// The template byte ranges where the strict local `name` is read; the `locals:` comment, which Rails cuts out, makes the
+/// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
 /// method's parameters.
-pub fn local_reads(text: &str, close: Close, name: &str) -> Vec<(usize, usize)> {
+pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
     let compiled = compile(text, Some(close));
     let original = |(start, end): (usize, usize)| (compiled.cut.original(start), compiled.cut.original(end));
-    prism::local_reads(&compiled.source, name)
-        .into_iter()
-        .filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original))
-        .collect()
+    let uses = prism::local_uses(&compiled.source, name);
+    let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original)).collect();
+    prism::LocalUses { spans, ..uses }
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.

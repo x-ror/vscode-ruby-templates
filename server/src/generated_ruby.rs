@@ -59,9 +59,11 @@ impl Compiled {
         self.verbatim.push((from, from + len, offset));
     }
 
-    /// The template byte ranges where the local `name` is read, among the code the template wrote.
-    pub fn local_reads(&self, name: &str) -> Vec<(usize, usize)> {
-        prism::local_reads(&self.source, name).into_iter().filter_map(|(start, end)| template_span(&self.verbatim, start, end)).collect()
+    /// The template byte ranges where the local `name` is read or assigned, among the code the template wrote.
+    pub fn local_uses(&self, name: &str) -> prism::LocalUses {
+        let uses = prism::local_uses(&self.source, name);
+        let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&self.verbatim, start, end)).collect();
+        prism::LocalUses { spans, ..uses }
     }
 
     pub fn block_locals(&self, template_offset: usize) -> Vec<String> {

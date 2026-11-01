@@ -489,6 +489,21 @@ pub fn passed_locals<'a>(line: &'a str, r: &RenderRef) -> Option<Vec<&'a str>> {
     passed_names(render_args(line, r)?, &RenderForm::of(line, r))
 }
 
+/// Where `call`, a literal partial render's `call_text`, spells the key of the local `name` (`name:` or `:name =>`).
+pub fn local_key_span(call: &str, r: &RenderRef, name: &str) -> Option<(usize, usize)> {
+    let pairs = render_pairs(call, r)?;
+    let keys: Vec<&str> = pairs.iter().map(|&(key, _, _)| key).collect();
+    let key = if RenderForm::of(call, r).locals_in_hash(&keys) {
+        let (_, hash, _) = pairs.iter().find(|&&(key, _, _)| key == "locals")?;
+        let locals = split_args(hash.strip_prefix('{')?.strip_suffix('}')?)?;
+        locals.into_iter().filter_map(key_value).map(|(key, _)| key).find(|&key| key == name)?
+    } else {
+        keys.into_iter().find(|&key| key == name)?
+    };
+    let at = offset_in(call, key);
+    Some((at, at + key.len()))
+}
+
 /// The arguments after a literal render's partial name in `call`, its `call_text`, without the call's closing `)`.
 fn render_args<'a>(call: &'a str, r: &RenderRef) -> Option<&'a str> {
     let rest = call.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
@@ -1089,6 +1104,15 @@ mod tests {
 
     #[test]
     fn literal_render_locals() {
+        fn span<'a>(line: &'a str, name: &str) -> Option<(usize, &'a str)> {
+            local_key_span(line, &render_refs(line)[0], name).map(|(s, e)| (s, &line[s..e]))
+        }
+        let line = r#"<%= render "card", title: "user: Bob", user: u %>"#;
+        assert_eq!(span(line, "user"), Some((39, "user")), "not the text inside the string");
+        let line = r#"<%= render partial: "card", locals: { :user => u } %>"#;
+        assert_eq!(span(line, "user"), Some((39, "user")));
+        assert_eq!(span(r#"<%= render "card", size: 1 %>"#, "user"), None);
+
         fn passed(line: &str) -> Option<Vec<&str>> {
             passed_locals(line, &render_refs(line)[0])
         }

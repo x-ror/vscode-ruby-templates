@@ -1212,6 +1212,14 @@ const check = (label, actual, expected) => {
     position: { line: 1, character: 4 },
     newName: "item",
   });
+  const refusedName = async (newName) =>
+    (
+      await send("textDocument/rename", {
+        textDocument: { uri: rowUri },
+        position: { line: 1, character: 4 },
+        newName,
+      })
+    ).error?.code ?? null;
   const flat = (changes) =>
     Object.entries(changes ?? {})
       .flatMap(([u, es]) =>
@@ -1241,6 +1249,9 @@ const check = (label, actual, expected) => {
       await prepare(2, 25),
       flat(localRename.result?.changes),
       localRefs,
+      await refusedName("class"),
+      await refusedName("link_to"),
+      await refusedName("b"),
     ],
     [
       { start: { line: 1, character: 4 }, end: { line: 1, character: 5 } },
@@ -1257,6 +1268,9 @@ const check = (label, actual, expected) => {
         "/app/views/strict/_row.html.erb 1:4",
         "/app/views/strict/list.html.erb 0:25",
       ],
+      -32602,
+      -32602,
+      -32602,
     ],
   );
   const i18nDocs = {

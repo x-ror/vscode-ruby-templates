@@ -82,47 +82,120 @@ pub(crate) fn block_locals(source: &str, offset: usize) -> Vec<String> {
     scopes.names
 }
 
-/// Byte ranges in `source` where the template local `name` is read: a variable of the outermost scope (ERB and Haml
-/// compile into a method whose parameters are the strict locals), or a bare call, which is what a local is to Ruby where
-/// nothing declares it (Slim compiles into no method). A block variable of the same name hides it.
-pub(crate) fn local_reads(source: &str, name: &str) -> Vec<(usize, usize)> {
-    let result = ruby_prism::parse(source.as_bytes());
-    let mut reads = Reads { name: name.as_bytes(), blocks: 0, ranges: Vec::new() };
-    ruby_prism::Visit::visit(&mut reads, &result.node());
-    reads.ranges
+/// Where a template local is read or assigned, and whether a block or lambda has a variable of that name too.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LocalUses {
+    pub spans: Vec<(usize, usize)>,
+    pub shadowed: bool,
 }
 
-struct Reads<'a> {
+/// Where `source` reads or assigns the template local `name`: a variable of the outermost scope (ERB and Haml compile
+/// into a method whose parameters are the strict locals), or a bare call, which is what a local is to Ruby where nothing
+/// declares it (Slim compiles into no method). A block variable of the same name hides it.
+pub(crate) fn local_uses(source: &str, name: &str) -> LocalUses {
+    let result = ruby_prism::parse(source.as_bytes());
+    let mut uses = Uses { name: name.as_bytes(), blocks: 0, found: LocalUses::default() };
+    ruby_prism::Visit::visit(&mut uses, &result.node());
+    uses.found
+}
+
+/// Where the keyword parameter `name` starts in `parameters`, a method's parameter list.
+pub(crate) fn keyword_parameter_at(parameters: &str, name: &str) -> Option<usize> {
+    let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
+    let result = ruby_prism::parse(source.as_bytes());
+    let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
+    let keywords = def.parameters()?.keywords();
+    let at = keywords.iter().find_map(|node| {
+        let (found, at) = match (node.as_required_keyword_parameter_node(), node.as_optional_keyword_parameter_node()) {
+            (Some(required), _) => (required.name(), required.name_loc()),
+            (_, Some(optional)) => (optional.name(), optional.name_loc()),
+            _ => return None,
+        };
+        (found.as_slice() == name.as_bytes()).then(|| at.start() as usize)
+    })?;
+    Some(at - PARAMETERS_DEF.len())
+}
+
+/// Where `parameters`, a method's parameter list, reads the parameter `name` in the defaults of the others.
+pub(crate) fn parameter_reads(parameters: &str, name: &str) -> Vec<(usize, usize)> {
+    let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
+    let end = PARAMETERS_DEF.len() + parameters.len();
+    local_uses(&source, name)
+        .spans
+        .into_iter()
+        .filter(|&(start, _)| (PARAMETERS_DEF.len()..end).contains(&start))
+        .map(|(start, finish)| (start - PARAMETERS_DEF.len(), finish - PARAMETERS_DEF.len()))
+        .collect()
+}
+
+const PARAMETERS_DEF: &str = "def _(";
+
+struct Uses<'a> {
     name: &'a [u8],
     /// How many blocks and lambdas the visitor is in, which a read of the outermost scope's variable reaches up through.
     blocks: u32,
-    ranges: Vec<(usize, usize)>,
+    found: LocalUses,
 }
 
-impl<'pr> ruby_prism::Visit<'pr> for Reads<'_> {
+impl Uses<'_> {
+    fn local(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location) {
+        if name.as_slice() == self.name && depth == self.blocks {
+            self.found.spans.push((at.start() as usize, at.end() as usize));
+        }
+    }
+
+    fn declares(&mut self, locals: &ruby_prism::ConstantList) {
+        self.found.shadowed |= locals.iter().any(|local| local.as_slice() == self.name);
+    }
+}
+
+impl<'pr> ruby_prism::Visit<'pr> for Uses<'_> {
     fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
+        self.declares(&node.locals());
         self.blocks += 1;
         ruby_prism::visit_block_node(self, node);
         self.blocks -= 1;
     }
 
     fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
+        self.declares(&node.locals());
         self.blocks += 1;
         ruby_prism::visit_lambda_node(self, node);
         self.blocks -= 1;
     }
 
     fn visit_local_variable_read_node(&mut self, node: &ruby_prism::LocalVariableReadNode<'pr>) {
-        if node.name().as_slice() == self.name && node.depth() == self.blocks {
-            let at = node.location();
-            self.ranges.push((at.start() as usize, at.end() as usize));
-        }
+        self.local(node.name(), node.depth(), node.location());
+    }
+
+    fn visit_local_variable_target_node(&mut self, node: &ruby_prism::LocalVariableTargetNode<'pr>) {
+        self.local(node.name(), node.depth(), node.location());
+    }
+
+    fn visit_local_variable_write_node(&mut self, node: &ruby_prism::LocalVariableWriteNode<'pr>) {
+        self.local(node.name(), node.depth(), node.name_loc());
+        ruby_prism::visit_local_variable_write_node(self, node);
+    }
+
+    fn visit_local_variable_or_write_node(&mut self, node: &ruby_prism::LocalVariableOrWriteNode<'pr>) {
+        self.local(node.name(), node.depth(), node.name_loc());
+        ruby_prism::visit_local_variable_or_write_node(self, node);
+    }
+
+    fn visit_local_variable_and_write_node(&mut self, node: &ruby_prism::LocalVariableAndWriteNode<'pr>) {
+        self.local(node.name(), node.depth(), node.name_loc());
+        ruby_prism::visit_local_variable_and_write_node(self, node);
+    }
+
+    fn visit_local_variable_operator_write_node(&mut self, node: &ruby_prism::LocalVariableOperatorWriteNode<'pr>) {
+        self.local(node.name(), node.depth(), node.name_loc());
+        ruby_prism::visit_local_variable_operator_write_node(self, node);
     }
 
     fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
         if node.is_variable_call() && node.name().as_slice() == self.name {
             let at = node.location();
-            self.ranges.push((at.start() as usize, at.end() as usize));
+            self.found.spans.push((at.start() as usize, at.end() as usize));
         }
         ruby_prism::visit_call_node(self, node);
     }
@@ -214,12 +287,31 @@ mod tests {
     }
 
     #[test]
-    fn local_reads_skip_shadowing_block_variables() {
+    fn local_uses_skip_shadowing_block_variables() {
         let source = "def t(user:)\n  user.name; @user; x.user; :user\n  [1].each { |user| user }\n  [2].each { user }\nend\n";
-        let reads: Vec<&str> = local_reads(source, "user").into_iter().map(|(s, e)| &source[s..e]).collect();
-        assert_eq!(reads, ["user", "user"]);
-        let slim = "user.name\nitems.each { |user| user }\n";
-        assert_eq!(local_reads(slim, "user"), [(0, 4)], "a bare call where nothing declares it");
+        let uses = local_uses(source, "user");
+        let found: Vec<&str> = uses.spans.iter().map(|&(s, e)| &source[s..e]).collect();
+        assert_eq!(found, ["user", "user"]);
+        assert!(uses.shadowed);
+        let slim = "user.name\nitems.each { |item| item }\n";
+        assert_eq!(local_uses(slim, "user"), LocalUses { spans: vec![(0, 4)], shadowed: false }, "a bare call where nothing declares it");
+        assert!(local_uses(slim, "item").shadowed);
+    }
+
+    #[test]
+    fn local_uses_include_assignments() {
+        let source = "def t(user:)\n  user ||= 1; user += 1; user = 2; a, user = 3, 4; user &&= 5\nend\n";
+        assert_eq!(local_uses(source, "user").spans.len(), 5);
+    }
+
+    #[test]
+    fn parameters_of_a_list() {
+        let list = r#"title: "user: guest", user:, label: user.name"#;
+        assert_eq!(keyword_parameter_at(list, "user"), list.find("user:,"));
+        assert_eq!(keyword_parameter_at(list, "label"), list.find("label"));
+        assert_eq!(keyword_parameter_at(list, "guest"), None);
+        let at = list.find("user.name").unwrap();
+        assert_eq!(parameter_reads(list, "user"), [(at, at + 4)]);
     }
 
     #[test]

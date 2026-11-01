@@ -18,9 +18,9 @@ pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version, comme
     compile_template(text, parsed, comment).diagnostics(text, ruby)
 }
 
-/// The template byte ranges where the local `name` is read; `comment`, the strict locals, makes the method's parameters.
-pub fn local_reads(text: &str, parsed: &Parsed, comment: Option<&Comment>, name: &str) -> Vec<(usize, usize)> {
-    compile_template(text, parsed, comment).local_reads(name)
+/// The template byte ranges where the local `name` is read or assigned; `comment`, the strict locals, makes the method's parameters.
+pub fn local_uses(text: &str, parsed: &Parsed, comment: Option<&Comment>, name: &str) -> crate::prism::LocalUses {
+    compile_template(text, parsed, comment).local_uses(name)
 }
 
 /// The block variables in scope at `offset` of the template.

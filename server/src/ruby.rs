@@ -85,6 +85,55 @@ pub fn comment_before(code: &str) -> bool {
     code_end(code) == CodeEnd::Comment
 }
 
+/// Ruby's reserved words that read like a local's name.
+pub const KEYWORDS: [&str; 38] = [
+    "__ENCODING__",
+    "__FILE__",
+    "__LINE__",
+    "alias",
+    "and",
+    "begin",
+    "break",
+    "case",
+    "class",
+    "def",
+    "do",
+    "else",
+    "elsif",
+    "end",
+    "ensure",
+    "false",
+    "for",
+    "if",
+    "in",
+    "module",
+    "next",
+    "nil",
+    "not",
+    "or",
+    "redo",
+    "rescue",
+    "retry",
+    "return",
+    "self",
+    "super",
+    "then",
+    "true",
+    "undef",
+    "unless",
+    "until",
+    "when",
+    "while",
+    "yield",
+];
+
+/// Whether `after`, the text after a hash key's name, is a `:` with no value: `user:` then means `user: user`.
+pub fn omits_value(after: &str) -> bool {
+    let Some(rest) = after.strip_prefix(':') else { return false };
+    let rest = rest.trim_start_matches([' ', '\t']);
+    rest.is_empty() || rest.starts_with([',', ')', '}', '\n', '\r', '#']) || rest.starts_with("%>") || rest.starts_with("-%>")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockEffect {
     /// Opens N blocks (net), e.g. `if x` or `items.each do |i|`.
@@ -212,6 +261,17 @@ pub fn logical_lines(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_without_values() {
+        for after in [":", ": ,", ":)", ":}", ":\n", ": %>", ": -%>", ": # note"] {
+            assert!(omits_value(after), "{after:?}");
+        }
+        for after in [": u", "::X", " :x", ":u", ""] {
+            assert!(!omits_value(after), "{after:?}");
+        }
+    }
+
     #[test]
     fn endless_methods_open_nothing() {
         for code in ["def f = 1", "def f(a) = a + 1", "def self.f = 1", "def f(*, **, &) = g(*, **, &)"] {
