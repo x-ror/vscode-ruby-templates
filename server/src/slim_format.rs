@@ -1,6 +1,6 @@
 //! Slim formatting that can't change the compiled template: each Slim line is re-indented to
 //! `tab_size` spaces per nesting level, text and engine blocks and continuations move with their
-//! owner line, trailing whitespace goes where Slim ignores it, and empty lines at the end become one line ending.
+//! owner line, trailing whitespace goes where Slim ignores it, and blank lines at the end become one line ending.
 
 use crate::slim_parser::{indent_width, parse, Role, BOM};
 
@@ -16,18 +16,12 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
     let body = text.strip_prefix(BOM).unwrap_or(text);
     let mut out = String::with_capacity(text.len());
     out.push_str(&text[..text.len() - body.len()]);
-    // Slim keeps whitespace-only lines at the end (as newlines in the compiled code) but drops empty ones.
     let lines: Vec<&str> = body.split('\n').collect();
-    let tail = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
-    let end = lines.iter().rposition(|l| !l.trim_end_matches('\r').is_empty()).map_or(0, |i| i + 1);
+    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
     let mut shift = vec![0isize; parsed.lines.len()];
     for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).take(end).enumerate() {
         if i > 0 {
             out.push('\n');
-        }
-        if i >= tail {
-            out.push_str(raw);
-            continue;
         }
         let (line, cr) = raw.strip_suffix('\r').map_or((raw, ""), |l| (l, "\r"));
         let (ws, content) = line.split_at(line.len() - line.trim_start_matches([' ', '\t']).len());
@@ -58,7 +52,7 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
         }
         out.push_str(cr);
     }
-    // The empty lines after the last one Slim compiles collapse into one line ending.
+    // The blank lines after the last one with content collapse into one line ending.
     if end > 0 && lines.len() > end {
         out.push('\n');
     }
@@ -109,24 +103,26 @@ mod tests {
     }
 
     #[test]
-    fn keeps_byte_order_mark_and_trailing_blank_lines() {
+    fn keeps_byte_order_mark_and_inner_blank_lines() {
         assert_eq!(fmt("\u{feff}div\n    p\n"), "\u{feff}div\n  p\n");
-        assert_eq!(fmt("p  \n\n   \n \n"), "p\n\n   \n \n");
         assert_eq!(fmt("p\n   \nq"), "p\n\nq");
     }
 
     #[test]
-    fn empty_lines_at_the_end_collapse_into_the_final_newline() {
-        // Slim splits on newlines and drops trailing empty strings; a whitespace-only line is one it compiles.
+    fn blank_lines_at_the_end_collapse_into_the_final_newline() {
         assert_eq!(fmt("p\n\n\n"), "p\n");
-        assert_eq!(fmt("p\n  \n\n"), "p\n  \n");
-        assert_eq!(fmt("p\n\n  \n\n\n"), "p\n\n  \n");
+        assert_eq!(fmt("p  \n\n   \n \n"), "p\n");
+        assert_eq!(fmt("p\n\n  \n\n\n"), "p\n");
+        assert_eq!(fmt("div\n    | text\n\n\n        "), "div\n  | text\n", "an editor's auto-indent on the last line");
         assert_eq!(fmt("p\r\n\r\n"), "p\r\n");
         assert_eq!(fmt("p"), "p");
         assert_eq!(fmt("\n\n\n"), "");
         assert_eq!(fmt("\u{feff}\n"), "\u{feff}");
         assert_eq!(fmt("javascript:\n  x\n\n\n"), "javascript:\n  x\n");
         assert_eq!(fmt("| a\n  b\n\n"), "| a\n  b\n");
+        assert_eq!(format("div\n  | text\n\n\n", 2, &[]).as_deref(), Some("div\n  | text\n"));
+        assert!(crate::slim_ruby::same_compilation("div\n  | text\n\n\n", "div\n  | text\n", &[]));
+        assert!(crate::slim_ruby::same_compilation("/ c\n\n\n", "/ c\n", &[]));
         assert_eq!(fmt("p\n\nq\n\n"), "p\n\nq\n");
     }
 
