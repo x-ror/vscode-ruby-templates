@@ -1,0 +1,9 @@
+<%# Stimulus attributes of the element's controllers. See demo/README.md, N-39. %>
+<form data-controller="search"
+      data-search-url-value="/users/search"
+      data-action="input->search#search">
+  <input data-search-target="query">
+  <ul data-search-target="results"></ul>
+</form>
+
+<div data-controller="search hello" <%= tag.attributes(id: "both") %> class="both"></div>

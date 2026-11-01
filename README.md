@@ -54,19 +54,19 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 
 ### Navigation and completion that know Rails
 
-| Where                                 | What you get                                                                           |
-| ------------------------------------- | -------------------------------------------------------------------------------------- |
-| `render "users/card"`, `render @user` | Go to the partial, hover shows the file, completion of partial names, find all renders |
-| `render ButtonComponent.new`          | Completion of ViewComponents, go to class and template, `with_*` slot completion       |
-| `@user`                               | Completion, hover and go to definition from the action and its `before_action`s        |
-| `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`       |
-| `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references     |
-| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`                           |
-| `f.text_field :`                      | Form builder methods and model columns from `db/schema.rb`                             |
-| `data-controller`, `data-action`      | Stimulus controller names, actions and targets                                         |
-| `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                    |
-| `def show` in a controller            | Go to the action's templates                                                           |
-| `user` in `@users.each do \|user\|`   | Go to the block parameter or the assignment that declares it                           |
+| Where                                 | What you get                                                                                          |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `render "users/card"`, `render @user` | Go to the partial, hover shows the file, completion of partial names, find all renders                |
+| `render ButtonComponent.new`          | Completion of ViewComponents, go to class and template, `with_*` slot completion                      |
+| `@user`                               | Completion, hover and go to definition from the action and its `before_action`s                       |
+| `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`                      |
+| `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references                    |
+| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`                                          |
+| `f.text_field :`                      | Form builder methods and model columns from `db/schema.rb`                                            |
+| `data-controller`, `data-action`      | Stimulus controller names, actions, targets, and the element's `-target`/`-value`/`-class` attributes |
+| `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                                   |
+| `def show` in a controller            | Go to the action's templates                                                                          |
+| `user` in `@users.each do \|user\|`   | Go to the block parameter or the assignment that declares it                                          |
 
 Plus: rename or move a partial in the Explorer and every `render` that points to it is updated; <kbd>F2</kbd> on a partial's strict local renames it in the partial and in every `render` that passes it; <kbd>Ctrl+T</kbd> finds templates by render name (`uscard` → `users/card`); outline and breadcrumbs for every template; Jbuilder and Builder views get partial navigation too.
 

@@ -59,7 +59,7 @@ fs.mkdirSync(path.join(root, "app", "javascript", "controllers"), {
 });
 fs.writeFileSync(
   path.join(root, "app", "javascript", "controllers", "hello_controller.js"),
-  'export default class extends Controller {\n  static targets = ["name"]\n  greet() {}\n}\n',
+  'export default class extends Controller {\n  static targets = ["name"]\n  static values = { greetingText: String }\n  greet() {}\n}\n',
 );
 fs.mkdirSync(path.join(root, "app", "controllers"), { recursive: true });
 fs.mkdirSync(path.join(root, "app", "helpers"), { recursive: true });
@@ -320,6 +320,49 @@ const check = (label, actual, expected) => {
     "definition on a strict local the partial assigns",
     [await assignedAt(48), await assignedAt(28)],
     ["0:0", "2:16"],
+  );
+  const stimulusAttributes = {};
+  for (const [lang, text] of Object.entries({
+    erb: '<div class="x"\n     data-controller="hello" data-hel',
+    haml: '%div(data-controller="hello" data-hel',
+    haml_hash: '%div{ data: { controller: "hello", hel',
+    slim: 'div data-controller="hello" data-hel',
+    erb_tag: '<div data-controller="hello" <%= attrs %> data-hel',
+    haml_lines: '%div(data-controller="hello"\n     data-hel',
+    haml_rocket: '%div{ "data-controller" => "hello", data',
+    slim_lines: 'div(\n  data-controller="hello"\n  data-hel',
+  })) {
+    const ext = lang.split("_")[0];
+    const attrUri = fileUri(
+      path.join(views, "users", `stimulus_${lang}.html.${ext}`),
+    );
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: attrUri, languageId: ext, version: 1, text } },
+      true,
+    );
+    const lines = text.split("\n");
+    const last = lines.length - 1;
+    const r = (
+      await req("textDocument/completion", attrUri, last, lines[last].length)
+    ).result;
+    stimulusAttributes[lang] = (r ?? [])
+      .map((i) => i.label)
+      .filter((l) => l.includes("hello"));
+  }
+  check(
+    "stimulus attributes of the element's controllers",
+    stimulusAttributes,
+    {
+      erb: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml_hash: ["hello_target", "hello_greeting_text_value"],
+      slim: ["data-hello-target", "data-hello-greeting-text-value"],
+      erb_tag: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml_lines: ["data-hello-target", "data-hello-greeting-text-value"],
+      haml_rocket: ["data-hello-target", "data-hello-greeting-text-value"],
+      slim_lines: ["data-hello-target", "data-hello-greeting-text-value"],
+    },
   );
   check("definition on a block variable", blockDefinitions, {
     erb: "0:19-23",

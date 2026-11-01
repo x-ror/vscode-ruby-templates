@@ -89,8 +89,20 @@ pub fn continued_head(lines: &[&str], roles: &[LineRole], at: usize, col: usize)
     Some(joined)
 }
 
-/// Items for a `completion_context`.
-pub fn completions(context: Completion) -> Vec<CompletionItem> {
+/// The key in a `data:` hash for the attribute `data-…`: underscored as Rails dasherizes it, unless the name holds a
+/// namespaced controller (`admin--users`), which only a quoted key can spell.
+fn data_key(attribute: &str) -> String {
+    let name = attribute.strip_prefix("data-").unwrap_or(attribute);
+    if name.contains("--") {
+        name.to_string()
+    } else {
+        name.replace('-', "_")
+    }
+}
+
+/// Items for a `completion_context`; `stimulus` gives the attributes the element's Stimulus controllers read, asked only
+/// for attribute names.
+pub fn completions(context: Completion, stimulus: impl FnOnce() -> Vec<String>) -> Vec<CompletionItem> {
     match context {
         Completion::Filter(typed) => HAML_FILTERS
             .iter()
@@ -103,15 +115,17 @@ pub fn completions(context: Completion) -> Vec<CompletionItem> {
             .map(|t| completion_item(*t, CompletionItemKind::PROPERTY, "HTML element"))
             .collect(),
         Completion::Attribute { typed, place, rocket } => {
+            let stimulus = stimulus();
             let names: Vec<String> = match place {
-                AttrPlace::Hash => HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
-                AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::Hash => HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).chain(stimulus).collect(),
+                AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).chain(stimulus.iter().map(|a| data_key(a))).collect(),
                 AttrPlace::AriaHash => ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
                 AttrPlace::Html => HTML_ATTRIBUTES
                     .iter()
                     .map(|a| a.to_string())
                     .chain(ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
                     .chain(DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
+                    .chain(stimulus)
                     .collect(),
             };
             names
@@ -292,6 +306,12 @@ pub fn hover(line: &str, col: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_keys_of_stimulus_attributes() {
+        assert_eq!(data_key("data-search-per-page-value"), "search_per_page_value");
+        assert_eq!(data_key("data-admin--users-target"), "admin--users-target", "a namespaced id stays dashed");
+    }
 
     /// `|` in `src` marks the cursor.
     fn split(src: &str) -> (String, usize) {

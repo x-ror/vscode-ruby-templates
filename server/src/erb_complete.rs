@@ -41,12 +41,23 @@ pub fn context(text: &str, offset: usize) -> Option<Context<'_>> {
     (after_space && in_start_tag(head, &regions)).then_some(Context::Attribute(typed))
 }
 
+/// The start tag the end of `before` is in, from its `<`: ERB tags and a `<` not opening a tag name are skipped.
+pub fn start_tag(before: &str) -> Option<&str> {
+    let regions = non_markup(before);
+    let open = tag_open(before, &regions)?;
+    in_start_tag(before, &regions).then(|| &before[open..])
+}
+
+/// Where the last tag before the end of `head` opens: a `<` outside ERB tags followed by a name.
+fn tag_open(head: &str, regions: &[(usize, usize)]) -> Option<usize> {
+    head.rmatch_indices('<')
+        .map(|(at, _)| at)
+        .find(|&at| !inside(regions, at) && head[at + 1..].starts_with(|c: char| c.is_ascii_alphabetic()))
+}
+
 /// Is the end of `head` between a start tag's name and its `>`, outside quotes and ERB tags?
 fn in_start_tag(head: &str, regions: &[(usize, usize)]) -> bool {
-    let Some(open) = head.rmatch_indices('<').map(|(at, _)| at).find(|&at| !inside(regions, at)) else { return false };
-    if !head[open + 1..].starts_with(|c: char| c.is_ascii_alphabetic()) {
-        return false;
-    }
+    let Some(open) = tag_open(head, regions) else { return false };
     let mut quote = None;
     for (at, c) in head[open..].char_indices().map(|(i, c)| (open + i, c)) {
         if inside(regions, at) {
@@ -87,7 +98,8 @@ fn open_element(before: &str) -> Option<String> {
     stack.pop()
 }
 
-pub fn items(context: Context, text: &str, offset: usize) -> Vec<CompletionItem> {
+/// `stimulus` gives the attributes the element's Stimulus controllers read, asked only for attribute names.
+pub fn items(context: Context, text: &str, offset: usize, stimulus: impl FnOnce() -> Vec<String>) -> Vec<CompletionItem> {
     match context {
         Context::Element(typed) => HTML_TAGS
             .iter()
@@ -110,6 +122,7 @@ pub fn items(context: Context, text: &str, offset: usize) -> Vec<CompletionItem>
                 .map(|a| a.to_string())
                 .chain(data)
                 .chain(aria)
+                .chain(stimulus())
                 .filter(|a| a.starts_with(typed))
                 .map(|name| {
                     let snippet = if BOOLEAN_ATTRIBUTES.contains(&name.as_str()) { name.clone() } else { format!("{name}=\"$1\"") };
@@ -153,8 +166,9 @@ mod tests {
 
     #[test]
     fn close_suggests_the_open_element() {
-        let close =
-            |text: &str| items(Context::Close(""), text, text.len()).into_iter().map(|i| i.insert_text.unwrap()).collect::<Vec<_>>();
+        let close = |text: &str| {
+            items(Context::Close(""), text, text.len(), Vec::new).into_iter().map(|i| i.insert_text.unwrap()).collect::<Vec<_>>()
+        };
         assert_eq!(close("<div><p>x</p><br><img src=\"a\"/><span>"), ["span>"]);
         assert_eq!(close("<section><% if a %><b>x</b><% end %>"), ["section>"]);
         assert_eq!(close("<div><%= \"<p>\" %>"), ["div>"]);
@@ -164,10 +178,20 @@ mod tests {
     }
 
     #[test]
+    fn start_tags_skip_erb_and_text() {
+        assert_eq!(
+            start_tag(r#"<p>x</p><div data-controller="a" <%= attrs %> data-"#),
+            Some(r#"<div data-controller="a" <%= attrs %> data-"#)
+        );
+        assert_eq!(start_tag(r#"<div title="a < b" data-"#), Some(r#"<div title="a < b" data-"#));
+        assert_eq!(start_tag("<div>text "), None);
+    }
+
+    #[test]
     fn attribute_snippets() {
-        let item = |typed| items(Context::Attribute(typed), "", 0).into_iter().next().map(|i| i.insert_text.unwrap());
+        let item = |typed| items(Context::Attribute(typed), "", 0, Vec::new).into_iter().next().map(|i| i.insert_text.unwrap());
         assert_eq!(item("hre").as_deref(), Some("href=\"$1\""));
         assert_eq!(item("disab").as_deref(), Some("disabled"));
-        assert!(items(Context::Attribute("data-contr"), "", 0).iter().any(|i| i.label == "data-controller"));
+        assert!(items(Context::Attribute("data-contr"), "", 0, Vec::new).iter().any(|i| i.label == "data-controller"));
     }
 }
