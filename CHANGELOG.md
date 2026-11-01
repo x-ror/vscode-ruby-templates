@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - macOS builds are back: a `.vsix` for Apple silicon and Intel Macs, and the `ruby-templates` npm package for both.
 - Quick fixes on strict-locals warnings: pass the missing locals to the `render` call, or remove an unknown local from it or declare it in the partial's `locals:` comment.
