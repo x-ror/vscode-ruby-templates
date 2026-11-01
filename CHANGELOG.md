@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Moving a partial directly into `app/views` rewrites its `render` calls to `/card`, the name Rails finds it by (the slash drops the controller's folder prefixes); before, they were left pointing at the old place. `render "/card"` also resolves to that partial.
+- Moving a partial directly into `app/views` rewrites its `render` calls to `/card`, the name Rails finds it by (the slash drops the controller's folder prefixes); before, they were left pointing at the old place. `render "/card"` also resolves to that partial, and so does `render "/users/card"` for `app/views/users/_card.html.erb`: before, the leading slash pointed outside `app/views`, so those renders were not linked, renamed or checked.
 - Link tooltips (Cmd/Ctrl+click on a partial, Stimulus controller, asset or layout) and the partial list in `render` hovers show the path from the Rails root (`app/javascript/controllers/hello_controller.js`) instead of the full path on disk.
 - Attribute completion knows the Stimulus controllers of the element being written: after `data-controller="search"` it offers `data-search-target`, and `data-search-<name>-value`, `-class` and `-outlet` for the names in the controller's `static values`, `classes` and `outlets`, in ERB, Haml (`data-…` attributes and `data:` hash keys) and Slim. Slim also completes the Turbo attributes (`data-turbo-method`, `data-turbo-confirm`, …).
 - Go to definition on a block variable (`|user|`, `|(a, b)|`, an outer block's variable) or a local the template assigns (`<% total = … %>`) jumps to where it is declared, in ERB, Haml and Slim.

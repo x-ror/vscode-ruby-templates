@@ -5,7 +5,8 @@
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
 use crate::partials::{
-    call_text, first_folder_only, local_key_span, model_renders, passed_locals, render_refs, resolve, resolve_model, RenderKind, RenderRef,
+    call_text, first_folder_only, local_key_span, model_renders, passed_locals, render_refs, resolve, resolve_model, split_render_name,
+    RenderKind, RenderRef,
 };
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
@@ -107,9 +108,9 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
 /// Whether `resolve` could look in `dir` for `r` from `source`: a cheap test before its directory listing.
 fn may_look_in(source: &Path, r: &RenderRef, dir: &Path) -> bool {
     let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
-    match (r.name.rsplit_once('/'), views) {
+    match (split_render_name(&r.name).0, views) {
         // The folders `resolve` lists, compared as paths: `./users` is `users` there too.
-        (Some((d, _)), Some(v)) => v.join(d) == dir,
+        (Some(d), Some(v)) => v.join(d) == dir,
         (Some(_), None) => true,
         (None, v) => source.parent() == Some(dir) || v.is_some_and(|v| v.join("application") == dir),
     }
@@ -448,6 +449,69 @@ mod tests {
         assert_eq!(into, [("app/views/users/index.html.slim".into(), 0, 10, "/card".into())]);
         let out_of = t.edits(&[("app/views/_note.html.erb", "app/views/shared/_note.html.erb")], &sources);
         assert_eq!(out_of, [("app/views/users/index.html.slim".into(), 1, 10, "shared/note".into())]);
+    }
+
+    #[test]
+    fn root_partial_renames_keep_the_slash_and_bare_names_of_root_siblings() {
+        let t = Tree::new("root-in-place", &["app/views/_card.html.erb"]);
+        let sources = [
+            t.source("app/views/users/index.html.erb", ERB, "<%= render \"/card\" %>\n"),
+            t.source("app/views/layout.html.erb", ERB, "<%= render \"card\" %>\n<%= render \"/card\" %>\n"),
+        ];
+        let card = "app/views/_card.html.erb";
+        assert_eq!(
+            t.edits(&[(card, "app/views/_tile.html.erb")], &sources),
+            [
+                ("app/views/layout.html.erb".into(), 0, 12, "tile".into()),
+                ("app/views/layout.html.erb".into(), 1, 12, "/tile".into()),
+                ("app/views/users/index.html.erb".into(), 0, 12, "/tile".into())
+            ]
+        );
+        // The sibling's bare name no longer finds it after the move, so it gets the qualified name.
+        let moved = t.edits(&[(card, "app/views/shared/_card.html.erb")], &sources);
+        assert_eq!(moved.iter().map(|e| e.3.as_str()).collect::<Vec<_>>(), ["shared/card", "shared/card", "shared/card"]);
+    }
+
+    #[test]
+    fn several_partials_moved_into_the_views_root_at_once() {
+        let t = Tree::new("root-many", &["app/views/users/_card.html.erb", "app/views/users/_row.html.erb"]);
+        let sources = [t.source("app/views/users/index.html.erb", ERB, "<%= render \"card\" %><%= render \"users/row\" %>\n")];
+        let renames =
+            [("app/views/users/_card.html.erb", "app/views/_card.html.erb"), ("app/views/users/_row.html.erb", "app/views/_row.html.erb")];
+        let got = t.edits(&renames, &sources);
+        assert_eq!(got.iter().map(|e| (e.2, e.3.as_str())).collect::<Vec<_>>(), [(12, "/card"), (32, "/row")]);
+    }
+
+    #[test]
+    fn references_find_slash_renders_of_a_root_partial() {
+        let t = Tree::new("refs-root", &["app/views/_card.html.erb", "app/views/users/_card.html.erb"]);
+        let sources = [
+            t.source("app/views/users/index.html.erb", ERB, "<%= render \"/card\" %>\n<%= render \"card\" %>\n"),
+            t.source("app/views/home/show.html.slim", SLIM, "= render \"/card\"\n"),
+            t.source("app/controllers/users_controller.rb", None, "render partial: \"/card\"\n"),
+        ];
+        let root_card = t.path("app/views/_card.html.erb");
+        let mut got: Vec<(String, u32)> = references(&Project::unknown(), &[root_card], &sources, &[])
+            .into_iter()
+            .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("app/controllers/users_controller.rb".into(), 0),
+                ("app/views/home/show.html.slim".into(), 0),
+                ("app/views/users/index.html.erb".into(), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn leading_slash_folder_renders_are_renamed() {
+        let t = Tree::new("slash-dir", &["app/views/users/_card.html.erb"]);
+        let sources = [t.source("app/views/home/index.html.erb", ERB, "<%= render \"/users/card\" %>\n")];
+        let got = t.edits(&[("app/views/users/_card.html.erb", "app/views/users/_tile.html.erb")], &sources);
+        assert_eq!(got.iter().map(|e| (e.2, e.3.as_str())).collect::<Vec<_>>(), [(12, "users/tile")]);
     }
 
     #[test]

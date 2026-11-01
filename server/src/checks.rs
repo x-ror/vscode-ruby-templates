@@ -252,8 +252,8 @@ fn checked_renders<'a>(
     // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
     // neither is knowable without reading controllers or the bundle.
     let mut dirs: HashMap<String, bool> = HashMap::new();
-    let mut in_views_dir = |name: &str| match name.rsplit_once('/') {
-        Some((dir, _)) => *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir()),
+    let mut in_views_dir = |name: &str| match partials::split_render_name(name).0 {
+        Some(dir) => *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir()),
         None => false,
     };
     let mut out = Vec::new();
@@ -300,16 +300,17 @@ fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &m
 
 /// Rails' MissingTemplate message up to ` with {…}.`; the rest lists the request's formats and paths, which vary.
 fn missing_message(r: &partials::RenderRef) -> String {
-    let (dir, name) = r.name.rsplit_once('/').unwrap_or(("", &r.name));
+    let (dir, name) = partials::split_render_name(&r.name);
     let (kind, prefix) = if r.kind == partials::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
-    let dir = if dir.is_empty() { String::new() } else { format!("{dir}/") };
+    let dir = dir.map_or(String::new(), |dir| format!("{dir}/"));
     format!("Missing {kind} {dir}{prefix}{name}")
 }
 
 /// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
 /// name (`devise/`, `spree/` from `spree_core`), and the app overrides only some of them, so the rest aren't on disk.
 fn is_gem_view(project: &Project, name: &str) -> bool {
-    name.split_once('/').is_some_and(|(top, _)| project.has_gem_family(top))
+    let top = partials::split_render_name(name).0.and_then(|dir| dir.split('/').next());
+    top.is_some_and(|top| project.has_gem_family(top))
 }
 
 /// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
@@ -602,6 +603,18 @@ mod tests {
     }
 
     #[test]
+    fn leading_slash_renders_are_checked_under_views() {
+        let root = std::env::temp_dir().join(format!("rt-slash-unresolved-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "").unwrap();
+        let text = "<%= render \"/users/missing\" %> <%= render \"/users/card\" %>\n";
+        let got: Vec<String> = unresolved(TemplateLang::Erb, &users.join("index.html.erb"), text).into_iter().map(|d| d.message).collect();
+        assert_eq!(got, ["Missing partial users/_missing"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn unresolved_render_warnings() {
         let root = std::env::temp_dir().join(format!("rt-unresolved-{}", std::process::id()));
         let users = root.join("app/views/users");
@@ -685,7 +698,7 @@ mod tests {
         for dir in ["devise/shared", "spree/admin", "admin"] {
             std::fs::create_dir_all(root.join("app/views").join(dir)).unwrap();
         }
-        let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"admin/x\" %>";
+        let gem_text = "<%= render \"devise/shared/error_messages\" %><%= render \"spree/admin/x\" %><%= render \"/devise/shared/links\" %><%= render \"admin/x\" %>";
         let lines: Vec<String> = unresolved(TemplateLang::Erb, &file, gem_text).into_iter().map(|d| d.message).collect();
         assert_eq!(lines, ["Missing partial admin/_x"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));

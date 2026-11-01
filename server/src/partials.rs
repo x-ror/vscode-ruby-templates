@@ -127,7 +127,7 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
 /// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>.<ext>` in the view's format
 /// (variant dropped) and template language, so the view finds it.
 pub fn new_template_path(project: &Project, current: &Path, r: &RenderRef) -> Option<PathBuf> {
-    let (dir, base) = r.name.rsplit_once('/')?;
+    let (Some(dir), base) = split_render_name(&r.name) else { return None };
     if base.is_empty() || dir.split('/').any(|part| part == "..") {
         return None;
     }
@@ -240,16 +240,22 @@ pub fn matching_templates(project: &Project, dir: &Path, basename: &str) -> Vec<
     found
 }
 
+/// A render name split into its folder and base name; the folder drops a leading `/` (`/users/card` is
+/// `users` under app/views).
+pub fn split_render_name(name: &str) -> (Option<&str>, &str) {
+    match name.rsplit_once('/') {
+        Some((dir, base)) => (Some(dir.trim_start_matches('/')), base),
+        None => (None, name),
+    }
+}
+
 /// Resolve a render reference to candidate files.
 pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf> {
     let views = views_root(current);
-    let (dir, base) = match r.name.rsplit_once('/') {
-        Some((d, b)) => (Some(d.to_string()), b.to_string()),
-        None => (None, r.name.clone()),
-    };
+    let (dir, base) = split_render_name(&r.name);
     let basename = match r.kind {
-        RenderKind::Partial => format!("_{}", base),
-        RenderKind::Template => base.clone(),
+        RenderKind::Partial => format!("_{base}"),
+        RenderKind::Template => base.to_string(),
     };
     let mut dirs: Vec<PathBuf> = Vec::new();
     match (&dir, &views, r.kind) {
@@ -830,6 +836,7 @@ mod tests {
             ),
             Some(views.join("layouts/lt.html.erb"))
         );
+        assert_eq!(path("home/show.html.erb", r#"render "/users/x""#), Some(views.join("users/_x.html.erb")));
         assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "../../config/x""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "shared/""#), None);
@@ -957,6 +964,18 @@ mod tests {
         ] {
             assert!(model_renders(query).is_empty(), "{query}");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolve_leading_slash_folder_from_views_root() {
+        let root = std::env::temp_dir().join(format!("rt-slash-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "").unwrap();
+        let card = render_refs(r#"render "/users/card""#).remove(0);
+        let found = resolve(&Project::unknown(), &root.join("app/views/home/index.html.erb"), &card);
+        assert_eq!(found, [users.join("_card.html.erb")]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
