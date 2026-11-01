@@ -128,6 +128,14 @@ pub(crate) fn parameter_reads(parameters: &str, name: &str) -> Vec<(usize, usize
         .collect()
 }
 
+/// The `end` that closes the method `source` starts with: in a template wrapped in one, a stray `end` closes it early.
+pub(crate) fn wrapper_end(source: &str) -> Option<(usize, usize)> {
+    let result = ruby_prism::parse(source.as_bytes());
+    let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
+    let end = def.end_keyword_loc()?;
+    Some((end.start() as usize, end.end() as usize))
+}
+
 const PARAMETERS_DEF: &str = "def _(";
 
 struct Uses<'a> {

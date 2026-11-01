@@ -22,6 +22,7 @@ static FILTER: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z_]\w*[?!]?").unwrap());
 static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[\w:]+\s*<\s*((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
+static MODULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*module\s+((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
 /// Deep enough for `UsersController < Admin::BaseController < ApplicationController < ActionController::Base`.
 const MAX_ANCESTORS: usize = 4;
 
@@ -104,12 +105,26 @@ fn ancestry(app: &Path, first: PathBuf) -> Vec<(PathBuf, String)> {
     while let Some(file) = next.take().filter(|f| out.len() < MAX_ANCESTORS && !out.iter().any(|(seen, _)| seen == f)) {
         let Ok(text) = std::fs::read_to_string(&file) else { break };
         next = PARENT.captures(&text).and_then(|cap| {
-            let rel: PathBuf = cap[1].split("::").map(snake_case).collect();
-            ["controllers", "mailers"].iter().map(|dir| app.join(dir).join(&rel).with_extension("rb")).find(|f| f.is_file())
+            let candidates = parent_names(&text[..cap.get(0)?.start()], &cap[1]);
+            candidates.iter().find_map(|name| {
+                let rel: PathBuf = name.split("::").map(snake_case).collect();
+                ["controllers", "mailers"].iter().map(|dir| app.join(dir).join(&rel).with_extension("rb")).find(|f| f.is_file())
+            })
         });
         out.push((file, text));
     }
     out
+}
+
+/// The constants Ruby tries for `parent` in a class inside the `module` blocks of `before`, innermost first: in
+/// `module Admin`, `BaseController` is `Admin::BaseController` before `BaseController`.
+fn parent_names(before: &str, parent: &str) -> Vec<String> {
+    let mut scopes: Vec<String> = Vec::new();
+    for cap in MODULE.captures_iter(before) {
+        let scope = scopes.last().map_or_else(|| cap[1].to_string(), |outer| format!("{outer}::{}", &cap[1]));
+        scopes.push(scope);
+    }
+    scopes.iter().rev().map(|scope| format!("{scope}::{parent}")).chain([parent.to_string()]).collect()
 }
 
 fn assignments_in(file: &Path, text: &str, lines: std::ops::Range<usize>) -> Vec<Assignment> {
@@ -256,6 +271,10 @@ end
             "app/controllers/application_controller.rb",
             "class ApplicationController\n  before_action :set_locale\n\n  def set_locale\n    @locale = :en\n  end\nend\n",
         );
+        write(
+            "app/controllers/admin/reports_controller.rb",
+            "module Admin\n  class ReportsController < BaseController\n    def index\n      @reports = 1\n    end\n  end\nend\n",
+        );
         std::fs::create_dir_all(root.join("app/views/users")).unwrap();
         let names = |view: &str| -> Vec<String> {
             let mut names: Vec<String> = for_view(&Project::unknown(), &root.join(view)).into_iter().map(|a| a.name).collect();
@@ -268,10 +287,18 @@ end
         assert_eq!(names("app/views/users/_card.html.erb"), ["count", "locale", "menu", "tab", "user", "users"]);
         assert!(names("app/views/layouts/application.html.erb").is_empty());
         assert_eq!(names("app/views/admin/users/show.html.erb"), ["admin", "locale", "user"]);
+        assert_eq!(names("app/views/admin/reports/index.html.erb"), ["admin", "locale", "reports"], "a parent named inside its module");
         let user =
             for_view(&Project::unknown(), &root.join("app/views/users/show.html.erb")).into_iter().find(|a| a.name == "user").unwrap();
         assert_eq!((user.file.file_name().unwrap().to_str().unwrap(), user.line), ("users_controller.rb", 18));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn parent_names_follow_the_module_nesting() {
+        assert_eq!(parent_names("module Admin\n  module Reports\n", "Base"), ["Admin::Reports::Base", "Admin::Base", "Base"]);
+        assert_eq!(parent_names("module Admin::Reports\n", "Base"), ["Admin::Reports::Base", "Base"]);
+        assert_eq!(parent_names("", "Admin::Base"), ["Admin::Base"]);
     }
 
     #[test]
