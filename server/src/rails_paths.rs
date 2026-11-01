@@ -107,6 +107,14 @@ pub fn app_root(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// `file` relative to the Rails root of `from`, the template asking (the folder holding its `app`), with `/`
+/// separators; the full path when `file` lies outside it, as a gem's file does.
+pub fn rails_relative(file: &Path, from: &Path) -> String {
+    let root = app_root(from).and_then(|app| app.parent().map(Path::to_path_buf));
+    let shown = root.and_then(|root| file.strip_prefix(root).ok()).unwrap_or(file);
+    shown.to_string_lossy().replace('\\', "/")
+}
+
 /// Every file under `root`; the listing `render_candidates` names come from.
 pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
     WalkDir::new(root)
@@ -123,6 +131,18 @@ pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_from_the_rails_root() {
+        let root = Path::new("/srv/shop");
+        let from = root.join("app/views/users/index.html.erb");
+        let shown = |rel: &str| rails_relative(&root.join(rel), &from);
+        assert_eq!(shown("app/javascript/controllers/hello_controller.js"), "app/javascript/controllers/hello_controller.js");
+        assert_eq!(shown("app/assets/images/app/logo.png"), "app/assets/images/app/logo.png", "a nested folder named app");
+        assert_eq!(shown("public/favicon.ico"), "public/favicon.ico", "outside app/");
+        assert_eq!(shown("engines/admin/app/views/shared/_nav.html.erb"), "engines/admin/app/views/shared/_nav.html.erb");
+        assert_eq!(rails_relative(Path::new("/gems/devise/app/views/x.html.erb"), &from), "/gems/devise/app/views/x.html.erb");
+    }
 
     #[test]
     fn feed_formats() {

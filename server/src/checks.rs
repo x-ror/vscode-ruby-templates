@@ -238,7 +238,7 @@ fn render_diagnostics(
     let renders = checked_renders(&views, text, in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
-    out.extend(strict_locals_mismatches(project, &views, &renders, &mut partials));
+    out.extend(strict_locals_mismatches(project, &renders, &mut partials));
     out
 }
 
@@ -318,7 +318,7 @@ fn supports_strict_locals(project: &Project) -> bool {
 }
 
 /// Literal renders whose locals don't fit the partial's `locals: (…)` signature.
-fn strict_locals_mismatches(project: &Project, views: &Path, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
+fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
     if !supports_strict_locals(project) {
         return vec![];
     }
@@ -340,9 +340,7 @@ fn strict_locals_mismatches(project: &Project, views: &Path, renders: &[CheckedR
         let Some(mut message) = strict_locals_message(&missing, &unknown, no_locals) else { continue };
         if suffix_with_template {
             // Rails prints the absolute path; relative to the app folder is stable and readable.
-            let app_root = views.parent().and_then(Path::parent).unwrap_or(views);
-            let identifier = file.strip_prefix(app_root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
-            message.push_str(&format!(" for {identifier}"));
+            message.push_str(&format!(" for {}", rails_paths::rails_relative(&file, &file)));
         }
         out.push(util::coded(util::warning(util::span_range(*i, line, r.start, r.end), message), STRICT_LOCALS));
     }
