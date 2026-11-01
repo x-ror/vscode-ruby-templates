@@ -4,6 +4,7 @@
 
 - Instance variables from a parent controller are found when a controller inside `module Admin` names it without the module (`class ReportsController < BaseController`), as Ruby resolves it.
 - Completing a helper whose call already has arguments (`link_to user.name, path`, `link_to(`) inserts only its name, not the argument snippet in front of them.
+- A stray `<% end %>` in ERB is reported on the `end` itself, not on the last line of the file.
 
 ## 0.8.0
 
