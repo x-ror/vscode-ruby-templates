@@ -59,6 +59,11 @@ impl Compiled {
         self.verbatim.push((from, from + len, offset));
     }
 
+    /// The template byte ranges where the local `name` is read, among the code the template wrote.
+    pub fn local_reads(&self, name: &str) -> Vec<(usize, usize)> {
+        prism::local_reads(&self.source, name).into_iter().filter_map(|(start, end)| template_span(&self.verbatim, start, end)).collect()
+    }
+
     pub fn block_locals(&self, template_offset: usize) -> Vec<String> {
         generated_offset(&self.verbatim, template_offset).map_or_else(Vec::new, |at| prism::block_locals(&self.source, at))
     }
@@ -92,6 +97,11 @@ impl Compiled {
         let raw = index.line(line);
         span_range(line, raw, leading_ws(raw).len(), raw.trim_end().len())
     }
+}
+
+/// The template range of the generated range `start..end`, when one verbatim run holds all of it.
+pub(crate) fn template_span(verbatim: &[(usize, usize, usize)], start: usize, end: usize) -> Option<(usize, usize)> {
+    verbatim.iter().find(|&&(from, to, _)| from <= start && end <= to).map(|&(from, _, at)| (at + start - from, at + end - from))
 }
 
 /// Where template offset `template` went in the generated source, if it is inside, or just after, verbatim code.

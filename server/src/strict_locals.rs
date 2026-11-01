@@ -127,6 +127,17 @@ impl Comment {
         }
     }
 
+    /// Where the parameter `name` (`name:` in the list) starts in the template.
+    pub fn parameter_at(&self, name: &str) -> Option<usize> {
+        let at = self.parameters_at?;
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let found = self.parameters.match_indices(name).find(|&(i, _)| {
+            let after = &self.parameters[i + name.len()..];
+            !self.parameters[..i].ends_with(is_word) && after.starts_with(':') && !after.starts_with("::")
+        });
+        found.map(|(i, _)| at + i)
+    }
+
     /// Whether the list was blank, which Rails reads as `**nil`.
     pub fn blank(&self) -> bool {
         self.parameters_at.is_none()

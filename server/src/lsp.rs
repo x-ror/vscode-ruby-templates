@@ -1,5 +1,5 @@
 use crate::checks::{diagnostics, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
-use crate::code_context::{block_locals, code_at, in_ruby_context, line_roles, render_filter};
+use crate::code_context::{self, block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
     local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions, stimulus_completions,
@@ -75,6 +75,11 @@ fn is_key(line: &str, col: usize) -> bool {
     let rest = &line[col.min(line.len())..];
     let after = rest.trim_start_matches(|c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!'));
     after.starts_with(':') && !after.starts_with("::")
+}
+
+/// Whether `name` can be a Ruby local variable's name.
+fn is_local_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_') && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A partial's strict local: required or its default, and how many `render` calls pass it.
@@ -445,6 +450,43 @@ impl Backend {
         out
     }
 
+    /// The strict local under `pos` of the partial `uri` and its word's range: a read in code, or its parameter in the
+    /// `locals:` comment; not a hash key of that name, nor a block variable hiding it.
+    fn strict_local_at(&self, uri: &Url, doc: &Doc, pos: Position) -> Option<(String, Range)> {
+        if !is_partial(uri) {
+            return None;
+        }
+        let close = strict_locals::Close::of(&Project::for_template(&uri.to_file_path().ok()?));
+        let comment = strict_locals::find(&doc.text, close)?;
+        let (line_start, line, col) = util::line_at(&doc.text, pos);
+        let name = helper_defs::name_at(line, col)?;
+        if !partials::strict_locals(&doc.text, close)?.locals.iter().any(|(local, _)| local == name) {
+            return None;
+        }
+        let at = line_start + line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len();
+        let found = if comment.range.contains(&at) {
+            comment.parameter_at(name) == Some(at)
+        } else {
+            code_context::local_reads(doc.lang, &doc.text, close, name, &self.options().extra_engines).iter().any(|&(start, _)| start == at)
+        };
+        let index = util::LineIndex::new(&doc.text);
+        found.then(|| (name.to_string(), Range::new(index.position(at), index.position(at + name.len()))))
+    }
+
+    /// Where the partial `path` (text `text`) declares and reads the strict local `name`, then the `render` calls passing it.
+    async fn local_references(&self, path: &Path, doc: &Doc, name: &str, declaration: bool) -> Result<Vec<Location>> {
+        let Ok(uri) = Url::from_file_path(path) else { return Ok(vec![]) };
+        let project = Project::for_template(path);
+        let close = strict_locals::Close::of(&project);
+        let index = util::LineIndex::new(&doc.text);
+        let span = |start: usize| Location::new(uri.clone(), Range::new(index.position(start), index.position(start + name.len())));
+        let declared = strict_locals::find(&doc.text, close).and_then(|comment| comment.parameter_at(name)).filter(|_| declaration);
+        let reads = code_context::local_reads(doc.lang, &doc.text, close, name, &self.options().extra_engines);
+        let mut out: Vec<Location> = declared.into_iter().chain(reads.into_iter().map(|(start, _)| start)).map(span).collect();
+        out.extend(self.local_passes(project, path, name).await?);
+        Ok(out)
+    }
+
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
         let root = rails_paths::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
@@ -493,6 +535,11 @@ impl LanguageServer for Backend {
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                // Only a partial's strict locals rename; Ruby LSP renames Ruby.
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
@@ -812,6 +859,58 @@ impl LanguageServer for Backend {
         Ok(Some(actions))
     }
 
+    async fn prepare_rename(&self, p: TextDocumentPositionParams) -> Result<Option<PrepareRenameResponse>> {
+        let Some(doc) = self.docs.get(&p.text_document.uri) else { return Ok(None) };
+        Ok(self.strict_local_at(&p.text_document.uri, &doc, p.position).map(|(_, range)| PrepareRenameResponse::Range(range)))
+    }
+
+    /// Renames a partial's strict local: its parameter in the `locals:` comment, its reads, and the keys of the `render`
+    /// calls that pass it.
+    async fn rename(&self, p: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = p.text_document_position.text_document.uri;
+        let new = p.new_name;
+        let Some((name, doc)) =
+            self.docs.get(&uri).and_then(|doc| Some((self.strict_local_at(&uri, &doc, p.text_document_position.position)?.0, doc.clone())))
+        else {
+            return Ok(None);
+        };
+        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let project = Project::for_template(&path);
+        let close = strict_locals::Close::of(&project);
+        let declared = partials::strict_locals(&doc.text, close).map(|sig| sig.locals).unwrap_or_default();
+        if !is_local_name(&new) || declared.iter().any(|(local, _)| *local == new) {
+            return Err(tower_lsp::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
+        }
+        let index = util::LineIndex::new(&doc.text);
+        let edit = |start: usize, end: usize, text: String| TextEdit::new(Range::new(index.position(start), index.position(end)), text);
+        let mut here: Vec<TextEdit> = strict_locals::find(&doc.text, close)
+            .and_then(|comment| comment.parameter_at(&name))
+            .map(|at| edit(at, at + name.len(), new.clone()))
+            .into_iter()
+            .collect();
+        for (start, end) in code_context::local_reads(doc.lang, &doc.text, close, &name, &self.options().extra_engines) {
+            // `render "x", user:` passes the local under the key `user`, which names the other partial's local.
+            let after = &doc.text[end..];
+            here.push(match after.starts_with(':') && !after.starts_with("::") {
+                true => edit(start, end + 1, format!("{name}: {new}")),
+                false => edit(start, end, new.clone()),
+            });
+        }
+        let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
+        let (open, partial, local, renamed) = (self.open_texts(), path.clone(), name.clone(), new.clone());
+        let extra_engines = self.options().extra_engines.clone();
+        let callers = off_server_task(move || {
+            let sources = partial_rename::sources(&views, &open);
+            partial_rename::local_key_edits(&project, &partial, &local, &renamed, &sources, &extra_engines)
+        })
+        .await?;
+        let mut changes = HashMap::from([(uri, here)]);
+        for (file, text_edit) in callers {
+            changes.entry(file).or_default().push(text_edit);
+        }
+        Ok(Some(WorkspaceEdit { changes: Some(changes), ..Default::default() }))
+    }
+
     /// Who renders the partial under the cursor's `render "…"`, or the current partial anywhere else in it.
     async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = p.text_document_position.text_document.uri;
@@ -834,6 +933,10 @@ impl LanguageServer for Backend {
             .await?;
             locations.extend(declarations);
             return Ok(Some(locations));
+        }
+        let local = self.docs.get(&uri).and_then(|doc| Some((self.strict_local_at(&uri, &doc, pos)?.0, doc.clone())));
+        if let Some((name, doc)) = local {
+            return Ok(Some(self.local_references(&path, &doc, &name, p.context.include_declaration).await?));
         }
         let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
         let files = {

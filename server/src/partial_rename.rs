@@ -171,16 +171,58 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     out
 }
 
-/// The `render` calls of `partial` that pass `local` (`render "card", user: u`), at the local's key.
+/// The `render` calls of `partial` that pass `local` (`render "card", user: u`): the local's key, else the call's start.
 pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+    local_keys(project, partial, local, sources, extra_engines)
+        .into_iter()
+        .filter_map(|LocalKey { source, call, key }| {
+            let index = LineIndex::new(&source.text);
+            let (start, end) = key.unwrap_or((call, call));
+            Some(Location::new(Url::from_file_path(&source.path).ok()?, Range::new(index.position(start), index.position(end))))
+        })
+        .collect()
+}
+
+/// The edits that make the `render` calls of `partial` pass `local` as `new` instead; a shorthand `user:` keeps its
+/// value as `member: user`.
+pub fn local_key_edits(
+    project: &Project,
+    partial: &Path,
+    local: &str,
+    new: &str,
+    sources: &[Source],
+    extra_engines: &[String],
+) -> Vec<(Url, TextEdit)> {
+    let mut out = Vec::new();
+    for LocalKey { source, key, .. } in local_keys(project, partial, local, sources, extra_engines) {
+        let (Some((start, end)), Ok(uri)) = (key, Url::from_file_path(&source.path)) else { continue };
+        let index = LineIndex::new(&source.text);
+        let after = &source.text[end..];
+        let value = after.strip_prefix(':').map(|rest| rest.trim_start_matches([' ', '\t']));
+        let shorthand = value.is_some_and(|v| v.is_empty() || v.starts_with([',', ')', '}', '\n', '\r']) || v.starts_with("%>"));
+        let (end, text) = if shorthand { (end + 1, format!("{new}: {local}")) } else { (end, new.to_string()) };
+        out.push((uri, TextEdit::new(Range::new(index.position(start), index.position(end)), text)));
+    }
+    out
+}
+
+/// A `render` that passes a partial's local.
+struct LocalKey<'s> {
+    source: &'s Source,
+    /// Where the call starts.
+    call: usize,
+    /// The byte range of the key's name, when the call spells it `user:` or `:user =>`.
+    key: Option<(usize, usize)>,
+}
+
+/// Each `render` of `partial` that passes `local`.
+fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [Source], extra_engines: &[String]) -> Vec<LocalKey<'s>> {
     let files = [partial.to_path_buf()];
     let stems = partial_stems(project, &files);
-    // The key itself, `user:` after the partial name; the call's start when it's spelled another way.
-    let key = Regex::new(&format!(r"(?:^|[^\w]){}:", regex::escape(local))).ok();
+    let name = regex::escape(local);
+    let key = Regex::new(&format!(r"(?:^|[^\w:])(?:({name}):|:({name})\s*=>)")).ok();
     let mut out = Vec::new();
     for source in sources {
-        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
-        let index = LineIndex::new(&source.text);
         for (start, _, r) in code_refs(source, extra_engines, render_refs, |r| may_name(&stems, &r.name)) {
             if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
@@ -192,9 +234,9 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
             if !passed_locals(call, &r).is_some_and(|names| names.contains(&local)) {
                 continue;
             }
-            let at = key.as_ref().and_then(|k| k.find(&call[r.end..])).map_or(r.call, |m| r.end + m.end() - local.len() - 1);
-            let position = index.position(line_start + at);
-            out.push(Location::new(uri.clone(), Range::new(position, position)));
+            let found = key.as_ref().and_then(|k| k.captures(&call[r.end..])).and_then(|cap| cap.get(1).or(cap.get(2)));
+            let at = line_start + r.end;
+            out.push(LocalKey { source, call: line_start + r.call, key: found.map(|m| (at + m.start(), at + m.end())) });
         }
     }
     out
@@ -488,6 +530,36 @@ mod tests {
             ]
         );
         assert!(local_passes(&Project::unknown(), &card, "missing", &sources, &[]).is_empty());
+    }
+
+    #[test]
+    fn local_key_edits_rename_keys_and_keep_shorthand_values() {
+        let t = Tree::new("local-keys", &["app/views/users/_card.html.erb"]);
+        let sources = [
+            t.source(
+                "app/views/users/index.html.erb",
+                ERB,
+                "<%= render \"card\", user: u %>\n<%= render \"card\", user: %>\n<%= render :partial => \"card\", :locals => { :user => u } %>\n",
+            ),
+            t.source("app/views/users/list.html.slim", SLIM, "= render \"card\",\n    user:,\n    size: 1\n"),
+        ];
+        let card = t.path("app/views/users/_card.html.erb");
+        let mut got: Vec<(String, u32, u32, u32, String)> = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[])
+            .into_iter()
+            .map(|(uri, e)| {
+                (t.rel(&uri.to_file_path().unwrap()), e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)
+            })
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("app/views/users/index.html.erb".into(), 0, 19, 23, "member".into()),
+                ("app/views/users/index.html.erb".into(), 1, 19, 24, "member: user".into()),
+                ("app/views/users/index.html.erb".into(), 2, 45, 49, "member".into()),
+                ("app/views/users/list.html.slim".into(), 1, 4, 9, "member: user".into()),
+            ]
+        );
     }
 
     #[test]

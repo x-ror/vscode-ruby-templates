@@ -55,6 +55,11 @@ pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version) -> Ve
     compile(&parsed.pieces).diagnostics(text, ruby)
 }
 
+/// The template byte ranges where the local `name` is read.
+pub fn local_reads(parsed: &Parsed, name: &str) -> Vec<(usize, usize)> {
+    compile(&parsed.pieces).local_reads(name)
+}
+
 /// The block variables in scope at `offset` of the template.
 pub fn block_locals(parsed: &Parsed, offset: usize) -> Vec<String> {
     compile(&parsed.pieces).block_locals(offset)

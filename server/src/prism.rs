@@ -82,6 +82,52 @@ pub(crate) fn block_locals(source: &str, offset: usize) -> Vec<String> {
     scopes.names
 }
 
+/// Byte ranges in `source` where the template local `name` is read: a variable of the outermost scope (ERB and Haml
+/// compile into a method whose parameters are the strict locals), or a bare call, which is what a local is to Ruby where
+/// nothing declares it (Slim compiles into no method). A block variable of the same name hides it.
+pub(crate) fn local_reads(source: &str, name: &str) -> Vec<(usize, usize)> {
+    let result = ruby_prism::parse(source.as_bytes());
+    let mut reads = Reads { name: name.as_bytes(), blocks: 0, ranges: Vec::new() };
+    ruby_prism::Visit::visit(&mut reads, &result.node());
+    reads.ranges
+}
+
+struct Reads<'a> {
+    name: &'a [u8],
+    /// How many blocks and lambdas the visitor is in, which a read of the outermost scope's variable reaches up through.
+    blocks: u32,
+    ranges: Vec<(usize, usize)>,
+}
+
+impl<'pr> ruby_prism::Visit<'pr> for Reads<'_> {
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
+        self.blocks += 1;
+        ruby_prism::visit_block_node(self, node);
+        self.blocks -= 1;
+    }
+
+    fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
+        self.blocks += 1;
+        ruby_prism::visit_lambda_node(self, node);
+        self.blocks -= 1;
+    }
+
+    fn visit_local_variable_read_node(&mut self, node: &ruby_prism::LocalVariableReadNode<'pr>) {
+        if node.name().as_slice() == self.name && node.depth() == self.blocks {
+            let at = node.location();
+            self.ranges.push((at.start() as usize, at.end() as usize));
+        }
+    }
+
+    fn visit_call_node(&mut self, node: &ruby_prism::CallNode<'pr>) {
+        if node.is_variable_call() && node.name().as_slice() == self.name {
+            let at = node.location();
+            self.ranges.push((at.start() as usize, at.end() as usize));
+        }
+        ruby_prism::visit_call_node(self, node);
+    }
+}
+
 struct Scopes {
     offset: usize,
     names: Vec<String>,
@@ -165,6 +211,15 @@ mod tests {
         assert_eq!(block_locals("f = ->(n) { n }", 12), ["n"]);
         assert!(block_locals("[1].map { _1 }", 11).is_empty());
         assert!(block_locals("x.each { |_unused, _slim_controls1| }", 20).is_empty());
+    }
+
+    #[test]
+    fn local_reads_skip_shadowing_block_variables() {
+        let source = "def t(user:)\n  user.name; @user; x.user; :user\n  [1].each { |user| user }\n  [2].each { user }\nend\n";
+        let reads: Vec<&str> = local_reads(source, "user").into_iter().map(|(s, e)| &source[s..e]).collect();
+        assert_eq!(reads, ["user", "user"]);
+        let slim = "user.name\nitems.each { |user| user }\n";
+        assert_eq!(local_reads(slim, "user"), [(0, 4)], "a bare call where nothing declares it");
     }
 
     #[test]

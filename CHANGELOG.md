@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Rename a partial's strict local with F2: the `locals:` comment, every read in the partial and the keys of the `render` calls that pass it change together, in ERB, Slim and Haml. Find all references on the local lists the same places.
+
 ## 0.7.0
 
 - macOS builds are back: a `.vsix` for Apple silicon and Intel Macs, and the `ruby-templates` npm package for both.
