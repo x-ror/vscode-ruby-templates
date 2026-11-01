@@ -3,7 +3,7 @@
 
 use crate::partials::snake_case;
 use crate::project::Project;
-use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::rails_paths::{app_root, rails_relative, template_stem, views_root};
 use crate::ruby::logical_lines;
 use crate::util::{inline_code, word_at};
 use regex::Regex;
@@ -173,9 +173,7 @@ pub fn hover(assignments: &[Assignment], name: &str) -> Option<String> {
         .iter()
         .filter(|a| a.name == name && seen.insert((&a.file, a.line)))
         .map(|a| {
-            let root = app_root(&a.file).and_then(|app| app.parent().map(Path::to_path_buf));
-            let shown = root.and_then(|root| a.file.strip_prefix(root).ok().map(Path::to_path_buf)).unwrap_or_else(|| a.file.clone());
-            let shown = format!("{}:{}", shown.to_string_lossy().replace('\\', "/"), a.line + 1);
+            let shown = format!("{}:{}", rails_relative(&a.file), a.line + 1);
             let link = Url::from_file_path(&a.file).map_or_else(|()| shown.clone(), |uri| format!("[{shown}]({uri}#L{})", a.line + 1));
             format!("- {link}: {}", inline_code(&a.code))
         })

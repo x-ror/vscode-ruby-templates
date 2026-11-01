@@ -107,6 +107,13 @@ pub fn app_root(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// `file` relative to its Rails root (the folder holding `app`), with `/` separators; the full path outside one.
+pub fn rails_relative(file: &Path) -> String {
+    let root = app_root(file).and_then(|app| app.parent().map(Path::to_path_buf));
+    let shown = root.and_then(|root| file.strip_prefix(root).ok()).unwrap_or(file);
+    shown.to_string_lossy().replace('\\', "/")
+}
+
 /// Every file under `root`; the listing `render_candidates` names come from.
 pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
     WalkDir::new(root)
@@ -123,6 +130,17 @@ pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_from_the_rails_root() {
+        let root = Path::new("/srv/shop");
+        assert_eq!(
+            rails_relative(&root.join("app/javascript/controllers/hello_controller.js")),
+            "app/javascript/controllers/hello_controller.js"
+        );
+        assert_eq!(rails_relative(&root.join("app/views/users/_card.html.erb")), "app/views/users/_card.html.erb");
+        assert_eq!(rails_relative(Path::new("/tmp/loose.erb")), "/tmp/loose.erb", "outside a Rails app");
+    }
 
     #[test]
     fn feed_formats() {

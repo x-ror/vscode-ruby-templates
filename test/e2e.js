@@ -472,6 +472,14 @@ const check = (label, actual, expected) => {
       "/app/assets/images/logo.png",
     ],
   );
+  check(
+    "documentLink tooltips from the Rails root",
+    (links.result || []).map((l) => l.tooltip).slice(-2),
+    [
+      "app/javascript/controllers/hello_controller.js",
+      "app/assets/images/logo.png",
+    ],
+  );
   const folds = await send("textDocument/foldingRange", {
     textDocument: { uri },
   });

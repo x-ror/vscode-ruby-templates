@@ -63,7 +63,7 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
     if found.is_empty() {
         return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
-    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", f.display())).collect();
+    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", rails_paths::rails_relative(f))).collect();
     let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
     if let Some(sig) = partials::file_strict_locals(&found[0], strict_locals::Close::of(project)) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
@@ -143,7 +143,7 @@ fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
     Some(DocumentLink {
         range,
         target: Some(Url::from_file_path(target).ok()?),
-        tooltip: Some(target.to_string_lossy().into_owned()),
+        tooltip: Some(rails_paths::rails_relative(target)),
         data: None,
     })
 }
@@ -1379,6 +1379,7 @@ mod tests {
         let line = r#"<%= render partial: "card" %>"#;
         let md = render_hover(&Project::unknown(), &file, &partials::render_ref_at(line, 22).unwrap());
         assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
+        assert!(md.contains("- `app/views/users/_card.html.erb`"), "a path from the Rails root: {md}");
         assert!(!render_hover(&Project::unknown(), &file, &partials::render_ref_at(r#"render "plain""#, 9).unwrap()).contains("locals:"));
 
         std::fs::remove_dir_all(&root).unwrap();
