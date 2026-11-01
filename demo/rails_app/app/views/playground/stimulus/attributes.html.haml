@@ -1,0 +1,6 @@
+-# Stimulus attributes of the element's controllers. See demo/README.md, N-39.
+%form(data-controller="search"
+      data-search-url-value="/users/search")
+  %input(data-search-target="query")
+
+%form{ data: { controller: "search", search_url_value: "/users/search" } }

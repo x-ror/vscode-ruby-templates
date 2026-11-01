@@ -15,6 +15,7 @@
 | `rails_app/app/views/playground/editing`                                 | Команди редагування: toggle, wrap, extract partial                                                                                                     |
 | `rails_app/app/views/playground/highlight`                               | Зразки підсвітки (копії `test/sample.*`)                                                                                                               |
 | `rails_app/app/views/playground/preview`                                 | Шаблони без Rails-хелперів для Preview / Show Compiled Ruby Source                                                                                     |
+| `rails_app/app/views/playground/stimulus`                                | Атрибути Stimulus-контролерів елемента (`search_controller.js`) в ERB, Haml і Slim                                                                     |
 | `rails_app/bin/rails`                                                    | Заглушка: відповідає лише на запит маршрутів, щоб `*_path` працювали без встановленого Rails                                                           |
 | `no_rails/`                                                              | Шаблони без `Gemfile.lock`: Rails-перевірки тут вимкнені                                                                                               |
 
@@ -150,6 +151,10 @@
 - [ ] **N-30** `data-controller="` → `hello`, `clipboard`. `data-action="click->hello#` → `greet`, `reset`. `data-hello-target="` → `name`, `output`.
 - [ ] **N-31** Hover на `link_to` → сигнатура й посилання на API docs. Набери `<%= link_` → хелпери з аргументами-сніпетами.
 - [ ] **N-32** У `@users.each do |user|` (рядки 10–13) набери `<%= us` → `user`.
+- [ ] **N-39** `playground/stimulus/attributes.html.erb`: у тезі `<form data-controller="search"` (рядки 2–4) після `data-search-url-value="…"` набери ` data-search-` → `data-search-target`, `data-search-url-value`, `data-search-debounce-wait-value`, `data-search-loading-class`, `data-search-result-list-outlet` (з `static targets/values/classes/outlets` у `search_controller.js`; слова з коментаря всередині `static values` не потрапляють). У `<div data-controller="search hello" <%= … %>` (рядок 9) перед `class=` набери `data-` → атрибути обох контролерів, ERB-тег їм не заважає.
+      Haml (`attributes.html.haml`): у `%form(` на другому рядку атрибутів набери `data-search-` → ті самі імена. У `%form{ data: { … } }` (рядок 6) після `search_url_value: "/users/search"` набери `, search_` → `search_target`, `search_debounce_wait_value`, `search_loading_class`… Slim (`attributes.html.slim`): у `form(` на другому рядку набери `data-search-`.
+      Slim також доповнює Turbo-атрибути: у `input ` набери `data-turbo-` → `data-turbo-method`, `data-turbo-confirm`, `data-turbo-frame`…
+- [ ] **N-40** `users/index.html.erb`: F12 на `user` у `user.name` (рядок 12) → `|user|` на рядку 10. У `users/_card.html.erb` F12 на `user` у `user.name` (рядок 3) як і раніше веде на `render`, що передають `user:` (strict local, не блокова змінна).
 
 **Контролери, суміжні файли, outline**
 
