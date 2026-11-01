@@ -1,7 +1,7 @@
 //! Ruby syntax errors in an ERB template: the method source Rails 8.1.4 evals for it (Erubi 1.13.1 with the
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
-use crate::generated_ruby::generated_offset;
+use crate::generated_ruby::{generated_offset, template_span};
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
 use crate::util::{error, LineIndex};
@@ -353,6 +353,16 @@ pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
     let compiled = compile(text, None);
     let Some(read_at) = offset.checked_sub(compiled.cut.encoding_tag) else { return Vec::new() };
     generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
+}
+
+/// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
+/// method's parameters.
+pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
+    let compiled = compile(text, Some(close));
+    let original = |(start, end): (usize, usize)| (compiled.cut.original(start), compiled.cut.original(end));
+    let uses = prism::local_uses(&compiled.source, name);
+    let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original)).collect();
+    prism::LocalUses { spans, ..uses }
 }
 
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.

@@ -127,6 +127,17 @@ impl Comment {
         }
     }
 
+    /// Where the parameter `name` (`name:` in the list) starts in the template.
+    pub fn parameter_at(&self, name: &str) -> Option<usize> {
+        Some(self.parameters_at? + crate::prism::keyword_parameter_at(&self.parameters, name)?)
+    }
+
+    /// Where the other parameters' defaults read the parameter `name`, in the template.
+    pub fn parameter_reads(&self, name: &str) -> Vec<(usize, usize)> {
+        let Some(at) = self.parameters_at else { return vec![] };
+        crate::prism::parameter_reads(&self.parameters, name).into_iter().map(|(start, end)| (at + start, at + end)).collect()
+    }
+
     /// Whether the list was blank, which Rails reads as `**nil`.
     pub fn blank(&self) -> bool {
         self.parameters_at.is_none()

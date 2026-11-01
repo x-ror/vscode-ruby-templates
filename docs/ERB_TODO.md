@@ -191,7 +191,7 @@ Legend: `[x]` means implemented and checked in the code (the file is named next 
 ## 12. Rename, references, symbols
 
 - [x] Rename a partial file and update every `render "…"` that points at it (`server/src/partial_rename.rs`, `workspace/willRenameFiles`)
-- [ ] Rename a local across a partial and its callers
+- [x] Rename a partial's strict local (F2) across its `locals:` comment, its reads and the keys of the `render` calls passing it; a shorthand `user:` keeps its value (`member: user`), a block variable of the same name is left alone; find all references lists the same places (`server/src/lsp.rs` `rename`, `local_references`, `prism::local_reads`, `partial_rename::local_key_edits`; `test/e2e.js` "rename and references of a partial local")
 - [x] Document symbols / outline: `content_for` blocks, forms, `turbo_frame_tag`, HTML landmarks with ids (`server/src/outline.rs` `document_symbols`)
 - [x] Breadcrumbs follow the symbol tree (VS Code builds them from `textDocument/documentSymbol`)
 - [x] Find all references to an i18n key: `t("…")` calls with the same full key (lazy `.x` keys resolved per view) plus its locale entries (`partial_rename::i18n_references`)

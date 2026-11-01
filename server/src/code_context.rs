@@ -1,6 +1,8 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
+use crate::prism::LocalUses;
+use crate::strict_locals::{self, Close};
 use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
 
@@ -19,6 +21,18 @@ pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_
         TemplateLang::Slim => slim_ruby::block_locals(&slim_parser::parse(text, extra_engines), offset),
         TemplateLang::Haml => haml_ruby::block_locals(text, &haml_parser::parse_with_ruby(text), offset),
         TemplateLang::Skim | TemplateLang::Ruby => Vec::new(),
+    }
+}
+
+/// Where the template reads or assigns the strict local `name`, from the Ruby it compiles to.
+pub(crate) fn local_uses(lang: TemplateLang, text: &str, close: Close, name: &str, extra_engines: &[String]) -> LocalUses {
+    match lang {
+        TemplateLang::Erb => erb_ruby::local_uses(text, close, name),
+        TemplateLang::Slim => slim_ruby::local_uses(&slim_parser::parse(text, extra_engines), name),
+        TemplateLang::Haml => {
+            haml_ruby::local_uses(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref(), name)
+        }
+        TemplateLang::Skim | TemplateLang::Ruby => LocalUses::default(),
     }
 }
 
@@ -111,6 +125,19 @@ pub(crate) fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_uses_in_every_language() {
+        let reads = |lang, text: &str| -> Vec<usize> {
+            local_uses(lang, text, Close::default(), "user", &[]).spans.into_iter().map(|(start, _)| start).collect()
+        };
+        let erb = "<%# locals: (user:) %>\n<%= user.name %> <% [1].each do |user| %><%= user %><% end %><%= @user %><% user ||= 1 %>\n";
+        assert_eq!(reads(TemplateLang::Erb, erb), [erb.find("user.name").unwrap(), erb.find("user ||=").unwrap()]);
+        let slim = "/# locals: (user:)\np = user.name\n- [1].each do |user|\n  = user\n";
+        assert_eq!(reads(TemplateLang::Slim, slim), [slim.find("user.name").unwrap()]);
+        let haml = "-# locals: (user:)\n%p= user.name\n- [1].each do |user|\n  = user\n";
+        assert_eq!(reads(TemplateLang::Haml, haml), [haml.find("user.name").unwrap()]);
+    }
 
     #[test]
     fn slim_code_at_asks_the_parser() {

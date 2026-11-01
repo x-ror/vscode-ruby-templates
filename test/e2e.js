@@ -1205,6 +1205,74 @@ const check = (label, actual, expected) => {
       null,
     ],
   );
+  const prepare = async (line, character) =>
+    (await req("textDocument/prepareRename", rowUri, line, character)).result;
+  const localRename = await send("textDocument/rename", {
+    textDocument: { uri: rowUri },
+    position: { line: 1, character: 4 },
+    newName: "item",
+  });
+  const refusedName = async (newName) =>
+    (
+      await send("textDocument/rename", {
+        textDocument: { uri: rowUri },
+        position: { line: 1, character: 4 },
+        newName,
+      })
+    ).error?.code ?? null;
+  const flat = (changes) =>
+    Object.entries(changes ?? {})
+      .flatMap(([u, es]) =>
+        es.map(
+          (e) =>
+            `${rel(u)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.character} ${e.newText}`,
+        ),
+      )
+      .sort();
+  const localRefs = (
+    await send("textDocument/references", {
+      textDocument: { uri: rowUri },
+      position: { line: 1, character: 4 },
+      context: { includeDeclaration: true },
+    })
+  ).result
+    .map(
+      (l) => `${rel(l.uri)} ${l.range.start.line}:${l.range.start.character}`,
+    )
+    .sort();
+  check(
+    "rename and references of a partial local",
+    [
+      await prepare(1, 4),
+      await prepare(0, 13),
+      await prepare(1, 23),
+      await prepare(2, 25),
+      flat(localRename.result?.changes),
+      localRefs,
+      await refusedName("class"),
+      await refusedName("link_to"),
+      await refusedName("b"),
+    ],
+    [
+      { start: { line: 1, character: 4 }, end: { line: 1, character: 5 } },
+      { start: { line: 0, character: 13 }, end: { line: 0, character: 14 } },
+      null,
+      null,
+      [
+        "/app/views/strict/_row.html.erb 0:13-14 item",
+        "/app/views/strict/_row.html.erb 1:4-5 item",
+        "/app/views/strict/list.html.erb 0:25-26 item",
+      ],
+      [
+        "/app/views/strict/_row.html.erb 0:13",
+        "/app/views/strict/_row.html.erb 1:4",
+        "/app/views/strict/list.html.erb 0:25",
+      ],
+      -32602,
+      -32602,
+      -32602,
+    ],
+  );
   const i18nDocs = {
     slim: '= t(".title")\n= t(".ti")\n',
     haml: '= t(".title")\n%p= t(".ti")\n',
