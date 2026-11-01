@@ -391,6 +391,28 @@ const checks = {
     }
   },
 
+  async "Slim format on save in one save"() {
+    const editor = await open("app/views/users/save.html.slim");
+    const editorSettings = vscode.workspace.getConfiguration("editor");
+    await formatEdits(editor);
+    await editorSettings.update(
+      "formatOnSave",
+      true,
+      vscode.ConfigurationTarget.Global,
+    );
+    try {
+      await editor.edit((e) => e.insert(new vscode.Position(0, 3), " "));
+      await editor.document.save();
+      assert.strictEqual(editor.document.getText(), "div\n  p= x\n  | text\n");
+    } finally {
+      await editorSettings.update(
+        "formatOnSave",
+        undefined,
+        vscode.ConfigurationTarget.Global,
+      );
+    }
+  },
+
   async "extract ERB partial"() {
     const rel = "app/views/users/extract.html.erb";
     return answeringInputBox("erb_part", async () => {

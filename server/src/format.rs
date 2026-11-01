@@ -269,7 +269,7 @@ mod tests {
             Ok("p\nq\n"),
             "trailing empty lines become the final newline"
         );
-        assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &Settings::default()).as_deref(), Ok("p\n\n\nq\n   \n"), "Slim compiles blank lines");
+        assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &Settings::default()).as_deref(), Ok("p\n\n\nq\n"), "inner blank lines stay");
         // A range leaves the final newline as it is.
         let range = Settings { final_newline: false, ..Settings::default() };
         assert_eq!(fmt("a.slim", "p", &range).as_deref(), Ok("p"));

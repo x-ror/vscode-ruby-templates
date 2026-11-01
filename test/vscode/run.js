@@ -62,6 +62,10 @@ write("app/views/users/reindent.html.haml", "%div\n    %p\n        %b x\n");
 write("app/views/users/format.html.haml", "%ul\n   %li\n      %b x\n");
 write("app/views/users/format.html.slim", "div\n    p= x\n    p y\n");
 write(
+  "app/views/users/save.html.slim",
+  "div\n    p= x\n    | text\n\n\n        ",
+);
+write(
   "app/views/users/extract.html.erb",
   "<div>\n  <p>a</p>\n  <p>b</p>\n</div>\n",
 );

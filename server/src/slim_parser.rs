@@ -214,7 +214,10 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         expecting: false,
         count: 0,
     };
-    p.count = p.lines.iter().rposition(|l| !l.is_empty()).map_or(0, |i| i + 1);
+    // Slim's `split` drops the empty lines at the end; whitespace-only ones there only add newlines to the
+    // compiled code, so they count as dropped too.
+    p.count = p.lines.iter().rposition(|l| !is_blank(l)).map_or(0, |i| i + 1);
+    p.lines.truncate(p.count);
     let mut next = 0;
     while next < p.count {
         p.i = next;
