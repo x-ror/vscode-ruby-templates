@@ -166,14 +166,15 @@ pub fn name_at(line: &str, col: usize) -> Option<&str> {
     (!word.is_empty() && before.ends_with('@') && !before.ends_with("@@")).then_some(word)
 }
 
-/// Markdown for `@name`: each line assigning it as a link, named from the app's root, with the line's code.
-pub fn hover(assignments: &[Assignment], name: &str) -> Option<String> {
+/// Markdown for `@name` in `view`: each line assigning it as a link, named from the view's Rails root, with the line's
+/// code.
+pub fn hover(assignments: &[Assignment], name: &str, view: &Path) -> Option<String> {
     let mut seen = HashSet::new();
     let lines: Vec<String> = assignments
         .iter()
         .filter(|a| a.name == name && seen.insert((&a.file, a.line)))
         .map(|a| {
-            let shown = format!("{}:{}", rails_relative(&a.file), a.line + 1);
+            let shown = format!("{}:{}", rails_relative(&a.file, view), a.line + 1);
             let link = Url::from_file_path(&a.file).map_or_else(|()| shown.clone(), |uri| format!("[{shown}]({uri}#L{})", a.line + 1));
             format!("- {link}: {}", inline_code(&a.code))
         })
@@ -312,10 +313,11 @@ end
     #[test]
     fn hover_lists_each_assignment() {
         let file = std::env::temp_dir().join("app/controllers/admin/users_controller.rb");
+        let view = std::env::temp_dir().join("app/views/admin/users/show.html.erb");
         let at = |line, code: &str| Assignment { name: "user".into(), file: file.clone(), line, code: code.into() };
         let found =
             [at(3, "@user = User.find(params[:id])"), at(9, "@user ||= nil; @user = `whoami`"), at(9, "@user ||= nil; @user = `whoami`")];
-        let md = hover(&found, "user").unwrap();
+        let md = hover(&found, "user", &view).unwrap();
         let uri = Url::from_file_path(&file).unwrap();
         let shown = "app/controllers/admin/users_controller.rb";
         assert_eq!(
@@ -324,7 +326,7 @@ end
                 "`@user`\n\n- [{shown}:4]({uri}#L4): `@user = User.find(params[:id])`\n- [{shown}:10]({uri}#L10): `` @user ||= nil; @user = `whoami` ``"
             )
         );
-        assert_eq!(hover(&found, "menu"), None);
+        assert_eq!(hover(&found, "menu", &view), None);
     }
 
     #[test]

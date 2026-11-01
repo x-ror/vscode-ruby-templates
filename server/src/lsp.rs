@@ -63,7 +63,7 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
     if found.is_empty() {
         return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
-    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", rails_paths::rails_relative(f))).collect();
+    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", rails_paths::rails_relative(f, path))).collect();
     let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
     if let Some(sig) = partials::file_strict_locals(&found[0], strict_locals::Close::of(project)) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
@@ -139,11 +139,12 @@ fn i18n_key_at(
     i18n::full_key(project, path, &line[start..end])
 }
 
-fn file_link(range: Range, target: &Path) -> Option<DocumentLink> {
+/// A link to `target` from the file `from`, its tooltip the path from `from`'s Rails root.
+fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
     Some(DocumentLink {
         range,
         target: Some(Url::from_file_path(target).ok()?),
-        tooltip: Some(rails_paths::rails_relative(target)),
+        tooltip: Some(rails_paths::rails_relative(target, from)),
         data: None,
     })
 }
@@ -732,7 +733,7 @@ impl LanguageServer for Backend {
             let links = util::lines_with_offsets(&text)
                 .enumerate()
                 .flat_map(|(i, (_, line))| controllers::targets(&project, &path, line, None).into_iter().map(move |t| (i, line, t)))
-                .filter_map(|(i, line, (start, end, found))| file_link(util::span_range(i, line, start, end), found.first()?));
+                .filter_map(|(i, line, (start, end, found))| file_link(util::span_range(i, line, start, end), found.first()?, &path));
             return Ok(Some(links.collect()));
         }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
@@ -745,7 +746,7 @@ impl LanguageServer for Backend {
                 .filter(|r| in_code(i, line_start, r))
                 .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&project, &path, line, None)) {
-                links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target)));
+                links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target, &path)));
             }
         }
         Ok(Some(links))
@@ -792,7 +793,8 @@ impl LanguageServer for Backend {
         // `@tag` is a variable, though `tag` is a helper.
         if let Some(name) = ivars::name_at(line, col).filter(|_| code_here) {
             let assignments = file.as_ref().map(|(project, path)| ivars::for_view(project, path)).unwrap_or_default();
-            return Ok(ivars::hover(&assignments, name).and_then(markdown_hover));
+            let view = file.as_ref().map(|(_, path)| path.as_path()).unwrap_or(Path::new(""));
+            return Ok(ivars::hover(&assignments, name, view).and_then(markdown_hover));
         }
         let declared_local = file.as_ref().filter(|_| code_here && is_partial(&uri)).and_then(|(project, _)| {
             let name = helper_defs::name_at(line, col).filter(|_| !is_key(line, col))?;
