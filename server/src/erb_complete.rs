@@ -87,7 +87,7 @@ fn open_element(before: &str) -> Option<String> {
     stack.pop()
 }
 
-pub fn items(context: Context, text: &str, offset: usize) -> Vec<CompletionItem> {
+pub fn items(context: Context, text: &str, offset: usize, stimulus: &[String]) -> Vec<CompletionItem> {
     match context {
         Context::Element(typed) => HTML_TAGS
             .iter()
@@ -110,6 +110,7 @@ pub fn items(context: Context, text: &str, offset: usize) -> Vec<CompletionItem>
                 .map(|a| a.to_string())
                 .chain(data)
                 .chain(aria)
+                .chain(stimulus.iter().cloned())
                 .filter(|a| a.starts_with(typed))
                 .map(|name| {
                     let snippet = if BOOLEAN_ATTRIBUTES.contains(&name.as_str()) { name.clone() } else { format!("{name}=\"$1\"") };
@@ -154,7 +155,7 @@ mod tests {
     #[test]
     fn close_suggests_the_open_element() {
         let close =
-            |text: &str| items(Context::Close(""), text, text.len()).into_iter().map(|i| i.insert_text.unwrap()).collect::<Vec<_>>();
+            |text: &str| items(Context::Close(""), text, text.len(), &[]).into_iter().map(|i| i.insert_text.unwrap()).collect::<Vec<_>>();
         assert_eq!(close("<div><p>x</p><br><img src=\"a\"/><span>"), ["span>"]);
         assert_eq!(close("<section><% if a %><b>x</b><% end %>"), ["section>"]);
         assert_eq!(close("<div><%= \"<p>\" %>"), ["div>"]);
@@ -165,9 +166,9 @@ mod tests {
 
     #[test]
     fn attribute_snippets() {
-        let item = |typed| items(Context::Attribute(typed), "", 0).into_iter().next().map(|i| i.insert_text.unwrap());
+        let item = |typed| items(Context::Attribute(typed), "", 0, &[]).into_iter().next().map(|i| i.insert_text.unwrap());
         assert_eq!(item("hre").as_deref(), Some("href=\"$1\""));
         assert_eq!(item("disab").as_deref(), Some("disabled"));
-        assert!(items(Context::Attribute("data-contr"), "", 0).iter().any(|i| i.label == "data-controller"));
+        assert!(items(Context::Attribute("data-contr"), "", 0, &[]).iter().any(|i| i.label == "data-controller"));
     }
 }

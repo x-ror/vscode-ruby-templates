@@ -90,7 +90,18 @@ pub fn continued_head(lines: &[&str], roles: &[LineRole], at: usize, col: usize)
 }
 
 /// Items for a `completion_context`.
-pub fn completions(context: Completion) -> Vec<CompletionItem> {
+/// The key in a `data:` hash for the attribute `data-…`: underscored as Rails dasherizes it, unless the name holds a
+/// namespaced controller (`admin--users`), which only a quoted key can spell.
+fn data_key(attribute: &str) -> String {
+    let name = attribute.strip_prefix("data-").unwrap_or(attribute);
+    if name.contains("--") {
+        name.to_string()
+    } else {
+        name.replace('-', "_")
+    }
+}
+
+pub fn completions(context: Completion, stimulus: &[String]) -> Vec<CompletionItem> {
     match context {
         Completion::Filter(typed) => HAML_FILTERS
             .iter()
@@ -105,13 +116,14 @@ pub fn completions(context: Completion) -> Vec<CompletionItem> {
         Completion::Attribute { typed, place, rocket } => {
             let names: Vec<String> = match place {
                 AttrPlace::Hash => HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).collect(),
-                AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).collect(),
+                AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).chain(stimulus.iter().map(|a| data_key(a))).collect(),
                 AttrPlace::AriaHash => ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
                 AttrPlace::Html => HTML_ATTRIBUTES
                     .iter()
                     .map(|a| a.to_string())
                     .chain(ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
                     .chain(DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
+                    .chain(stimulus.iter().cloned())
                     .collect(),
             };
             names

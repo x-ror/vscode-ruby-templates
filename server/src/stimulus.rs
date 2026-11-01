@@ -20,7 +20,11 @@ static OPEN_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 // An unfinished `data-x-target="…` or `x_target: "…` value in a `data:` hash.
 static OPEN_TARGET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?:data-([\w-]+)-target["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(\w+)_target:)\s*["']([^"']*)$"#).unwrap());
-static TARGETS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+targets\s*=\s*\[([^\]]*)\]").unwrap());
+static STATIC_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
+static STATIC_VALUES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+values\s*=\s*\{").unwrap());
+// A `data:` hash still open where the element's text ends, as in Haml's `%div{ data: { controller: "x", x_` while typing.
+static OPEN_DATA_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdata:\s*\{([^}]*)$").unwrap());
+static HASH_CONTROLLER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\bcontroller:\s*["']([^"']*)["']"#).unwrap());
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']([\w-]+)["']"#).unwrap());
 // `name(args) {`, `async name() {`, TS `name(): void {`, or a `name = (e) =>` class field, at the start of a line.
 static METHOD: LazyLock<Regex> = LazyLock::new(|| {
@@ -83,8 +87,77 @@ fn is_identifier(id: &str) -> bool {
 
 /// The names in a controller's `static targets = [...]`.
 pub fn targets(source: &str) -> Vec<String> {
-    let Some(list) = TARGETS.captures(source).and_then(|cap| cap.get(1)) else { return vec![] };
+    static_list(source, "targets")
+}
+
+/// The names in a controller's `static <kind> = [...]` (`targets`, `classes`, `outlets`).
+fn static_list(source: &str, kind: &str) -> Vec<String> {
+    let Some(list) = STATIC_LIST.captures_iter(source).find(|cap| &cap[1] == kind).and_then(|cap| cap.get(2)) else { return vec![] };
     QUOTED.captures_iter(list.as_str()).map(|cap| cap[1].to_string()).collect()
+}
+
+/// The keys of a controller's `static values = { name: Type, other: { type: String, default: "" } }`.
+fn static_values(source: &str) -> Vec<String> {
+    let Some(open) = STATIC_VALUES.find(source) else { return vec![] };
+    let (mut depth, mut key, mut out) = (1, String::new(), Vec::new());
+    for c in source[open.end()..].chars() {
+        match c {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' if depth == 1 => break,
+            '}' | ']' | ')' => depth -= 1,
+            ':' if depth == 1 && !key.is_empty() => out.push(std::mem::take(&mut key)),
+            c if depth == 1 && is_name_char(c) => key.push(c),
+            _ if depth == 1 => key.clear(),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The controllers of the element whose start tag `text` ends in: `data-controller="a b"`, or `controller:` in a `data:` hash.
+pub fn element_controllers(text: &str) -> Vec<String> {
+    let attributes = ATTR.captures_iter(text).filter(|cap| &cap[1] == "controller").map(|cap| cap[2].to_string());
+    let hashes = DATA_HASH.captures_iter(text).chain(OPEN_DATA_HASH.captures_iter(text)).filter_map(|cap| cap.get(1));
+    let in_hashes = hashes.flat_map(|hash| HASH_CONTROLLER.captures_iter(hash.as_str()).map(|cap| cap[1].to_string()).collect::<Vec<_>>());
+    let mut out: Vec<String> = Vec::new();
+    for id in attributes.chain(in_hashes).flat_map(|value| value.split_whitespace().map(str::to_string).collect::<Vec<_>>()) {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// The attributes the controller `id` reads from its element, given its source: `data-id-target`, and a `-value`,
+/// `-class` or `-outlet` attribute for each name its class declares.
+pub fn element_attributes(id: &str, source: &str) -> Vec<String> {
+    let declared =
+        [(static_values(source), "value"), (static_list(source, "classes"), "class"), (static_list(source, "outlets"), "outlet")];
+    let named = declared.into_iter().flat_map(|(names, suffix)| names.into_iter().map(move |name| (name, suffix)));
+    std::iter::once(format!("data-{id}-target"))
+        .chain(named.map(|(name, suffix)| format!("data-{id}-{}-{suffix}", dasherize(&name))))
+        .collect()
+}
+
+/// The Stimulus attributes for the element whose start tag `text` ends in, from its controllers in `current`'s app.
+pub fn attributes(current: &Path, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in element_controllers(text) {
+        let source = resolve(current, &id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+        out.extend(element_attributes(&id, &source));
+    }
+    out
+}
+
+/// `fooBar` → `foo-bar`, as Stimulus maps a value or class name to its attribute.
+fn dasherize(name: &str) -> String {
+    name.chars().fold(String::new(), |mut out, c| {
+        if c.is_ascii_uppercase() {
+            out.push('-');
+        }
+        out.push(c.to_ascii_lowercase());
+        out
+    })
 }
 
 /// Methods an action can call: the controller class's members, lifecycle callbacks left out.
@@ -198,6 +271,35 @@ pub fn resolve(current: &Path, identifier: &str) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn element_controllers_from_attributes_and_data_hashes() {
+        assert_eq!(element_controllers(r#"<div class="x" data-controller="search admin--users" data-"#), ["search", "admin--users"]);
+        assert_eq!(element_controllers(r#"%div{ data: { controller: "search", sea"#), ["search"]);
+        assert_eq!(element_controllers(r#"div data-controller="a" data-controller="a b" "#), ["a", "b"]);
+        assert!(element_controllers(r#"<div data-action="click->search#go" "#).is_empty());
+    }
+
+    #[test]
+    fn element_attributes_from_the_controller_class() {
+        let source = r#"export default class extends Controller {
+  static targets = ["input", "results"]
+  static values = { url: String, perPage: { type: Number, default: 10 } }
+  static classes = ["loading"]
+  static outlets = ["result-list"]
+}"#;
+        assert_eq!(
+            element_attributes("search", source),
+            [
+                "data-search-target",
+                "data-search-url-value",
+                "data-search-per-page-value",
+                "data-search-loading-class",
+                "data-search-result-list-outlet"
+            ]
+        );
+        assert_eq!(element_attributes("plain", ""), ["data-plain-target"]);
+    }
 
     #[test]
     fn identifiers_in_attributes_and_hashes() {
