@@ -1,0 +1,11 @@
+<article class="card">
+  <% if header? %>
+    <header><%= header %></header>
+  <% end %>
+  <h2><%= @title %></h2>
+  <ul>
+    <% items.each do |item| %>
+      <li><%= item %></li>
+    <% end %>
+  </ul>
+</article>

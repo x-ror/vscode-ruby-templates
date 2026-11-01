@@ -1,0 +1,19 @@
+!!! 5
+%div
+  %p ok
+  %span Text
+    %b nested under inline text
+  - if true
+    %i ok
+  - end
+  :unknownfilter
+    content
+  - else
+    %i orphan
+  %br/ text
+  / note
+    %p inside a comment with text
+  = user.name
+    %p under code that opens no block
+  %a{href: "x"
+  %p

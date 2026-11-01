@@ -1,0 +1,28 @@
+<%# Navigation playground: F12, hover, completion. See demo/README.md, section "Navigation". %>
+<h1><%= t(".title") %></h1>
+
+<p>Total: <%= @total %>, signed in as <%= current_user_name %></p>
+
+<%= render "users/card", user: @current_user %>
+<%= render partial: "shared/footer" %>
+<%= render @users %>
+
+<% @users.each do |user| %>
+  <%= render "card", user: user, compact: true %>
+  <%= link_to user.name, edit_user_path(user) %>
+<% end %>
+
+<%= render CardComponent.new(title: "Team") do |c| %>
+  <% c.with_header { "Header" } %>
+  <% c.with_item { "One" } %>
+<% end %>
+<%= render UI::ButtonComponent.new(label: "Save") %>
+
+<p><%= format_price(42) %></p>
+<%= link_to "New user", new_user_path %>
+
+<div data-controller="hello">
+  <input data-hello-target="name">
+  <button data-action="click->hello#greet">Greet</button>
+  <span data-hello-target="output"></span>
+</div>

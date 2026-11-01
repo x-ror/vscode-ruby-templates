@@ -1,0 +1,10 @@
+<% @users.each do |user| %>
+  <%= link_to user.name, user %>
+  <% if user.admin? %>
+    <b>admin</b>
+<% end %>
+<%= if foo %>
+<% end %>
+<% end %>
+<% end %>
+<% x = 1

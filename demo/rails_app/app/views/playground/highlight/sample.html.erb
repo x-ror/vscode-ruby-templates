@@ -1,0 +1,22 @@
+<%# Comment here %>
+<%# locals: (title:, count: 0, tags: ["a", "b"], **options) -%>
+<%# locals: (user:) TODO %><p class="x">(a) %></p>
+<div class="users">
+  <% @users.each do |user| %>
+    <%= link_to user.name, user_path(user), class: "name" %>
+    <%- if user.admin? -%>
+      <span>Admin</span>
+    <% end %>
+  <% end %>
+  <%== raw_html %>
+  <%% literal %>
+  <%= 1 =%>
+  <%- trimmed = 2 -%>
+</div>
+<a class="btn <%= active %>" href="<%= url %>" data-x='<%= y %>'>x</a>
+<div <%= attrs %> id="d"></div>
+<!-- <%= hidden %> -->
+<script>const n = <%= count %>;</script>
+<style>.a { color: <%= color %>; }</style>
+<% x = { a: "}" } %><p>after hash</p>
+<%= link_to "a %", b %><p>after percent</p>

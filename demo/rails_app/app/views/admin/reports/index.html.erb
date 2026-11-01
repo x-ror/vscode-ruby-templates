@@ -1,0 +1,7 @@
+<%# @reports from the action, @admin_section from Admin::BaseController, @current_user from ApplicationController %>
+<h1>Reports</h1>
+<% if @admin_section %>
+  <% @reports.each do |report| %>
+    <p><%= report.title %></p>
+  <% end %>
+<% end %>

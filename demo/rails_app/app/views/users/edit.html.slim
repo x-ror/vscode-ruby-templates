@@ -1,0 +1,19 @@
+/ Slim playground: f.text_field :, @ivars, hover on line markers.
+h1 = t("users.edit.save")
+= form_with model: @user do |f|
+  .field
+    = f.label :name
+    = f.text_field :name
+  .field
+    = f.email_field :email
+  = f.submit t(".save")
+
+div data-controller="clipboard"
+  input data-clipboard-target="source" value=@user.email
+  button data-action="clipboard#copy" Copy
+
+- @user.tags.each do |tag|
+  span.tag = tag
+
+javascript:
+  console.log("editing #{@user.id}");

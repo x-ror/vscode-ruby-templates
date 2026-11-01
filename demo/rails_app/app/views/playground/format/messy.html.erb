@@ -1,0 +1,28 @@
+<div class="wrapper">
+<% if @users.any? %>
+      <ul>
+  <% @users.each do |user| %>
+<li>
+        <%= link_to user.name, user %>   
+    </li>
+            <% end %>
+</ul>
+<% else %>
+ <p><%= t("users.index.empty") %></p>
+    <% end %>
+<pre>
+   keep   this   as is
+</pre>
+  <script>
+      console.log("not touched");
+  </script>
+<%= form_with model: @user do |f| %>
+<div class="field">
+  <%= f.text_field :name,
+        placeholder: "Name" %>
+</div>
+  <% end %>
+
+
+
+</div>

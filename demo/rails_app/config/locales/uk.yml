@@ -1,0 +1,12 @@
+uk:
+  users:
+    index:
+      title: Користувачі
+      empty: Ще немає користувачів
+    show:
+      heading: Профіль
+    edit:
+      save: Зберегти
+  shared:
+    footer:
+      copyright: "© Демо"
