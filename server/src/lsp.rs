@@ -1120,7 +1120,7 @@ impl LanguageServer for Backend {
         let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
         // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
         let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
-        let indented_element = stimulus::indented_element(&doc.text[..line_start + col]);
+        let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
         if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
             let offset = line_start + col;
             if let Some(context) = erb_complete::context(&doc.text, offset) {
@@ -1153,7 +1153,7 @@ impl LanguageServer for Backend {
         // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
         if doc.lang == TemplateLang::Haml {
             if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
-                return items(haml::completions(context, || stimulus_attributes(indented_element)));
+                return items(haml::completions(context, || stimulus_attributes(indented_element())));
             }
             let lines: Vec<&str> = doc.text.lines().collect();
             let head = haml::continued_head(&lines, &roles, pos.line as usize, col).filter(|_| role == LineRole::Ruby);
@@ -1167,7 +1167,8 @@ impl LanguageServer for Backend {
             (TemplateLang::Slim, _) => {
                 let parsed = slim_parser::parse(&doc.text, engines);
                 let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
-                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element)) {
+                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element()))
+                {
                     return items(markup);
                 }
                 // An unclosed `#{` being typed is Ruby too, for completion only.

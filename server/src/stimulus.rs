@@ -22,9 +22,10 @@ static OPEN_TARGET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?:data-([\w-]+)-target["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(\w+)_target:)\s*["']([^"']*)$"#).unwrap());
 static STATIC_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
 static STATIC_VALUES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+values\s*=\s*\{").unwrap());
+// A Haml or Slim tag head and the attribute wrapper right after it: `%form(`, `div.card{`, `a[`.
+static TAG_WRAPPER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[ \t]*[%.#]?[\w:-]+(?:[.#][\w:-]+)*[(\[{]").unwrap());
 // A `data:` hash still open where the element's text ends, as in Haml's `%div{ data: { controller: "x", x_` while typing.
 static OPEN_DATA_HASH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdata:\s*\{([^}]*)$").unwrap());
-static ERB_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<%.*?%>").unwrap());
 static HASH_CONTROLLER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\bcontroller:\s*["']([^"']*)["']"#).unwrap());
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']([\w-]+)["']"#).unwrap());
 // `name(args) {`, `async name() {`, TS `name(): void {`, or a `name = (e) =>` class field, at the start of a line.
@@ -110,7 +111,7 @@ fn static_values(source: &str) -> Vec<String> {
         } else if rest.starts_with("/*") {
             Some(rest.find("*/").map_or(rest.len(), |end| end + 2))
         } else if matches!(c, '"' | '\'' | '`') {
-            Some(rest[1..].find(c).map_or(rest.len(), |end| end + 2))
+            Some(string_len(rest, c))
         } else {
             None
         };
@@ -133,18 +134,43 @@ fn static_values(source: &str) -> Vec<String> {
     out
 }
 
+/// The length of the string literal `rest` starts with, quotes included; a backslash escapes the next character.
+fn string_len(rest: &str, quote: char) -> usize {
+    let mut chars = rest.char_indices().skip(1);
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            c if c == quote => return at + c.len_utf8(),
+            _ => {}
+        }
+    }
+    rest.len()
+}
+
 /// The controllers of the element whose start tag `text` ends in: `data-controller="a b"`, or `controller:` in a `data:` hash.
 pub fn element_controllers(text: &str) -> Vec<String> {
+    // ERB output names a controller only at runtime, and its quotes would cut the attribute value short.
+    let text = &without_erb(text);
     let attributes = ATTR.captures_iter(text).filter(|cap| &cap[1] == "controller").map(|cap| cap[2].to_string());
     let hashes = DATA_HASH.captures_iter(text).chain(OPEN_DATA_HASH.captures_iter(text)).filter_map(|cap| cap.get(1));
     let in_hashes = hashes.flat_map(|hash| HASH_CONTROLLER.captures_iter(hash.as_str()).map(|cap| cap[1].to_string()).collect::<Vec<_>>());
     let mut out: Vec<String> = Vec::new();
-    // ERB output in the value names a controller only at runtime.
-    let literal = |value: String| ERB_TAG.replace_all(&value, " ").split_whitespace().map(str::to_string).collect::<Vec<_>>();
-    for id in attributes.chain(in_hashes).flat_map(literal) {
+    for id in attributes.chain(in_hashes).flat_map(|value| value.split_whitespace().map(str::to_string).collect::<Vec<_>>()) {
         if is_identifier(&id) && !out.contains(&id) {
             out.push(id);
         }
+    }
+    out
+}
+
+/// `text` with each ERB tag, `<%` to `%>`, blanked out.
+fn without_erb(text: &str) -> String {
+    let mut out = text.to_string();
+    for (start, end) in crate::erb::code_spans(text).into_iter().rev() {
+        let (from, to) = (start - "<%".len(), (end + 1).min(text.len()));
+        out.replace_range(from..to, &" ".repeat(to - from));
     }
     out
 }
@@ -155,17 +181,30 @@ const MAX_ATTRIBUTE_LINES: usize = 20;
 /// The text of the indentation-based (Haml, Slim) element the end of `before` is in: from the line that opens the
 /// attribute wrapper still unclosed there, else the current line.
 pub fn indented_element(before: &str) -> &str {
-    let line_starts = before.rmatch_indices('\n').map(|(at, _)| at + 1).chain([0]).take(MAX_ATTRIBUTE_LINES);
-    let unclosed = |text: &str| {
-        text.chars().fold(0i32, |depth, c| match c {
-            '(' | '[' | '{' => depth + 1,
-            ')' | ']' | '}' => depth - 1,
-            _ => depth,
-        }) > 0
-    };
     let current = before.rfind('\n').map_or(0, |at| at + 1);
-    let start = line_starts.into_iter().find(|&start| unclosed(&before[start..])).unwrap_or(current);
+    let line_starts = before.rmatch_indices('\n').map(|(at, _)| at + 1).chain([0]).take(MAX_ATTRIBUTE_LINES);
+    let opens_wrapper = |start: usize| {
+        let wrapper = TAG_WRAPPER.find(&before[start..])?;
+        unclosed(&before[start + wrapper.end() - 1..]).then_some(start)
+    };
+    let start = line_starts.into_iter().find_map(opens_wrapper).unwrap_or(current);
     &before[start..]
+}
+
+/// Whether `text` leaves a bracket open, counting none inside quotes.
+fn unclosed(text: &str) -> bool {
+    let (mut depth, mut quote) = (0i32, None);
+    for c in text.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '(' | '[' | '{') => depth += 1,
+            (None, ')' | ']' | '}') => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0
 }
 
 /// The attributes the controller `id` reads from its element, given its source: `data-id-target`, and a `-value`,
@@ -319,6 +358,7 @@ mod tests {
         assert_eq!(element_controllers(r#"div data-controller="a" data-controller="a b" "#), ["a", "b"]);
         assert!(element_controllers(r#"<div data-action="click->search#go" "#).is_empty());
         assert_eq!(element_controllers(r#"<div data-controller="<%= name %> search" "#), ["search"], "ERB output names nothing");
+        assert!(element_controllers(r#"<div data-controller="<%= admin ? "admin" : "user" %>" data-"#).is_empty(), "quotes in ERB");
     }
 
     #[test]
@@ -342,12 +382,17 @@ mod tests {
         assert_eq!(element_attributes("plain", ""), ["data-plain-target"]);
         let commented = "static values = {\n  // note: in seconds\n  delay: Number, /* skip: x */ label: { default: \"a: b\" }\n}";
         assert_eq!(static_values(commented), ["delay", "label"]);
+        let escaped = r#"static values = { label: { default: "say \"hi\" {" }, wait: Number }"#;
+        assert_eq!(static_values(escaped), ["label", "wait"]);
     }
 
     #[test]
     fn indented_elements_span_wrapped_attributes() {
         assert_eq!(indented_element("p\ndiv(\n  data-controller=\"a\"\n  data-"), "div(\n  data-controller=\"a\"\n  data-");
         assert_eq!(indented_element("div(a=\"1\")\np data-"), "p data-");
+        assert_eq!(indented_element("p data-controller=\"old\" (see below\ndiv data-"), "div data-", "a bracket in text");
+        assert_eq!(indented_element("%div{ title: \"(\" }\n%p(data-"), "%p(data-", "a bracket in a value");
+        assert_eq!(indented_element("%form{ data: { a: 1 },\n  data-"), "%form{ data: { a: 1 },\n  data-");
     }
 
     #[test]
