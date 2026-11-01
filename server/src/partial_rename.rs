@@ -27,11 +27,12 @@ pub struct Source {
     pub text: String,
 }
 
-/// `app/views/users/_card.html.slim` → `users/card`; `None` for non-partials and files outside a views dir.
+/// `app/views/users/_card.html.slim` → `users/card`, and `app/views/_card.html.slim` → `/card`, the name Rails looks up
+/// with no folder prefix; `None` for non-partials and files outside a views dir.
 fn qualified_name(project: &Project, views: &Path, file: &Path) -> Option<String> {
     let dir = file.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
     let name = template_stem(|f| project.is_format(f), file.file_name()?.to_str()?.strip_prefix('_')?);
-    (!dir.is_empty() && !name.is_empty()).then(|| format!("{dir}/{name}"))
+    (!name.is_empty()).then(|| format!("{dir}/{name}"))
 }
 
 /// Where `path` ends up after `renames`, whether it or one of its folders is renamed.
@@ -437,6 +438,16 @@ mod tests {
             ("app/views/users/_row.html+phone.erb", "app/views/users/_line.html+phone.erb"),
         ];
         assert_eq!(t.edits(&both, &sources), [("app/views/users/index.html.slim".into(), 3, 10, "line".into())]);
+    }
+
+    #[test]
+    fn moves_into_and_out_of_the_views_root() {
+        let t = Tree::new("root", &["app/views/users/_card.html.slim", "app/views/_note.html.erb"]);
+        let sources = [t.source("app/views/users/index.html.slim", SLIM, "= render \"card\"\n= render \"/note\"\n")];
+        let into = t.edits(&[("app/views/users/_card.html.slim", "app/views/_card.html.slim")], &sources);
+        assert_eq!(into, [("app/views/users/index.html.slim".into(), 0, 10, "/card".into())]);
+        let out_of = t.edits(&[("app/views/_note.html.erb", "app/views/shared/_note.html.erb")], &sources);
+        assert_eq!(out_of, [("app/views/users/index.html.slim".into(), 1, 10, "shared/note".into())]);
     }
 
     #[test]

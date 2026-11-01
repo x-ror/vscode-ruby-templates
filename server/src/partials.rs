@@ -1225,6 +1225,15 @@ mod tests {
     }
 
     #[test]
+    fn partial_in_the_views_root() {
+        let (root, views) = partial_tree("views-root", &["_note.html.erb", "users/_note.html.erb"]);
+        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "/note""#), ["_note.html.erb"]);
+        let found = resolve(&Project::unknown(), &views.join("users/show.html.erb"), &render_refs(r#"render "/note""#).remove(0));
+        assert_eq!(found, [views.join("_note.html.erb")], "the root one, not the folder's");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn variant_named_partial_is_not_the_bare_name() {
         let (root, views) = partial_tree("variant-name", &["users/_user.v2.html.erb", "users/_user.html.erb"]);
         assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "user""#), ["_user.html.erb"]);
