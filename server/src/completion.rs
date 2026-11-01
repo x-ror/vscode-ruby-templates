@@ -160,8 +160,9 @@ pub(crate) fn component_completions(path: &Path, typed: &str, range: Range) -> V
         .collect()
 }
 
-/// Form builder methods after `f.` / `form.` / `ff.`…, Turbo Stream actions after `turbo_stream.`.
-pub(crate) fn receiver_completions(before: &str) -> Option<Vec<CompletionItem>> {
+/// Form builder methods after `f.` / `form.` / `ff.`…, Turbo Stream actions after `turbo_stream.`; `after` is the line
+/// from the cursor on.
+pub(crate) fn receiver_completions(before: &str, after: &str) -> Option<Vec<CompletionItem>> {
     let idx = before.rfind('.')?;
     let recv = before[..idx].rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or("");
     let typed = &before[idx + 1..];
@@ -176,17 +177,28 @@ pub(crate) fn receiver_completions(before: &str) -> Option<Vec<CompletionItem>> 
                 .map(|m| util::completion_item(*m, CompletionItemKind::METHOD, "ActionView::Helpers::FormBuilder"))
                 .collect(),
         ),
-        "turbo_stream" => Some(helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(helper_item).collect()),
+        "turbo_stream" => {
+            let called = has_arguments(after);
+            Some(helpers::TURBO_STREAM.iter().filter(|h| h.name.starts_with(typed)).map(|h| helper_item(h, called)).collect())
+        }
         _ => None,
     }
 }
 
-pub(crate) fn helper_item(h: &helpers::Helper) -> CompletionItem {
-    CompletionItem {
-        insert_text: Some(h.snippet.to_string()),
-        insert_text_format: Some(InsertTextFormat::SNIPPET),
-        ..util::completion_item(h.name, CompletionItemKind::FUNCTION, h.detail)
+/// A helper inserted with its argument snippet, or by name alone when the call already has its arguments (`called`).
+pub(crate) fn helper_item(h: &helpers::Helper, called: bool) -> CompletionItem {
+    let item = util::completion_item(h.name, CompletionItemKind::FUNCTION, h.detail);
+    if called {
+        return item;
     }
+    CompletionItem { insert_text: Some(h.snippet.to_string()), insert_text_format: Some(InsertTextFormat::SNIPPET), ..item }
+}
+
+/// Whether the call whose name the cursor is in already has arguments: `after`, the line from the cursor on, goes on
+/// past the name with something other than the end of the code.
+pub(crate) fn has_arguments(after: &str) -> bool {
+    let rest = after.trim_start_matches(|c: char| c.is_alphanumeric() || matches!(c, '_' | '?' | '!')).trim_start_matches([' ', '\t']);
+    !(rest.is_empty() || rest.starts_with([')', ',', '}', ']', '\r', '\n']) || rest.starts_with("%>") || rest.starts_with("-%>"))
 }
 
 pub(crate) fn helpers_for(lang: TemplateLang) -> impl Iterator<Item = &'static helpers::Helper> {
@@ -202,7 +214,20 @@ mod tests {
     fn slot_setters_leave_other_receivers_alone() {
         let before = "<%= render CardComponent.new do |f| %><% end %>\n<%= form_with model: @user do |f| %>\n  <%= f.te";
         assert!(slot_setter_completions(&Project::unknown(), Path::new("/nowhere/app/views/users/new.html.erb"), before).is_none());
-        assert!(receiver_completions(before).is_some_and(|items| !items.is_empty()));
+        assert!(receiver_completions(before, "").is_some_and(|items| !items.is_empty()));
+    }
+
+    #[test]
+    fn helpers_already_called_complete_by_name() {
+        for after in ["", " %>", "-%>", ")", ", x", "\n", "}"] {
+            assert!(!has_arguments(after), "{after:?}");
+        }
+        for after in [" \"x\", y %>", "(\"x\")", "_to user.name", " user"] {
+            assert!(has_arguments(after), "{after:?}");
+        }
+        let link_to = helpers::HELPERS.iter().find(|h| h.name == "link_to").unwrap();
+        assert_eq!(helper_item(link_to, true).insert_text, None);
+        assert!(helper_item(link_to, false).insert_text.is_some_and(|text| text.contains("${1")));
     }
 
     #[test]

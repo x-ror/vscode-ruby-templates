@@ -254,6 +254,31 @@ const check = (label, actual, expected) => {
     labels(await req("textDocument/completion", uri, 5, 11)),
     ["link_to"],
   );
+  const calledHelper = {};
+  for (const [lang, text] of Object.entries({
+    erb: "<%= link_to user.name, edit_user_path(user) %>\n<%= link_to %>\n",
+    haml: '= link_to "Users", users_path\n= link_to\n',
+    slim: '= link_to("Users", users_path)\n= link_to\n',
+  })) {
+    const calledUri = fileUri(path.join(views, "users", `called.html.${lang}`));
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: calledUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const insert = async (line, character) =>
+      (
+        await req("textDocument/completion", calledUri, line, character)
+      ).result?.find((i) => i.label === "link_to")?.insertText ?? "name";
+    const at = text.indexOf("link_to") + "link_to".length;
+    calledHelper[lang] = [await insert(0, at - 3), await insert(1, at)];
+  }
+  const snippet = 'link_to "${1:text}", ${2:path}';
+  check("helper completion on a call with arguments", calledHelper, {
+    erb: ["name", snippet],
+    haml: ["name", snippet],
+    slim: ["name", snippet],
+  });
   check(
     "definition render @users",
     targets(await req("textDocument/definition", uri, 15, 12)),

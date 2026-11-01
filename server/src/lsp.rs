@@ -1,8 +1,9 @@
 use crate::checks::{diagnostics, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
 use crate::code_context::{self, block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
-    block_local_completions, component_completions, component_prefix, helper_item, helpers_for, i18n_completions, ivar_completions,
-    local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions, stimulus_completions,
+    block_local_completions, component_completions, component_prefix, has_arguments, helper_item, helpers_for, i18n_completions,
+    ivar_completions, local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions,
+    stimulus_completions,
 };
 use crate::lang::{file_name, html_host, is_partial, TemplateLang};
 use crate::{
@@ -1115,7 +1116,7 @@ impl LanguageServer for Backend {
         {
             return items(found);
         }
-        if let Some(found) = receiver_completions(before).filter(|_| code_here()) {
+        if let Some(found) = receiver_completions(before, &line[col..]).filter(|_| code_here()) {
             return items(found);
         }
         if let Some(typed) = component_prefix(before).filter(|_| code_here()) {
@@ -1171,7 +1172,8 @@ impl LanguageServer for Backend {
         let locals: Vec<_> =
             local_completions(&doc.text, typed, close).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
         found.extend(locals);
-        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(helper_item));
+        let called = has_arguments(&line[col..]);
+        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| helper_item(h, called)));
         let own_slots =
             path.as_deref().and_then(|p| slots::class_of_template(project(p), p)).and_then(|class| std::fs::read_to_string(class).ok());
         let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
