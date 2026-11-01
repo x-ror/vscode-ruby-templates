@@ -52,7 +52,20 @@ jobs:
               ext: "",
               cross: true,
             }
-          # macOS (darwin-arm64, darwin-x64) is left out while GitHub's macos-14 runners don't pick up jobs.
+          # Apple silicon runner; it builds the Intel binary too, which it can't run, so only arm64 is tested.
+          - {
+              os: macos-15,
+              target: aarch64-apple-darwin,
+              dir: darwin-arm64,
+              ext: "",
+              test: true,
+            }
+          - {
+              os: macos-15,
+              target: x86_64-apple-darwin,
+              dir: darwin-x64,
+              ext: "",
+            }
           - {
               os: windows-latest,
               target: x86_64-pc-windows-msvc,
@@ -154,7 +167,7 @@ jobs:
         with: { pattern: cli-*, path: .cli }
       - run: bun npm/assemble.js .cli npm-dist
       # Every platform the server matrix builds, plus the main package: a renamed artifact must not drop one.
-      - run: test "$(ls npm-dist | wc -l)" -eq 4
+      - run: test "$(ls npm-dist | wc -l)" -eq 6
       - uses: actions/upload-artifact@v7
         with: { name: npm, path: npm-dist }
 

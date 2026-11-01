@@ -19,4 +19,4 @@ Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O error
 
 The only formatter setting is the indentation width, from `.editorconfig` (`indent_size`, default 2), plus `--align-comments` for ERB comments; see [the settings](https://github.com/x-ror/vscode-ruby-templates/blob/main/docs/FORMATTER_CONFIG.md) and [the full reference](https://github.com/x-ror/vscode-ruby-templates/blob/main/docs/FEATURES.md#built-in-formatter).
 
-The binary comes from a per-platform package (Linux x64/arm64, Windows x64) installed as an optional dependency; `RUBY_TEMPLATES_BINARY` points the wrapper at another build.
+The binary comes from a per-platform package (Linux x64/arm64, macOS arm64/x64, Windows x64) installed as an optional dependency; `RUBY_TEMPLATES_BINARY` points the wrapper at another build.

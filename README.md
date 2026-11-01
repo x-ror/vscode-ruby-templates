@@ -104,7 +104,7 @@ npx ruby-templates format --write app/views   # format them
 2. Open a Rails project and any view. That's it: highlighting, checks, navigation and formatting work immediately.
 3. Optional: turn on format on save, e.g. `"[erb]": { "editor.formatOnSave": true }` (also `[haml]`, `[slim]`).
 
-Requires VS Code 1.100 or newer, on Linux (x64, arm64) or Windows (x64). macOS builds are paused for now.
+Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, Intel) or Windows (x64).
 
 ## Settings
 
