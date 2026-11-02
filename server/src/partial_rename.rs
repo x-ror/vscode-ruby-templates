@@ -10,6 +10,7 @@ use crate::partials::{
 };
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::render_call;
 use crate::util::{lines_with_offsets, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -60,20 +61,21 @@ fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, 
 fn code_refs(
     source: &Source,
     extra_engines: &[String],
-    find: impl Fn(&str, usize, &str) -> Vec<RenderRef>,
+    find: impl Fn(&str, usize, &str, bool) -> Vec<RenderRef>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef)> {
+    let haml = source.lang == Some(TemplateLang::Haml);
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
         return spans
             .into_iter()
-            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e]).into_iter().filter(&want).map(shift(s)))
+            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], false).into_iter().filter(&want).map(shift(s)))
             .collect();
     }
     let candidates: Vec<(usize, usize, &str, RenderRef)> = lines_with_offsets(&source.text)
         .enumerate()
-        .flat_map(|(i, (offset, line))| find(&source.text, offset, line).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
+        .flat_map(|(i, (offset, line))| find(&source.text, offset, line, haml).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
         .collect();
     if candidates.is_empty() {
         return vec![];
@@ -156,8 +158,8 @@ fn may_name(stems: &[&str], name: &str) -> bool {
 }
 
 /// The renders on a line that may name one of `stems`, with lookups read from the whole call.
-fn renders_named<'s>(stems: &'s [&str]) -> impl Fn(&str, usize, &str) -> Vec<RenderRef> + 's {
-    move |text, at, line| render_refs_in(text, at, line, |r| may_name(stems, &r.name))
+fn renders_named<'s>(stems: &'s [&str]) -> impl Fn(&str, usize, &str, bool) -> Vec<RenderRef> + 's {
+    move |text, at, line, haml| render_refs_in(text, at, line, haml, |r| may_name(stems, &r.name))
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
@@ -171,10 +173,14 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
             .into_iter()
             .filter(|(_, _, r)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
             .filter(|(start, _, r)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
-        let models =
-            code_refs(source, extra_engines, |_, _, line| model_refs(line), |r| may_name(&stems, &crate::partials::singularize(&r.name)))
-                .into_iter()
-                .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
+        let models = code_refs(
+            source,
+            extra_engines,
+            |_, _, line, _| model_refs(line),
+            |r| may_name(&stems, &crate::partials::singularize(&r.name)),
+        )
+        .into_iter()
+        .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
         for (start, end, _) in named.chain(models) {
             let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
@@ -244,7 +250,8 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
                 continue;
             }
             let line_start = start - r.start;
-            let call = read_call(&source.text[line_start..], &r);
+            let haml = render_call::haml_pipes_apply(&source.text, line_start, source.lang == Some(TemplateLang::Haml));
+            let call = read_call(&source.text[line_start..], &r, haml);
             let key = match passed_locals(&call, &r) {
                 Some(names) if !names.contains(&local) => continue,
                 Some(_) => local_key_span(&call, local).map(|(s, e)| (line_start + s, line_start + e)),
@@ -264,7 +271,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     for source in sources {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        for (start, end, _) in code_refs(source, extra_engines, |_, _, line| find(line), |r| key.ends_with(r.name.as_str()))
+        for (start, end, _) in code_refs(source, extra_engines, |_, _, line, _| find(line), |r| key.ends_with(r.name.as_str()))
             .into_iter()
             .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
@@ -351,7 +358,7 @@ pub fn render_edits(
         for (start, end, r) in code_refs(
             source,
             extra_engines,
-            |text, at, line| render_refs_in(text, at, line, |r| folder_renamed || may_name(&stems, &r.name)),
+            |text, at, line, haml| render_refs_in(text, at, line, haml, |r| folder_renamed || may_name(&stems, &r.name)),
             |r| folder_renamed || may_name(&stems, &r.name),
         ) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
@@ -421,6 +428,7 @@ mod tests {
 
     const SLIM: Option<TemplateLang> = Some(TemplateLang::Slim);
     const ERB: Option<TemplateLang> = Some(TemplateLang::Erb);
+    const HAML: Option<TemplateLang> = Some(TemplateLang::Haml);
 
     #[test]
     fn renames_and_moves_rewrite_matching_renders() {
@@ -619,6 +627,10 @@ mod tests {
             t.source("app/views/home/show.html.slim", SLIM, "= render \"users/card\", user: current_user\n"),
             t.source("app/views/home/other.html.erb", ERB, "<%= render \"other\", user: u %>\n"),
             t.source("app/views/home/list.html.slim", SLIM, "= render \"users/card\",\n    size: 1,\n    user: u\n"),
+            // A trailing `|` is Ruby in a Haml filter body too.
+            t.source("app/views/home/filter.html.haml", HAML, ":ruby\n  x = render \"users/card\", user: a |\n    b, size: 1\n"),
+            // A trailing `|` is Ruby outside Haml.
+            t.source("app/controllers/cards_controller.rb", None, "render partial: \"users/card\", locals: { size: x |\n  y, user: u }\n"),
         ];
         let card = t.path("app/views/users/_card.html.erb");
         let mut got: Vec<(String, u32, u32)> = local_passes(&Project::unknown(), &card, "user", &sources, &[])
@@ -629,12 +641,16 @@ mod tests {
         assert_eq!(
             got,
             [
+                ("app/controllers/cards_controller.rb".into(), 1, 5),
+                ("app/views/home/filter.html.haml".into(), 1, 27),
                 ("app/views/home/list.html.slim".into(), 2, 4),
                 ("app/views/home/show.html.slim".into(), 0, 23),
                 ("app/views/users/index.html.erb".into(), 0, 37)
             ]
         );
         assert!(local_passes(&Project::unknown(), &card, "missing", &sources, &[]).is_empty());
+        let size = local_passes(&Project::unknown(), &card, "size", &sources, &[]);
+        assert!(size.iter().any(|l| l.uri.to_file_path().unwrap().ends_with("filter.html.haml") && l.range.start.line == 2));
     }
 
     #[test]

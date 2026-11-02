@@ -75,7 +75,7 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     // Only the options form has lookup options.
     let lookups: Vec<_> = refs
         .iter()
-        .map(|r| Some(if RenderForm::of(line, r).options { read_call_with_lookup(line, r).1 } else { Lookup::default() }))
+        .map(|r| Some(if RenderForm::of(line, r).options { read_call_with_lookup(line, r, false).1 } else { Lookup::default() }))
         .collect();
     set_lookups(&mut refs, &lookups);
     refs
@@ -121,9 +121,9 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
 }
 
 /// `render_refs` for the line of `text` at `line_start`, keeping the refs `keep` accepts, with lookups read from the whole
-/// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep.
-pub fn render_refs_in(text: &str, line_start: usize, line: &str, keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
-    render_calls_in(text, line_start, line, keep).into_iter().map(|(r, _)| r).collect()
+/// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep. `haml`: `text` is Haml.
+pub fn render_refs_in(text: &str, line_start: usize, line: &str, haml: bool, keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
+    render_calls_in(text, line_start, line, haml, keep).into_iter().map(|(r, _)| r).collect()
 }
 
 /// `render_refs_in` with each ref's call, read once.
@@ -131,6 +131,7 @@ pub fn render_calls_in<'a>(
     text: &'a str,
     line_start: usize,
     line: &str,
+    haml: bool,
     mut keep: impl FnMut(&RenderRef) -> bool,
 ) -> Vec<(RenderRef, RenderCall<'a>)> {
     let mut refs = refs_without_lookups(line);
@@ -138,12 +139,13 @@ pub fn render_calls_in<'a>(
     if !kept.contains(&true) {
         return vec![];
     }
+    let haml = render_call::haml_pipes_apply(text, line_start, haml);
     // A kept `layout:` takes its partial's lookup, so that call is read too.
     let needed = |i: usize| kept[i] || refs.iter().zip(&kept).any(|(r, &k)| k && r.from_layout && r.call == refs[i].call);
     let (calls, lookups): (Vec<_>, Vec<_>) = (0..refs.len())
         .map(|i| match needed(i) {
             true => {
-                let (call, lookup) = read_call_with_lookup(&text[line_start..], &refs[i]);
+                let (call, lookup) = read_call_with_lookup(&text[line_start..], &refs[i], haml);
                 (Some(call), Some(lookup))
             }
             false => (None, None),
@@ -206,9 +208,9 @@ fn literal_names(value: &str) -> Option<Vec<String>> {
 }
 
 /// Find a render reference whose string spans `col` (byte column) on `line`, the line of `text` at `line_start`.
-pub fn render_ref_at(text: &str, line_start: usize, line: &str, col: usize) -> Option<RenderRef> {
+pub fn render_ref_at(text: &str, line_start: usize, line: &str, haml: bool, col: usize) -> Option<RenderRef> {
     let spans_col = |r: &RenderRef| col >= r.start.saturating_sub(1) && col <= r.end + 1;
-    render_refs_in(text, line_start, line, spans_col).into_iter().next()
+    render_refs_in(text, line_start, line, haml, spans_col).into_iter().next()
 }
 
 pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
@@ -720,25 +722,26 @@ fn passed_names<'a>(call: &Call<'a>, form: &RenderForm) -> Option<Vec<&'a str>> 
     Some(names)
 }
 
-/// The call of `r`, read from `text`, which starts at `r`'s line.
-pub fn read_call<'a>(text: &'a str, r: &RenderRef) -> RenderCall<'a> {
-    read_call_with_lookup(text, r).0
+/// The call of `r`, read from `text`, which starts at `r`'s line; `haml`: `text` is Haml.
+pub fn read_call<'a>(text: &'a str, r: &RenderRef, haml: bool) -> RenderCall<'a> {
+    read_call_with_lookup(text, r, haml).0
 }
 
-fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef) -> (RenderCall<'a>, Lookup) {
+fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml: bool) -> (RenderCall<'a>, Lookup) {
     let form = RenderForm::of(text, r);
-    let parsed = render_call::read(text, r.call, r.start);
+    let parsed = render_call::read(text, r.call, r.start, haml);
     let lookup = parsed.as_ref().map(|parsed| lookup(parsed, &form)).unwrap_or_default();
     (RenderCall { form, parsed }, lookup)
 }
 
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `offset`;
-/// the render call may start up to `MAX_CALL_LINES` lines higher.
-pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<String>, &str)> {
+/// the render call may start up to `MAX_CALL_LINES` lines higher. `haml`: `text` is Haml.
+pub fn local_key_before(text: &str, offset: usize, haml: bool) -> Option<(RenderRef, Vec<String>, &str)> {
     let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
     // Starts above the first one that sees the partial ref see the same ref, so they can't read the call any better.
     let (start, r) = line_starts.into_iter().find_map(|start| Some((start, partial_ref_before(&text[start..offset])?)))?;
-    let (names, typed) = local_key_after(&text[start..], offset - start, &r)?;
+    let haml = render_call::haml_pipes_apply(text, start, haml);
+    let (names, typed) = local_key_after(&text[start..], offset - start, &r, haml)?;
     Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
 }
 
@@ -754,7 +757,7 @@ fn partial_ref_before(before: &str) -> Option<RenderRef> {
 
 /// The locals already passed (before or after the cursor) and the name typed so far where a local's name may be typed at
 /// `col` in `text`, which starts at the render call's line.
-fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef) -> Option<(Vec<String>, &'a str)> {
+fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> Option<(Vec<String>, &'a str)> {
     let line = text.get(..col)?;
     let args = line.get(r.end + 1..)?;
     if args.contains("%>") {
@@ -804,12 +807,12 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef) -> Option<(Vec<
         Some(names.into_iter().map(str::to_string).collect::<Vec<_>>())
     };
     // The whole call, when it reads, decides: the probe is a local there or nowhere.
-    if let Some(call) = render_call::read(&spliced, 0, name_at).filter(|call| call.readable) {
+    if let Some(call) = render_call::read(&spliced, 0, name_at, haml).filter(|call| call.readable) {
         return Some((others(passed_names(&call, &form)?)?, typed));
     }
     // Cut at the cursor, the probe may also sit beside a hash the call ignores.
     let passed = |source: &str| {
-        let call = render_call::read(source, 0, name_at)?;
+        let call = render_call::read(source, 0, name_at, haml)?;
         let names = passed_names(&call, &form)?;
         if !names.contains(&CURSOR_KEY) && call.pairs.iter().any(|pair| pair.key == CURSOR_KEY) {
             return Some(names.into_iter().map(str::to_string).collect());
@@ -862,11 +865,11 @@ mod tests {
         };
         let add = |line: &str, names: &[&str]| {
             let r = &render_refs(line)[0];
-            apply(line, add_locals_edit(&read_call(line, r), r, names))
+            apply(line, add_locals_edit(&read_call(line, r, false), r, names))
         };
         let remove = |line: &str, name: &str| {
             let r = &render_refs(line)[0];
-            apply(line, remove_local_edit(&read_call(line, r), r, name))
+            apply(line, remove_local_edit(&read_call(line, r, false), r, name))
         };
         let s = |line: &str| Some(line.to_string());
         assert_eq!(add(r#"<%= render "card" %>"#, &["user"]), s(r#"<%= render "card", user: nil %>"#));
@@ -899,7 +902,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, false).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
         };
         let card = |passed: &str, typed: &str| Some(("card".to_string(), passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", | %>"#), card("", ""));
@@ -971,14 +974,14 @@ mod tests {
     #[test]
     fn refs() {
         let l = r#"<%= render "users/card", user: u %>"#;
-        let r = render_ref_at(l, 0, l, 14).unwrap();
+        let r = render_ref_at(l, 0, l, false, 14).unwrap();
         assert_eq!(r.name, "users/card");
         assert_eq!(r.kind, RenderKind::Partial);
         let row = "= render partial: 'row', collection: @x";
-        let r = render_ref_at(row, 0, row, 20).unwrap();
+        let r = render_ref_at(row, 0, row, false, 20).unwrap();
         assert_eq!(r.name, "row");
         let tpl = "= render template: 'a/b'";
-        assert_eq!(render_ref_at(tpl, 0, tpl, 22).unwrap().kind, RenderKind::Template);
+        assert_eq!(render_ref_at(tpl, 0, tpl, false, 22).unwrap().kind, RenderKind::Template);
         assert_eq!(component_ref_at("= render Users::CardComponent.new(user: u)", 12).unwrap(), "Users::CardComponent");
         assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), (RenderKind::Partial, "us".to_string()));
         assert_eq!(render_string_prefix(r#"render template: "a/"#, 20).unwrap(), (RenderKind::Template, "a/".to_string()));
@@ -1223,7 +1226,7 @@ mod tests {
         let text = "<%= render \"card\", a: items\n      .first %>";
         assert_eq!(passed_in(text), strs(&["a"]));
         let r = &render_refs(text.lines().next().unwrap())[0];
-        let call = read_call(text, r);
+        let call = read_call(text, r, false);
         let apply = |(range, new): ByteEdit| {
             let mut out = text.to_string();
             out.replace_range(range, &new);
@@ -1236,7 +1239,7 @@ mod tests {
         // On its own line inside a `<% %>` tag, the call continues too.
         let own = "<%\n  render \"card\", a: items\n    .first\n%>";
         let own_ref = &render_refs("  render \"card\", a: items")[0];
-        let own_call = read_call(&own[3..], own_ref);
+        let own_call = read_call(&own[3..], own_ref, false);
         assert_eq!(passed_locals(&own_call, own_ref), Some(vec!["a"]));
         let mut edited = own[3..].to_string();
         let (range, new) = add_locals_edit(&own_call, own_ref, &["b"]).unwrap();
@@ -1252,7 +1255,7 @@ mod tests {
         let key = |text: &str| {
             let offset = text.find('|').unwrap();
             let text = text.replace('|', "");
-            local_key_before(&text, offset).map(|(r, passed, typed)| (r.name, r.start, passed.join(" "), typed.to_string()))
+            local_key_before(&text, offset, false).map(|(r, passed, typed)| (r.name, r.start, passed.join(" "), typed.to_string()))
         };
         let card = |passed: &str, typed: &str| Some(("card".to_string(), 12, passed.to_string(), typed.to_string()));
         assert_eq!(key("p\n= render \"card\",\n  user: u,\n  si|"), card("user", "si"));
@@ -1263,7 +1266,7 @@ mod tests {
     #[test]
     fn literal_render_locals() {
         fn span<'a>(line: &'a str, name: &str) -> Option<(usize, &'a str)> {
-            local_key_span(&read_call(line, &render_refs(line)[0]), name).map(|(s, e)| (s, &line[s..e]))
+            local_key_span(&read_call(line, &render_refs(line)[0], false), name).map(|(s, e)| (s, &line[s..e]))
         }
         let line = r#"<%= render "card", title: "user: Bob", user: u %>"#;
         assert_eq!(span(line, "user"), Some((39, "user")), "not the text inside the string");
@@ -1474,7 +1477,7 @@ mod tests {
     fn interpolations_do_not_end_the_call() {
         fn locals(text: &str) -> Option<Vec<&str>> {
             let r = render_refs(text.lines().next().unwrap()).remove(0);
-            passed_locals(&read_call(text, &r), &r)
+            passed_locals(&read_call(text, &r, false), &r)
         }
         assert_eq!(locals("<%= render \"card\", a: \"#{f(\"}\")}\", b: 1 %>"), Some(vec!["a", "b"]));
         assert_eq!(locals("= render \"card\", a: \"#{t(\"(\")}\", b: 1\n= c: 2\n"), Some(vec!["a", "b"]));
@@ -1546,7 +1549,7 @@ mod tests {
         let r = &refs[0];
         assert_eq!(&line[r.start..r.end], "users/card");
         assert_eq!(r.call, line.find("render").unwrap());
-        let call = read_call(line, r);
+        let call = read_call(line, r, false);
         assert_eq!(passed_locals(&call, r).as_deref(), Some(&["a"][..]));
         let (range, text) = add_locals_edit(&call, r, &["b"]).unwrap();
         assert_eq!(format!("{}{}{}", &line[..range.start], text, &line[range.end..]), line.replace("a: 1", "a: 1, b: nil"));
@@ -1593,7 +1596,7 @@ mod tests {
     fn render_ref_at_reads_lookups_from_later_lines() {
         let text = "<%= render partial: \"users/card\",\n  formats: [:json] %>\n";
         let line = text.lines().next().unwrap();
-        let r = render_ref_at(text, 0, line, 22).unwrap();
+        let r = render_ref_at(text, 0, line, false, 22).unwrap();
         assert_eq!(r.lookup.formats, Some(vec!["json".to_string()]));
     }
 
@@ -1613,7 +1616,7 @@ mod tests {
         let text = "p\n<%= render partial: \"card\", layout: \"wrap\",\n  formats: [:json], locals: { a: 1 } %>\n";
         let line_start = 2;
         let line = text[line_start..].lines().next().unwrap();
-        let found = render_calls_in(text, line_start, line, |r| r.from_layout);
+        let found = render_calls_in(text, line_start, line, false, |r| r.from_layout);
         assert_eq!(found.len(), 1);
         let (layout, call) = &found[0];
         assert_eq!((layout.name.as_str(), layout.lookup.formats.clone()), ("wrap", Some(vec!["json".to_string()])));
@@ -1724,10 +1727,10 @@ mod tests {
         let line = r#"<%= render "users/card" %>"#;
         let open_quote = line.find('"').unwrap();
         let end = open_quote + 1 + "users/card".len();
-        assert!(render_ref_at(line, 0, line, open_quote - 1).is_none());
-        assert!(render_ref_at(line, 0, line, open_quote).is_some());
-        assert!(render_ref_at(line, 0, line, end + 1).is_some());
-        assert!(render_ref_at(line, 0, line, end + 2).is_none());
+        assert!(render_ref_at(line, 0, line, false, open_quote - 1).is_none());
+        assert!(render_ref_at(line, 0, line, false, open_quote).is_some());
+        assert!(render_ref_at(line, 0, line, false, end + 1).is_some());
+        assert!(render_ref_at(line, 0, line, false, end + 2).is_none());
     }
 
     #[test]
@@ -1747,14 +1750,27 @@ mod tests {
     }
 
     fn passed_of(text: &str) -> Option<Vec<&str>> {
+        passed_for(text, false)
+    }
+
+    fn passed_for(text: &str, haml: bool) -> Option<Vec<&str>> {
         let r = render_refs(text.lines().next().unwrap()).remove(0);
-        passed_locals(&read_call(text, &r), &r)
+        passed_locals(&read_call(text, &r, haml), &r)
+    }
+
+    /// `passed_in` for a Haml template.
+    fn passed_in_haml(text: &str) -> Option<Vec<String>> {
+        passed_for(text, true).map(|names| names.into_iter().map(str::to_string).collect())
     }
 
     /// `text` with `name` passed to its first call.
     fn added(text: &str, name: &str) -> Option<String> {
+        added_for(text, name, false)
+    }
+
+    fn added_for(text: &str, name: &str, haml: bool) -> Option<String> {
         let r = render_refs(text.lines().next().unwrap()).remove(0);
-        let (range, new) = add_locals_edit(&read_call(text, &r), &r, &[name])?;
+        let (range, new) = add_locals_edit(&read_call(text, &r, haml), &r, &[name])?;
         let mut out = text.to_string();
         out.replace_range(range, &new);
         Some(out)
@@ -1776,10 +1792,126 @@ mod tests {
         assert_eq!(passed_in("== render \"card\", a: 1,\n  b: 2\np x"), strs(&["a", "b"]));
         assert_eq!(passed_in("= render \"card\", a: 1, \\\n  b: 2\np x"), strs(&["a", "b"]));
         assert_eq!(passed_in("- render \"card\", a: 1\np x"), strs(&["a"]));
-        // Haml's trailing `|` is not Ruby; the call is left alone rather than misread.
-        let text = "= render \"card\", a: 1, |\n  b: 2 |\np x";
-        let r = &render_refs(text.lines().next().unwrap())[0];
-        assert_eq!(add_locals_edit(&read_call(text, r), r, &["c"]), None);
+    }
+
+    #[test]
+    fn haml_pipe_multiline_reads_as_one_call() {
+        let text = "= render \"users/card\",  |\n    user: @user,         |\n    size: :md            |\np x";
+        assert_eq!(passed_in_haml(text), strs(&["user", "size"]));
+        assert_eq!(passed_in_haml("= render \"card\", a: 1, |\n  b: 2 |\np x"), strs(&["a", "b"]));
+        assert_eq!(passed_in_haml("= render \"card\", a: 1 |\np x"), strs(&["a"]));
+        // Blank lines keep the group open, as in Haml.
+        assert_eq!(passed_in_haml("= render \"card\", a: 1, |\n\n  b: 2 |\np x"), strs(&["a", "b"]));
+        // The group ends at the first line without the marker.
+        assert_eq!(passed_in_haml("= render \"card\", a: 1, |\n  b: 2 |\n  c: 3\np x"), strs(&["a", "b"]));
+        assert_eq!(passed_in_haml("= render \"card\", a: x ||\n  y"), strs(&["a"]));
+        // Haml joins the lines, so a value or an operator may start on the next one.
+        assert_eq!(passed_in_haml("= render \"card\", title: |\n  \"Hi\", b: 1 |\np x"), strs(&["title", "b"]));
+        assert_eq!(passed_in_haml("= render \"card\", a: x |\n  + y, b: 1 |\np x"), strs(&["a", "b"]));
+        assert_eq!(passed_in_haml("= render \"card\", a: x |\n  && y, b: 1 |\np x"), strs(&["a", "b"]));
+    }
+
+    #[test]
+    fn haml_filter_bodies_have_no_pipe_groups() {
+        let text = ":ruby\n  x = render \"card\", a: b |\n    c, d: 1\np x";
+        let line_start = text.find("  x =").unwrap();
+        assert!(!render_call::haml_pipes_apply(text, line_start, true));
+        assert!(!render_call::haml_pipes_apply(text, text.find("p x").unwrap(), true));
+        let line = &text[line_start..text.find("\n    c").unwrap()];
+        let (r, call) = render_calls_in(text, line_start, line, true, |_| true).remove(0);
+        assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
+        let outside = ":ruby\n  x = 1\n= render \"card\", a: b, |\n    d: 1 |\np x";
+        let line_start = outside.find("= render").unwrap();
+        let (r, call) = render_calls_in(outside, line_start, "= render \"card\", a: b, |", true, |_| true).remove(0);
+        assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
+        // A `:symbol` line above (attribute hash continuation) is no filter.
+        let hash = "%section\n  %div{ :class => \"x\",\n  :id => \"y\" }\n    = render \"card\", a: 1, |\n      b: 2 |\n";
+        let line_start = hash.find("    = render").unwrap();
+        let line = "    = render \"card\", a: 1, |";
+        let (r, call) = render_calls_in(hash, line_start, line, true, |_| true).remove(0);
+        assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
+    }
+
+    #[test]
+    fn haml_structure_pass_runs_only_for_pipe_lines() {
+        let text = "= render \"card\", a: 1\n".repeat(50) + "= render \"card\", a: 1, |\n  b: 2 |\n";
+        let passes = || render_call::STRUCTURE_PASSES.with(|passes| passes.get());
+        let before = passes();
+        for line in text.lines().take(50) {
+            render_calls_in(&text, text.find(line).unwrap(), line, true, |_| true);
+        }
+        assert_eq!(passes(), before);
+        let start = text.rfind("= render").unwrap();
+        render_calls_in(&text, start, "= render \"card\", a: 1, |", true, |_| true);
+        assert_eq!(passes(), before + 1);
+    }
+
+    #[test]
+    fn pipes_outside_a_haml_group_stay_ruby() {
+        // Bitwise or at a line end in ERB, also when the tag opened on an earlier line.
+        assert_eq!(passed_in("<%= render \"card\", a: x |\n y, b: 1 %>"), strs(&["a", "b"]));
+        let text = "<%=\n  render \"card\", a: x |\n  y, b: 1 %>";
+        let (line_start, line) = (4, "  render \"card\", a: x |");
+        let (r, call) = render_calls_in(text, line_start, line, false, |_| true).remove(0);
+        assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
+        assert_eq!(passed_in("<%= render \"card\", a: 1 ||\n  b %>"), strs(&["a"]));
+        // The same in a Ruby file.
+        assert_eq!(passed_in("  render \"card\", a: x |\n  y, b: 1"), strs(&["a", "b"]));
+        assert_eq!(passed_in("  render \"card\", a: h.map { |k, v |\n v }, b: 1"), strs(&["a", "b"]));
+        // A block param list is not a marker.
+        assert_eq!(passed_in_haml("= render \"card\", a: items.map do |x|\n x\nend\np x"), strs(&["a"]));
+        // A Slim text line after a call is not part of it.
+        assert_eq!(passed_in("= render \"card\", a: 1\n| b |\np x"), strs(&["a"]));
+        // The group ends at the first plain line, even if text there ends in a pipe.
+        assert_eq!(passed_in_haml("= render \"card\", a: 1 |\n  b: 2\np x |"), strs(&["a"]));
+    }
+
+    #[test]
+    fn jbuilder_bitwise_or_at_line_end_stays_ruby() {
+        assert_eq!(passed_in("json.partial! \"card\", locals: { b: c +\n d }"), strs(&["b"]));
+        assert_eq!(passed_in("json.partial! \"card\", locals: { b: c |\n d }"), strs(&["b"]));
+    }
+
+    #[test]
+    fn erb_completion_keeps_a_line_end_pipe_as_ruby() {
+        let text = "<%= render \"card\", z|a: x |\n y, b: 1 %>";
+        let col = text.find('|').unwrap();
+        let text = text.replacen('|', "", 1);
+        let passed = local_key_before(&text, col, false).map(|(_, passed, _)| passed.join(" "));
+        assert_eq!(passed.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn haml_pipe_multiline_with_crlf_and_multibyte() {
+        let text = "= render \"card\", a: 1, |\r\n  b: 2 |\r\np x";
+        assert_eq!(passed_in_haml(text), strs(&["a", "b"]));
+        assert_eq!(added_for(text, "c", true).as_deref(), Some("= render \"card\", a: 1, |\r\n  b: 2, c: nil |\r\np x"));
+        let text = "= render \"card\", a: \"é日\", |\n  b: \"日\" |\np x";
+        assert_eq!(added_for(text, "c", true).as_deref(), Some("= render \"card\", a: \"é日\", |\n  b: \"日\", c: nil |\np x"));
+    }
+
+    #[test]
+    fn local_edits_keep_haml_pipe_markers_valid() {
+        let remove = |text: &str, name: &str| {
+            let r = &render_refs(text.lines().next().unwrap())[0];
+            let (range, new) = remove_local_edit(&read_call(text, r, true), r, name)?;
+            let mut out = text.to_string();
+            out.replace_range(range, &new);
+            Some(out)
+        };
+        let text = "= render \"card\", a: 1, |\n  b: 2, |\n  c: 3 |\np x";
+        assert_eq!(added_for(text, "d", true).as_deref(), Some("= render \"card\", a: 1, |\n  b: 2, |\n  c: 3, d: nil |\np x"));
+        assert_eq!(remove(text, "c").as_deref(), Some("= render \"card\", a: 1, |\n  b: 2 |\np x"));
+        assert_eq!(remove(text, "b").as_deref(), Some("= render \"card\", a: 1, |\n  c: 3 |\np x"));
+        assert_eq!(remove(text, "a").as_deref(), Some("= render \"card\", |\n  b: 2, |\n  c: 3 |\np x"));
+        let text = "= render \"card\", title: |\n  \"Hi\", b: 1 |\np x";
+        assert_eq!(added_for(text, "c", true).as_deref(), Some("= render \"card\", title: |\n  \"Hi\", b: 1, c: nil |\np x"));
+        assert_eq!(remove(text, "b").as_deref(), Some("= render \"card\", title: |\n  \"Hi\" |\np x"));
+        let text = "= render \"card\", title: |\n  \"Hi\" |\np x";
+        assert_eq!(added_for(text, "c", true).as_deref(), Some("= render \"card\", title: |\n  \"Hi\", c: nil |\np x"));
+        let text = "= render \"card\", a: x |\n  + y, b: 1 |\np x";
+        assert_eq!(added_for(text, "c", true).as_deref(), Some("= render \"card\", a: x |\n  + y, b: 1, c: nil |\np x"));
+        assert_eq!(remove(text, "b").as_deref(), Some("= render \"card\", a: x |\n  + y |\np x"));
     }
 
     #[test]
@@ -1790,8 +1922,8 @@ mod tests {
         let line = r#"json.partial! "a/b", z: 1; json.c @c, partial: "c/d", locals: { y: 2 }"#;
         let refs = render_refs(line);
         assert_eq!(refs.len(), 2);
-        assert_eq!(passed_locals(&read_call(line, &refs[1]), &refs[1]), Some(vec!["y"]));
-        assert_eq!(passed_locals(&read_call(line, &refs[0]), &refs[0]), Some(vec!["z"]));
+        assert_eq!(passed_locals(&read_call(line, &refs[1], false), &refs[1]), Some(vec!["y"]));
+        assert_eq!(passed_locals(&read_call(line, &refs[0], false), &refs[0]), Some(vec!["z"]));
     }
 
     #[test]
@@ -1804,7 +1936,7 @@ mod tests {
         let text = "<%= link_to render(\"icon\", a: 1), path do %>\n  x\n<% end %>";
         assert_eq!(passed_in(text), strs(&["a"]));
         let r = &render_refs(text.lines().next().unwrap())[0];
-        assert!(add_locals_edit(&read_call(text, r), r, &["b"]).is_some());
+        assert!(add_locals_edit(&read_call(text, r, false), r, &["b"]).is_some());
     }
 
     #[test]
@@ -1824,7 +1956,7 @@ mod tests {
     fn symbol_keys_with_quotes_and_percent_values() {
         let line = r#"<%= render "card", "data-x": 1, w: %w(a b), i: %i[c d] %>"#;
         let r = &render_refs(line)[0];
-        let call = read_call(line, r);
+        let call = read_call(line, r, false);
         let (at, end) = local_key_span(&call, "data-x").unwrap();
         assert_eq!(&line[at..end], "data-x");
         assert_eq!(passed_locals(&call, r), Some(vec!["data-x", "w", "i"]));
@@ -1839,7 +1971,7 @@ mod tests {
             r#"render partial: "card", locals: { **o }"#,
         ] {
             let r = &render_refs(line)[0];
-            let call = read_call(line, r);
+            let call = read_call(line, r, false);
             assert_eq!(passed_locals(&call, r), None, "{line}");
             assert_eq!(remove_local_edit(&call, r, "a"), None, "{line}");
         }
@@ -1865,7 +1997,7 @@ mod tests {
         };
         let line = r#"<%= render "café", título: "é😀", colour: "日本", size: 2 %>"#;
         let r = &render_refs(line)[0];
-        let call = read_call(line, r);
+        let call = read_call(line, r, false);
         assert_eq!(apply(line, remove_local_edit(&call, r, "colour").unwrap()), r#"<%= render "café", título: "é😀", size: 2 %>"#);
         assert_eq!(apply(line, remove_local_edit(&call, r, "título").unwrap()), r#"<%= render "café", colour: "日本", size: 2 %>"#);
         assert_eq!(
@@ -1877,7 +2009,7 @@ mod tests {
         let line = r#"= render partial: "café", locals: { t: "日本" }"#;
         let r = &render_refs(line)[0];
         assert_eq!(
-            apply(line, add_locals_edit(&read_call(line, r), r, &["x"]).unwrap()),
+            apply(line, add_locals_edit(&read_call(line, r, false), r, &["x"]).unwrap()),
             r#"= render partial: "café", locals: { t: "日本", x: nil }"#
         );
     }
@@ -1886,7 +2018,7 @@ mod tests {
     fn a_comment_in_the_call_blocks_adding_but_a_hash_in_a_string_does_not() {
         let text = "<%= render \"card\",\n  a: 1, # note\n  b: 2 %>";
         let r = &render_refs(text.lines().next().unwrap())[0];
-        let call = read_call(text, r);
+        let call = read_call(text, r, false);
         assert_eq!(passed_locals(&call, r), Some(vec!["a", "b"]));
         assert_eq!(add_locals_edit(&call, r, &["c"]), None);
         assert!(remove_local_edit(&call, r, "b").is_some());
@@ -1900,7 +2032,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, false).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", a| %>"#), at("", "a"));
@@ -1929,7 +2061,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, false).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key("<%= render \"a\", | %>\n<%= render \"a\", b: 1 %>"), at("", ""), "the next tag's call");
@@ -1949,7 +2081,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, false).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "a", |b: 2, c: 3 %>"#), at("b c", ""), "the next key right at the cursor");
@@ -1963,11 +2095,11 @@ mod tests {
         let line = r#"json.partial! "a", |, locals: { b: 1 }"#;
         let col = line.find('|').unwrap();
         let line = line.replace('|', "");
-        let names = local_key_before(&line, col).map(|(_, passed, _)| passed);
+        let names = local_key_before(&line, col, false).map(|(_, passed, _)| passed);
         assert_eq!(names, None, "top-level keys are ignored when locals: is given");
         let key = |line: &str| {
             let col = line.find('|').unwrap();
-            local_key_before(&line.replace('|', ""), col).map(|(_, passed, _)| passed.join(" "))
+            local_key_before(&line.replace('|', ""), col, false).map(|(_, passed, _)| passed.join(" "))
         };
         assert_eq!(key(r#"<%= render partial: "a", locals: { x: 1, | }, collection: c %>"#), None, "collection: after the cursor");
         assert_eq!(key(r#"<%= render partial: "a", collection: c, locals: { x: 1, | } %>"#), None);
@@ -1981,7 +2113,7 @@ mod tests {
         let offset = text.find('|').unwrap();
         let text = text.replace('|', "");
         let before = render_call::PARSES.with(|parses| parses.get());
-        local_key_before(&text, offset);
+        local_key_before(&text, offset, false);
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 100, "{parses} parses for one keystroke");
     }
@@ -1990,7 +2122,7 @@ mod tests {
     fn half_typed_local_key_costs_few_parses() {
         let line = r#"<%= render "card", a: 1, b: 2, c , d: 3 %>"#;
         let before = render_call::PARSES.with(|parses| parses.get());
-        local_key_before(line, line.find(" ,").unwrap()).unwrap();
+        local_key_before(line, line.find(" ,").unwrap(), false).unwrap();
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 6, "{parses} parses for one keystroke");
     }
@@ -2005,14 +2137,14 @@ mod tests {
         assert_eq!(parses(&|| drop(render_refs(r#"<%= render "card", user: u %>"#))), 0, "no lookup options to read");
         let invalid = format!("= render \"card\", a: (1,), b: 2\n{}", "%p x\n".repeat(19));
         let r = &render_refs(invalid.lines().next().unwrap())[0];
-        assert!(parses(&|| drop(read_call(&invalid, r))) <= 2, "later lines can't fix an invalid call");
+        assert!(parses(&|| drop(read_call(&invalid, r, false))) <= 2, "later lines can't fix an invalid call");
     }
 
     #[test]
     fn locals_and_edits_reuse_the_call_read_with_the_refs() {
         let text = "<%= render \"card\", a: 1, b: 2 %>\n";
         let before = render_call::PARSES.with(|parses| parses.get());
-        let (r, call) = render_calls_in(text, 0, text.lines().next().unwrap(), |_| true).remove(0);
+        let (r, call) = render_calls_in(text, 0, text.lines().next().unwrap(), false, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert!(add_locals_edit(&call, &r, &["c"]).is_some());
         assert!(remove_local_edit(&call, &r, "a").is_some());
@@ -2027,7 +2159,7 @@ mod tests {
         let before = render_call::PARSES.with(|parses| parses.get());
         let mut line_start = 0;
         for line in text.lines() {
-            render_calls_in(&text, line_start, line, |_| true);
+            render_calls_in(&text, line_start, line, false, |_| true);
             line_start += line.len() + 1;
         }
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;

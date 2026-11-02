@@ -720,10 +720,11 @@ const check = (label, actual, expected) => {
       start: { line: 0, character: 12 },
       end: { line: 0, character: 22 },
     },
+    languageId = "erb",
   ) => {
     await send(
       "textDocument/didOpen",
-      { textDocument: { uri: u, languageId: "erb", version: 1, text } },
+      { textDocument: { uri: u, languageId, version: 1, text } },
       true,
     );
     const { result } = await send("textDocument/codeAction", {
@@ -742,6 +743,21 @@ const check = (label, actual, expected) => {
   };
   const extraUri = fileUri(path.join(views, "strict", "extra.html.erb"));
   const multiUri = fileUri(path.join(views, "strict", "multi.html.erb"));
+  const pipesUri = fileUri(path.join(views, "strict", "pipes.html.haml"));
+  check(
+    "strict locals quick fixes on a haml pipe multiline",
+    await strictFixes(
+      pipesUri,
+      '= render "strict/row", |\n    c: 2 |\n',
+      { start: { line: 0, character: 10 }, end: { line: 0, character: 20 } },
+      "haml",
+    ),
+    [
+      'Pass `a` to the render | /app/views/strict/pipes.html.haml 1:8-8 ", a: nil"',
+      'Remove `c` from the render | /app/views/strict/pipes.html.haml 0:21-1:8 ""',
+      'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+    ],
+  );
   check(
     "strict locals quick fixes",
     [
