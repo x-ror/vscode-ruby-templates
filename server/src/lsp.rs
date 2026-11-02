@@ -416,8 +416,7 @@ impl Backend {
     /// from the call or declare it in the partial.
     fn strict_locals_fixes(&self, project: &Project, path: &Path, text: &str, d: &Diagnostic) -> Vec<CodeAction> {
         let (line_start, line, start) = util::line_at(text, d.range.start);
-        let Some(r) = partials::render_refs_in(text, line_start, line, |r| r.start == start).pop() else { return vec![] };
-        let call = partials::call_text(&text[line_start..], &r);
+        let Some((r, call)) = partials::render_calls_in(text, line_start, line, |r| r.start == start).pop() else { return vec![] };
         let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
@@ -680,7 +679,7 @@ impl LanguageServer for Backend {
             let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
-        let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(line, col) {
+        let targets: Vec<PathBuf> = if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, col) {
             partials::resolve(&project, &path, &r)
         } else if let Some(c) = partials::component_ref_at(line, col) {
             partials::resolve_component(&project, &path, &c)
@@ -773,7 +772,7 @@ impl LanguageServer for Backend {
         }
         let file = uri.to_file_path().ok().map(|path| (Project::for_template(&path), path));
         if let Some((project, path)) = &file {
-            if let Some(r) = partials::render_ref_at(line, col) {
+            if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
             }
             if let Some(md) = i18n_key_at(project, &doc, path, line_start, line, col, &self.options().extra_engines)
@@ -983,9 +982,9 @@ impl LanguageServer for Backend {
         let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
         let files = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-            let (_, line, col) = util::line_at(&doc.text, pos);
+            let (line_start, line, col) = util::line_at(&doc.text, pos);
             let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
-            match (partials::render_ref_at(line, col), model) {
+            match (partials::render_ref_at(&doc.text, line_start, line, col), model) {
                 (Some(r), _) => partials::first_folder_only(partials::resolve(&project, &path, &r)),
                 (None, Some((_, _, name))) => partials::resolve_model(&project, &path, name),
                 // On a component render the question isn't about this partial.
@@ -1391,10 +1390,15 @@ mod tests {
         let file = users.join("index.html.erb");
 
         let line = r#"<%= render partial: "card" %>"#;
-        let md = render_hover(&Project::unknown(), &file, &partials::render_ref_at(line, 22).unwrap());
+        let md = render_hover(&Project::unknown(), &file, &partials::render_ref_at(line, 0, line, 22).unwrap());
         assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
         assert!(md.contains("- `app/views/users/_card.html.erb`"), "a path from the Rails root: {md}");
-        assert!(!render_hover(&Project::unknown(), &file, &partials::render_ref_at(r#"render "plain""#, 9).unwrap()).contains("locals:"));
+        assert!(!render_hover(
+            &Project::unknown(),
+            &file,
+            &partials::render_ref_at(r#"render "plain""#, 0, r#"render "plain""#, 9).unwrap()
+        )
+        .contains("locals:"));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

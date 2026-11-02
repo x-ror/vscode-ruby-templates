@@ -5,7 +5,7 @@
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
 use crate::partials::{
-    call_text, first_folder_only, local_key_span, model_renders, passed_locals, render_refs, resolve, resolve_model, split_render_name,
+    call_text, first_folder_only, local_key_span, model_renders, passed_locals, render_refs_in, resolve, resolve_model, split_render_name,
     RenderKind, RenderRef,
 };
 use crate::project::Project;
@@ -60,17 +60,20 @@ fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, 
 fn code_refs(
     source: &Source,
     extra_engines: &[String],
-    find: impl Fn(&str) -> Vec<RenderRef>,
+    find: impl Fn(&str, usize, &str) -> Vec<RenderRef>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef)> {
     let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
-        return spans.into_iter().flat_map(|(s, e)| find(&source.text[s..e]).into_iter().filter(&want).map(shift(s))).collect();
+        return spans
+            .into_iter()
+            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e]).into_iter().filter(&want).map(shift(s)))
+            .collect();
     }
     let candidates: Vec<(usize, usize, &str, RenderRef)> = lines_with_offsets(&source.text)
         .enumerate()
-        .flat_map(|(i, (offset, line))| find(line).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
+        .flat_map(|(i, (offset, line))| find(&source.text, offset, line).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
         .collect();
     if candidates.is_empty() {
         return vec![];
@@ -152,6 +155,11 @@ fn may_name(stems: &[&str], name: &str) -> bool {
     stems.contains(&name.rsplit('/').next().unwrap_or(name))
 }
 
+/// The renders on a line that may name one of `stems`, with lookups read from the whole call.
+fn renders_named<'s>(stems: &'s [&str]) -> impl Fn(&str, usize, &str) -> Vec<RenderRef> + 's {
+    move |text, at, line| render_refs_in(text, at, line, |r| may_name(stems, &r.name))
+}
+
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
 pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
     let stems = partial_stems(project, files);
@@ -159,13 +167,14 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        let named = code_refs(source, extra_engines, render_refs, |r| may_name(&stems, &r.name))
+        let named = code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name))
             .into_iter()
             .filter(|(_, _, r)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
             .filter(|(start, _, r)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
-        let models = code_refs(source, extra_engines, model_refs, |r| may_name(&stems, &crate::partials::singularize(&r.name)))
-            .into_iter()
-            .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
+        let models =
+            code_refs(source, extra_engines, |_, _, line| model_refs(line), |r| may_name(&stems, &crate::partials::singularize(&r.name)))
+                .into_iter()
+                .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
         for (start, end, _) in named.chain(models) {
             let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
@@ -228,7 +237,7 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
     let stems = partial_stems(project, &files);
     let mut out = Vec::new();
     for source in sources {
-        for (start, _, r) in code_refs(source, extra_engines, render_refs, |r| may_name(&stems, &r.name)) {
+        for (start, _, r) in code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name)) {
             if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
             {
@@ -255,7 +264,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     for source in sources {
         let Ok(uri) = Url::from_file_path(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        for (start, end, _) in code_refs(source, extra_engines, find, |r| key.ends_with(r.name.as_str()))
+        for (start, end, _) in code_refs(source, extra_engines, |_, _, line| find(line), |r| key.ends_with(r.name.as_str()))
             .into_iter()
             .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
@@ -339,7 +348,12 @@ pub fn render_edits(
     for source in sources {
         let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
-        for (start, end, r) in code_refs(source, extra_engines, render_refs, |r| folder_renamed || may_name(&stems, &r.name)) {
+        for (start, end, r) in code_refs(
+            source,
+            extra_engines,
+            |text, at, line| render_refs_in(text, at, line, |r| folder_renamed || may_name(&stems, &r.name)),
+            |r| folder_renamed || may_name(&stems, &r.name),
+        ) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
                 .map(|t| new_ref_name(project, &r.name, &source.path, &moved(t, renames)?, renames))
@@ -506,6 +520,18 @@ mod tests {
                 ("app/views/users/index.html.erb".into(), 0),
             ]
         );
+    }
+
+    #[test]
+    fn references_read_formats_on_later_lines() {
+        let t = Tree::new("refs-lookup", &["app/views/users/_card.html.erb", "app/views/users/_card.json.jbuilder"]);
+        let text = "<%= render partial: \"card\",\n  formats: [:json] %>\n<%= render partial: \"card\" %>\n";
+        let sources = [t.source("app/views/users/index.html.erb", ERB, text)];
+        let lines = |partial: &str| -> Vec<u32> {
+            references(&Project::unknown(), &[t.path(partial)], &sources, &[]).into_iter().map(|l| l.range.start.line).collect()
+        };
+        assert_eq!(lines("app/views/users/_card.json.jbuilder"), [0]);
+        assert_eq!(lines("app/views/users/_card.html.erb"), [2]);
     }
 
     #[test]

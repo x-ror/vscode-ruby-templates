@@ -329,7 +329,7 @@ const check = (label, actual, expected) => {
         uri: lookupUri,
         languageId: "erb",
         version: 1,
-        text: '<%= render partial: "user", formats: [:json] %>\n<%= render "user", formats: [:json] %>\n',
+        text: '<%= render partial: "user", formats: [:json] %>\n<%= render "user", formats: [:json] %>\n<%= render partial: "user",\n  formats: [:json] %>\n<%= render formats: [:json], partial: "user" %>\n<%= render partial: "users/ghost",\n  formats: [:json] %>\n',
       },
     },
     true,
@@ -344,6 +344,34 @@ const check = (label, actual, expected) => {
       ["/app/views/users/_user.json.jbuilder"],
       ["/app/views/users/_user.html.erb"],
     ],
+  );
+  check(
+    "render formats: on a later line picks the file",
+    targets(await req("textDocument/definition", lookupUri, 2, 22)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "render formats: before the name picks the file",
+    targets(await req("textDocument/definition", lookupUri, 4, 40)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  const ghost = {
+    start: { line: 5, character: 21 },
+    end: { line: 5, character: 32 },
+  };
+  const ghostActions = await send("textDocument/codeAction", {
+    textDocument: { uri: lookupUri },
+    range: ghost,
+    context: {
+      diagnostics: [
+        { range: ghost, code: "unresolved-render", message: "not found" },
+      ],
+    },
+  });
+  check(
+    "codeAction create partial in the lookup's format",
+    ghostActions.result?.map((a) => a.title),
+    ["Create partial `users/_ghost.json.erb`"],
   );
   const untitled = {};
   for (const [lang, text] of Object.entries({

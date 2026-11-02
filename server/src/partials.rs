@@ -12,6 +12,10 @@ use walkdir::WalkDir;
 static RENDER_STR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
 });
+// `render formats: [:json], partial: "y"`: options before the name; group 1 must be balanced so `partial:` is a top-level key.
+static RENDER_KEY_AFTER_OPTIONS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"render\s*\(?\s*(:?\w+\s*(?::|=>)(?:[^%]|%[^>])*?),\s*:?(partial|template)\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
+});
 // Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
 // ponytail: stops at any `#`, so a `partial:` after `"#x"` or an interpolation is missed (no ref, no warning).
 static JSON_PARTIAL_KEY: LazyLock<Regex> =
@@ -69,7 +73,8 @@ pub struct Lookup {
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
     let mut refs = refs_without_lookups(line);
-    set_lookups(&mut refs, |_| line);
+    let calls = vec![Some(line); refs.len()];
+    set_lookups(&mut refs, &calls);
     refs
 }
 
@@ -91,13 +96,21 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
         }
     };
     let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(2)?, false)));
+    // ponytail: a nested `partial:` rejected by the filter below hides the real key after it (`locals: { partial: "x" }, partial: "card"`).
     // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
     let layouts = RENDER_LAYOUT_KEY
         .captures_iter(line)
-        .filter(|cap| split_args(&cap[2]).is_some())
+        .filter(|cap| is_one_statement(&cap[2]))
         .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(3)?, true)));
+    let after_options = RENDER_KEY_AFTER_OPTIONS
+        .captures_iter(line)
+        .filter(|cap| {
+            let first_key = cap[1].trim_start_matches(':').split(|c: char| !c.is_alphanumeric() && c != '_').next();
+            !matches!(first_key, Some("partial" | "template")) && is_one_statement(&cap[1])
+        })
+        .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(2), cap.get(3)?, false)));
     let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, None, cap.get(1)?, false)));
-    let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(json).collect();
+    let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(after_options).chain(json).collect();
     refs.sort_by_key(|r| r.start);
     // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
     refs.dedup_by_key(|r| r.start);
@@ -106,22 +119,37 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
 
 /// `render_refs` for the line of `text` at `line_start`, keeping the refs `keep` accepts, with lookups read from the whole
 /// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep.
-pub fn render_refs_in(text: &str, line_start: usize, line: &str, mut keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
-    let mut refs = refs_without_lookups(line);
-    if !refs.iter().any(&mut keep) {
-        return vec![];
-    }
-    set_lookups(&mut refs, |r| call_text(&text[line_start..], r));
-    refs.retain(keep);
-    refs
+pub fn render_refs_in(text: &str, line_start: usize, line: &str, keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
+    render_calls_in(text, line_start, line, keep).into_iter().map(|(r, _)| r).collect()
 }
 
-/// Give each ref the lookup of its call, read from `call_of(ref)`, the text of the call from its start; a `layout:` takes
+/// `render_refs_in` with each ref's `call_text`.
+pub fn render_calls_in<'a>(
+    text: &'a str,
+    line_start: usize,
+    line: &str,
+    mut keep: impl FnMut(&RenderRef) -> bool,
+) -> Vec<(RenderRef, &'a str)> {
+    let mut refs = refs_without_lookups(line);
+    let kept: Vec<bool> = refs.iter().map(&mut keep).collect();
+    if !kept.contains(&true) {
+        return vec![];
+    }
+    // A kept `layout:` takes its partial's lookup, so that call is read too.
+    let needed = |i: usize| kept[i] || refs.iter().zip(&kept).any(|(r, &k)| k && r.from_layout && r.call == refs[i].call);
+    let calls: Vec<Option<&str>> = (0..refs.len()).map(|i| needed(i).then(|| call_text(&text[line_start..], &refs[i]))).collect();
+    set_lookups(&mut refs, &calls);
+    refs.into_iter().zip(calls).zip(kept).filter_map(|((r, call), k)| k.then_some((r, call?))).collect()
+}
+
+/// Give each ref the lookup of its call, read from `calls[ref]` (`None`: not needed), the text of the call from its start; a `layout:` takes
 /// its partial's (the nearest one before it, else after), since Rails resolves both with the same details; a `layout:` alone
 /// (block form) reads its own call.
-fn set_lookups<'a>(refs: &mut [RenderRef], call_of: impl Fn(&RenderRef) -> &'a str) {
-    for r in refs.iter_mut().filter(|r| !r.from_layout) {
-        r.lookup = lookup(call_of(r), r);
+fn set_lookups(refs: &mut [RenderRef], calls: &[Option<&str>]) {
+    for (r, call) in refs.iter_mut().zip(calls).filter(|(r, _)| !r.from_layout) {
+        if let Some(call) = call {
+            r.lookup = lookup(call, r);
+        }
     }
     for i in 0..refs.len() {
         if !refs[i].from_layout {
@@ -132,20 +160,32 @@ fn set_lookups<'a>(refs: &mut [RenderRef], call_of: impl Fn(&RenderRef) -> &'a s
         let partner = partners.clone().rfind(|r| r.start < layout.start).or_else(|| partners.clone().next());
         refs[i].lookup = match partner {
             Some(partner) => partner.lookup.clone(),
-            None => lookup(call_of(layout), layout),
+            None => calls[i].map(|call| lookup(call, layout)).unwrap_or_default(),
         };
     }
 }
 
-/// The `formats:`, `variants:` and `handlers:` of `r`'s call in `call`. Only the options form has them: in
-/// `render "x", formats: [:json]` the hash is the partial's locals.
+/// The `formats:`, `variants:` and `handlers:` of `r`'s call in `call`, before or after the name. Only the options form has
+/// them: in `render "x", formats: [:json]` the hash is the partial's locals.
 fn lookup(call: &str, r: &RenderRef) -> Lookup {
     if !RenderForm::of(call, r).options {
         return Lookup::default();
     }
-    let Some(pairs) = render_pairs(call, r) else { return Lookup::default() };
+    // Arguments after the name that don't parse (`… if show?`) still leave the options before it.
+    let after = render_pairs(call, r).unwrap_or_default();
+    let pairs: Vec<_> = options_before_name(call, r).into_iter().chain(after).collect();
     let option = |name: &str| pairs.iter().find(|&&(key, _, _)| key == name).and_then(|&(_, value, _)| literal_names(value));
     Lookup { formats: option("formats"), variants: option("variants"), handlers: option("handlers") }
+}
+
+/// The `key: value` pairs between the call's method name and the `partial:` key of `r`: `render formats: [:json], partial: "x"`.
+fn options_before_name<'a>(call: &'a str, r: &RenderRef) -> Vec<(&'a str, &'a str, &'a str)> {
+    let head = call.get(r.call..r.start.saturating_sub(1)).unwrap_or_default();
+    let args = head.find(|c: char| c.is_whitespace() || c == '(').map_or("", |at| head[at..].trim_start_matches('(').trim_start());
+    let Some(mut items) = split_args(args) else { return vec![] };
+    // The last item is the name's own key (`partial:`).
+    items.pop();
+    items.into_iter().filter_map(|arg| key_value(arg).map(|(key, value)| (key, value, arg))).collect()
 }
 
 /// The names in a literal `:json`, `"json"`, `[:json, :html]` or `%i[json html]`; `None` for anything computed.
@@ -168,9 +208,10 @@ fn literal_names(value: &str) -> Option<Vec<String>> {
         .collect()
 }
 
-/// Find a render reference whose string spans `col` (byte column) on `line`.
-pub fn render_ref_at(line: &str, col: usize) -> Option<RenderRef> {
-    render_refs(line).into_iter().find(|r| col >= r.start.saturating_sub(1) && col <= r.end + 1)
+/// Find a render reference whose string spans `col` (byte column) on `line`, the line of `text` at `line_start`.
+pub fn render_ref_at(text: &str, line_start: usize, line: &str, col: usize) -> Option<RenderRef> {
+    let spans_col = |r: &RenderRef| col >= r.start.saturating_sub(1) && col <= r.end + 1;
+    render_refs_in(text, line_start, line, spans_col).into_iter().next()
 }
 
 pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
@@ -212,19 +253,20 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
         .collect()
 }
 
-/// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>.<ext>` in the view's format
-/// (variant dropped) and template language, so the view finds it.
+/// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>+<variant>.<ext>` with the first of the
+/// call's `formats:`, `variants:` and `handlers:`, else the view's format (variant dropped) and template language.
 pub fn new_template_path(project: &Project, current: &Path, r: &RenderRef) -> Option<PathBuf> {
     let (Some(dir), base) = split_render_name(&r.name) else { return None };
     if base.is_empty() || dir.split('/').any(|part| part == "..") {
         return None;
     }
-    let ext = current.extension()?.to_str()?;
+    let first = |names: &Option<Vec<String>>| names.as_ref().and_then(|names| names.first()).cloned();
+    let ext = first(&r.lookup.handlers).or_else(|| Some(current.extension()?.to_str()?.to_string()))?;
     let prefix = if r.kind == RenderKind::Partial { "_" } else { "" };
-    let file = match template_format(|f| project.is_format(f), current) {
-        Some(format) => format!("{prefix}{base}.{format}.{ext}"),
-        None => format!("{prefix}{base}.{ext}"),
-    };
+    let format = first(&r.lookup.formats).or_else(|| template_format(|f| project.is_format(f), current).map(str::to_string));
+    let format = format.map(|format| format!(".{format}")).unwrap_or_default();
+    let variant = first(&r.lookup.variants).map(|variant| format!("+{variant}")).unwrap_or_default();
+    let file = format!("{prefix}{base}{format}{variant}.{ext}");
     Some(views_root(current)?.join(dir).join(file))
 }
 
@@ -576,35 +618,101 @@ fn keyword_arg(arg: &str) -> Option<(&str, &str)> {
     Some((cap.get(1)?.as_str(), cap.get(2)?.as_str().trim()))
 }
 
-/// Split a Ruby argument list at top-level commas; `None` when brackets or quotes don't balance.
+/// Split a Ruby argument list at top-level commas, up to a top-level `;`; `None` when brackets or quotes don't balance.
 fn split_args(s: &str) -> Option<Vec<&str>> {
+    split_statement(s).map(|(items, _)| items)
+}
+
+/// Whether `s` is balanced and stays inside one statement (no top-level `;`).
+fn is_one_statement(s: &str) -> bool {
+    split_statement(s).is_some_and(|(_, cut)| !cut)
+}
+
+/// `split_args` plus whether a top-level `;` cut the list short.
+fn split_statement(s: &str) -> Option<(Vec<&str>, bool)> {
     if s.trim().is_empty() {
-        return Some(vec![]);
+        return Some((vec![], false));
     }
-    let (mut depth, mut quote, mut start, mut out) = (0u32, None, 0, vec![]);
+    let (mut depth, mut start, mut out) = (0u32, 0, vec![]);
     let mut chars = s.char_indices();
     while let Some((i, c)) = chars.next() {
-        match (quote, c) {
-            (Some(_), '\\') => {
-                chars.next();
-            }
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '(' | '[' | '{') => depth += 1,
-            (None, ')' | ']' | '}') => depth = depth.checked_sub(1)?,
-            (None, ',') if depth == 0 => {
+        match c {
+            '"' | '\'' => skip_string(&mut chars, c)?,
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => {
                 out.push(s[start..i].trim());
                 start = i + 1;
+            }
+            // The next statement isn't an argument.
+            ';' if depth == 0 => {
+                let last = s[start..i].trim();
+                if opens_literal(last) {
+                    return None;
+                }
+                out.push(last);
+                return Some((out, true));
             }
             _ => {}
         }
     }
-    if depth != 0 || quote.is_some() {
+    if depth != 0 {
         return None;
     }
     out.push(s[start..].trim());
-    Some(out)
+    Some((out, false))
+}
+
+/// Whether `arg` ends inside a regex (`/;/`) or `?;` character literal, so a `;` after it isn't a statement end.
+fn opens_literal(arg: &str) -> bool {
+    let char_literal = arg.strip_suffix('?').is_some_and(|before| !before.ends_with(|c: char| c.is_alphanumeric() || c == '_'));
+    let mut chars = arg.char_indices();
+    let mut slashes = 0;
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '"' | '\'' if skip_string(&mut chars, c).is_none() => break,
+            '/' => slashes += 1,
+            _ => {}
+        }
+    }
+    char_literal || slashes % 2 == 1
+}
+
+/// Consume the rest of a string opened with `quote`, including the code of `#{…}` in a double-quoted one; `None` if unterminated.
+fn skip_string(chars: &mut std::str::CharIndices, quote: char) -> Option<()> {
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            c if c == quote => return Some(()),
+            '#' if quote == '"' && chars.clone().next().is_some_and(|(_, next)| next == '{') => {
+                chars.next();
+                skip_interpolation(chars)?;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Consume the code of a `#{…}` up to its closing `}`.
+fn skip_interpolation(chars: &mut std::str::CharIndices) -> Option<()> {
+    let mut depth = 1u32;
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '"' | '\'' => skip_string(chars, c)?,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Local names passed by a literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }` in `line`, the call's
@@ -634,14 +742,49 @@ pub fn local_key_span(call: &str, r: &RenderRef, name: &str) -> Option<(usize, u
 /// The arguments after a literal render's partial name in `call`, its `call_text`, without the call's closing `)`.
 fn render_args<'a>(call: &'a str, r: &RenderRef) -> Option<&'a str> {
     let rest = call.get(r.end + 1..)?.split("%>").next()?.trim_end().trim_end_matches(['-', '=']).trim();
-    // The block of `render layout: "x", formats: [:json] do`.
-    let rest = rest.strip_suffix("do").filter(|before| before.ends_with(char::is_whitespace)).map_or(rest, str::trim_end);
+    let rest = without_block(rest);
     // `render("x", a: 1)`: the call's closing paren is the one that doesn't balance.
     if split_args(rest).is_some() {
         Some(rest)
     } else {
         rest.strip_suffix(')')
     }
+}
+
+/// `args` without a trailing `do |x|` or `{ |x| … }` block.
+fn without_block(args: &str) -> &str {
+    let params = args.strip_suffix('|').and_then(|head| head.rfind('|').map(|open| head[..open].trim_end()));
+    if let Some(before) = params.and_then(strip_do).or_else(|| strip_do(args)) {
+        return before.trim_end();
+    }
+    block_brace(args).map_or(args, |at| args[..at].trim_end())
+}
+
+fn strip_do(text: &str) -> Option<&str> {
+    text.strip_suffix("do").filter(|before| before.ends_with(char::is_whitespace))
+}
+
+/// Where a `{` opens a block in `args`: the one right after the call's closing `)`. A paren-less `render` takes no brace
+/// block, so any other `{` is a hash or a block of a nested call (`tags: post.tags.map { … }`).
+fn block_brace(args: &str) -> Option<usize> {
+    let (mut depth, mut call_closed) = (0u32, false);
+    let mut chars = args.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                skip_string(&mut chars, c)?;
+                call_closed = false;
+            }
+            '{' if depth == 0 && call_closed => return Some(i),
+            '(' | '[' | '{' => depth += 1,
+            // `args` has no opening paren for the call's own `)`: the one that finds depth 0.
+            ')' if depth == 0 => call_closed = true,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            c if !c.is_whitespace() => call_closed = false,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A replacement for the bytes `range` of a text.
@@ -786,26 +929,38 @@ fn key_value(arg: &str) -> Option<(&str, &str)> {
     })
 }
 
-/// How many lines up from the cursor a multi-line render call may start.
+/// How many lines up a multi-line render call may start from the cursor, and how many lines it may span.
 const MAX_CALL_LINES: usize = 20;
 
 /// `text`, which starts at `r`'s line, up to where the call's arguments end: on later lines while a bracket is open or a
-/// line ends in `,`, never past an ERB `%>`; all of `text` when the call doesn't close.
+/// line ends in `,`, never past an ERB `%>` or `MAX_CALL_LINES` lines; all of `text` when the call doesn't close.
 pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
-    let (mut depth, mut quote, mut escaped, mut last) = (0u32, None, false, None);
+    let (mut depth, mut quote, mut escaped, mut last, mut lines) = (0u32, None, false, None, 0);
+    // The depths at which open `#{…}` of double-quoted strings started; their `}` reopens the string.
+    let mut interpolations: Vec<u32> = Vec::new();
     let args_at = (r.end + 1).min(text.len());
     for (i, c) in text[args_at..].char_indices().map(|(i, c)| (args_at + i, c)) {
         match (quote, c) {
             _ if escaped => escaped = false,
+            (_, '\n') if lines + 1 >= MAX_CALL_LINES => return &text[..i],
             (Some(_), '\\') => escaped = true,
             (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
+            (Some('"'), '#') if text[i..].starts_with("#{") => {
+                interpolations.push(depth);
+                quote = None;
+            }
+            (None, '}') if depth > 0 && interpolations.last() == Some(&(depth - 1)) => {
+                depth -= 1;
+                interpolations.pop();
+                quote = Some('"');
+            }
             (None, '"' | '\'') => quote = Some(c),
             (None, '%') if text[i..].starts_with("%>") => return &text[..i],
             (None, '(' | '[' | '{') => depth += 1,
             (None, ')' | ']' | '}') if depth == 0 => return &text[..=i],
             (None, ')' | ']' | '}') => depth -= 1,
             (None, '\n') if depth == 0 && last != Some(',') => return &text[..i],
+            (_, '\n') => lines += 1,
             _ => {}
         }
         if !c.is_whitespace() {
@@ -960,6 +1115,15 @@ mod tests {
             Some(views.join("layouts/lt.html.erb"))
         );
         assert_eq!(path("home/show.html.erb", r#"render "/users/x""#), Some(views.join("users/_x.html.erb")));
+        assert_eq!(
+            path("users/show.html.erb", r#"render partial: "users/card", formats: [:json, :html]"#),
+            Some(views.join("users/_card.json.erb"))
+        );
+        assert_eq!(
+            path("users/show.html.erb", r#"render partial: "users/card", variants: [:phone], handlers: [:haml]"#),
+            Some(views.join("users/_card.html+phone.haml"))
+        );
+        assert_eq!(path("users/show.html.erb", r#"render partial: "users/card", formats: []"#), Some(views.join("users/_card.html.erb")));
         assert_eq!(path("users/show.html.erb", r#"render "card""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "../../config/x""#), None);
         assert_eq!(path("users/show.html.erb", r#"render "shared/""#), None);
@@ -982,12 +1146,14 @@ mod tests {
     #[test]
     fn refs() {
         let l = r#"<%= render "users/card", user: u %>"#;
-        let r = render_ref_at(l, 14).unwrap();
+        let r = render_ref_at(l, 0, l, 14).unwrap();
         assert_eq!(r.name, "users/card");
         assert_eq!(r.kind, RenderKind::Partial);
-        let r = render_ref_at("= render partial: 'row', collection: @x", 20).unwrap();
+        let row = "= render partial: 'row', collection: @x";
+        let r = render_ref_at(row, 0, row, 20).unwrap();
         assert_eq!(r.name, "row");
-        assert_eq!(render_ref_at("= render template: 'a/b'", 22).unwrap().kind, RenderKind::Template);
+        let tpl = "= render template: 'a/b'";
+        assert_eq!(render_ref_at(tpl, 0, tpl, 22).unwrap().kind, RenderKind::Template);
         assert_eq!(component_ref_at("= render Users::CardComponent.new(user: u)", 12).unwrap(), "Users::CardComponent");
         assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), (RenderKind::Partial, "us".to_string()));
         assert_eq!(render_string_prefix(r#"render template: "a/"#, 20).unwrap(), (RenderKind::Template, "a/".to_string()));
@@ -1418,6 +1584,173 @@ mod tests {
     }
 
     #[test]
+    fn lookup_is_read_around_the_name_and_the_statement() {
+        let json = Some(vec!["json".to_string()]);
+        let formats = |line: &str| render_refs(line)[0].lookup.formats.clone();
+        assert_eq!(formats(r#"<%= render partial: "a", formats: [:json]; render partial: "b" %>"#), json);
+        assert_eq!(formats(r#"<%= render partial: "a"; render partial: "b", formats: [:json] %>"#), None);
+        assert_eq!(formats(r#"render formats: [:json], partial: "card""#), json);
+        assert_eq!(formats(r#"render(formats: [:json], :partial => "card")"#), json);
+        assert_eq!(formats(r#"render layout: "wrap", formats: [:json] do |x|"#), json);
+        assert_eq!(formats(r#"render partial: "card", locals: { formats: 1 }"#), None);
+    }
+
+    #[test]
+    fn lookup_keeps_options_before_the_name_when_the_rest_is_unparsed() {
+        let json = Some(vec!["json".to_string()]);
+        let formats = |line: &str| render_refs(line)[0].lookup.formats.clone();
+        assert_eq!(formats(r#"render formats: [:json], partial: "card" if show?"#), json);
+        assert_eq!(formats(r#"render formats: [:json], partial: "card" do"#), json);
+    }
+
+    #[test]
+    fn a_first_key_that_only_starts_with_partial_is_not_the_name() {
+        let refs = render_refs(r#"render partial_name: 1, partial: "card""#);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "card");
+    }
+
+    #[test]
+    fn semicolons_inside_nested_interpolated_strings_do_not_cut_the_arguments() {
+        let locals = |line: &str| passed_locals(line, &render_refs(line)[0]).map(|names| names.join(","));
+        assert_eq!(locals(r##"render "card", a: "#{f("a;b")}", b: 1"##).as_deref(), Some("a,b"));
+        assert_eq!(locals(r##"render "card", a: "#{f("}")} ;", b: 1"##).as_deref(), Some("a,b"));
+    }
+
+    #[test]
+    fn interpolations_do_not_end_the_call_text() {
+        fn locals(text: &str) -> Option<Vec<&str>> {
+            let r = render_refs(text.lines().next().unwrap()).remove(0);
+            passed_locals(call_text(text, &r), &r)
+        }
+        assert_eq!(locals("<%= render \"card\", a: \"#{f(\"}\")}\", b: 1 %>"), Some(vec!["a", "b"]));
+        assert_eq!(locals("= render \"card\", a: \"#{t(\"(\")}\", b: 1\n= c: 2\n"), Some(vec!["a", "b"]));
+        assert_eq!(locals("<%= render(\"card\", a: \"#{b}\") { |y| y } %>"), Some(vec!["a"]));
+    }
+
+    #[test]
+    fn slashes_in_strings_are_not_regex_literals() {
+        assert_eq!(
+            passed_locals(r#"<% render "card", url: "/users"; foo %>"#, &render_refs(r#"<% render "card", url: "/users"; foo %>"#)[0]),
+            Some(vec!["url"])
+        );
+    }
+
+    #[test]
+    fn call_text_counts_lines_inside_an_open_quote() {
+        let text = format!("= render \"card\", a: \"x\n{}", "y\n".repeat(MAX_CALL_LINES * 2));
+        let call = call_text(&text, &render_refs(text.lines().next().unwrap())[0]);
+        assert_eq!(call.lines().count(), MAX_CALL_LINES);
+    }
+
+    #[test]
+    fn blocks_do_not_hide_passed_locals() {
+        let locals = |line: &str| passed_locals(line, &render_refs(line)[0]).map(|names| names.join(","));
+        assert_eq!(locals(r#"render layout: "wrap", locals: { a: 1 } do |x|"#).as_deref(), Some("a"));
+        assert_eq!(locals(r#"render("card", a: 1) { |y| y }"#).as_deref(), Some("a"));
+        assert_eq!(locals(r#"render partial: "card", locals: { a: 1 }; foo"#).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn semicolons_inside_strings_and_hashes_do_not_cut_the_arguments() {
+        let locals = |line: &str| passed_locals(line, &render_refs(line)[0]).map(|names| names.join(","));
+        assert_eq!(locals(r#"render "card", a: "x;y", b: 1"#).as_deref(), Some("a,b"));
+        assert_eq!(locals(r#"render partial: "card", locals: { a: ";", b: 2 }"#).as_deref(), Some("a,b"));
+        assert_eq!(locals(r#"render "card", a: [1; 2].size, b: 1"#).as_deref(), Some("a,b"));
+    }
+
+    #[test]
+    fn hash_braces_are_not_taken_for_blocks() {
+        let locals = |line: &str| passed_locals(line, &render_refs(line)[0]).map(|names| names.join(","));
+        for hash in [r#", {a: 1, b: 2}"#, r#", { a: 1 }"#, r#", opts: {a: 1}"#, r#", :opts => {a: 1}"#, r#", [{a: 1}]"#] {
+            assert_eq!(without_block(hash), hash);
+        }
+        assert_eq!(without_block(", a: 1) { |x| x }"), ", a: 1)");
+        for line in [
+            r#"render "card", tags: post.tags.map { |t| t.name }, size: :md"#,
+            r#"render "card", f: lambda { x }, b: 2"#,
+            r#"render "card", f: proc { }, b: 2"#,
+            r#"render "card", a: x || {}, b: 1"#,
+        ] {
+            assert_eq!(locals(line).map(|names| names.split(',').count()), Some(2), "{line}");
+        }
+        assert_eq!(locals(r#"render "card", :a => { x: 1 }, b: 2"#).as_deref(), Some("a,b"));
+        assert_eq!(locals(r#"render partial: "card", locals: {a: 1}"#).as_deref(), Some("a"));
+        assert_eq!(locals(r#"render partial: "card", locals: { a: 1 } do |x|"#).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn keys_in_the_next_statement_are_not_refs() {
+        assert!(render_refs(r#"- render plain: "ok"; helper "id", partial: "row""#).is_empty());
+        assert!(render_refs(r#"<% render partial: "a"; wrap x, layout: "b" %>"#).iter().all(|r| !r.from_layout));
+    }
+
+    #[test]
+    fn percent_literals_before_the_name_are_refs() {
+        let refs = render_refs(r#"render formats: %i[json], partial: "card""#);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "card");
+        assert_eq!(refs[0].lookup.formats, Some(vec!["json".to_string()]));
+    }
+
+    #[test]
+    fn options_before_the_name_are_a_ref_with_spans_and_edits() {
+        let line = r#"<%= render formats: [:json], partial: "users/card", locals: { a: 1 } %>"#;
+        let refs = render_refs(line);
+        assert_eq!(refs.len(), 1);
+        let r = &refs[0];
+        assert_eq!(&line[r.start..r.end], "users/card");
+        assert_eq!(r.call, line.find("render").unwrap());
+        assert_eq!(passed_locals(line, r).as_deref(), Some(&["a"][..]));
+        let (range, text) = add_locals_edit(line, r, &["b"]).unwrap();
+        assert_eq!(format!("{}{}{}", &line[..range.start], text, &line[range.end..]), line.replace("a: 1", "a: 1, b: nil"));
+        let (range, _) = remove_local_edit(line, r, "a").unwrap();
+        assert_eq!(&line[range], "a: 1");
+        let (at, end) = local_key_span(line, r, "a").unwrap();
+        assert_eq!(&line[at..end], "a");
+    }
+
+    #[test]
+    fn options_before_the_name_ignore_unbalanced_or_nested_partial_keys() {
+        assert!(render_refs(r#"render locals: { partial: "x" }, id: 1"#).is_empty());
+        assert!(render_refs(r#"render foo: [1, partial: "x""#).is_empty());
+        assert_eq!(render_refs(r#"render partial: "a", partial: "b""#).len(), 1);
+    }
+
+    #[test]
+    fn options_before_the_name_in_haml() {
+        let r = &render_refs(r#"= render formats: [:json], partial: "card""#)[0];
+        assert_eq!(r.name, "card");
+        assert_eq!(r.lookup.formats, Some(vec!["json".to_string()]));
+    }
+
+    #[test]
+    fn semicolon_inside_a_literal_is_not_a_statement_end() {
+        for line in [r#"= render "card", sep: /;/, b: 1"#, r#"= render "card", sep: ?;, b: 1"#] {
+            let r = &render_refs(line)[0];
+            assert_eq!(passed_locals(line, r), None, "{line}");
+            assert_eq!(add_locals_edit(line, r, &["x"]), None, "{line}");
+        }
+        let line = r#"<% render "a", x: 1; render "b" %>"#;
+        assert_eq!(passed_locals(line, &render_refs(line)[0]).as_deref(), Some(&["x"][..]));
+    }
+
+    #[test]
+    fn call_text_stops_after_max_call_lines() {
+        let text = format!("= render \"card\", a: (\n{}", "1,\n".repeat(MAX_CALL_LINES * 2));
+        let call = call_text(&text, &render_refs(text.lines().next().unwrap())[0]);
+        assert_eq!(call.lines().count(), MAX_CALL_LINES);
+    }
+
+    #[test]
+    fn render_ref_at_reads_lookups_from_later_lines() {
+        let text = "<%= render partial: \"users/card\",\n  formats: [:json] %>\n";
+        let line = text.lines().next().unwrap();
+        let r = render_ref_at(text, 0, line, 22).unwrap();
+        assert_eq!(r.lookup.formats, Some(vec!["json".to_string()]));
+    }
+
+    #[test]
     fn layout_next_to_partial_takes_the_lookup() {
         let json = Some(vec!["json".to_string()]);
         for line in
@@ -1527,10 +1860,10 @@ mod tests {
         let line = r#"<%= render "users/card" %>"#;
         let open_quote = line.find('"').unwrap();
         let end = open_quote + 1 + "users/card".len();
-        assert!(render_ref_at(line, open_quote - 1).is_none());
-        assert!(render_ref_at(line, open_quote).is_some());
-        assert!(render_ref_at(line, end + 1).is_some());
-        assert!(render_ref_at(line, end + 2).is_none());
+        assert!(render_ref_at(line, 0, line, open_quote - 1).is_none());
+        assert!(render_ref_at(line, 0, line, open_quote).is_some());
+        assert!(render_ref_at(line, 0, line, end + 1).is_some());
+        assert!(render_ref_at(line, 0, line, end + 2).is_none());
     }
 
     #[test]
