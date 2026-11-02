@@ -20,7 +20,7 @@ const NESTING_CONTENT: &str = "Illegal nesting: nesting within a tag that alread
 const NESTING_HEADER: &str = "Illegal nesting: nesting within a header command is illegal.";
 const MIXED_INDENTATION: &str = "Indentation can't use both tabs and spaces.";
 /// Ruby's `\s` and `rstrip` characters.
-const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
+pub(crate) const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
 /// Ruby's regexp `\s`.
 const REGEXP_SPACE: [char; 6] = [' ', '\t', '\n', '\x0b', '\x0c', '\r'];
 /// The filters Haml 6 and 7 register (`Haml::Filters`).

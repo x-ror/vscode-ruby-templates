@@ -123,7 +123,13 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
     let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(render_diagnostics(path, project, &doc.text, render_filter(doc.lang, &doc.text, &options.extra_engines)));
+        out.extend(render_diagnostics(
+            path,
+            project,
+            &doc.text,
+            doc.lang == TemplateLang::Haml,
+            render_filter(doc.lang, &doc.text, &options.extra_engines),
+        ));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
@@ -232,13 +238,14 @@ fn render_diagnostics(
     path: &Path,
     project: &Project,
     text: &str,
+    haml: bool,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<Diagnostic> {
     if project.framework != Framework::Rails {
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    let renders = checked_renders(&views, text, in_code);
+    let renders = checked_renders(&views, text, haml, in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
     out.extend(strict_locals_mismatches(project, &renders, &mut partials));
@@ -249,6 +256,7 @@ fn render_diagnostics(
 fn checked_renders<'a>(
     views: &Path,
     text: &'a str,
+    haml: bool,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
@@ -261,7 +269,7 @@ fn checked_renders<'a>(
     };
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        let refs = partials::render_calls_in(text, line_start, line, haml, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
@@ -595,7 +603,7 @@ mod tests {
     }
 
     fn render_checks(lang: TemplateLang, path: &Path, project: &Project, text: &str, code: &str) -> Vec<Diagnostic> {
-        let found = render_diagnostics(path, project, text, render_filter(lang, text, &[]));
+        let found = render_diagnostics(path, project, text, lang == TemplateLang::Haml, render_filter(lang, text, &[]));
         found.into_iter().filter(|d| util::code(d) == Some(code)).collect()
     }
 
