@@ -97,17 +97,35 @@ fn render_ref(line: &str, call: usize, kind: RenderKind, name: Range<usize>, fro
 /// Whether `at` in `line` is Ruby code, not inside a string or comment; ERB text before the last `<%` is not code to scan.
 fn is_code_at(line: &str, at: usize) -> bool {
     let before = &line[..at];
-    ruby::code_end(before.rfind("<%").map_or(before, |open| &before[open + 2..])) == CodeEnd::Code
+    if let Some(open) = before.rfind("<%") {
+        return ruby::code_end(&before[open + 2..]) == CodeEnd::Code;
+    }
+    // Haml/Slim text before an open `#{` isn't Ruby: `p It's #{render …`.
+    ruby::code_end(before) == CodeEnd::Code
+        || before.rfind("#{").is_some_and(|open| !before[open..].contains('}') && ruby::code_end(&before[open + 2..]) == CodeEnd::Code)
 }
 
-/// Each match of `heads` in code, with the text after it up to the next match: a call's own arguments.
+/// Bracket depth at the end of `code`, strings and comments aside.
+fn bracket_depth(code: &str) -> isize {
+    ruby::strip(code)
+        .chars()
+        .map(|c| match c {
+            '(' | '[' | '{' => 1,
+            ')' | ']' | '}' => -1,
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Each match of `heads` in code, with the text after it up to the next match outside its brackets: a call's own
+/// arguments (a `render(…)` nested in them doesn't end them).
 fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> impl Iterator<Item = (Captures<'l>, Range<usize>)> {
-    let mut heads = heads.captures_iter(line).filter(|head| head.get(0).is_some_and(|m| is_code_at(line, m.start()))).peekable();
-    std::iter::from_fn(move || {
-        let head = heads.next()?;
-        let start = head.get(0)?.end();
-        let end = heads.peek().and_then(|next| next.get(0)).map_or(line.len(), |next| next.start());
-        Some((head, start..end))
+    let heads: Vec<_> = heads.captures_iter(line).filter(|head| head.get(0).is_some_and(|m| is_code_at(line, m.start()))).collect();
+    let starts: Vec<(usize, usize)> = heads.iter().filter_map(|head| head.get(0)).map(|m| (m.start(), m.end())).collect();
+    heads.into_iter().zip(0..).map(move |(head, i)| {
+        let start = starts[i].1;
+        let end = starts[i + 1..].iter().map(|&(next, _)| next).find(|&next| bracket_depth(&line[start..next]) <= 0);
+        (head, start..end.unwrap_or(line.len()))
     })
 }
 
@@ -1218,6 +1236,15 @@ mod tests {
         assert_eq!(found(r#"<%= render partial: "a", title: "render a: 1", layout: "b" %>"#), [n("a", false), n("b", true)]);
         assert_eq!(found(r#"json.x @y, label: "json.y z", partial: "p""#), [n("p", false)]);
         assert_eq!(found(r#"<p>it's</p><%= render a: 1, partial: "x" %>"#), [n("x", false)]);
+        assert_eq!(found(r#"p It's #{render formats: [:json], partial: "x"}"#), [n("x", false)]);
+    }
+
+    #[test]
+    fn a_call_nested_in_the_arguments_does_not_end_them() {
+        let names = |l: &str| refs_without_lookups(l).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"<%= render locals: { x: render(partial: "f") }, partial: "item" %>"#), ["f", "item"]);
+        assert_eq!(names(r#"json.array! @posts, locals: { user: json.current_user }, partial: "posts/post""#), ["posts/post"]);
+        assert_eq!(names(r#"render(a: 1, partial: "p"); render(b: 2, partial: "q")"#), ["p", "q"]);
     }
 
     #[test]
