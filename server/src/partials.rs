@@ -24,6 +24,8 @@ static OPTION_KEY: LazyLock<Regex> =
 // The block that makes a lone `layout:` a partial: `do`, `do |x|` or `{ |x|` after it.
 static BLOCK_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdo\b\s*(?:\||[-=]?\s*(?:%>|$))|\{\s*\|").unwrap());
 // Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
+// A Haml/Slim element before its code (`#main=`, `%div.a#b=`): its `#` starts an id, not a comment.
+static ELEMENT_PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:%[\w:-]+|[.#][\w-]+)(?:[.#][\w-]+)*").unwrap());
 static JSON_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"json\.\w+!?[\s(]").unwrap());
 // Each parse of a candidate costs its length; a call has a few file-naming keys, so a longer run is noise.
 const MAX_KEY_CANDIDATES: usize = 8;
@@ -100,6 +102,7 @@ fn is_code_at(line: &str, at: usize) -> bool {
     if let Some(open) = before.rfind("<%") {
         return ruby::code_end(&before[open + 2..]) == CodeEnd::Code;
     }
+    let before = &before[ELEMENT_PREFIX.find(before).map_or(0, |element| element.end())..];
     // Haml/Slim text before an open `#{` isn't Ruby: `p It's #{render …`.
     ruby::code_end(before) == CodeEnd::Code
         || before.rfind("#{").is_some_and(|open| !before[open..].contains('}') && ruby::code_end(&before[open + 2..]) == CodeEnd::Code)
@@ -117,16 +120,19 @@ fn bracket_depth(code: &str) -> isize {
         .sum()
 }
 
-/// Each match of `heads` in code, with the text after it up to the next match outside its brackets: a call's own
-/// arguments (a `render(…)` nested in them doesn't end them).
-fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> impl Iterator<Item = (Captures<'l>, Range<usize>)> {
+/// Each match of `heads` in code, with the text after it up to its `%>` or the next match outside its brackets: a call's
+/// own arguments (a `render(…)` nested in them doesn't end them).
+fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> Vec<(Captures<'l>, Range<usize>)> {
     let heads: Vec<_> = heads.captures_iter(line).filter(|head| head.get(0).is_some_and(|m| is_code_at(line, m.start()))).collect();
-    let starts: Vec<(usize, usize)> = heads.iter().filter_map(|head| head.get(0)).map(|m| (m.start(), m.end())).collect();
-    heads.into_iter().zip(0..).map(move |(head, i)| {
-        let start = starts[i].1;
-        let end = starts[i + 1..].iter().map(|&(next, _)| next).find(|&next| bracket_depth(&line[start..next]) <= 0);
-        (head, start..end.unwrap_or(line.len()))
-    })
+    let ranges = heads.iter().enumerate().map(|(i, head)| {
+        let start = head.get(0).map_or(line.len(), |m| m.end());
+        let tag_end = line[start..].find("%>").map_or(line.len(), |end| start + end);
+        let next = heads[i + 1..].iter().filter_map(|next| next.get(0)).map(|next| next.start()).take_while(|&next| next < tag_end);
+        let end = next.into_iter().find(|&next| bracket_depth(&line[start..next]) <= 0).unwrap_or(tag_end);
+        start..end
+    });
+    let ranges: Vec<_> = ranges.collect();
+    heads.into_iter().zip(ranges).collect()
 }
 
 /// The file-naming keys of a call, `tail` being its arguments, as (key, name span in `tail`): those that are top-level, so
@@ -174,7 +180,7 @@ fn option_refs(line: &str) -> Vec<RenderRef> {
                 break;
             }
         }
-        let kind = if named_first { Some(first.as_str()) } else { name.as_ref().map(|(key, _)| *key) };
+        let kind = if named_first { Some(render_kind(first.as_str())) } else { name.as_ref().map(|(key, _)| render_kind(key)) };
         if let Some((key, span)) = name {
             refs.push(render_ref(line, call.start(), render_kind(key), span, false));
         }
@@ -183,7 +189,7 @@ fn option_refs(line: &str) -> Vec<RenderRef> {
         if kind.is_none() && !opens_block(call.as_str(), &line[tail.clone()], layout.end - tail.start) {
             continue;
         }
-        refs.push(render_ref(line, call.start(), render_kind(kind.unwrap_or_default()), layout, kind.is_some()));
+        refs.push(render_ref(line, call.start(), kind.unwrap_or(RenderKind::Partial), layout, kind.is_some()));
     }
     refs
 }
@@ -195,9 +201,16 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
     }
     let calls = RENDER_STR.captures_iter(line).filter_map(|cap| {
         let (call, name) = (cap.get(0)?, cap.get(2)?);
-        Some(render_ref(line, call.start(), render_kind(cap.get(1).map_or("", |key| key.as_str())), name.range(), false))
+        let key = cap.get(1).map_or("", |key| key.as_str());
+        // `render layout: "x"` names a partial only with a block or a `partial:`/`template:` next to it.
+        let (quoted, after) = (&line[name.start() - 1..], &line[name.end() + 1..]);
+        if key == "layout" && !opens_block(call.as_str(), quoted, name.len() + 2) && !top_level_keys(after).any(|(key, _)| key != "layout")
+        {
+            return None;
+        }
+        Some(render_ref(line, call.start(), render_kind(key), name.range(), false))
     });
-    let json = call_tails(line, &JSON_CALL).filter_map(|(call, tail)| {
+    let json = call_tails(line, &JSON_CALL).into_iter().filter_map(|(call, tail)| {
         let (_, name) = top_level_keys(&line[tail.clone()]).find(|(key, _)| *key == "partial")?;
         Some(render_ref(line, call.get(0)?.start(), RenderKind::Partial, tail.start + name.start..tail.start + name.end, false))
     });
@@ -680,20 +693,12 @@ fn template_name(project: &Project, p: &Path, partial: bool) -> Option<String> {
 /// Is the cursor inside the string of a `render "..."` call?
 /// Returns what the string names (see `render_refs` for `layout:`) and the typed prefix.
 pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, String)> {
-    static OPEN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(concat!(
-            r#"(?:(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?"#,
-            r#"|render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*)["']([\w./-]*)$"#,
-        ))
-        .unwrap()
-    });
+    // The string closed after a placeholder, and a block not yet typed, read as a finished call.
+    const PLACEHOLDER: &str = "x";
     let before = line.get(..col.min(line.len()))?;
-    let cap = OPEN.captures(before)?;
-    if cap.get(3).is_some_and(|between| !prism::is_one_statement(between.as_str())) {
-        return None;
-    }
-    let kind = if cap.get(1).or(cap.get(2)).is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
-    Some((kind, cap[4].to_string()))
+    let probe = format!("{before}{PLACEHOLDER}\" do");
+    let r = refs_without_lookups(&probe).into_iter().find(|r| r.end == before.len() + PLACEHOLDER.len())?;
+    Some((r.kind, r.name.strip_suffix(PLACEHOLDER)?.to_string()))
 }
 
 /// A template's `locals: (…)` magic comment.
@@ -1107,6 +1112,11 @@ mod tests {
         assert!(render_string_prefix(r#"render "x", layout: "ad"#, 23).is_none());
         assert!(render_string_prefix(r#"page_layout "ad"#, 15).is_none());
         assert_eq!(render_string_prefix(r#"json.partial! "po"#, 17).unwrap(), (RenderKind::Partial, "po".to_string()));
+        assert_eq!(render_string_prefix(r#"render formats: [:json], layout: "sh"#, 36).unwrap(), (RenderKind::Partial, "sh".to_string()));
+        assert_eq!(
+            render_string_prefix(r##"json.tags @t, label: "#x", partial: "sh"##, 39).unwrap(),
+            (RenderKind::Partial, "sh".to_string())
+        );
         assert_eq!(render_string_prefix(r#"json.partial! partial: 'po"#, 26).unwrap(), (RenderKind::Partial, "po".to_string()));
         assert_eq!(snake_case("CardComponent"), "card_component");
         for (constant, file) in
@@ -1200,6 +1210,7 @@ mod tests {
             r#"<%= render collection: @x, layout: "shared/box" %>"#,
             r#"= render(collection: @x, layout: "shared/box")"#,
             r#"<%= render locals: { do: 1 }, layout: "shared/box" %>"#,
+            r#"<%= render layout: "shared/box", locals: { a: 1 } %>"#,
         ] {
             assert!(names(line).is_empty(), "{line}");
         }
@@ -1237,6 +1248,12 @@ mod tests {
         assert_eq!(found(r#"json.x @y, label: "json.y z", partial: "p""#), [n("p", false)]);
         assert_eq!(found(r#"<p>it's</p><%= render a: 1, partial: "x" %>"#), [n("x", false)]);
         assert_eq!(found(r#"p It's #{render formats: [:json], partial: "x"}"#), [n("x", false)]);
+        // A Haml/Slim id is not a comment.
+        assert_eq!(found(r#"#main= render partial: "row", layout: "box""#), [n("row", false), n("box", true)]);
+        assert_eq!(found(r#"%div.a#main= render formats: [:json], partial: "x""#), [n("x", false)]);
+        assert_eq!(found(r#"#main = render formats: [:json], partial: "x""#), [n("x", false)]);
+        let line = r#"<%= render a: 1 %>(<%= render b: 2 %>"#;
+        assert!(call_tails(line, &RENDER_OPTIONS).iter().all(|(_, tail)| line[tail.end..].starts_with("%>")));
     }
 
     #[test]
