@@ -24,8 +24,6 @@ pub struct Hash<'a> {
 }
 
 pub struct Call<'a> {
-    /// Includes heredoc bodies, and stops at the code that was parsed.
-    pub end: usize,
     /// The keyword arguments, but the one that holds the name; those with a non-literal key are left out.
     pub pairs: Vec<Pair<'a>>,
     /// Every argument after the name is such a keyword argument.
@@ -35,7 +33,7 @@ pub struct Call<'a> {
 }
 
 /// Where the call text starting at `call_at` in `text` may end at most: an ERB `%>` or `MAX_CALL_LINES` lines.
-pub fn window_end(text: &str, call_at: usize) -> usize {
+fn window_end(text: &str, call_at: usize) -> usize {
     let end = text[call_at..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(text.len(), |(at, _)| call_at + at);
     text[call_at..end].find("%>").map_or(end, |at| call_at + at)
 }
@@ -69,18 +67,21 @@ pub fn read(text: &str, call_at: usize, name_at: usize) -> Option<Call<'_>> {
     if !closed_by_tag && !text[..call_at].contains("<%") {
         return Some(call);
     }
+    // A chain line ending in `,` goes on with more arguments on the lines after it.
+    let mut open = false;
     for line_end in line_ends {
         let line = window[line_start..line_end].trim();
         line_start = line_end;
         if line.is_empty() {
             continue;
         }
-        if !is_method_chain(line) {
+        if !open && !is_method_chain(line) {
             break;
         }
         match read_code(text, call_at, name_at, window[..line_end].trim_end()) {
-            Ok(longer) => call = longer,
-            Err(_) => break,
+            Ok(longer) => (call, open) = (longer, false),
+            Err(Failure::EndsEarly) => open = true,
+            Err(Failure::Invalid) => break,
         }
     }
     Some(call)
@@ -100,14 +101,14 @@ thread_local! {
 const BLOCK_CLOSERS: [&str; 2] = ["\nend", "\n}"];
 
 fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str) -> Result<Call<'a>, Failure> {
-    match parse(text, call_at, name_at, code.len(), code) {
+    match parse(text, call_at, name_at, code) {
         Err(Failure::EndsEarly) => {}
         plain => return plain.map(|found| found.call),
     }
     BLOCK_CLOSERS
         .iter()
         .find_map(|closer| {
-            let found = parse(text, call_at, name_at, code.len(), &format!("{code}{closer}")).ok()?;
+            let found = parse(text, call_at, name_at, &format!("{code}{closer}")).ok()?;
             // The closer ends the call's block, or lies after the call.
             (found.has_block || found.node_end <= code.len()).then_some(found.call)
         })
@@ -126,7 +127,7 @@ enum Failure {
     Invalid,
 }
 
-fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, code_len: usize, source: &str) -> Result<Found<'a>, Failure> {
+fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str) -> Result<Found<'a>, Failure> {
     #[cfg(test)]
     PARSES.with(|parses| parses.set(parses.get() + 1));
     let result = ruby_prism::parse(source.as_bytes());
@@ -148,7 +149,7 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, code_len: usize, sou
     if result.errors().any(ends_early) {
         return Err(Failure::EndsEarly);
     }
-    let found = find(&result, text, call_at, name_at, code_len).ok_or(Failure::Invalid)?;
+    let found = find(&result, text, call_at, name_at).ok_or(Failure::Invalid)?;
     if result.errors().next().is_none() {
         return Ok(found);
     }
@@ -159,11 +160,11 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, code_len: usize, sou
     if alone.errors().next().is_some() {
         return Err(Failure::Invalid);
     }
-    find(&alone, text, call_at, name_at, code_len).ok_or(Failure::Invalid)
+    find(&alone, text, call_at, name_at).ok_or(Failure::Invalid)
 }
 
-fn find<'a>(result: &ruby_prism::ParseResult, text: &'a str, call_at: usize, name_at: usize, code_len: usize) -> Option<Found<'a>> {
-    let mut finder = Finder { text, call_at, name_at, code_len, found: None };
+fn find<'a>(result: &ruby_prism::ParseResult, text: &'a str, call_at: usize, name_at: usize) -> Option<Found<'a>> {
+    let mut finder = Finder { text, call_at, name_at, found: None };
     finder.visit(&result.node());
     let mut found = finder.found?;
     found.call.commented = result.comments().next().is_some();
@@ -174,7 +175,6 @@ struct Finder<'a> {
     text: &'a str,
     call_at: usize,
     name_at: usize,
-    code_len: usize,
     found: Option<Found<'a>>,
 }
 
@@ -245,8 +245,7 @@ impl<'a> Finder<'a> {
             }
         }
         let has_block = node.block().is_some_and(|block| block.as_block_node().is_some());
-        let end = self.call_at + node_end.min(self.code_len);
-        named.then_some(Found { call: Call { end, pairs, readable, commented: false }, node_end, has_block })
+        named.then_some(Found { call: Call { pairs, readable, commented: false }, node_end, has_block })
     }
 
     fn pair(&self, assoc: &AssocNode, read_hash: bool) -> Option<Pair<'a>> {

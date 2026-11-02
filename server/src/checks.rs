@@ -224,8 +224,8 @@ pub(crate) const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
-/// Line index, line, the call's text from the line's start to the end of its arguments, and the render.
-type CheckedRender<'a> = (usize, &'a str, &'a str, partials::RenderRef);
+/// Line index, line, the call as read, and the render.
+type CheckedRender<'a> = (usize, &'a str, partials::RenderCall<'a>, partials::RenderRef);
 
 /// The render checks of a Rails template in app/views: unresolved renders, then strict-locals mismatches.
 fn render_diagnostics(
@@ -948,6 +948,24 @@ mod tests {
         // `formats:` passes no locals; `object:` passes the partial's own, which the check can't see.
         let options_missing = ("missing local: :user".to_string(), at(9, 21, 31));
         assert_eq!(got, vec![missing(1), missing(7), options_missing]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_read_a_call_continued_by_a_leading_dot_in_a_code_tag() {
+        let root = std::env::temp_dir().join(format!("rt-locals-dot-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "<%# locals: (user:, size:) -%>\n").unwrap();
+        let file = users.join("index.html.erb");
+        // The first call's `size:` only counts if the read goes on past the `.first,` line.
+        let text = "<p>héllo 日本</p>\n<%\n  render \"users/card\", user: users\n    .first,\n    size: 1\n%>\n<%= render \"users/card\", size: sizes\n  .first %>\n";
+        let got: Vec<(String, Range)> = render_checks(TemplateLang::Erb, &file, &lock_with("7.1.0"), text, STRICT_LOCALS)
+            .into_iter()
+            .map(|d| (d.message, d.range))
+            .collect();
+        let range = Range::new(Position::new(6, 12), Position::new(6, 22));
+        assert_eq!(got, vec![("missing local: :user".to_string(), range)]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

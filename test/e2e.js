@@ -713,16 +713,19 @@ const check = (label, actual, expected) => {
   check("strict locals under actionview 7.1", diagnostics(strictUri), [
     "1: missing local: :a",
   ]);
-  const strictFixes = async (u, text) => {
+  const strictFixes = async (
+    u,
+    text,
+    at = {
+      start: { line: 0, character: 12 },
+      end: { line: 0, character: 22 },
+    },
+  ) => {
     await send(
       "textDocument/didOpen",
       { textDocument: { uri: u, languageId: "erb", version: 1, text } },
       true,
     );
-    const at = {
-      start: { line: 0, character: 12 },
-      end: { line: 0, character: 22 },
-    };
     const { result } = await send("textDocument/codeAction", {
       textDocument: { uri: u },
       range: at,
@@ -734,15 +737,24 @@ const check = (label, actual, expected) => {
       .filter((a) => a.kind === "quickfix")
       .map((a) => {
         const [[target, [e]]] = Object.entries(a.edit.changes);
-        return `${a.title} | ${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.character} "${e.newText}"`;
+        return `${a.title} | ${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.line === e.range.start.line ? "" : `${e.range.end.line}:`}${e.range.end.character} "${e.newText}"`;
       });
   };
   const extraUri = fileUri(path.join(views, "strict", "extra.html.erb"));
+  const multiUri = fileUri(path.join(views, "strict", "multi.html.erb"));
   check(
     "strict locals quick fixes",
     [
       await strictFixes(strictUri, '<%= render "strict/row" %>\n'),
       await strictFixes(extraUri, '<%= render "strict/row", a: 1, c: 2 %>\n'),
+      await strictFixes(
+        multiUri,
+        '<p>h\u00e9llo \u65e5\u672c</p>\n<%\n  render "strict/row",\n    c: items\n      .first\n%>\n',
+        {
+          start: { line: 2, character: 10 },
+          end: { line: 2, character: 20 },
+        },
+      ),
     ],
     [
       [
@@ -750,6 +762,11 @@ const check = (label, actual, expected) => {
       ],
       [
         'Remove `c` from the render | /app/views/strict/extra.html.erb 0:29-35 ""',
+        'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+      ],
+      [
+        'Pass `a` to the render | /app/views/strict/multi.html.erb 4:12-12 ", a: nil"',
+        'Remove `c` from the render | /app/views/strict/multi.html.erb 2:21-4:12 ""',
         'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
       ],
     ],

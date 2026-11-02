@@ -415,7 +415,7 @@ impl Backend {
     fn strict_locals_fixes(&self, project: &Project, path: &Path, text: &str, d: &Diagnostic) -> Vec<CodeAction> {
         let (line_start, line, start) = util::line_at(text, d.range.start);
         let Some((r, call)) = partials::render_calls_in(text, line_start, line, |r| r.start == start).pop() else { return vec![] };
-        let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
+        let Some(passed) = partials::passed_locals(&call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
         let (Some(uri), Some(partial_uri)) = (crate::util::file_uri(path), crate::util::file_uri(&partial)) else { return vec![] };
@@ -445,13 +445,13 @@ impl Backend {
         };
         let quoted = |names: &[&str]| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
         let mut out = Vec::new();
-        if let Some(edit) = (!missing.is_empty()).then(|| partials::add_locals_edit(call, &r, &missing)).flatten() {
+        if let Some(edit) = (!missing.is_empty()).then(|| partials::add_locals_edit(&call, &r, &missing)).flatten() {
             // Not preferred: `nil` silences the warning without passing what the partial needs.
             out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), false));
         }
         let shown = partial.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
         for name in unknown {
-            if let Some(edit) = partials::remove_local_edit(call, &r, name) {
+            if let Some(edit) = partials::remove_local_edit(&call, &r, name) {
                 out.push(action(format!("Remove `{name}` from the render"), here(edit), false));
             }
             let (range, new) = comment.declare(name, partials::NEW_LOCAL_VALUE);
