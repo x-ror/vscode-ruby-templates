@@ -161,7 +161,7 @@ fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
 
 fn file_uri(path: &Path) -> Option<Uri> {
     let absolute = std::fs::canonicalize(path).or_else(|_| std::path::absolute(path)).ok()?;
-    Uri::from_file_path(absolute)
+    crate::util::file_uri(absolute)
 }
 
 fn language(path: &Path) -> Option<TemplateLang> {

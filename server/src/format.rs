@@ -257,7 +257,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rt-format-locals-{}", std::process::id()));
         let file = root.join("app/views/users/_card.html.erb");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let uri = Uri::from_file_path(&file).unwrap();
+        let uri = crate::util::file_uri(&file).unwrap();
         // Rails 7.1 cuts `# locals: (a:)` out of the tag; before, the `#` comments out the rest of the line.
         let text = "<div>\n<%= render \"x\" # locals: (a:) %>\n</div>\n";
         let formatted = |actionview: &str| {
@@ -435,7 +435,7 @@ mod tests {
         let mut violations = Vec::new();
         let ruby = RubyContext::outside_project();
         for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
-            let Some(uri) = Uri::from_file_path(entry.path()) else { continue };
+            let Some(uri) = crate::util::file_uri(entry.path()) else { continue };
             let (Some(lang), Ok(sample)) = (TemplateLang::from_uri_or_id(&uri, None), std::fs::read_to_string(entry.path())) else {
                 continue;
             };

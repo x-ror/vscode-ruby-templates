@@ -538,14 +538,14 @@ mod tests {
             ("f.jbuilder", TemplateLang::Ruby, "json.partial! \"users/gone\"\n", "ruby"),
         ];
         for (name, lang, text, source) in cases {
-            let uri = Uri::from_file_path(views.join(name)).unwrap();
+            let uri = crate::util::file_uri(views.join(name)).unwrap();
             let found = diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, &Options::default());
             assert!(!found.is_empty(), "{name}");
             for d in found {
                 assert_eq!(d.source.as_deref(), Some(source), "{name}: {}", d.message);
             }
         }
-        let uri = Uri::from_file_path(views.join("g.html.erb")).unwrap();
+        let uri = crate::util::file_uri(views.join("g.html.erb")).unwrap();
         let html = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb: false, version: 0 };
         let found = diagnostics(&uri, &html, &Options::default());
         assert_eq!(found.iter().filter_map(util::code).collect::<Vec<_>>(), [tags::code::UNCLOSED_ELEMENT]);
@@ -851,7 +851,7 @@ mod tests {
             plain_erb: false,
             version: 0,
         };
-        let uri = Uri::from_file_path(&file).unwrap();
+        let uri = crate::util::file_uri(&file).unwrap();
         let codes = || -> Vec<String> {
             let found = diagnostics(&uri, &doc, &Options::default());
             found.iter().filter_map(|d| util::code(d).map(String::from)).collect()
@@ -879,7 +879,7 @@ mod tests {
         let file = root.join("app/views/users/_card.html.erb");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let doc = Doc { lang: TemplateLang::Erb, text: "<%# locals: (user, size:) -%>\n".into(), plain_erb: false, version: 0 };
-        let uri = Uri::from_file_path(&file).unwrap();
+        let uri = crate::util::file_uri(&file).unwrap();
         let messages = || diagnostics(&uri, &doc, &Options::default()).into_iter().map(|d| d.message).collect::<Vec<_>>();
         let lock = |actionview: &str| {
             std::fs::write(root.join("Gemfile.lock"), format!("GEM\n  specs:\n    actionview ({actionview})\n")).unwrap()
@@ -905,7 +905,7 @@ mod tests {
         for (lang, ext, comment, body) in others {
             let file = root.join(format!("app/views/users/_card.{ext}"));
             let doc = Doc { lang, text: format!("{comment} locals: (user, size:)\n{body} x\n"), plain_erb: false, version: 0 };
-            let found: Vec<_> = diagnostics(&Uri::from_file_path(&file).unwrap(), &doc, &Options::default())
+            let found: Vec<_> = diagnostics(&crate::util::file_uri(&file).unwrap(), &doc, &Options::default())
                 .into_iter()
                 .map(|d| (d.range.start.line, util::code(&d).map(String::from), d.message))
                 .collect();

@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
     Uri,
@@ -96,6 +96,24 @@ pub fn file_path(uri: &Uri) -> Option<PathBuf> {
         return None;
     }
     uri.to_file_path().map(Cow::into_owned)
+}
+
+/// The `file:` URI of `path`, with a Windows drive's colon unescaped (`file:///C:/…`), as the `url` crate wrote it and as
+/// Node and the tests spell it; `Uri::from_file_path` escapes it to `C%3A`.
+pub fn file_uri(path: impl AsRef<Path>) -> Option<Uri> {
+    let uri = Uri::from_file_path(path)?;
+    match drive_colon_unescaped(uri.as_str()) {
+        Some(spelled) => spelled.parse().ok(),
+        None => Some(uri),
+    }
+}
+
+/// `file:///C%3A/…` as `file:///C:/…`; `None` for a URI without an escaped drive.
+fn drive_colon_unescaped(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file:///")?;
+    let drive = rest.chars().next().filter(char::is_ascii_alphabetic)?;
+    let path = rest[1..].strip_prefix("%3A")?;
+    Some(format!("file:///{drive}:{path}"))
 }
 
 /// `%XX` escapes decoded; malformed escapes are kept as they are.
@@ -256,7 +274,7 @@ mod tests {
     fn generated_file_uris_decode_back_to_the_same_path() {
         for name in AWKWARD_NAMES {
             let path = PathBuf::from(format!("/Users/x/{name}/app/views/_card.html.erb"));
-            let uri = Uri::from_file_path(&path).unwrap();
+            let uri = file_uri(&path).unwrap();
             assert_eq!(file_path(&uri), Some(path), "{name}: {}", uri.as_str());
             assert!(!uri.as_str().contains(['#', '?', ' ']), "{}", uri.as_str());
         }
@@ -291,7 +309,7 @@ mod tests {
             ("file:///Users/x/e%23f/a.html.erb", "/Users/x/e#f/a.html.erb"),
             ("file:///Users/x/caf%C3%A9/a.html.erb", "/Users/x/caf\u{e9}/a.html.erb"),
         ] {
-            assert_eq!(Uri::from_file_path(path).unwrap().as_str(), sent, "{path}");
+            assert_eq!(file_uri(path).unwrap().as_str(), sent, "{path}");
         }
     }
 
@@ -399,5 +417,14 @@ mod tests {
         assert_eq!(len(r#"("é)")"#), Some(r#"("é)")"#.len()));
         assert_eq!(len(r#"("a)""#), None);
         assert_eq!(len("(a"), None);
+    }
+
+    #[test]
+    fn drive_colons_are_spelled_as_node_and_the_url_crate_do() {
+        assert_eq!(drive_colon_unescaped("file:///C%3A/Users/a%20b/x.erb").as_deref(), Some("file:///C:/Users/a%20b/x.erb"));
+        assert_eq!(drive_colon_unescaped("file:///home/x%3Ay.erb"), None);
+        assert_eq!(drive_colon_unescaped("untitled:Untitled-1"), None);
+        let uri: Uri = "file:///C:/Users/x.erb".parse().unwrap();
+        assert_eq!(uri.as_str(), "file:///C:/Users/x.erb");
     }
 }

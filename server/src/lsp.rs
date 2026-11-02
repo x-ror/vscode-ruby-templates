@@ -143,7 +143,7 @@ fn i18n_key_at(
 fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
     Some(DocumentLink {
         range,
-        target: Some(Uri::from_file_path(target)?),
+        target: Some(crate::util::file_uri(target)?),
         tooltip: Some(rails_paths::rails_relative(target, from)),
         data: None,
     })
@@ -153,7 +153,7 @@ fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
 fn translation_locations(files: &i18n::Locales, key: &str) -> Vec<Location> {
     let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
     i18n::lookup(files, key)
-        .filter_map(|(file, t)| Some(Location::new(Uri::from_file_path(file)?, Range::new(start(t), start(t)))))
+        .filter_map(|(file, t)| Some(Location::new(crate::util::file_uri(file)?, Range::new(start(t), start(t)))))
         .collect()
 }
 
@@ -253,7 +253,7 @@ fn file_location(file: impl AsRef<Path>) -> Option<Location> {
 
 fn line_location(file: impl AsRef<Path>, line: usize) -> Option<Location> {
     let start = Position::new(line as u32, 0);
-    Some(Location::new(Uri::from_file_path(file)?, Range::new(start, start)))
+    Some(Location::new(crate::util::file_uri(file)?, Range::new(start, start)))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -418,7 +418,7 @@ impl Backend {
         let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
-        let (Some(uri), Some(partial_uri)) = (Uri::from_file_path(path), Uri::from_file_path(&partial)) else { return vec![] };
+        let (Some(uri), Some(partial_uri)) = (crate::util::file_uri(path), crate::util::file_uri(&partial)) else { return vec![] };
         let partial_text = match self.docs.get(&partial_uri) {
             Some(doc) => doc.text.clone(),
             None => std::fs::read_to_string(&partial).unwrap_or_default(),
@@ -486,7 +486,7 @@ impl Backend {
 
     /// Where the partial `path` (text `text`) declares and uses `local`, then the `render` calls passing it.
     async fn local_references(&self, path: &Path, text: &str, local: &StrictLocal, declaration: bool) -> Result<Vec<Location>> {
-        let Some(uri) = Uri::from_file_path(path) else { return Ok(vec![]) };
+        let Some(uri) = crate::util::file_uri(path) else { return Ok(vec![]) };
         let index = util::LineIndex::new(text);
         let span = |(start, end): (usize, usize)| Location::new(uri.clone(), Range::new(index.position(start), index.position(end)));
         let declared = local.declaration.filter(|_| declaration);
@@ -511,7 +511,7 @@ impl Backend {
     }
 
     /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's Windows URIs differ in drive-letter
-    /// case and colon encoding (`c%3A` vs `C%3A`) from `Uri::from_file_path`.
+    /// case and colon encoding (`c%3A` vs `C:`) from `util::file_uri`.
     fn open_texts(&self) -> HashMap<PathBuf, String> {
         let templates = self.docs.iter().filter_map(|d| Some((util::file_path(d.key())?, d.text.clone())));
         // Partial and i18n references also scan controllers; their unsaved text is the current one.
@@ -881,7 +881,7 @@ impl LanguageServer for Backend {
             let r = partials::render_refs_in(&doc.text, line_start, line, |r| r.start == start).pop()?;
             let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
-                uri: Uri::from_file_path(&target)?,
+                uri: crate::util::file_uri(&target)?,
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
                 annotation_id: None,
             };
@@ -1027,7 +1027,7 @@ impl LanguageServer for Backend {
         roots.dedup();
         let mut out = Vec::new();
         for views in roots {
-            let is_template = |f: &&PathBuf| Uri::from_file_path(f).is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
+            let is_template = |f: &&PathBuf| crate::util::file_uri(f).is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
             let project = Project::for_template(&views.join("_"));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
