@@ -32,6 +32,7 @@ mod partials;
 mod prism;
 mod project;
 mod rails_paths;
+mod render_call;
 mod routes;
 mod ruby;
 mod schema;

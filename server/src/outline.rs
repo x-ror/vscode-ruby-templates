@@ -437,6 +437,12 @@ mod tests {
         assert_eq!(syms[0].name, "form_with( model: @u )");
     }
 
+    #[test]
+    fn render_far_below_the_top_of_a_long_code_block_does_not_panic() {
+        let text = format!("<%\n{}render partial: \"card\"\n%>\n", "x = 1\n".repeat(25));
+        document_symbols(&text, true);
+    }
+
     fn outline(syms: &[DocumentSymbol]) -> Vec<String> {
         syms.iter()
             .map(|s| match &s.children {
