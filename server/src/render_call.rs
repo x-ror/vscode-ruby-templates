@@ -157,7 +157,7 @@ fn is_method_chain(line: &str) -> bool {
 
 #[cfg(test)]
 thread_local! {
-    /// How many times this thread has run Prism over a call, for tests that bound the work.
+    /// How many times this thread has run Prism, for tests that bound the work.
     pub static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

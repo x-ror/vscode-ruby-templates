@@ -744,6 +744,43 @@ mod tests {
     }
 
     #[test]
+    fn block_layout_after_formats_is_checked_in_those_formats() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-formats-layout-{}", std::process::id()));
+        let shared = root.join("app/views/shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let file = root.join("app/views/index.html.erb");
+        let text = "<%= render formats: [:json], layout: \"shared/wrap\" do %>x<% end %>";
+        let messages = || unresolved(TemplateLang::Erb, &file, text).into_iter().map(|d| d.message).collect::<Vec<_>>();
+        assert_eq!(messages(), ["Missing partial shared/_wrap"]);
+        std::fs::write(shared.join("_wrap.json.erb"), "").unwrap();
+        assert!(messages().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lone_layout_is_missing_only_with_a_block() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-lone-layout-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app/views/shared")).unwrap();
+        let file = root.join("app/views/index.html.erb");
+        let messages = |text: &str| unresolved(TemplateLang::Erb, &file, text).into_iter().map(|d| d.message).collect::<Vec<_>>();
+        for options in ["inline: \"<p>x</p>\"", "html: \"x\"", "plain: \"x\"", "locals: { a: 1 }", "collection: @x"] {
+            assert!(messages(&format!("<%= render {options}, layout: \"shared/box\" %>")).is_empty(), "{options}");
+            assert_eq!(
+                messages(&format!("<%= render {options}, layout: \"shared/box\" do %>x<% end %>")),
+                ["Missing partial shared/_box"],
+                "{options}"
+            );
+        }
+        for text in [
+            "<%= render html: \"x\", layout: \"shared/box\" %><% @items.each do |i| %>x<% end %>",
+            "<%= render collection: @x, layout: \"shared/box\", cb: proc { |a| a } %>",
+        ] {
+            assert!(messages(text).is_empty(), "{text}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn lookup_options_decide_unresolved_renders() {
         let root = std::env::temp_dir().join(format!("rt-unresolved-lookup-{}", std::process::id()));
         let users = root.join("app/views/users");

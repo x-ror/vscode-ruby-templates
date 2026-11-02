@@ -1802,7 +1802,7 @@ const check = (label, actual, expected) => {
         uri: jbuilderUri,
         languageId: "ruby",
         version: 1,
-        text: 'json.array! @users, partial: "users/user", as: :user\njson.partial! "users/user", user: @user\n',
+        text: 'json.array! @users, partial: "users/user", as: :user\njson.partial! "users/user", user: @user\njson.tags @tags, label: "#tag", partial: "users/user"\n',
       },
     },
     true,
@@ -1815,6 +1815,11 @@ const check = (label, actual, expected) => {
   check(
     "jbuilder partial!",
     targets(await req("textDocument/definition", jbuilderUri, 1, 18)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "jbuilder partial: after a # in a string",
+    targets(await req("textDocument/definition", jbuilderUri, 2, 45)),
     ["/app/views/users/_user.json.jbuilder"],
   );
   check(

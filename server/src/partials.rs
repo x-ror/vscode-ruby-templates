@@ -4,8 +4,10 @@ use crate::prism;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
 use crate::render_call::{self, Call, Pair, MAX_CALL_LINES};
+use crate::ruby::{self, CodeEnd};
 use crate::strict_locals::{self, Close};
-use regex::Regex;
+use regex::{Captures, Regex};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -13,19 +15,18 @@ use walkdir::WalkDir;
 static RENDER_STR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:render|json\.partial!)\s*\(?\s*(?::?(partial|template|layout)\s*(?::|=>)\s*)?["']([\w./-]+)["']"#).unwrap()
 });
-// `render formats: [:json], partial: "y"`: options before the name; group 1 must be balanced so `partial:` is a top-level key.
-static RENDER_KEY_AFTER_OPTIONS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"render\s*\(?\s*(:?\w+\s*(?::|=>)(?:[^%]|%[^>])*?),\s*:?(partial|template)\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
-});
+// `render formats: [:json], partial: "y"`: the first key, then (`top_level_keys`) the later ones that name a file.
+// After a bare `render "y", layout: …` the hash is just locals.
+static RENDER_OPTIONS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\brender\b\s*\(?\s*:?(\w+)\s*(?::|=>)").unwrap());
+// At the start of the arguments too: `json.comments partial: "…"` has no key before it.
+static OPTION_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?:^|,)\s*:?(partial|template|layout)\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
+// The block that makes a lone `layout:` a partial: `do`, `do |x|` or `{ |x|` after it.
+static BLOCK_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdo\b\s*(?:\||[-=]?\s*(?:%>|$))|\{\s*\|").unwrap());
 // Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
-// ponytail: stops at any `#`, so a `partial:` after `"#x"` or an interpolation is missed (no ref, no warning).
-static JSON_PARTIAL_KEY: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"json\.\w+!?[\s(][^#]*?\bpartial\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap());
-// `render partial:|template: "y", layout: "x"`; group 2 must be balanced so `layout:` is a top-level key.
-// After a bare `render "y", layout: …` it's just a local.
-static RENDER_LAYOUT_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"render\s*\(?\s*:?(partial|template)\s*(?::|=>)([^%]*?),\s*:?layout\s*(?::|=>)\s*["']([\w./-]+)["']"#).unwrap()
-});
+static JSON_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"json\.\w+!?[\s(]").unwrap());
+// Each parse of a candidate costs its length; a call has a few file-naming keys, so a longer run is noise.
+const MAX_KEY_CANDIDATES: usize = 8;
 static RENDER_COMPONENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
 static RENDER_MODEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*(@\w+(?:\.\w+)?)").unwrap());
 
@@ -81,41 +82,110 @@ pub fn render_refs(line: &str) -> Vec<RenderRef> {
     refs
 }
 
+fn render_kind(key: &str) -> RenderKind {
+    if key == "template" {
+        RenderKind::Template
+    } else {
+        RenderKind::Partial
+    }
+}
+
+fn render_ref(line: &str, call: usize, kind: RenderKind, name: Range<usize>, from_layout: bool) -> RenderRef {
+    RenderRef { kind, name: line[name.clone()].to_string(), start: name.start, end: name.end, call, from_layout, lookup: Lookup::default() }
+}
+
+/// Whether `at` in `line` is Ruby code, not inside a string or comment; ERB text before the last `<%` is not code to scan.
+fn is_code_at(line: &str, at: usize) -> bool {
+    let before = &line[..at];
+    ruby::code_end(before.rfind("<%").map_or(before, |open| &before[open + 2..])) == CodeEnd::Code
+}
+
+/// Each match of `heads` in code, with the text after it up to the next match: a call's own arguments.
+fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> impl Iterator<Item = (Captures<'l>, Range<usize>)> {
+    let mut heads = heads.captures_iter(line).filter(|head| head.get(0).is_some_and(|m| is_code_at(line, m.start()))).peekable();
+    std::iter::from_fn(move || {
+        let head = heads.next()?;
+        let start = head.get(0)?.end();
+        let end = heads.peek().and_then(|next| next.get(0)).map_or(line.len(), |next| next.start());
+        Some((head, start..end))
+    })
+}
+
+/// The file-naming keys of a call, `tail` being its arguments, as (key, name span in `tail`): those that are top-level, so
+/// what precedes them is balanced and in one statement; a nested `{ partial: … }` or a string holding `, partial: …` is skipped.
+fn top_level_keys(tail: &str) -> impl Iterator<Item = (&str, Range<usize>)> {
+    // A `%>` ends the call, and keeps the parsed prefixes short.
+    let tail = tail.find("%>").map_or(tail, |end| &tail[..end]);
+    OPTION_KEY.captures_iter(tail).take(MAX_KEY_CANDIDATES).filter_map(move |cap| {
+        let before = &tail[..cap.get(0)?.start()];
+        (!ruby::comment_before(before) && prism::is_one_statement(before)).then_some((cap.get(1)?.as_str(), cap.get(2)?.range()))
+    })
+}
+
+/// Whether the call `head` + `args` (cut at its `%>`) takes a block right after `after_layout`: a `do` or `{ |x|` in the call's
+/// own code, not one in a string or a nested call.
+fn opens_block(head: &str, args: &str, after_layout: usize) -> bool {
+    let args = args.find("%>").map_or(args, |end| &args[..end]);
+    BLOCK_OPEN.find_iter(&args[after_layout..]).take(MAX_KEY_CANDIDATES).any(|opener| {
+        let at = after_layout + opener.start();
+        let before = args[..at].trim_end();
+        let call_closed = head.contains('(') && before.ends_with(')');
+        let before = if call_closed { &before[..before.len() - 1] } else { before };
+        // `do` binds to the call; a `{` only when nothing but the layout's value or the call's `)` precedes it.
+        let binds_to_call = opener.as_str().starts_with("do") || call_closed || before.ends_with(['"', '\'']);
+        binds_to_call && ruby::code_end(before) == CodeEnd::Code && prism::is_one_statement(before)
+    })
+}
+
+/// The refs in `render` options before or after the file's name: `render formats: [:json], partial: "y"`, `render
+/// partial: "y", layout: "x"` and a block `render formats: [:json], layout: "x" do`.
+fn option_refs(line: &str) -> Vec<RenderRef> {
+    let mut refs = vec![];
+    for (head, tail) in call_tails(line, &RENDER_OPTIONS) {
+        let (Some(call), Some(first)) = (head.get(0), head.get(1)) else { continue };
+        let named_first = matches!(first.as_str(), "partial" | "template");
+        let (mut name, mut layout) = (None, None);
+        for (key, span) in top_level_keys(&line[tail.clone()]) {
+            let span = tail.start + span.start..tail.start + span.end;
+            if key == "layout" {
+                layout.get_or_insert(span);
+            } else if !named_first {
+                name.get_or_insert((key, span));
+            }
+            if layout.is_some() && (named_first || name.is_some()) {
+                break;
+            }
+        }
+        let kind = if named_first { Some(first.as_str()) } else { name.as_ref().map(|(key, _)| *key) };
+        if let Some((key, span)) = name {
+            refs.push(render_ref(line, call.start(), render_kind(key), span, false));
+        }
+        let Some(layout) = layout else { continue };
+        // A layout with no file next to it renders the partial itself, only with a block, like `render layout: "x" do`.
+        if kind.is_none() && !opens_block(call.as_str(), &line[tail.clone()], layout.end - tail.start) {
+            continue;
+        }
+        refs.push(render_ref(line, call.start(), render_kind(kind.unwrap_or_default()), layout, kind.is_some()));
+    }
+    refs
+}
+
 fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
     // Every pattern below needs one of these; most lines have neither, and the regexes cost per line.
     if !line.contains("render") && !line.contains("partial") {
         return vec![];
     }
-    let render_ref = |call: regex::Match, kind: Option<regex::Match>, m: regex::Match, from_layout| {
-        let kind = if kind.is_some_and(|k| k.as_str() == "template") { RenderKind::Template } else { RenderKind::Partial };
-        RenderRef {
-            kind,
-            name: m.as_str().to_string(),
-            start: m.start(),
-            end: m.end(),
-            call: call.start(),
-            from_layout,
-            lookup: Lookup::default(),
-        }
-    };
-    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(2)?, false)));
-    // ponytail: a nested `partial:` rejected by the filter below hides the real key after it (`locals: { partial: "x" }, partial: "card"`).
-    // ponytail: a rejected `layout:` inside `{…}` hides a later top-level one on the same line.
-    let layouts = RENDER_LAYOUT_KEY
-        .captures_iter(line)
-        .filter(|cap| prism::is_one_statement(&cap[2]))
-        .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(1), cap.get(3)?, true)));
-    let after_options = RENDER_KEY_AFTER_OPTIONS
-        .captures_iter(line)
-        .filter(|cap| {
-            let first_key = cap[1].trim_start_matches(':').split(|c: char| !c.is_alphanumeric() && c != '_').next();
-            !matches!(first_key, Some("partial" | "template")) && prism::is_one_statement(&cap[1])
-        })
-        .filter_map(|cap| Some(render_ref(cap.get(0)?, cap.get(2), cap.get(3)?, false)));
-    let json = JSON_PARTIAL_KEY.captures_iter(line).filter_map(|cap| Some(render_ref(cap.get(0)?, None, cap.get(1)?, false)));
-    let mut refs: Vec<RenderRef> = calls.chain(layouts).chain(after_options).chain(json).collect();
+    let calls = RENDER_STR.captures_iter(line).filter_map(|cap| {
+        let (call, name) = (cap.get(0)?, cap.get(2)?);
+        Some(render_ref(line, call.start(), render_kind(cap.get(1).map_or("", |key| key.as_str())), name.range(), false))
+    });
+    let json = call_tails(line, &JSON_CALL).filter_map(|(call, tail)| {
+        let (_, name) = top_level_keys(&line[tail.clone()]).find(|(key, _)| *key == "partial")?;
+        Some(render_ref(line, call.get(0)?.start(), RenderKind::Partial, tail.start + name.start..tail.start + name.end, false))
+    });
+    let mut refs: Vec<RenderRef> = calls.chain(option_refs(line)).chain(json).collect();
     refs.sort_by_key(|r| r.start);
-    // `json.partial! partial: "x"` matches both RENDER_STR and JSON_PARTIAL_KEY.
+    // `json.partial! partial: "x"` matches both RENDER_STR and the Jbuilder path.
     refs.dedup_by_key(|r| r.start);
     refs
 }
@@ -1044,6 +1114,153 @@ mod tests {
         assert_eq!(refs(r#"render(:partial => "row", :layout => "box")"#), [p("row"), p("box")]);
         assert_eq!(render_string_prefix(r#"render :partial => "ro"#, 22).unwrap(), (RenderKind::Partial, "ro".to_string()));
         assert_eq!(render_string_prefix(r#"render :partial => "x", :layout => "a"#, 37).unwrap(), (RenderKind::Partial, "a".to_string()));
+    }
+
+    #[test]
+    fn file_keys_after_other_keys_and_hash_noise() {
+        let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.name, r.from_layout)).collect::<Vec<_>>();
+        let one = |name: &str| vec![(name.to_string(), false)];
+        // Jbuilder: a `#` inside a string or interpolation is not a comment.
+        assert_eq!(refs(r##"json.comments @c, as: "#{prefix}_comment", partial: "comments/comment""##), one("comments/comment"));
+        assert_eq!(refs(r##"json.tags @tags, label: "#tag", partial: "tags/tag""##), one("tags/tag"));
+        assert!(refs(r#"json.tags @tags # partial: "tags/tag""#).is_empty());
+        assert!(refs(r##"json.tags @tags, label: "#tag" # partial: "tags/tag""##).is_empty());
+        // A nested or quoted key doesn't hide the top-level one after it.
+        assert_eq!(refs(r#"render locals: { partial: "x" }, partial: "card""#), one("card"));
+        assert_eq!(refs(r#"render locals: { a: 1, partial: "x" }, partial: "card""#), one("card"));
+        assert_eq!(refs(r#"render formats: "a,partial: 'x'", partial: "card""#), one("card"));
+        assert_eq!(
+            refs(r#"render partial: "row", locals: { a: 1, layout: "x" }, layout: "box""#),
+            [("row".to_string(), false), ("box".to_string(), true)]
+        );
+        assert!(refs(r#"render locals: { a: 1, partial: "x" }"#).is_empty());
+        assert!(refs(r#"render partial: row, locals: { a: 1, layout: "x" }"#).is_empty());
+        // A block layout next to other options is the partial itself, with the call's formats.
+        let layout = &render_refs(r#"render formats: [:json], layout: "shared/wrap" do"#)[0];
+        assert_eq!((layout.name.as_str(), layout.from_layout, layout.kind), ("shared/wrap", false, RenderKind::Partial));
+        assert_eq!(layout.lookup.formats, Some(vec!["json".to_string()]));
+        assert_eq!(
+            refs(r#"render formats: [:json], partial: "row", layout: "box""#),
+            [("row".to_string(), false), ("box".to_string(), true)]
+        );
+        assert!(refs(r#"render formats: [:json], locals: { layout: "x" }"#).is_empty());
+    }
+
+    #[test]
+    fn option_refs_span_the_name_and_stop_at_the_tag_end() {
+        let spans = |l: &str| {
+            render_refs(l)
+                .into_iter()
+                .map(|r| (l[r.start..r.end].to_string(), l[r.call..].starts_with("render"), r.from_layout))
+                .collect::<Vec<_>>()
+        };
+        let named = |name: &str, from_layout| (name.to_string(), true, from_layout);
+        // Multibyte text before the key moves the byte offsets, not the name.
+        assert_eq!(spans(r#"<%= render locals: { a: "é", partial: "x" }, partial: "card" %>"#), [named("card", false)]);
+        assert_eq!(spans(r#"<%= render a: "日本", partial: "x", layout: "box" %>"#), [named("x", false), named("box", true)]);
+        // Each call keeps its own keys: neither borrows a key from the next tag.
+        assert_eq!(
+            spans(r#"<%= render "a" %><%= render partial: "b", layout: "c" %>"#),
+            [named("a", false), named("b", false), named("c", true)]
+        );
+        assert_eq!(spans(r#"<%= render x: 1 %><%= render y: 2, partial: "b" %>"#), [named("b", false)]);
+        assert!(spans(r#"<%= render x: 1 %><%= foo a, partial: "b" %>"#).is_empty());
+        // Haml and Slim lines, with and without parentheses.
+        assert_eq!(spans(r#"= render(formats: [:json], partial: "w")"#), [named("w", false)]);
+        assert_eq!(spans(r#"= render(partial: "w", layout: "l")"#), [named("w", false), named("l", true)]);
+        assert_eq!(spans(r#"= render :layout => "l", :partial => "p""#), [named("l", false), named("p", false)]);
+    }
+
+    #[test]
+    fn lone_layout_is_a_partial_only_with_a_block() {
+        let names = |l: &str| refs_without_lookups(l).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        for line in [
+            r#"<%= render inline: "<p>x</p>", layout: "shared/box" %>"#,
+            r#"<%= render html: "x", layout: "shared/box" %>"#,
+            r#"<%= render plain: "x", layout: "shared/box" %>"#,
+            r#"<%= render locals: { a: 1 }, layout: "shared/box" %>"#,
+            r#"<%= render collection: @x, layout: "shared/box" %>"#,
+            r#"= render(collection: @x, layout: "shared/box")"#,
+            r#"<%= render locals: { do: 1 }, layout: "shared/box" %>"#,
+        ] {
+            assert!(names(line).is_empty(), "{line}");
+        }
+        for line in [
+            r#"<%= render html: "x", layout: "shared/box" %><% @items.each do |i| %>"#,
+            r#"<%= render collection: @x, layout: "shared/box", cb: proc { |a| a } %>"#,
+            r#"<%= render collection: @x, layout: "shared/box", foo: "do |" %>"#,
+            r#"<%= render collection: @x, layout: "shared/box", foo: "do %>"#,
+            r#"<%= render html: "x", layout: "shared/box" %><%= link_to "x" do %>"#,
+        ] {
+            assert!(names(line).is_empty(), "{line}");
+        }
+        for line in [
+            r#"<%= render locals: { a: 1 }, layout: "shared/box" do %>"#,
+            r#"<%= render collection: @x, layout: "shared/box" do |x| %>"#,
+            r#"<%= render(locals: { a: 1 }, layout: "shared/box") do -%>"#,
+            r#"<%= render locals: { a: 1 }, layout: "shared/box" do |x| x.y %>"#,
+            r#"<%= render locals: { a: 1 }, layout: "shared/box", formats: [:html] do %>"#,
+            r#"= render locals: { a: 1 }, layout: "shared/box" do"#,
+            r#"= render locals: { a: 1 }, layout: "shared/box" { |f| f }"#,
+        ] {
+            assert_eq!(names(line), ["shared/box"], "{line}");
+        }
+    }
+
+    #[test]
+    fn call_heads_in_keys_strings_and_comments_do_not_cut_the_call() {
+        let found = |l: &str| render_refs(l).into_iter().map(|r| (r.name, r.from_layout)).collect::<Vec<_>>();
+        let n = |name: &str, from_layout| (name.to_string(), from_layout);
+        assert_eq!(found(r#"<%= render partial: "a", renderer: :x, layout: "b" %>"#), [n("a", false), n("b", true)]);
+        let json = render_refs(r#"<%= render formats: [:json], rendered: 1, render_mode: 2, partial: "x" %>"#);
+        assert_eq!((json[0].name.as_str(), json[0].call, json[0].lookup.formats.clone()), ("x", 4, Some(vec!["json".to_string()])));
+        assert_eq!(found(r#"<%= render a: 1, b: "render x: 1", partial: "x" %>"#), [n("x", false)]);
+        assert_eq!(found(r#"<%= render partial: "a", title: "render a: 1", layout: "b" %>"#), [n("a", false), n("b", true)]);
+        assert_eq!(found(r#"json.x @y, label: "json.y z", partial: "p""#), [n("p", false)]);
+        assert_eq!(found(r#"<p>it's</p><%= render a: 1, partial: "x" %>"#), [n("x", false)]);
+    }
+
+    #[test]
+    fn json_keys_belong_to_their_own_call() {
+        let names = |l: &str| refs_without_lookups(l).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"json.x @y, locals: { partial: "n" }, partial: "a""#), ["a"]);
+        assert_eq!(names(r#"json.a 1; json.b @b, partial: "x""#), ["x"]);
+        assert_eq!(names(r#"json.a 1, as: :z; json.b @b, partial: "x""#), ["x"]);
+        assert_eq!(names(r#"json.comments partial: "comments/comment", collection: @c"#), ["comments/comment"]);
+        assert!(names(r#"json.a @a; json.b @b"#).is_empty());
+    }
+
+    #[test]
+    fn pathological_lines_cost_a_bounded_number_of_parses() {
+        let parses = |line: &str| {
+            render_call::PARSES.with(|count| count.set(0));
+            let refs = refs_without_lookups(line).len();
+            (refs, render_call::PARSES.with(|count| count.get()))
+        };
+        let nested = format!("render k0: 1{}", (1..500).map(|i| format!(", k{i}: 1, layout: \"x{i}\"")).collect::<String>());
+        assert!(parses(&nested).1 <= MAX_KEY_CANDIDATES, "keys of one call");
+        let joined = (0..100).map(|i| format!("render a: {i}, partial: \"p{i}\"")).collect::<Vec<_>>().join("; ");
+        let (refs, parses) = parses(&joined);
+        assert_eq!(refs, 100);
+        assert!(parses <= 2 * refs, "{parses} parses for {refs} calls");
+    }
+
+    #[test]
+    fn template_with_layout_makes_the_layout_a_template() {
+        let refs = render_refs(r#"render formats: [:json], template: "t", layout: "l""#);
+        let got: Vec<_> = refs.iter().map(|r| (r.name.as_str(), r.kind, r.from_layout)).collect();
+        assert_eq!(got, [("t", RenderKind::Template, false), ("l", RenderKind::Template, true)]);
+    }
+
+    #[test]
+    fn jbuilder_partial_key_is_the_first_outside_a_comment() {
+        let names = |l: &str| render_refs(l).into_iter().map(|r| (r.name, r.start)).collect::<Vec<_>>();
+        assert_eq!(names(r#"json.partial! "x""#), [("x".to_string(), 15)]);
+        assert_eq!(names(r#"json.array! @a, partial: "x", as: :y"#), [("x".to_string(), 26)]);
+        assert_eq!(names(r#"json.a @a, partial: "x", partial: "y""#), [("x".to_string(), 21)]);
+        // Offsets are bytes; "é" takes two.
+        assert_eq!(names(r#"json.a @a, b: "é", partial: "x""#), [("x".to_string(), 30)]);
+        assert!(names(r#"json.a @a, b: 1 # c, partial: "z""#).is_empty());
     }
 
     #[test]
