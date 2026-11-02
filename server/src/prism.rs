@@ -99,6 +99,41 @@ pub(crate) fn local_uses(source: &str, name: &str) -> LocalUses {
     uses.found
 }
 
+/// Keyword parameters as `(name, default's source)`, and whether `**rest` takes the others.
+pub(crate) type KeywordParameters = (Vec<(String, Option<String>)>, bool);
+
+/// The keyword parameters of `parameters`, a method's parameter list; `None` when it isn't valid Ruby.
+pub(crate) fn keyword_parameters(parameters: &str) -> Option<KeywordParameters> {
+    let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
+    let result = ruby_prism::parse(source.as_bytes());
+    if result.errors().next().is_some() {
+        return None;
+    }
+    let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
+    let Some(parameters) = def.parameters() else { return Some((vec![], false)) };
+    let name = |name: ruby_prism::ConstantId| String::from_utf8_lossy(name.as_slice()).into_owned();
+    let default = |node: ruby_prism::Node| {
+        let (start, end) = span(&node.location());
+        source[start..end].to_string()
+    };
+    let locals = parameters
+        .keywords()
+        .iter()
+        .filter_map(|keyword| match keyword.as_optional_keyword_parameter_node() {
+            Some(optional) => Some((name(optional.name()), Some(default(optional.value())))),
+            None => Some((name(keyword.as_required_keyword_parameter_node()?.name()), None)),
+        })
+        .collect();
+    // `**nil`, which Rails spells "no other locals", is not a rest parameter.
+    let rest = parameters.keyword_rest().is_some_and(|rest| rest.as_keyword_rest_parameter_node().is_some());
+    Some((locals, rest))
+}
+
+/// Whether `arguments`, the text of a call's arguments, is balanced and stays inside one statement (no top-level `;`).
+pub(crate) fn is_one_statement(arguments: &str) -> bool {
+    syntax_errors(&format!("[{arguments}\n]"), ruby_prism::Version::Latest).is_empty()
+}
+
 /// Where the keyword parameter `name` starts in `parameters`, a method's parameter list.
 pub(crate) fn keyword_parameter_at(parameters: &str, name: &str) -> Option<usize> {
     let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
