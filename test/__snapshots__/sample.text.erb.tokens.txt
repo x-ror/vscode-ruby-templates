@@ -31,4 +31,19 @@
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
    "end"                       meta.embedded.block > source.ruby > keyword.control.ruby
    "-%>"                       meta.embedded.block > punctuation.section.embedded.end
+"Raw <%== @html %> and <%% literal %> <%= @user.name -%>"
+   "Raw "                      
+   "<%=="                      meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "html"                      meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+   " and "                     
+   "<%%"                       constant.character.escape
+   " literal %> "              
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "user"                      meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "."                         meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "name"                      meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "-%>"                       meta.embedded.line > punctuation.section.embedded.end
 ""

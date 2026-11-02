@@ -36,4 +36,37 @@
    "<%"                        meta.embedded.block > punctuation.section.embedded.begin
    "end"                       meta.embedded.block > source.ruby > keyword.control.ruby
    "%>"                        meta.embedded.block > punctuation.section.embedded.end
+"const raw = \"<%== @html %>\"; // <%% not code %>"
+   "const"                     meta.var.expr.js > storage.type.js
+   "raw"                       meta.var.expr.js > meta.var-single-variable.expr.js > meta.definition.variable.js > variable.other.constant.js
+   "="                         meta.var.expr.js > keyword.operator.assignment.js
+   "\""                        meta.var.expr.js > string.quoted.double.js > punctuation.definition.string.begin.js
+   "<%=="                      meta.var.expr.js > string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.var.expr.js > string.quoted.double.js > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "html"                      meta.var.expr.js > string.quoted.double.js > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "%>"                        meta.var.expr.js > string.quoted.double.js > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.var.expr.js > string.quoted.double.js > punctuation.definition.string.end.js
+   ";"                         punctuation.terminator.statement.js
+   "//"                        comment.line.double-slash.js > punctuation.definition.comment.js
+   "<%%"                       comment.line.double-slash.js > constant.character.escape
+   " not code %>"              comment.line.double-slash.js
+"<%- if admin -%>"
+   "<%-"                       meta.embedded.block > punctuation.section.embedded.begin
+   "if"                        meta.embedded.block > source.ruby > keyword.control.ruby
+   " admin "                   meta.embedded.block > source.ruby
+   "-%>"                       meta.embedded.block > punctuation.section.embedded.end
+"alert(\"<%# note %>\");"
+   "alert"                     meta.function-call.js > entity.name.function.js
+   "("                         meta.brace.round.js
+   "\""                        string.quoted.double.js > punctuation.definition.string.begin.js
+   "<%#"                       string.quoted.double.js > comment.block > punctuation.definition.comment.begin
+   " note "                    string.quoted.double.js > comment.block
+   "%>"                        string.quoted.double.js > comment.block > punctuation.definition.comment.end
+   "\""                        string.quoted.double.js > punctuation.definition.string.end.js
+   ")"                         meta.brace.round.js
+   ";"                         punctuation.terminator.statement.js
+"<%- end -%>"
+   "<%-"                       meta.embedded.block > punctuation.section.embedded.begin
+   "end"                       meta.embedded.block > source.ruby > keyword.control.ruby
+   "-%>"                       meta.embedded.block > punctuation.section.embedded.end
 ""

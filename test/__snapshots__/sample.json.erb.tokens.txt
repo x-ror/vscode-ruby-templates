@@ -29,6 +29,40 @@
    "<%"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.begin
    "end"                       meta.structure.dictionary.json > meta.embedded.block > source.ruby > keyword.control.ruby
    "%>"                        meta.structure.dictionary.json > meta.embedded.block > punctuation.section.embedded.end
+"  \"raw\": \"<%== @html %>\","
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "raw"                       meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.begin.json
+   "<%=="                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "html"                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "%>"                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.end.json
+   ","                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.pair.json
+"  \"literal\": \"<%% not code %>\","
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "literal"                   meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.begin.json
+   "<%%"                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > constant.character.escape
+   " not code %>"              meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.end.json
+   ","                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.pair.json
+"  \"trimmed\": \"<%= @name -%>\","
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
+   "trimmed"                   meta.structure.dictionary.json > string.json > support.type.property-name.json
+   "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.end.json
+   ":"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.key-value.json
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.begin.json
+   "<%="                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.begin
+   "@"                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby > punctuation.definition.variable.ruby
+   "name"                      meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > source.ruby > variable.other.readwrite.instance.ruby
+   "-%>"                       meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > meta.embedded.line > punctuation.section.embedded.end
+   "\""                        meta.structure.dictionary.json > meta.structure.dictionary.value.json > string.quoted.double.json > punctuation.definition.string.end.json
+   ","                         meta.structure.dictionary.json > meta.structure.dictionary.value.json > punctuation.separator.dictionary.pair.json
 "  \"count\": <%= @count -%>"
    "\""                        meta.structure.dictionary.json > string.json > support.type.property-name.json > punctuation.support.type.property-name.begin.json
    "count"                     meta.structure.dictionary.json > string.json > support.type.property-name.json
