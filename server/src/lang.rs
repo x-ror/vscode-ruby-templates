@@ -61,10 +61,11 @@ pub const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
 /// format (`app/views/pages/about.de.erb`), which is HTML in practice.
-// ponytail: bare `.erb` and untitled documents are skipped; their host (`nginx.conf.erb`…) is unknown.
-pub fn html_host(uri: &Url) -> bool {
+// ponytail: a bare `.erb` is skipped; its host (`nginx.conf.erb`…) is unknown.
+pub fn html_host(uri: &Url, plain_erb: bool) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
-    if file.ends_with(".rhtml") {
+    // An untitled document names no host; the plain `erb` language id (not `erb-js`, ...) is HTML ERB, as for Slim.
+    if file.ends_with(".rhtml") || (plain_erb && !file.contains('.')) {
         return true;
     }
     if ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format)) {
@@ -138,8 +139,16 @@ mod tests {
             ("/v/show.html.erubis", true),
             ("/v/feed.xml.erubi", false),
         ] {
-            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap()), html, "{path}");
+            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap(), false), html, "{path}");
         }
+    }
+
+    #[test]
+    fn untitled_erb_is_html() {
+        let untitled = Url::parse("untitled:Untitled-1").unwrap();
+        assert!(html_host(&untitled, true));
+        assert!(!html_host(&untitled, false));
+        assert!(!html_host(&Url::parse("file:///v/nginx.erb").unwrap(), true));
     }
 
     #[test]
