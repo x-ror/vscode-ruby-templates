@@ -1449,7 +1449,7 @@ const check = (label, actual, expected) => {
   const keyDocs = {
     erb: '<%= render "strict/row", a: 1, | %>\n',
     slim: '= render "strict/row",\n    b: 2,\n    |\n',
-    haml: '= render("strict/row", |)\n',
+    haml: '= render("strict/row", |, b: 2)\n',
   };
   const renderKeys = {};
   for (const [lang, marked] of Object.entries(keyDocs)) {
@@ -1472,7 +1472,7 @@ const check = (label, actual, expected) => {
   check("render locals keys", renderKeys, {
     erb: ["b:  (local = 1)"],
     slim: ["a:  (local (required))"],
-    haml: ["a:  (local (required))", "b:  (local = 1)"],
+    haml: ["a:  (local (required))"],
   });
   const rowUri = fileUri(path.join(views, "strict", "_row.html.erb"));
   await send(

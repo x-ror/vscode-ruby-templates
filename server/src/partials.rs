@@ -732,28 +732,38 @@ fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef) -> (RenderCall<'a>, L
     (RenderCall { form, parsed }, lookup)
 }
 
-/// `local_key_at` for the text before `offset`, whose render call may start up to `MAX_CALL_LINES` lines higher.
+/// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `offset`;
+/// the render call may start up to `MAX_CALL_LINES` lines higher.
 pub fn local_key_before(text: &str, offset: usize) -> Option<(RenderRef, Vec<String>, &str)> {
     let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
-    line_starts.into_iter().find_map(|start| {
-        local_key_at(&text[start..offset], offset - start)
-            .map(|(r, names, typed)| (RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
-    })
+    // Starts above the first one that sees the partial ref see the same ref, so they can't read the call any better.
+    let (start, r) = line_starts.into_iter().find_map(|start| Some((start, partial_ref_before(&text[start..offset])?)))?;
+    let (names, typed) = local_key_after(&text[start..], offset - start, &r)?;
+    Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
 }
 
 const CURSOR_KEY: &str = "cursor_key__";
 
-/// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `col`.
-pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<String>, &str)> {
-    let r = render_refs(line).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < col)?;
-    let args = line.get(r.end + 1..col)?;
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn partial_ref_before(before: &str) -> Option<RenderRef> {
+    render_refs(before).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < before.len())
+}
+
+/// The locals already passed (before or after the cursor) and the name typed so far where a local's name may be typed at
+/// `col` in `text`, which starts at the render call's line.
+fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef) -> Option<(Vec<String>, &'a str)> {
+    let line = text.get(..col)?;
+    let args = line.get(r.end + 1..)?;
     if args.contains("%>") {
         return None;
     }
-    let head = args.trim_end_matches(|c: char| c.is_alphanumeric() || c == '_');
+    let head = args.trim_end_matches(is_word_char);
     let typed = &args[head.len()..];
     let head = head.trim_end();
-    let form = RenderForm::of(line, &r);
+    let form = RenderForm::of(line, r);
     // In the options form keys are typed inside `locals: {`; next to the name, only Jbuilder reads that hash.
     let open = open_brace(head);
     match open {
@@ -761,21 +771,53 @@ pub fn local_key_at(line: &str, col: usize) -> Option<(RenderRef, Vec<String>, &
         None if !form.options => {}
         _ => return None,
     }
-    let listed = if head.ends_with('{') { head } else { head.strip_suffix(',')? };
+    let after_open = head.ends_with('{');
+    let listed = if after_open { head } else { head.strip_suffix(',')? };
     let closed = if open.is_some() { format!("{listed}}}") } else { listed.to_string() };
+    let call_start = line.get(r.call..=r.end)?;
     // The call from its name on, with a key after the cursor: the call has it only if the cursor is still among its arguments.
-    let source = format!("{}{closed}, {CURSOR_KEY}: 1", line.get(r.call..=r.end)?);
+    let source = format!("{call_start}{closed}, {CURSOR_KEY}: 1");
+    // The same with the rest of the call after the cursor, to count the locals passed there.
+    let rest_end = text[col..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(text.len(), |(at, _)| col + at);
+    let rest = &text[col..rest_end];
+    let after_word = rest.trim_start_matches(is_word_char);
+    // The word being typed goes on after the cursor: it is dropped, unless a `:` follows, when it is a key to keep (but not to count).
+    let (tail, editing) = if typed.is_empty() {
+        (rest.to_string(), String::new())
+    } else if after_word.starts_with(':') && !after_word.starts_with("::") {
+        (format!("{typed}{rest}"), format!("{typed}{}", &rest[..rest.len() - after_word.len()]))
+    } else {
+        (after_word.to_string(), String::new())
+    };
+    let separator = if after_open { " " } else { ", " };
+    // A key that follows the cursor without a comma is the next argument.
+    let joint = if tail.trim_start().starts_with(|c: char| is_word_char(c) || matches!(c, ':' | '"' | '\'')) { "," } else { "" };
+    let spliced = format!("{call_start}{listed}{separator}{CURSOR_KEY}: 1{joint}{tail}");
     let name_at = r.start - r.call;
+    // The probe and, right after it, the key being edited are not passed locals; a duplicate of that key elsewhere is.
+    let others = |mut names: Vec<&str>| {
+        let at = names.iter().position(|name| *name == CURSOR_KEY)?;
+        names.remove(at);
+        if !editing.is_empty() && names.get(at) == Some(&editing.as_str()) {
+            names.remove(at);
+        }
+        Some(names.into_iter().map(str::to_string).collect::<Vec<_>>())
+    };
+    // The whole call, when it reads, decides: the probe is a local there or nowhere.
+    if let Some(call) = render_call::read(&spliced, 0, name_at).filter(|call| call.readable) {
+        return Some((others(passed_names(&call, &form)?)?, typed));
+    }
+    // Cut at the cursor, the probe may also sit beside a hash the call ignores.
     let passed = |source: &str| {
         let call = render_call::read(source, 0, name_at)?;
-        if !call.pairs.iter().any(|pair| pair.key == CURSOR_KEY) {
-            return None;
-        }
         let names = passed_names(&call, &form)?;
-        Some(names.into_iter().filter(|name| *name != CURSOR_KEY).map(str::to_string).collect())
+        if !names.contains(&CURSOR_KEY) && call.pairs.iter().any(|pair| pair.key == CURSOR_KEY) {
+            return Some(names.into_iter().map(str::to_string).collect());
+        }
+        others(names)
     };
     let names = passed(&source).or_else(|| passed(&format!("{source})")))?;
-    Some((r, names, typed))
+    Some((names, typed))
 }
 
 /// Where the last `{` that `text` leaves open is, braces in string literals aside.
@@ -857,7 +899,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_at(&line, col).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
+            local_key_before(&line, col).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
         };
         let card = |passed: &str, typed: &str| Some(("card".to_string(), passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", | %>"#), card("", ""));
@@ -1858,7 +1900,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_at(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", a| %>"#), at("", "a"));
@@ -1870,9 +1912,87 @@ mod tests {
         assert_eq!(key(r#"<%= render "card", title: "a, | %>"#), None, "inside a string");
         assert_eq!(key(r#"<%= render "café", título: 1, tít| %>"#), at("título", "tít"));
         assert_eq!(key(r#"<%= render "card" , | %>"#), at("", ""));
-        assert_eq!(key(r#"<%= render "card", a: 1, | , b: 2 %>"#), at("a", ""));
-        assert_eq!(key(r#"<%= render("card", a: 1,| b: 2) %>"#), at("a", ""));
+        assert_eq!(key(r#"<%= render "card", a: 1, | , b: 2 %>"#), at("a b", ""));
+        assert_eq!(key(r#"<%= render("card", a: 1,| b: 2) %>"#), at("a b", ""));
+        assert_eq!(key(r#"<%= render partial: "card", locals: { |, user: u } %>"#), at("user", ""));
+        assert_eq!(key(r#"<%= render partial: "card", locals: { a: 1, | user: u } %>"#), at("a user", ""));
+        assert_eq!(key(r#"<%= render "card", a| , b: 2 %>"#), at("b", "a"));
+        assert_eq!(key(r#"<%= render "card", a|bc, b: 2 %>"#), at("b", "a"), "the cursor is inside a word");
+        assert_eq!(key("= render \"card\", a: 1, |\n  b: 2"), at("a b", ""), "a later line");
+        assert_eq!(key(r#"<%= render "card", a: 1, | b: (2 %>"#), at("a", ""), "a broken rest keeps what comes before");
+        assert_eq!(key(r#"<%= render "card", a: 1, | %> <%= render "x", b: 1 %>"#), at("a", ""), "another tag's call");
         assert_eq!(key(r#"<%= render "card", "a" => 1, b| %>"#), None, "string keys are not locals");
+    }
+
+    #[test]
+    fn local_keys_after_the_cursor_ignore_what_is_not_the_call() {
+        let key = |line: &str| {
+            let col = line.find('|').unwrap();
+            let line = line.replace('|', "");
+            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+        };
+        let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
+        assert_eq!(key("<%= render \"a\", | %>\n<%= render \"a\", b: 1 %>"), at("", ""), "the next tag's call");
+        assert_eq!(key("= render \"a\", |\n= render \"a\", b: 1"), at("", ""), "the next line's call");
+        assert_eq!(key("= render \"a\", |\n= render \"a\", cursor_key__: 1"), at("", ""), "a probe-named key is never offered");
+        assert_eq!(key("= render \"a\", x: 1, |\n%p text"), at("x", ""), "Haml markup on the next line");
+        assert_eq!(key("= render \"a\", x: 1, |\np text"), at("x", ""), "Slim markup on the next line");
+        assert_eq!(key(r#"<%= render "a", | b: "}),", c: 2 %>"#), at("b c", ""), "punctuation in a string");
+        assert_eq!(key(r#"<%= render("a", x: 1, |)"#), at("x", ""), "right before the closing parenthesis");
+        assert_eq!(key(r#"<%= render partial: "a", locals: { | } %>"#), at("", ""), "an empty locals hash");
+        assert_eq!(key(r#"<%= render partial: "a", locals: {|"#), at("", ""), "an open locals hash");
+        assert_eq!(key(r#"<%= render "a", us|er: u %>"#), at("", "us"), "inside an existing key");
+    }
+
+    #[test]
+    fn local_keys_after_the_cursor_follow_the_next_key() {
+        let key = |line: &str| {
+            let col = line.find('|').unwrap();
+            let line = line.replace('|', "");
+            local_key_before(&line, col).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+        };
+        let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
+        assert_eq!(key(r#"<%= render "a", |b: 2, c: 3 %>"#), at("b c", ""), "the next key right at the cursor");
+        assert_eq!(key(r#"<%= render "a", x: 1, a|bc: 1, c: 2 %>"#), at("x c", "a"), "inside a key: not counted, the rest is");
+        assert_eq!(key(r#"<%= render "a", x: 1, | :b => 2 %>"#), at("x b", ""), "a symbol key");
+        assert_eq!(key(r#"<%= render "a", x: 1, | "b": 2 %>"#), at("x b", ""), "a quoted key");
+    }
+
+    #[test]
+    fn jbuilder_probe_beside_locals_hash_is_not_a_local_position() {
+        let line = r#"json.partial! "a", |, locals: { b: 1 }"#;
+        let col = line.find('|').unwrap();
+        let line = line.replace('|', "");
+        let names = local_key_before(&line, col).map(|(_, passed, _)| passed);
+        assert_eq!(names, None, "top-level keys are ignored when locals: is given");
+        let key = |line: &str| {
+            let col = line.find('|').unwrap();
+            local_key_before(&line.replace('|', ""), col).map(|(_, passed, _)| passed.join(" "))
+        };
+        assert_eq!(key(r#"<%= render partial: "a", locals: { x: 1, | }, collection: c %>"#), None, "collection: after the cursor");
+        assert_eq!(key(r#"<%= render partial: "a", collection: c, locals: { x: 1, | } %>"#), None);
+        assert_eq!(key(r#"<%= render "card", a: 1, a|: 2 %>"#).as_deref(), Some("a"), "a duplicate of the edited key is passed");
+    }
+
+    #[test]
+    fn local_key_before_stops_at_the_render_it_found() {
+        let markup = "%p x\n".repeat(25);
+        let text = format!("{markup}= render \"a\", x: \"open, |\n{}", "  y: 2,\n".repeat(25));
+        let offset = text.find('|').unwrap();
+        let text = text.replace('|', "");
+        let before = render_call::PARSES.with(|parses| parses.get());
+        local_key_before(&text, offset);
+        let parses = render_call::PARSES.with(|parses| parses.get()) - before;
+        assert!(parses <= 100, "{parses} parses for one keystroke");
+    }
+
+    #[test]
+    fn half_typed_local_key_costs_few_parses() {
+        let line = r#"<%= render "card", a: 1, b: 2, c , d: 3 %>"#;
+        let before = render_call::PARSES.with(|parses| parses.get());
+        local_key_before(line, line.find(" ,").unwrap()).unwrap();
+        let parses = render_call::PARSES.with(|parses| parses.get()) - before;
+        assert!(parses <= 6, "{parses} parses for one keystroke");
     }
 
     #[test]
