@@ -261,8 +261,8 @@ fn checked_renders<'a>(
     };
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_refs_in(text, line_start, line, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
-        out.extend(refs.into_iter().map(|r| (i, line, partials::call_text(&text[line_start..], &r), r)));
+        let refs = partials::render_calls_in(text, line_start, line, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
 }

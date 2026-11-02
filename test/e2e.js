@@ -329,7 +329,7 @@ const check = (label, actual, expected) => {
         uri: lookupUri,
         languageId: "erb",
         version: 1,
-        text: '<%= render partial: "user", formats: [:json] %>\n<%= render "user", formats: [:json] %>\n',
+        text: '<%= render partial: "user", formats: [:json] %>\n<%= render "user", formats: [:json] %>\n<%= render partial: "user",\n  formats: [:json] %>\n<%= render formats: [:json], partial: "user" %>\n',
       },
     },
     true,
@@ -344,6 +344,16 @@ const check = (label, actual, expected) => {
       ["/app/views/users/_user.json.jbuilder"],
       ["/app/views/users/_user.html.erb"],
     ],
+  );
+  check(
+    "render formats: on a later line picks the file",
+    targets(await req("textDocument/definition", lookupUri, 2, 22)),
+    ["/app/views/users/_user.json.jbuilder"],
+  );
+  check(
+    "render formats: before the name picks the file",
+    targets(await req("textDocument/definition", lookupUri, 4, 40)),
+    ["/app/views/users/_user.json.jbuilder"],
   );
   const untitled = {};
   for (const [lang, text] of Object.entries({
