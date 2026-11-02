@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Moving a partial directly into `app/views` rewrites its `render` calls to `/card`, the name Rails finds it by (the slash drops the controller's folder prefixes); before, they were left pointing at the old place. `render "/card"` also resolves to that partial, and so does `render "/users/card"` for `app/views/users/_card.html.erb`: before, the leading slash pointed outside `app/views`, so those renders were not linked, renamed or checked.
 - `render partial:` and `render template:` with literal `formats:`, `variants:` or `handlers:` go to the file Rails picks: `formats: [:json]` finds `_card.json.jbuilder` from an HTML view, `variants: [:phone]` puts `_card.html+phone.erb` first, `handlers: [:haml]` keeps only `.haml`. The same choice drives links, hover and the missing-partial warning. In `render "card", formats: [:json]` the hash is the partial's locals, as in Rails, so nothing changes there.
 - An untitled ERB document counts as HTML ERB, as Slim already did: it gets the HTML checks, folding, formatting and attribute completion. Rails lookups on documents that aren't files answer nothing instead of erroring, now covered by a test for ERB, Haml and Slim.
 - Link tooltips (Cmd/Ctrl+click on a partial, Stimulus controller, asset or layout) and the partial list in `render` hovers show the path from the Rails root (`app/javascript/controllers/hello_controller.js`) instead of the full path on disk.

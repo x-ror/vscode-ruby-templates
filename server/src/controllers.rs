@@ -1,7 +1,7 @@
 //! Controllers → views: `layout "admin"`, an action's `def show`, and `render :edit` / `render "users/show"`.
 //! Controllers reach the server only for navigation; Ruby LSP owns everything else in them.
 
-use crate::partials::matching_templates;
+use crate::partials::{matching_templates, split_render_name};
 use crate::project::Project;
 use crate::rails_paths::app_root;
 use regex::Regex;
@@ -28,9 +28,9 @@ pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -
     let views = app.join("views");
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
     let in_views = |name: &str, partial: bool| {
-        let (dir, base) = match name.rsplit_once('/') {
-            Some((dir, base)) => (views.join(dir), base),
-            None => (views.join(&controller), name),
+        let (dir, base) = match split_render_name(name) {
+            (Some(dir), base) => (views.join(dir), base),
+            (None, base) => (views.join(&controller), base),
         };
         matching_templates(project, &dir, &if partial { format!("_{base}") } else { base.to_string() })
     };
@@ -93,6 +93,7 @@ mod tests {
         assert_eq!(names(r#"render action: :edit"#, None)[0].0, "edit");
         assert_eq!(names(r#"render :template => "shared/missing""#, None)[0].0, "shared/missing");
         assert_eq!(names(r#"render partial: "form""#, None)[0].1, ["admin/users/_form.html.erb"]);
+        assert_eq!(names(r#"render partial: "/admin/users/form""#, None)[0].1, ["admin/users/_form.html.erb"]);
         for line in ["render json: @user", "render plain: \"ok\"", "layout :choose_layout", "render :nope"] {
             assert!(names(line, None).is_empty(), "{line}");
         }
