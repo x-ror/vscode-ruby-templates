@@ -246,10 +246,12 @@ pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
 pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathBuf> {
     let Some(views) = views_root(current) else { return vec![] };
     let singular = singularize(name);
-    matching_templates(project, &views.join(pluralize(&singular)), &format!("_{singular}"))
+    let mut found: Vec<PathBuf> = matching_templates(project, &views.join(pluralize(&singular)), &format!("_{singular}"))
         .into_iter()
         .filter(|p| renders_format(project, current, p))
-        .collect()
+        .collect();
+    sort_like_action_view(project, current, &Lookup::default(), &mut found);
+    found
 }
 
 /// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>+<variant>.<ext>` with the first of the
@@ -277,13 +279,17 @@ pub fn first_folder_only(mut found: Vec<PathBuf>) -> Vec<PathBuf> {
     found
 }
 
-/// Rails looks a partial up in the view's format only, plus HTML from JS (`LookupContext#formats=`);
-/// format-less files match any.
-// ponytail: turbo_stream gets the JS fallback too, so its HTML partials aren't flagged unresolved.
+/// The formats Rails looks a partial up in for a view: its own, plus HTML from JS (`LookupContext#formats=`) and
+/// from turbo_stream (its request's Accept header is `text/vnd.turbo-stream.html, text/html`).
+fn lookup_formats(view: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(view).chain(matches!(view, "js" | "turbo_stream").then_some("html"))
+}
+
+/// Format-less files match any format.
 fn renders_format(project: &Project, current: &Path, candidate: &Path) -> bool {
     let is_format = |f: &str| project.is_format(f);
     match (template_format(is_format, current), template_format(is_format, candidate)) {
-        (Some(view), Some(partial)) => view == partial || (partial == "html" && matches!(view, "js" | "turbo_stream")),
+        (Some(view), Some(partial)) => lookup_formats(view).any(|format| format == partial),
         _ => true,
     }
 }
@@ -407,23 +413,44 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
     for d in dirs {
         let mut found: Vec<PathBuf> =
             matching_templates(project, &d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
-        found.sort_by_key(|p| {
-            (
-                preference(&r.lookup.formats, template_format(|f| project.is_format(f), p)),
-                preference(&r.lookup.variants, template_variant(p)),
-                preference(&r.lookup.handlers, p.extension().and_then(|e| e.to_str())),
-            )
-        });
+        sort_like_action_view(project, current, &r.lookup, &mut found);
         out.extend(found);
     }
     out
 }
 
-/// Rails tries the values it was given in order, and a template without that detail after them all. (The locale, unknown
-/// here, isn't ordered.)
-fn preference(names: &Option<Vec<String>>, value: Option<&str>) -> usize {
-    let Some(names) = names else { return 0 };
-    value.and_then(|value| names.iter().position(|name| name == value)).unwrap_or(names.len())
+/// Orders candidates like ActionView's `TemplateDetails#sort_key_for`: by format, variant, then handler (the locale,
+/// unknown here, isn't ordered). With no `variants:` the view's own is wanted, as in Rails.
+fn sort_like_action_view(project: &Project, current: &Path, lookup: &Lookup, found: &mut [PathBuf]) {
+    let view_format = template_format(|f| project.is_format(f), current);
+    let view_variant = template_variant(current);
+    found.sort_by_key(|p| {
+        let format = template_format(|f| project.is_format(f), p);
+        let format_rank = match (&lookup.formats, view_format) {
+            (Some(_), _) => rank(listed(&lookup.formats), format),
+            (None, Some(view)) => rank(lookup_formats(view), format),
+            (None, None) => usize::from(format != Some("html")) + usize::from(format.is_none()),
+        };
+        let wanted_variants = listed(&lookup.variants).chain(view_variant.filter(|_| lookup.variants.is_none()));
+        (format_rank, rank(wanted_variants, template_variant(p)), rank(listed(&lookup.handlers), p.extension().and_then(|e| e.to_str())))
+    });
+}
+
+fn listed(names: &Option<Vec<String>>) -> impl Iterator<Item = &str> {
+    names.iter().flatten().map(String::as_str)
+}
+
+/// The place of `value` among the wanted `names`: Rails tries them in order, a template without that detail after
+/// them all.
+fn rank<'a>(names: impl Iterator<Item = &'a str>, value: Option<&str>) -> usize {
+    let mut wanted = 0;
+    for name in names {
+        if value == Some(name) {
+            return wanted;
+        }
+        wanted += 1;
+    }
+    wanted + usize::from(value.is_some())
 }
 
 /// Whether Rails could pick `candidate` for a render in `current` with the call's `lookup`: its format among
@@ -1101,22 +1128,76 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rt-formats-{}", std::process::id()));
         let users = root.join("app/views/users");
         std::fs::create_dir_all(&users).unwrap();
-        for f in ["_user.html.erb", "_user.html+phone.erb", "_user.json.jbuilder", "_user.erb"] {
+        for f in ["_user.html.erb", "_user.json.jbuilder", "_user.html+phone.erb", "_user.erb"] {
             std::fs::write(users.join(f), "").unwrap();
         }
-        let user = render_refs(r#"render "users/user""#).remove(0);
-        let found = |view: &str| -> Vec<String> {
-            resolve(&Project::unknown(), &users.join(view), &user)
-                .iter()
-                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                .collect()
-        };
-        assert_eq!(found("index.html.erb"), ["_user.erb", "_user.html+phone.erb", "_user.html.erb"]);
-        assert_eq!(found("show.html+phone.erb"), found("index.html.erb"));
-        assert_eq!(found("index.json.jbuilder"), ["_user.erb", "_user.json.jbuilder"]);
+        let views = root.join("app/views");
+        let found = |view: &str| resolved_names(&Project::unknown(), &views, &format!("users/{view}"), r#"render "users/user""#);
+        assert_eq!(found("index.html.erb"), ["_user.html.erb", "_user.html+phone.erb", "_user.erb"]);
+        assert_eq!(found("show.html+phone.erb"), ["_user.html+phone.erb", "_user.html.erb", "_user.erb"]);
+        assert_eq!(found("show.erb"), ["_user.html.erb", "_user.html+phone.erb", "_user.json.jbuilder", "_user.erb"]);
+        let render = render_refs(r#"render "users/user""#).remove(0);
+        for view in ["index.html.erb", "show.html+phone.erb", "show.erb", "index.json.jbuilder"] {
+            let current = users.join(view);
+            assert_eq!(resolve_model(&Project::unknown(), &current, "users"), resolve(&Project::unknown(), &current, &render));
+        }
+        assert_eq!(found("index.json.jbuilder"), ["_user.json.jbuilder", "_user.erb"]);
         assert_eq!(found("create.js.erb"), found("index.html.erb"));
-        assert_eq!(found("index.erb").len(), 4);
-        assert_eq!(resolve_model(&Project::unknown(), &users.join("index.json.jbuilder"), "users").len(), 2);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn turbo_stream_view_renders_turbo_stream_then_html_partials() {
+        let root = std::env::temp_dir().join(format!("rt-turbo-{}", std::process::id()));
+        let cards = root.join("app/views/cards");
+        std::fs::create_dir_all(&cards).unwrap();
+        let views = root.join("app/views");
+        let found = |view: &str| resolved_names(&Project::unknown(), &views, &format!("cards/{view}"), r#"render "cards/card""#);
+        std::fs::write(cards.join("_card.js.erb"), "").unwrap();
+        assert!(found("create.turbo_stream.erb").is_empty());
+        assert_eq!(found("create.js.erb"), ["_card.js.erb"]);
+        std::fs::write(cards.join("_card.html.erb"), "").unwrap();
+        assert_eq!(found("create.turbo_stream.erb"), ["_card.html.erb"]);
+        assert_eq!(found("create.js.erb"), ["_card.js.erb", "_card.html.erb"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn partials_are_ordered_by_the_views_formats_then_variants_then_handlers() {
+        let root = std::env::temp_dir().join(format!("rt-partial-order-{}", std::process::id()));
+        let cards = root.join("app/views/cards");
+        std::fs::create_dir_all(&cards).unwrap();
+        let views = root.join("app/views");
+        let found = |view: &str, line: &str| resolved_names(&Project::unknown(), &views, &format!("cards/{view}"), line);
+        let write = |names: &[&str]| {
+            for entry in std::fs::read_dir(&cards).unwrap() {
+                std::fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+            for name in names {
+                std::fs::write(cards.join(name), "").unwrap();
+            }
+        };
+        let plain = r#"render "cards/card""#;
+
+        write(&["_card.html.erb", "_card.turbo_stream.erb", "_card.erb", "_card.js.erb"]);
+        assert_eq!(found("create.turbo_stream.erb", plain), ["_card.turbo_stream.erb", "_card.html.erb", "_card.erb"]);
+        let html = r#"render partial: "cards/card", formats: [:html]"#;
+        assert_eq!(found("create.turbo_stream.erb", html), ["_card.html.erb", "_card.erb"]);
+        let js = r#"render partial: "cards/card", formats: :js"#;
+        assert_eq!(found("create.turbo_stream.erb", js), ["_card.js.erb", "_card.erb"]);
+
+        write(&["_a.atom.builder", "_a.html.erb"]);
+        assert_eq!(found("x.erb", r#"render "cards/a""#), ["_a.html.erb", "_a.atom.builder"]);
+
+        write(&["_e.erb", "_e.js.erb"]);
+        assert_eq!(found("x.js.erb", r#"render "cards/e""#), ["_e.js.erb", "_e.erb"]);
+
+        write(&["_c.html+phone.erb", "_c.js.erb"]);
+        let phone = r#"render partial: "cards/c", variants: [:phone]"#;
+        assert_eq!(found("x.js.erb", phone), ["_c.js.erb", "_c.html+phone.erb"]);
+
+        write(&["_h.js.haml", "_h.html.erb", "_h.js.erb"]);
+        assert_eq!(found("x.js.erb", r#"render partial: "cards/h", handlers: [:erb, :haml]"#), ["_h.js.erb", "_h.js.haml", "_h.html.erb"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1128,13 +1209,9 @@ mod tests {
         for f in ["_card.html.erb", "_card.mobile.erb"] {
             std::fs::write(users.join(f), "").unwrap();
         }
-        let card = render_refs(r#"render "users/card""#).remove(0);
-        let found = |view: &str| -> Vec<String> {
-            let view = users.join(view);
-            resolve(&Project::for_template(&view), &view, &card)
-                .iter()
-                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-                .collect()
+        let views = root.join("app/views");
+        let found = |view: &str| {
+            resolved_names(&Project::for_template(&users.join(view)), &views, &format!("users/{view}"), r#"render "users/card""#)
         };
         assert_eq!(found("show.mobile.erb"), ["_card.html.erb"]);
         assert_eq!(found("show.html.erb"), ["_card.html.erb"]);
@@ -1361,16 +1438,16 @@ mod tests {
         (root, views)
     }
 
-    fn resolved_names(views: &Path, view: &str, render: &str) -> Vec<String> {
+    fn resolved_names(project: &Project, views: &Path, view: &str, render: &str) -> Vec<String> {
         let r = render_refs(render).remove(0);
-        resolve(&Project::unknown(), &views.join(view), &r).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+        resolve(project, &views.join(view), &r).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
     }
 
     #[test]
     fn locale_only_partial_resolves_from_any_format() {
         let (root, views) = partial_tree("locale-only", &["shared/_greeting.de.erb"]);
         for view in ["users/show.html.erb", "users/index.json.jbuilder", "users/show.erb"] {
-            assert_eq!(resolved_names(&views, view, r#"render "shared/greeting""#), ["_greeting.de.erb"], "{view}");
+            assert_eq!(resolved_names(&Project::unknown(), &views, view, r#"render "shared/greeting""#), ["_greeting.de.erb"], "{view}");
         }
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1378,20 +1455,20 @@ mod tests {
     #[test]
     fn locale_and_format_partial_follows_view_format() {
         let (root, views) = partial_tree("locale-format", &["users/_card.en.html.erb", "users/_clip.js.erb", "users/_event.ics.erb"]);
-        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "card""#), ["_card.en.html.erb"]);
-        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "card""#).is_empty());
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/show.html.erb", r#"render "card""#), ["_card.en.html.erb"]);
+        assert!(resolved_names(&Project::unknown(), &views, "users/index.json.jbuilder", r#"render "card""#).is_empty());
         // `js` has locale shape but is a format: it must not read as format-less and match JSON views.
-        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "clip""#).is_empty());
-        assert_eq!(resolved_names(&views, "users/index.js.erb", r#"render "clip""#), ["_clip.js.erb"]);
-        assert!(resolved_names(&views, "users/index.json.jbuilder", r#"render "event""#).is_empty());
-        assert_eq!(resolved_names(&views, "users/index.ics.erb", r#"render "event""#), ["_event.ics.erb"]);
+        assert!(resolved_names(&Project::unknown(), &views, "users/index.json.jbuilder", r#"render "clip""#).is_empty());
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/index.js.erb", r#"render "clip""#), ["_clip.js.erb"]);
+        assert!(resolved_names(&Project::unknown(), &views, "users/index.json.jbuilder", r#"render "event""#).is_empty());
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/index.ics.erb", r#"render "event""#), ["_event.ics.erb"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn partial_in_the_views_root() {
         let (root, views) = partial_tree("views-root", &["_note.html.erb", "users/_note.html.erb"]);
-        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "/note""#), ["_note.html.erb"]);
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/show.html.erb", r#"render "/note""#), ["_note.html.erb"]);
         let found = resolve(&Project::unknown(), &views.join("users/show.html.erb"), &render_refs(r#"render "/note""#).remove(0));
         assert_eq!(found, [views.join("_note.html.erb")], "the root one, not the folder's");
         std::fs::remove_dir_all(&root).unwrap();
@@ -1401,7 +1478,7 @@ mod tests {
     fn lookup_options_pick_the_files() {
         let files = ["users/_card.html.erb", "users/_card.html+phone.erb", "users/_card.json.jbuilder", "users/_card.html.haml"];
         let (root, views) = partial_tree("lookup", &files);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert_eq!(names(r#"render partial: "card", formats: [:json]"#), ["_card.json.jbuilder"]);
         assert_eq!(names(r#"render partial: "card", formats: :json, handlers: [:jbuilder]"#), ["_card.json.jbuilder"]);
         assert_eq!(names(r#"render partial: "card", handlers: %i[haml]"#), ["_card.html.haml"]);
@@ -1412,10 +1489,10 @@ mod tests {
             "only the variant-less ones"
         );
         // In the short form the hash is locals, and a computed value names nothing literal.
-        assert_eq!(names(r#"render "card", formats: [:json]"#), ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]);
+        assert_eq!(names(r#"render "card", formats: [:json]"#), ["_card.html.erb", "_card.html.haml", "_card.html+phone.erb"]);
         assert_eq!(
             names(r#"render partial: "card", formats: request_formats"#),
-            ["_card.html+phone.erb", "_card.html.erb", "_card.html.haml"]
+            ["_card.html.erb", "_card.html.haml", "_card.html+phone.erb"]
         );
         assert!(names(r#"render partial: "card", formats: [:xml]"#).is_empty(), "Rails raises Missing partial");
         std::fs::remove_dir_all(&root).unwrap();
@@ -1424,7 +1501,7 @@ mod tests {
     #[test]
     fn lookup_options_apply_to_render_template() {
         let (root, views) = partial_tree("lookup-template", &["users/card.html.erb", "users/card.json.jbuilder"]);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert_eq!(names(r#"render template: "users/card", formats: [:json]"#), ["card.json.jbuilder"]);
         assert_eq!(names(r#"render template: "users/card", handlers: [:erb]"#), ["card.html.erb"]);
         std::fs::remove_dir_all(&root).unwrap();
@@ -1433,7 +1510,7 @@ mod tests {
     #[test]
     fn lookup_handlers_can_exclude_the_format_match() {
         let (root, views) = partial_tree("lookup-handlers", &["users/_card.json.jbuilder", "users/_card.html.erb"]);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert!(names(r#"render partial: "card", formats: [:json], handlers: [:erb]"#).is_empty());
         assert_eq!(names(r#"render partial: "card", formats: %i(json html), handlers: %i(erb)"#), ["_card.html.erb"]);
         std::fs::remove_dir_all(&root).unwrap();
@@ -1655,7 +1732,7 @@ mod tests {
     fn lookup_orders_by_the_given_formats_and_variants() {
         let files = ["users/_card.html.erb", "users/_card.json.jbuilder", "users/_card.erb", "users/_card.en.json.jbuilder"];
         let (root, views) = partial_tree("lookup-order", &files);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert_eq!(
             names(r#"render partial: "card", formats: [:json, :html]"#),
             ["_card.en.json.jbuilder", "_card.json.jbuilder", "_card.html.erb", "_card.erb"]
@@ -1666,7 +1743,7 @@ mod tests {
 
         let files = ["users/_card.html+tablet.erb", "users/_card.html+phone.erb", "users/_card.html.erb"];
         let (root, views) = partial_tree("lookup-variant-order", &files);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert_eq!(
             names(r#"render partial: "card", variants: [:phone, :tablet]"#),
             ["_card.html+phone.erb", "_card.html+tablet.erb", "_card.html.erb"]
@@ -1675,7 +1752,7 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
 
         let (root, views) = partial_tree("lookup-handler-order", &["users/_card.json.erb", "users/_card.json.jbuilder"]);
-        let names = |render: &str| resolved_names(&views, "users/show.html.erb", render);
+        let names = |render: &str| resolved_names(&Project::unknown(), &views, "users/show.html.erb", render);
         assert_eq!(
             names(r#"render partial: "card", formats: [:json], handlers: [:jbuilder, :erb]"#),
             ["_card.json.jbuilder", "_card.json.erb"]
@@ -1699,10 +1776,10 @@ mod tests {
     #[test]
     fn variant_named_partial_is_not_the_bare_name() {
         let (root, views) = partial_tree("variant-name", &["users/_user.v2.html.erb", "users/_user.html.erb"]);
-        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "user""#), ["_user.html.erb"]);
-        assert_eq!(resolved_names(&views, "users/show.html.erb", r#"render "user.v2""#), ["_user.v2.html.erb"]);
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/show.html.erb", r#"render "user""#), ["_user.html.erb"]);
+        assert_eq!(resolved_names(&Project::unknown(), &views, "users/show.html.erb", r#"render "user.v2""#), ["_user.v2.html.erb"]);
         let only_v2 = partial_tree("variant-only", &["users/_user.v2.html.erb"]);
-        assert!(resolved_names(&only_v2.1, "users/show.html.erb", r#"render "user""#).is_empty());
+        assert!(resolved_names(&Project::unknown(), &only_v2.1, "users/show.html.erb", r#"render "user""#).is_empty());
         assert!(resolve_model(&Project::unknown(), &only_v2.1.join("users/show.html.erb"), "user").is_empty());
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&only_v2.0).unwrap();
