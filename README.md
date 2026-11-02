@@ -2,9 +2,10 @@
 
 # Ruby Templates: ERB, Haml, Slim
 
-[![VS Marketplace](https://img.shields.io/visual-studio-marketplace/v/x-ror.ruby-templates?label=VS%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=x-ror.ruby-templates)
+[![VS Marketplace](https://vsmarketplacebadges.dev/version-short/x-ror.ruby-templates.svg)](https://marketplace.visualstudio.com/items?itemName=x-ror.ruby-templates)
 [![Open VSX](https://img.shields.io/open-vsx/v/x-ror/ruby-templates?label=Open%20VSX)](https://open-vsx.org/extension/x-ror/ruby-templates)
 [![npm](https://img.shields.io/npm/v/@x-ror/ruby-templates?label=npm%20CLI)](https://www.npmjs.com/package/@x-ror/ruby-templates)
+[![Socket](https://socket.dev/api/badge/npm/package/@x-ror/ruby-templates)](https://socket.dev/npm/package/@x-ror/ruby-templates)
 [![build](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml/badge.svg)](https://github.com/x-ror/vscode-ruby-templates/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
