@@ -5,7 +5,7 @@
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
 use crate::partials::{
-    call_text, first_folder_only, local_key_span, model_renders, passed_locals, render_refs_in, resolve, resolve_model, split_render_name,
+    first_folder_only, local_key_span, model_renders, passed_locals, read_call, render_refs_in, resolve, resolve_model, split_render_name,
     RenderKind, RenderRef,
 };
 use crate::project::Project;
@@ -244,10 +244,10 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
                 continue;
             }
             let line_start = start - r.start;
-            let call = call_text(&source.text[line_start..], &r);
-            let key = match passed_locals(call, &r) {
+            let call = read_call(&source.text[line_start..], &r);
+            let key = match passed_locals(&call, &r) {
                 Some(names) if !names.contains(&local) => continue,
-                Some(_) => local_key_span(call, &r, local).map(|(s, e)| (line_start + s, line_start + e)),
+                Some(_) => local_key_span(&call, local).map(|(s, e)| (line_start + s, line_start + e)),
                 None => None,
             };
             out.push(LocalKey { source, call: line_start + r.call, key });
@@ -671,6 +671,20 @@ mod tests {
                 ("app/views/users/show.html.erb".into(), 0, 39, 43, "member".into()),
             ]
         );
+    }
+
+    #[test]
+    fn local_key_edits_reach_keys_on_later_lines_of_a_multiline_erb_tag() {
+        let t = Tree::new("local-keys-multiline", &["app/views/users/_card.html.erb"]);
+        let text = "<p>héllo 日本</p>\n<%\n  render \"card\",\n    user: u,\n    size: items\n      .first\n%>\n<%= render \"card\",\n  user:,\n  size: 1 %>\n";
+        let sources = [t.source("app/views/users/index.html.erb", ERB, text)];
+        let card = t.path("app/views/users/_card.html.erb");
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        assert!(unread.is_empty());
+        let mut got: Vec<(u32, u32, u32, String)> =
+            edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
+        got.sort();
+        assert_eq!(got, [(3, 4, 8, "member".into()), (8, 2, 7, "member: user".into())]);
     }
 
     #[test]
