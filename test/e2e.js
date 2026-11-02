@@ -321,6 +321,30 @@ const check = (label, actual, expected) => {
     [await assignedAt(48), await assignedAt(28)],
     ["0:0", "2:16"],
   );
+  const lookupUri = fileUri(path.join(views, "users", "lookup.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: lookupUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= render partial: "user", formats: [:json] %>\n<%= render "user", formats: [:json] %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "render formats: picks the file",
+    [
+      targets(await req("textDocument/definition", lookupUri, 0, 22)),
+      targets(await req("textDocument/definition", lookupUri, 1, 13)),
+    ],
+    [
+      ["/app/views/users/_user.json.jbuilder"],
+      ["/app/views/users/_user.html.erb"],
+    ],
+  );
   const untitled = {};
   for (const [lang, text] of Object.entries({
     erb: '<div>\n<%= render "card" %>\n',

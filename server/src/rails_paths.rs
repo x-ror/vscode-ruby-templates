@@ -85,6 +85,13 @@ pub fn template_format(is_format: impl Fn(&str) -> bool + Copy, path: &Path) -> 
     template_suffix(is_format, fname, template_stem(is_format, fname))?
 }
 
+/// `phone` of `show.html+phone.erb`.
+pub fn template_variant(path: &Path) -> Option<&str> {
+    let fname = path.file_name()?.to_str()?;
+    let (_, rest) = fname.split_once('+')?;
+    rest.split('.').next().filter(|variant| !variant.is_empty())
+}
+
 /// Walk up from `file` to find the Rails `app/views` directory.
 pub fn views_root(file: &Path) -> Option<PathBuf> {
     let mut dir = file.parent()?;
@@ -164,6 +171,15 @@ mod tests {
         std::os::unix::fs::symlink(&views, views.join("loop")).unwrap();
         assert_eq!(files_under(&views, usize::MAX), [views.join("shared/cards/_card.html.erb")]);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn template_variants() {
+        let variant = |fname: &str| template_variant(Path::new(fname)).map(str::to_string);
+        assert_eq!(variant("show.html+phone.erb"), Some("phone".to_string()));
+        assert_eq!(variant("show.en.html+phone.erb"), Some("phone".to_string()));
+        assert_eq!(variant("show.html.erb"), None);
+        assert_eq!(variant("show.html+.erb"), None);
     }
 
     #[test]

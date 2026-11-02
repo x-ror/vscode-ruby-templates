@@ -132,6 +132,7 @@ fn model_refs(line: &str) -> Vec<RenderRef> {
             end,
             call: line[..start].rfind("render").unwrap_or(start),
             from_layout: false,
+            lookup: Default::default(),
         })
         .collect()
 }
@@ -274,6 +275,7 @@ fn i18n_refs(line: &str) -> Vec<RenderRef> {
             end,
             call,
             from_layout: false,
+            lookup: Default::default(),
         })
         .collect()
 }
