@@ -1,5 +1,5 @@
 use crate::util::LineIndex;
-use tower_lsp::lsp_types::Range;
+use tower_lsp_server::ls_types::Range;
 
 pub(crate) struct RubyError {
     /// Prism's text, verbatim.

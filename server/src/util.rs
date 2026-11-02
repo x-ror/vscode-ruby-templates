@@ -1,5 +1,8 @@
-use tower_lsp::lsp_types::{
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
+    Uri,
 };
 
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
@@ -85,6 +88,32 @@ pub fn error(range: Range, message: impl Into<String>) -> Diagnostic {
 
 pub fn warning(range: Range, message: impl Into<String>) -> Diagnostic {
     diag(range, DiagnosticSeverity::WARNING, message)
+}
+
+/// `file:` URI as an owned path; `None` for other schemes, which `Uri::to_file_path` doesn't check.
+pub fn file_path(uri: &Uri) -> Option<PathBuf> {
+    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
+        return None;
+    }
+    uri.to_file_path().map(Cow::into_owned)
+}
+
+/// The `file:` URI of `path`, with a Windows drive's colon unescaped (`file:///C:/…`), as the `url` crate wrote it and as
+/// Node and the tests spell it; `Uri::from_file_path` escapes it to `C%3A`.
+pub fn file_uri(path: impl AsRef<Path>) -> Option<Uri> {
+    let uri = Uri::from_file_path(path)?;
+    match drive_colon_unescaped(uri.as_str()) {
+        Some(spelled) => spelled.parse().ok(),
+        None => Some(uri),
+    }
+}
+
+/// `file:///C%3A/…` as `file:///C:/…`; `None` for a URI without an escaped drive.
+fn drive_colon_unescaped(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file:///")?;
+    let drive = rest.chars().next().filter(char::is_ascii_alphabetic)?;
+    let path = rest[1..].strip_prefix("%3A")?;
+    Some(format!("file:///{drive}:{path}"))
 }
 
 /// `%XX` escapes decoded; malformed escapes are kept as they are.
@@ -237,6 +266,66 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    const AWKWARD_NAMES: [&str; 8] = ["my app", "a@b", "c+d", "e#f", "g%h", "i%20j", "q?r", "caf\u{e9} \u{1f600}"];
+
+    #[cfg(unix)]
+    #[test]
+    fn generated_file_uris_decode_back_to_the_same_path() {
+        for name in AWKWARD_NAMES {
+            let path = PathBuf::from(format!("/Users/x/{name}/app/views/_card.html.erb"));
+            let uri = file_uri(&path).unwrap();
+            assert_eq!(file_path(&uri), Some(path), "{name}: {}", uri.as_str());
+            assert!(!uri.as_str().contains(['#', '?', ' ']), "{}", uri.as_str());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vscode_encoded_uris_map_to_the_path() {
+        for (sent, path) in [
+            ("file:///Users/x/my%20app/a.html.erb", "/Users/x/my app/a.html.erb"),
+            ("file:///Users/x/%40scope/a.html.erb", "/Users/x/@scope/a.html.erb"),
+            ("file:///Users/x/c+d/a.html.erb", "/Users/x/c+d/a.html.erb"),
+            ("file:///Users/x/c%2Bd/a.html.erb", "/Users/x/c+d/a.html.erb"),
+            ("file:///Users/x/e%23f/a.html.erb", "/Users/x/e#f/a.html.erb"),
+            ("file:///Users/x/g%25h/a.html.erb", "/Users/x/g%h/a.html.erb"),
+            ("file:///Users/x/q%3Fr/a.html.erb", "/Users/x/q?r/a.html.erb"),
+            ("file:///Users/x/caf%C3%A9/a.html.erb", "/Users/x/caf\u{e9}/a.html.erb"),
+        ] {
+            let uri = sent.parse::<Uri>().unwrap();
+            assert_eq!(file_path(&uri), Some(PathBuf::from(path)), "{sent}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vscode_and_generated_uris_name_the_same_document() {
+        // VS Code keys open documents by the URI it sent; `Uri` equality is textual, so the spelling must match.
+        for (sent, path) in [
+            ("file:///Users/x/my%20app/a.html.erb", "/Users/x/my app/a.html.erb"),
+            ("file:///Users/x/%40scope/a.html.erb", "/Users/x/@scope/a.html.erb"),
+            ("file:///Users/x/c%2Bd/a.html.erb", "/Users/x/c+d/a.html.erb"),
+            ("file:///Users/x/e%23f/a.html.erb", "/Users/x/e#f/a.html.erb"),
+            ("file:///Users/x/caf%C3%A9/a.html.erb", "/Users/x/caf\u{e9}/a.html.erb"),
+        ] {
+            assert_eq!(file_uri(path).unwrap().as_str(), sent, "{path}");
+        }
+    }
+
+    #[test]
+    fn non_file_uris_have_no_path() {
+        for sent in ["untitled:Untitled-1", "git:/a/b.erb", "vscode-userdata:/x/y.erb"] {
+            assert_eq!(file_path(&sent.parse::<Uri>().unwrap()), None, "{sent}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_scheme_is_case_insensitive() {
+        assert_eq!(file_path(&"FILE:///a/b.erb".parse::<Uri>().unwrap()), Some(PathBuf::from("/a/b.erb")));
+    }
+
     #[test]
     fn line_index_agrees_with_scanning_the_text() {
         for text in ["", "a", "a\n", "é😀b\r\nc\n\nd", "x\r", "a\r\n\r\nb\r"] {
@@ -328,5 +417,14 @@ mod tests {
         assert_eq!(len(r#"("é)")"#), Some(r#"("é)")"#.len()));
         assert_eq!(len(r#"("a)""#), None);
         assert_eq!(len("(a"), None);
+    }
+
+    #[test]
+    fn drive_colons_are_spelled_as_node_and_the_url_crate_do() {
+        assert_eq!(drive_colon_unescaped("file:///C%3A/Users/a%20b/x.erb").as_deref(), Some("file:///C:/Users/a%20b/x.erb"));
+        assert_eq!(drive_colon_unescaped("file:///home/x%3Ay.erb"), None);
+        assert_eq!(drive_colon_unescaped("untitled:Untitled-1"), None);
+        let uri: Uri = "file:///C:/Users/x.erb".parse().unwrap();
+        assert_eq!(uri.as_str(), "file:///C:/Users/x.erb");
     }
 }

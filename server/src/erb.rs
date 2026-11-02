@@ -3,7 +3,7 @@
 use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::util::{coded, warning, LineIndex};
-use tower_lsp::lsp_types::{Diagnostic, Position, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
@@ -349,7 +349,7 @@ mod tests {
             .into_iter()
             .map(|d| {
                 assert_eq!(d.message, UNCLOSED_MESSAGE);
-                assert_eq!(d.severity, Some(tower_lsp::lsp_types::DiagnosticSeverity::WARNING));
+                assert_eq!(d.severity, Some(tower_lsp_server::ls_types::DiagnosticSeverity::WARNING));
                 assert_eq!(crate::util::code(&d), Some(code::UNCLOSED_TAG));
                 d.range
             })

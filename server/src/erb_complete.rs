@@ -8,7 +8,7 @@ use crate::tags::VOID;
 use crate::util::completion_item;
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
+use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<(/?)([a-zA-Z][\w:-]*)").unwrap());
 

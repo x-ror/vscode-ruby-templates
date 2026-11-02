@@ -3,7 +3,7 @@
 use crate::rails_paths::{is_known_format, is_locale, template_format, views_root};
 use crate::util;
 use std::path::Path;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TemplateLang {
@@ -26,7 +26,7 @@ impl TemplateLang {
         }
     }
 
-    pub fn from_uri_or_id(uri: &Url, language_id: Option<&str>) -> Option<Self> {
+    pub fn from_uri_or_id(uri: &Uri, language_id: Option<&str>) -> Option<Self> {
         match language_id {
             Some(id) if id == "erb" || id.starts_with("erb-") => return Some(Self::Erb),
             Some("haml") => return Some(Self::Haml),
@@ -34,7 +34,7 @@ impl TemplateLang {
             Some("skim") => return Some(Self::Skim),
             _ => {}
         }
-        Self::from_file_name(uri.path())
+        Self::from_file_name(uri.path().as_str())
     }
 
     /// The language of a file named `name` (a bare name or a whole path), by its extension.
@@ -62,7 +62,7 @@ pub const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
 /// format (`app/views/pages/about.de.erb`), which is HTML in practice.
 // ponytail: a bare `.erb` is skipped; its host (`nginx.conf.erb`…) is unknown.
-pub fn html_host(uri: &Url, plain_erb: bool) -> bool {
+pub fn html_host(uri: &Uri, plain_erb: bool) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     // An untitled document names no host; the plain `erb` language id (not `erb-js`, ...) is HTML ERB, as for Slim.
     if file.ends_with(".rhtml") || (plain_erb && !file.contains('.')) {
@@ -71,8 +71,8 @@ pub fn html_host(uri: &Url, plain_erb: bool) -> bool {
     if ERB_EXTENSIONS.iter().any(|ext| host_format(&file, ext).is_some_and(is_html_format)) {
         return true;
     }
-    // The URI's own path, not `to_file_path`, which a drive-less test URI fails on Windows.
-    let in_views = views_root(Path::new(&util::percent_decode(uri.path()))).is_some();
+    // The URI's own path, not `file_path`, which a drive-less test URI fails on Windows.
+    let in_views = views_root(Path::new(&util::percent_decode(uri.path().as_str()))).is_some();
     let original = file_name(uri);
     let parts: Vec<&str> = original.split('.').collect();
     in_views
@@ -83,21 +83,20 @@ pub fn html_host(uri: &Url, plain_erb: bool) -> bool {
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
-pub fn slim_html_host(uri: &Url) -> bool {
+pub fn slim_html_host(uri: &Uri) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
-pub fn is_partial(uri: &Url) -> bool {
-    uri.path().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
+pub fn is_partial(uri: &Uri) -> bool {
+    uri.path().as_str().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
 }
 
 /// Decoded last path segment: VS Code sends `show.html%2Bphone.erb` for `show.html+phone.erb`. URIs that aren't
 /// file paths here (`untitled:`, a drive-less `file:///v/x` on Windows) are decoded by hand.
-pub fn file_name(uri: &Url) -> String {
-    uri.to_file_path()
-        .ok()
+pub fn file_name(uri: &Uri) -> String {
+    util::file_path(uri)
         .and_then(|p| Some(p.file_name()?.to_str()?.to_owned()))
-        .unwrap_or_else(|| util::percent_decode(uri.path().rsplit('/').next().unwrap_or_default()))
+        .unwrap_or_else(|| util::percent_decode(uri.path().as_str().rsplit('/').next().unwrap_or_default()))
 }
 
 /// The format of `name[.locale][.format].ext`; `None` when `file` doesn't end in `ext` or names no format.
@@ -139,29 +138,41 @@ mod tests {
             ("/v/show.html.erubis", true),
             ("/v/feed.xml.erubi", false),
         ] {
-            assert_eq!(html_host(&Url::parse(&format!("file://{path}")).unwrap(), false), html, "{path}");
+            assert_eq!(html_host(&format!("file://{path}").parse::<Uri>().unwrap(), false), html, "{path}");
         }
     }
 
     #[test]
+    fn file_name_decodes_what_vscode_encodes() {
+        for (sent, name) in [
+            ("file:///v/show.html%2Bphone.erb", "show.html+phone.erb"),
+            ("file:///v/my%20app/_caf%C3%A9%40x.erb", "_caf\u{e9}@x.erb"),
+            ("untitled:Untitled-1", "Untitled-1"),
+        ] {
+            assert_eq!(file_name(&sent.parse::<Uri>().unwrap()), name, "{sent}");
+        }
+        assert!(is_partial(&"file:///v/my%20app/_caf%C3%A9.erb".parse::<Uri>().unwrap()));
+    }
+
+    #[test]
     fn untitled_erb_is_html() {
-        let untitled = Url::parse("untitled:Untitled-1").unwrap();
+        let untitled = "untitled:Untitled-1".parse::<Uri>().unwrap();
         assert!(html_host(&untitled, true));
         assert!(!html_host(&untitled, false));
-        assert!(!html_host(&Url::parse("file:///v/nginx.erb").unwrap(), true));
+        assert!(!html_host(&"file:///v/nginx.erb".parse::<Uri>().unwrap(), true));
     }
 
     #[test]
     fn host_specific_erb_ids() {
-        let untitled = Url::parse("untitled:Untitled-1").unwrap();
+        let untitled = "untitled:Untitled-1".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-js")), Some(TemplateLang::Erb));
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
-        let js_erb = Url::parse("file:///app/views/users/index.js.erb").unwrap();
+        let js_erb = "file:///app/views/users/index.js.erb".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
-        let upper = Url::parse("file:///app/views/users/INDEX.HTML.ERB").unwrap();
+        let upper = "file:///app/views/users/INDEX.HTML.ERB".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&upper, None), Some(TemplateLang::Erb));
         for path in ["file:///views/x.erubi", "file:///views/x.html.ERUBIS"] {
-            assert_eq!(TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), None), Some(TemplateLang::Erb), "{path}");
+            assert_eq!(TemplateLang::from_uri_or_id(&path.parse::<Uri>().unwrap(), None), Some(TemplateLang::Erb), "{path}");
         }
     }
 }

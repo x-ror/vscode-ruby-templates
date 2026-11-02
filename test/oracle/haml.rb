@@ -1,7 +1,7 @@
 # Compiles the Haml template on stdin with Haml 7.5.1's defaults and prints the outcome as JSON.
 # --rails compiles with the options of Haml::RailsTemplate (lib/haml/rails_template.rb), for comparing the code
 # before and after formatting.
-# Without it, the Ruby Haml generates as Rails compiles it is also parsed with Prism 2.0.0 (prism_errors.rb, in a process
+# Without it, the Ruby Haml generates as Rails compiles it is also parsed with Prism 2.1.0 (prism_errors.rb, in a process
 # of its own, since this one runs on Prism 1.9.0): its errors come back as {"errors": [{message, line, column: null}]}.
 # --ruby-version X.Y|latest picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
 require "json"
@@ -45,7 +45,7 @@ def one_based_line(error)
   error.backtrace ? error.line&.succ : error.line
 end
 
-# Prism 2.0.0's errors in the Ruby Rails would compile for `template`, at the template's lines.
+# Prism 2.1.0's errors in the Ruby Rails would compile for `template`, at the template's lines.
 def ruby_errors(template, version_flag)
   source = Haml::Engine.new(RAILS_OPTIONS).call(template)
   last_line = [template.lines.size, 1].max

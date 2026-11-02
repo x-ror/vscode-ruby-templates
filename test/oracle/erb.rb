@@ -1,11 +1,11 @@
-# Compiles the ERB template on stdin the way Rails 8.1.4 does and parses the Ruby it would eval with Prism 2.0.0.
+# Compiles the ERB template on stdin the way Rails 8.1.4 does and parses the Ruby it would eval with Prism 2.1.0.
 # Usage: erb.rb [--file name.html.erb] [--normalize] [--ruby-version X.Y|latest]; the name picks the format and appears in Rails' messages.
 # --ruby-version picks Prism's grammar (3.3, 3.4, 3.5, 4.0, 4.1 or latest); without it Prism uses the running Ruby's.
 # --normalize compiles the template with the leading and trailing whitespace of its text lines removed (see below).
 # Prints {"errors": [{message, line, column}]} for every error, else {"source": the method source Rails evals}.
 require "json"
 gem "minitest", "< 6" # minitest 6 (an ActiveSupport dependency) wants prism ~> 1.5
-gem "prism", "2.0.0"
+gem "prism", "2.1.0"
 gem "actionview", "8.1.4"
 gem "erubi", "1.13.1"
 require "prism"

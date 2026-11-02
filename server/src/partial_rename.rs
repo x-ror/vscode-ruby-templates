@@ -16,7 +16,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Location, Range, TextEdit, Url};
+use tower_lsp_server::ls_types::{Location, Range, TextEdit, Uri};
 use walkdir::WalkDir;
 
 static PARTIAL_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"partial\s*(?::|=>)\s*["']$"#).unwrap());
@@ -165,7 +165,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     let stems = partial_stems(project, files);
     let mut out = Vec::new();
     for source in sources {
-        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         let named = code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name))
             .into_iter()
@@ -190,7 +190,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
         .filter_map(|LocalKey { source, key, .. }| {
             let (start, end) = key?;
             let index = LineIndex::new(&source.text);
-            Some(Location::new(Url::from_file_path(&source.path).ok()?, Range::new(index.position(start), index.position(end))))
+            Some(Location::new(crate::util::file_uri(&source.path)?, Range::new(index.position(start), index.position(end))))
         })
         .collect()
 }
@@ -204,10 +204,10 @@ pub fn local_key_edits(
     new: &str,
     sources: &[Source],
     extra_engines: &[String],
-) -> (Vec<(Url, TextEdit)>, Vec<Location>) {
+) -> (Vec<(Uri, TextEdit)>, Vec<Location>) {
     let (mut edits, mut unread) = (Vec::new(), Vec::new());
     for LocalKey { source, call, key } in local_keys(project, partial, local, sources, extra_engines) {
-        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         let Some((start, end)) = key else {
             unread.push(Location::new(uri, Range::new(index.position(call), index.position(call))));
@@ -262,7 +262,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     let find = |line: &str| if line.contains(last) { i18n_refs(line) } else { vec![] };
     let mut out = Vec::new();
     for source in sources {
-        let Ok(uri) = Url::from_file_path(&source.path) else { continue };
+        let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         for (start, end, _) in code_refs(source, extra_engines, |_, _, line| find(line), |r| key.ends_with(r.name.as_str()))
             .into_iter()
@@ -322,7 +322,7 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
         .filter_map(|path| {
             let lang = match path.extension() {
                 Some(ext) if ext == "rb" => None,
-                _ => Some(TemplateLang::from_uri_or_id(&Url::from_file_path(&path).ok()?, None)?),
+                _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None)?),
             };
             let text = match open.get(&path) {
                 Some(text) => text.clone(),
@@ -340,7 +340,7 @@ pub fn render_edits(
     renames: &[(PathBuf, PathBuf)],
     sources: &[Source],
     extra_engines: &[String],
-) -> HashMap<Url, Vec<TextEdit>> {
+) -> HashMap<Uri, Vec<TextEdit>> {
     let folder_renamed = renames.iter().any(|(old, _)| old.is_dir());
     let stems = partial_stems(project, renames.iter().map(|(old, _)| old));
 
@@ -365,7 +365,7 @@ pub fn render_edits(
             let range = Range::new(index.position(start), index.position(end));
             edits.push(TextEdit::new(range, name.clone()));
         }
-        if let (false, Ok(uri)) = (edits.is_empty(), Url::from_file_path(&source.path)) {
+        if let (false, Some(uri)) = (edits.is_empty(), crate::util::file_uri(&source.path)) {
             out.insert(uri, edits);
         }
     }
@@ -375,7 +375,7 @@ pub fn render_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::Position;
+    use tower_lsp_server::ls_types::Position;
 
     struct Tree(PathBuf);
 

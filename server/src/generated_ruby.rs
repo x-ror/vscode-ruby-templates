@@ -2,7 +2,7 @@
 
 use crate::prism;
 use crate::util::{error, leading_ws, span_range, LineIndex};
-use tower_lsp::lsp_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Slim and Haml compile into a method body, where `yield` is valid; Prism, parsing it alone, says otherwise.
 const IGNORED_ERROR: &str = "Invalid yield";

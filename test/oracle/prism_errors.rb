@@ -1,9 +1,9 @@
-# Parses the Ruby on stdin with Prism 2.0.0, inside the method Rails compiles a template into, and prints its errors as
+# Parses the Ruby on stdin with Prism 2.1.0, inside the method Rails compiles a template into, and prints its errors as
 # JSON: [{message, line, column: null}], at the lines of the source on stdin.
 # Haml 7.5.1 mis-lexes nested hashes with Prism 2.x, so haml.rb (on 1.9.0) runs this in a process of its own.
 # --last-line N clamps the lines Haml's own last line adds to the template's; --ruby-version X.Y|latest picks the grammar.
 require "json"
-gem "prism", "2.0.0"
+gem "prism", "2.1.0"
 require "prism"
 
 def option(name) = (ARGV[ARGV.index(name) + 1] if ARGV.include?(name))

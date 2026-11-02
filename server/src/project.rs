@@ -127,7 +127,7 @@ impl Project {
     /// The Prism grammar of the project's Ruby, the latest when it names none.
     pub fn prism_version(&self) -> ruby_prism::Version {
         let Some(ruby) = &self.ruby else { return ruby_prism::Version::Latest };
-        // Prism 2.0.0 has no grammar before 3.3, which stands in for older Rubies.
+        // Prism 2.1.0 has no grammar before 3.3, which stands in for older Rubies.
         PRISM_GRAMMARS.iter().rfind(|(since, _)| ruby.at_least(since)).map_or(ruby_prism::Version::CRuby3_3, |&(_, grammar)| grammar)
     }
 
@@ -137,10 +137,10 @@ impl Project {
     }
 }
 
-/// Grammars Prism 2.0.0 vendors after 3.3, by the first Ruby version that uses each.
+/// Grammars Prism 2.1.0 vendors after 3.3, by the first Ruby version that uses each.
 const PRISM_GRAMMARS: [(&str, ruby_prism::Version); 4] = [
     ("3.4", ruby_prism::Version::CRuby3_4),
-    ("3.5", ruby_prism::Version::CRuby3_5),
+    ("3.5", ruby_prism::Version::CRuby4_0),
     ("4.1", ruby_prism::Version::CRuby4_1),
     ("4.2", ruby_prism::Version::Latest),
 ];
@@ -369,8 +369,8 @@ mod tests {
             ("3.3.6", CRuby3_3),
             ("3.4.0", CRuby3_4),
             ("3.4.9", CRuby3_4),
-            ("3.5.0", CRuby3_5),
-            ("4.0.2", CRuby3_5),
+            ("3.5.0", CRuby4_0),
+            ("4.0.2", CRuby4_0),
             ("4.1.0", CRuby4_1),
             ("4.1.9", CRuby4_1),
             ("4.2.0", Latest),

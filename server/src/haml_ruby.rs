@@ -3,7 +3,7 @@
 use crate::generated_ruby::Compiled;
 use crate::haml_parser::{Chunk, Parsed, Piece, BOM};
 use crate::strict_locals::{self, Comment};
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp_server::ls_types::Diagnostic;
 
 /// The method Rails compiles a template into, up to its parameters.
 const WRAPPER_DEF: &str = "def _template(";

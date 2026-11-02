@@ -8,7 +8,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Ruby's `\s`, which `STRICT_LOCALS_REGEX` is written in.
 const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
@@ -213,7 +213,7 @@ pub fn comment_diagnostics(text: &str, comment: &Comment, ruby: ruby_prism::Vers
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::Position;
+    use tower_lsp_server::ls_types::Position;
 
     const IDENTIFIER: &str = "app/views/users/_card.html.haml";
 

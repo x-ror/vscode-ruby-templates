@@ -9,7 +9,7 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use tower_lsp::lsp_types::{Diagnostic, Url};
+use tower_lsp_server::ls_types::{Diagnostic, Uri};
 
 #[derive(Clone)]
 pub(crate) struct Doc {
@@ -107,18 +107,18 @@ impl Options {
     }
 }
 
-pub(crate) fn diagnostics(uri: &Url, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
+pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     diagnostics_in(uri, doc, options, &mut Projects::new())
 }
 
 /// `diagnostics`, taking the template's project from `projects` when a run already loaded it.
-pub(crate) fn diagnostics_in(uri: &Url, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
+pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
-    if uri.path().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
+    if uri.path().as_str().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
         return vec![];
     }
-    let path = uri.to_file_path().ok();
+    let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
     let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, &doc.text, &options.extra_engines, &ruby);
@@ -157,13 +157,13 @@ impl RubyContext {
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
-pub(crate) fn ruby_context(uri: &Url, projects: &mut Projects) -> RubyContext {
-    uri.to_file_path().map_or_else(|_| RubyContext::outside_project(), |path| RubyContext::of(&path, Project::memoized(projects, &path)))
+pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
+    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| RubyContext::of(&path, Project::memoized(projects, &path)))
 }
 
 /// The template language's own checks, without the render checks that need app/views.
 pub(crate) fn language_diagnostics(
-    uri: &Url,
+    uri: &Uri,
     lang: TemplateLang,
     plain_erb: bool,
     text: &str,
@@ -366,13 +366,13 @@ mod tests {
     use super::*;
     use crate::code_context::in_ruby_context;
     use std::collections::BTreeSet;
-    use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString, Position, Range};
+    use tower_lsp_server::ls_types::{DiagnosticSeverity, NumberOrString, Position, Range};
 
     #[test]
     fn void_children_only_for_html_slim() {
         let text = "img\n  | x\n";
         let has_void = |path: &str| {
-            let uri = Url::parse(path).unwrap();
+            let uri = path.parse::<Uri>().unwrap();
             diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), plain_erb: false, version: 0 }, &Options::default())
                 .iter()
                 .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
@@ -423,7 +423,7 @@ mod tests {
         assert!(align(serde_json::json!(true)).0.align_erb_comments);
         assert_eq!(align(serde_json::json!("yes")).1.len(), 1);
         let count = |lang, text: &str, options: &Options| {
-            let uri = Url::parse("file:///v/show.html.erb").unwrap();
+            let uri = "file:///v/show.html.erb".parse::<Uri>().unwrap();
             diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, options).len()
         };
         assert_eq!(count(TemplateLang::Erb, "<% end %>\n", &Options::default()), 1);
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn disabled_diagnostics_per_language() {
         let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
-            let uri = Url::parse(path).unwrap();
+            let uri = path.parse::<Uri>().unwrap();
             diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, options)
                 .into_iter()
                 .map(|d| match d.code {
@@ -538,14 +538,14 @@ mod tests {
             ("f.jbuilder", TemplateLang::Ruby, "json.partial! \"users/gone\"\n", "ruby"),
         ];
         for (name, lang, text, source) in cases {
-            let uri = Url::from_file_path(views.join(name)).unwrap();
+            let uri = crate::util::file_uri(views.join(name)).unwrap();
             let found = diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, &Options::default());
             assert!(!found.is_empty(), "{name}");
             for d in found {
                 assert_eq!(d.source.as_deref(), Some(source), "{name}: {}", d.message);
             }
         }
-        let uri = Url::from_file_path(views.join("g.html.erb")).unwrap();
+        let uri = crate::util::file_uri(views.join("g.html.erb")).unwrap();
         let html = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb: false, version: 0 };
         let found = diagnostics(&uri, &html, &Options::default());
         assert_eq!(found.iter().filter_map(util::code).collect::<Vec<_>>(), [tags::code::UNCLOSED_ELEMENT]);
@@ -557,7 +557,7 @@ mod tests {
     fn untitled_erb_gets_html_diagnostics() {
         let codes = |uri: &str, plain_erb| {
             let doc = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb, version: 0 };
-            let found = diagnostics(&Url::parse(uri).unwrap(), &doc, &Options::default());
+            let found = diagnostics(&uri.parse::<Uri>().unwrap(), &doc, &Options::default());
             found.iter().filter_map(util::code).map(str::to_owned).collect::<Vec<_>>()
         };
         assert_eq!(codes("untitled:Untitled-1", true), [tags::code::UNCLOSED_ELEMENT]);
@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn skim_skips_ruby_checks() {
-        let uri = Url::parse("untitled:Untitled-1").unwrap();
+        let uri = "untitled:Untitled-1".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
         let ruby = "- else\n= alert(\"hi\"\n";
         let explicit_end = "- end = start + 10\n";
@@ -607,7 +607,7 @@ mod tests {
     fn thor_templates_skip_structure_checks() {
         let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
         let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), plain_erb: false, version: 0 };
-        let uri = |name: &str| Url::parse(&format!("file:///app/lib/templates/haml/scaffold/{name}")).unwrap();
+        let uri = |name: &str| format!("file:///app/lib/templates/haml/scaffold/{name}").parse::<Uri>().unwrap();
         assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &Options::default()).is_empty());
         assert!(!diagnostics(&uri("index.html.haml"), &doc(), &Options::default()).is_empty());
         let erb = Doc {
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn jbuilder_and_builder_views() {
-        let lang = |path: &str, id| TemplateLang::from_uri_or_id(&Url::parse(path).unwrap(), id);
+        let lang = |path: &str, id| TemplateLang::from_uri_or_id(&path.parse::<Uri>().unwrap(), id);
         assert_eq!(lang("file:///app/views/users/index.json.jbuilder", Some("ruby")), Some(TemplateLang::Ruby));
         assert_eq!(lang("file:///app/views/feed.atom.builder", Some("ruby")), Some(TemplateLang::Ruby));
         assert_eq!(lang("file:///app/views/users/index.json.jbuilder", None), Some(TemplateLang::Ruby));
@@ -851,7 +851,7 @@ mod tests {
             plain_erb: false,
             version: 0,
         };
-        let uri = Url::from_file_path(&file).unwrap();
+        let uri = crate::util::file_uri(&file).unwrap();
         let codes = || -> Vec<String> {
             let found = diagnostics(&uri, &doc, &Options::default());
             found.iter().filter_map(|d| util::code(d).map(String::from)).collect()
@@ -879,7 +879,7 @@ mod tests {
         let file = root.join("app/views/users/_card.html.erb");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let doc = Doc { lang: TemplateLang::Erb, text: "<%# locals: (user, size:) -%>\n".into(), plain_erb: false, version: 0 };
-        let uri = Url::from_file_path(&file).unwrap();
+        let uri = crate::util::file_uri(&file).unwrap();
         let messages = || diagnostics(&uri, &doc, &Options::default()).into_iter().map(|d| d.message).collect::<Vec<_>>();
         let lock = |actionview: &str| {
             std::fs::write(root.join("Gemfile.lock"), format!("GEM\n  specs:\n    actionview ({actionview})\n")).unwrap()
@@ -905,7 +905,7 @@ mod tests {
         for (lang, ext, comment, body) in others {
             let file = root.join(format!("app/views/users/_card.{ext}"));
             let doc = Doc { lang, text: format!("{comment} locals: (user, size:)\n{body} x\n"), plain_erb: false, version: 0 };
-            let found: Vec<_> = diagnostics(&Url::from_file_path(&file).unwrap(), &doc, &Options::default())
+            let found: Vec<_> = diagnostics(&crate::util::file_uri(&file).unwrap(), &doc, &Options::default())
                 .into_iter()
                 .map(|d| (d.range.start.line, util::code(&d).map(String::from), d.message))
                 .collect();

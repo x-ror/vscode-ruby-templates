@@ -5,7 +5,7 @@ use crate::ruby::{analyze, BlockEffect};
 use crate::util::{coded, offset_to_position, warning, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {
@@ -420,7 +420,7 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::Position;
+    use tower_lsp_server::ls_types::Position;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
         super::diagnostics(text, false)
