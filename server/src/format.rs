@@ -72,14 +72,22 @@ pub struct Formatted {
 }
 
 /// `text` formatted, or why it is left as it is.
-pub fn format(uri: &Url, lang: TemplateLang, text: &str, settings: &Settings, extra_engines: &[String]) -> Result<Formatted, Skipped> {
-    format_in(uri, lang, text, settings, extra_engines, &mut Projects::new())
+pub fn format(
+    uri: &Url,
+    lang: TemplateLang,
+    plain_erb: bool,
+    text: &str,
+    settings: &Settings,
+    extra_engines: &[String],
+) -> Result<Formatted, Skipped> {
+    format_in(uri, lang, plain_erb, text, settings, extra_engines, &mut Projects::new())
 }
 
 /// `format`, taking the template's project from `projects` when a run already loaded it.
 pub(crate) fn format_in(
     uri: &Url,
     lang: TemplateLang,
+    plain_erb: bool,
     text: &str,
     settings: &Settings,
     extra_engines: &[String],
@@ -91,20 +99,28 @@ pub(crate) fn format_in(
     let settings = &effective_settings(lang, settings);
     // The formatter refuses on errors, so it must see the ones the server shows: those of the project's Ruby.
     let ruby = ruby_context(uri, projects);
-    let formatted = format_once(uri, lang, text, settings, extra_engines, &ruby)?;
+    let template = Template { uri, lang, plain_erb };
+    let formatted = format_once(template, text, settings, extra_engines, &ruby)?;
     if formatted.text == text {
         return Ok(formatted);
     }
-    if let Some(broken) = broken_invariant(uri, lang, text, &formatted.text, settings, extra_engines, &ruby) {
+    if let Some(broken) = broken_invariant(template, text, &formatted.text, settings, extra_engines, &ruby) {
         return skip(SkipKind::Internal, broken);
     }
     Ok(formatted)
 }
 
+/// What is being formatted: where it lives, its language, and whether it was opened as plain `erb`.
+#[derive(Clone, Copy)]
+struct Template<'a> {
+    uri: &'a Url,
+    lang: TemplateLang,
+    plain_erb: bool,
+}
+
 /// Which invariant turning `text` into `formatted` breaks, if one does.
 fn broken_invariant(
-    uri: &Url,
-    lang: TemplateLang,
+    template: Template,
     text: &str,
     formatted: &str,
     settings: &Settings,
@@ -114,29 +130,29 @@ fn broken_invariant(
     if !same_non_whitespace(text, formatted) {
         return Some("formatting would change more than whitespace");
     }
-    if format_once(uri, lang, formatted, settings, extra_engines, ruby).map(|again| again.text).as_deref() != Ok(formatted) {
+    if format_once(template, formatted, settings, extra_engines, ruby).map(|again| again.text).as_deref() != Ok(formatted) {
         return Some("formatting is not stable");
     }
     // The original's diagnostics matter only when the result has some, which is rare.
-    let after = structure_diagnostics(uri, lang, formatted, extra_engines, ruby);
+    let after = structure_diagnostics(template, formatted, extra_engines, ruby);
     if after.is_empty() {
         return None;
     }
-    let before = structure_diagnostics(uri, lang, text, extra_engines, ruby);
+    let before = structure_diagnostics(template, text, extra_engines, ruby);
     after.iter().any(|d| !before.contains(d)).then_some("formatting would add a diagnostic")
 }
 
 fn format_once(
-    uri: &Url,
-    lang: TemplateLang,
+    template: Template,
     text: &str,
     settings: &Settings,
     extra_engines: &[String],
     ruby: &RubyContext,
 ) -> Result<Formatted, Skipped> {
+    let Template { uri, lang, plain_erb } = template;
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
-        TemplateLang::Erb if !html_host(uri) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
+        TemplateLang::Erb if !html_host(uri, plain_erb) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
         TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
@@ -195,12 +211,12 @@ fn same_non_whitespace(a: &str, b: &str) -> bool {
 
 /// The language's own structure checks, as `(code, message)` with line numbers dropped, since Slim and Haml drop
 /// trailing blank lines.
-fn structure_diagnostics(uri: &Url, lang: TemplateLang, text: &str, extra_engines: &[String], ruby: &RubyContext) -> Vec<(String, String)> {
+fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String], ruby: &RubyContext) -> Vec<(String, String)> {
     let key = |d: &Diagnostic| {
         let code = util::code(d).unwrap_or_default().to_string();
         (code, d.message.chars().filter(|c| !c.is_ascii_digit()).collect())
     };
-    language_diagnostics(uri, lang, text, extra_engines, ruby).iter().map(key).collect()
+    language_diagnostics(template.uri, template.lang, template.plain_erb, text, extra_engines, ruby).iter().map(key).collect()
 }
 
 #[cfg(test)]
@@ -213,7 +229,7 @@ mod tests {
 
     fn fmt(name: &str, text: &str, settings: &Settings) -> Result<String, Skipped> {
         let lang = TemplateLang::from_uri_or_id(&uri(name), None).unwrap();
-        format(&uri(name), lang, text, settings, &[]).map(|f| f.text)
+        format(&uri(name), lang, false, text, settings, &[]).map(|f| f.text)
     }
 
     #[test]
@@ -246,7 +262,7 @@ mod tests {
         let text = "<div>\n<%= render \"x\" # locals: (a:) %>\n</div>\n";
         let formatted = |actionview: &str| {
             std::fs::write(root.join("Gemfile.lock"), format!("GEM\n  specs:\n    actionview ({actionview})\n")).unwrap();
-            format(&uri, TemplateLang::Erb, text, &Settings::default(), &[]).map(|f| f.text)
+            format(&uri, TemplateLang::Erb, false, text, &Settings::default(), &[]).map(|f| f.text)
         };
         assert_eq!(formatted("7.1.0").as_deref(), Ok("<div>\n  <%= render \"x\" # locals: (a:) %>\n</div>\n"));
         assert!(formatted("7.0.8").is_err());
@@ -342,7 +358,7 @@ mod tests {
         assert_eq!(fmt("a.js.erb", "x", &s).map_err(|e| e.kind), Err(SkipKind::NotHandled));
         assert!(fmt("a.json.jbuilder", "json.x 1", &s).is_err());
         let template = Url::parse("file:///lib/templates/slim/scaffold/index.html.slim.tt").unwrap();
-        assert!(format(&template, TemplateLang::Slim, "p", &s, &[]).is_err());
+        assert!(format(&template, TemplateLang::Slim, false, "p", &s, &[]).is_err());
     }
 
     const SAMPLES: [(&str, &str); 10] = [
@@ -387,9 +403,11 @@ mod tests {
             let lang = TemplateLang::from_uri_or_id(&uri, None).unwrap();
             for text in variants(sample) {
                 for settings in settings_variants() {
-                    let Ok(once) = format_once(&uri, lang, &text, &settings, &[], &ruby) else { continue };
+                    let Ok(once) = format_once(Template { uri: &uri, lang, plain_erb: false }, &text, &settings, &[], &ruby) else {
+                        continue;
+                    };
                     formatted += 1;
-                    let broken = broken_invariant(&uri, lang, &text, &once.text, &settings, &[], &ruby);
+                    let broken = broken_invariant(Template { uri: &uri, lang, plain_erb: false }, &text, &once.text, &settings, &[], &ruby);
                     assert_eq!(broken, None, "{name} with {settings:?}:\n{text}\n---\n{}", once.text);
                 }
             }
@@ -402,7 +420,7 @@ mod tests {
         for (name, text) in &SAMPLES[7..] {
             let uri = uri(name);
             let lang = TemplateLang::from_uri_or_id(&uri, None).unwrap();
-            let kind = format(&uri, lang, text, &Settings::default(), &[]).map(|f| f.text);
+            let kind = format(&uri, lang, false, text, &Settings::default(), &[]).map(|f| f.text);
             assert!(kind.as_ref().is_err_and(|e| e.kind == SkipKind::Doubt), "{name}: {kind:?}");
         }
     }
@@ -424,10 +442,12 @@ mod tests {
             files += 1;
             for (v, text) in variants(&sample).into_iter().enumerate() {
                 for (s, settings) in settings_variants().into_iter().enumerate() {
-                    match format_once(&uri, lang, &text, &settings, &[], &ruby) {
+                    match format_once(Template { uri: &uri, lang, plain_erb: false }, &text, &settings, &[], &ruby) {
                         Ok(once) => {
                             formatted += 1;
-                            if let Some(broken) = broken_invariant(&uri, lang, &text, &once.text, &settings, &[], &ruby) {
+                            if let Some(broken) =
+                                broken_invariant(Template { uri: &uri, lang, plain_erb: false }, &text, &once.text, &settings, &[], &ruby)
+                            {
                                 violations.push(format!("{} variant {v} settings {s}: {broken}", entry.path().display()));
                             }
                         }
