@@ -268,7 +268,7 @@ impl Backend {
     /// and, unlogged, when formatting is switched off for its language.
     /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
     async fn formatted(&self, uri: &Url, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
-        let (lang, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.text.clone()))?;
+        let (lang, plain_erb, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
         if !self.options().format_enabled(lang) {
             return None;
         }
@@ -285,7 +285,7 @@ impl Backend {
                 settings.final_newline = false;
             }
             settings.align_comments = align_comments;
-            let result = format::format(&uri, lang, &text, &settings, &extra_engines);
+            let result = format::format(&uri, lang, plain_erb, &text, &settings, &extra_engines);
             (uri, text, result)
         })
         .await
@@ -608,7 +608,10 @@ impl LanguageServer for Backend {
             }
             return;
         };
-        self.docs.insert(p.text_document.uri.clone(), Doc { lang, text: p.text_document.text, version: p.text_document.version });
+        self.docs.insert(
+            p.text_document.uri.clone(),
+            Doc { lang, plain_erb: p.text_document.language_id == "erb", text: p.text_document.text, version: p.text_document.version },
+        );
         self.local_callers.clear();
         self.warm_caches(&p.text_document.uri);
         self.publish_later(p.text_document.uri, Duration::ZERO);
@@ -826,8 +829,11 @@ impl LanguageServer for Backend {
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let Some((lang, text)) = self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
-        let (html, extra_engines) = (html_host(&p.text_document.uri), self.options().extra_engines.clone());
+        let Some((lang, plain_erb, text)) = self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))
+        else {
+            return Ok(None);
+        };
+        let (html, extra_engines) = (html_host(&p.text_document.uri, plain_erb), self.options().extra_engines.clone());
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
@@ -841,8 +847,10 @@ impl LanguageServer for Backend {
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
-        let Some((lang, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
-        let (html, extra_engines) = (html_host(&uri), self.options().extra_engines.clone());
+        let Some((lang, plain_erb, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone())) else {
+            return Ok(None);
+        };
+        let (html, extra_engines) = (html_host(&uri, plain_erb), self.options().extra_engines.clone());
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
@@ -1001,7 +1009,9 @@ impl LanguageServer for Backend {
 
     async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
         let uri = p.text_document_position_params.text_document.uri;
-        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri)) else { return Ok(None) };
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri, d.plain_erb)) else {
+            return Ok(None);
+        };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
         let index = util::LineIndex::new(&doc.text);
         let to_range = |(s, e)| Range::new(index.position(s), index.position(e));
@@ -1123,7 +1133,7 @@ impl LanguageServer for Backend {
         // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
         let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
         let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
-        if doc.lang == TemplateLang::Erb && html_host(&uri) && !code_here() {
+        if doc.lang == TemplateLang::Erb && html_host(&uri, doc.plain_erb) && !code_here() {
             let offset = line_start + col;
             if let Some(context) = erb_complete::context(&doc.text, offset) {
                 let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
