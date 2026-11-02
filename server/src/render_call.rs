@@ -50,10 +50,20 @@ pub fn read(text: &str, call_at: usize, name_at: usize) -> Option<Call<'_>> {
     let window = if closed_by_tag { window.trim_end_matches(['-', '=']).trim_end() } else { window };
     let mut line_ends = window.match_indices('\n').map(|(at, _)| at).chain([window.len()]);
     let mut line_start = 0;
-    let mut call = line_ends.by_ref().find_map(|line_end| {
+    let mut call = None;
+    for line_end in line_ends.by_ref() {
         line_start = line_end;
-        read_code(text, call_at, name_at, window[..line_end].trim_end())
-    })?;
+        match read_code(text, call_at, name_at, window[..line_end].trim_end()) {
+            Ok(found) => {
+                call = Some(found);
+                break;
+            }
+            // Later lines can't make an invalid call valid.
+            Err(Failure::Invalid) => return None,
+            Err(Failure::EndsEarly) => {}
+        }
+    }
+    let mut call = call?;
     // A `.method` on the next line goes on with the call's last argument; in Haml and Slim that line is a `.class` element.
     // The text starts at the call's line, so an ERB call has its `<%` there or its `%>` after it.
     if !closed_by_tag && !text[..call_at].contains("<%") {
@@ -69,8 +79,8 @@ pub fn read(text: &str, call_at: usize, name_at: usize) -> Option<Call<'_>> {
             break;
         }
         match read_code(text, call_at, name_at, window[..line_end].trim_end()) {
-            Some(longer) => call = longer,
-            None => break,
+            Ok(longer) => call = longer,
+            Err(_) => break,
         }
     }
     Some(call)
@@ -89,17 +99,19 @@ thread_local! {
 /// A block whose closer lies in a later template tag is closed here so the call parses.
 const BLOCK_CLOSERS: [&str; 2] = ["\nend", "\n}"];
 
-fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str) -> Option<Call<'a>> {
+fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str) -> Result<Call<'a>, Failure> {
     match parse(text, call_at, name_at, code.len(), code) {
-        Ok(found) => return Some(found.call),
-        Err(Failure::Invalid) => return None,
         Err(Failure::EndsEarly) => {}
+        plain => return plain.map(|found| found.call),
     }
-    BLOCK_CLOSERS.iter().find_map(|closer| {
-        let found = parse(text, call_at, name_at, code.len(), &format!("{code}{closer}")).ok()?;
-        // The closer ends the call's block, or lies after the call.
-        (found.has_block || found.node_end <= code.len()).then_some(found.call)
-    })
+    BLOCK_CLOSERS
+        .iter()
+        .find_map(|closer| {
+            let found = parse(text, call_at, name_at, code.len(), &format!("{code}{closer}")).ok()?;
+            // The closer ends the call's block, or lies after the call.
+            (found.has_block || found.node_end <= code.len()).then_some(found.call)
+        })
+        .ok_or(Failure::EndsEarly)
 }
 
 struct Found<'a> {
@@ -126,7 +138,14 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, code_len: usize, sou
         code = source[..comment.location().start() as usize].trim_end();
     }
     let last_token_at = code.len() - code.rsplit(char::is_whitespace).next().map_or(0, str::len);
-    if result.errors().any(|error| error.location().start() as usize >= last_token_at) {
+    // Prism puts an unterminated string at its opening and a heredoc at its tag (`<<~EOS`): more lines may close them.
+    let opens_literal =
+        |at: usize| source[..at].trim_end_matches(['~', '-']).ends_with("<<") || source[at..].starts_with(['"', '\'', '%', '/', '`']);
+    let ends_early = |error: ruby_prism::Diagnostic| {
+        let at = error.location().start() as usize;
+        at >= last_token_at || opens_literal(at)
+    };
+    if result.errors().any(ends_early) {
         return Err(Failure::EndsEarly);
     }
     let found = find(&result, text, call_at, name_at, code_len).ok_or(Failure::Invalid)?;

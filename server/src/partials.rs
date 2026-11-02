@@ -72,7 +72,11 @@ pub struct Lookup {
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
     let mut refs = refs_without_lookups(line);
-    let calls: Vec<_> = refs.iter().map(|r| Some(call_text_and_lookup(line, r))).collect();
+    // Only the options form has lookup options; the call text isn't needed here.
+    let calls: Vec<_> = refs
+        .iter()
+        .map(|r| Some(if RenderForm::of(line, r).options { call_text_and_lookup(line, r) } else { (line, Lookup::default()) }))
+        .collect();
     set_lookups(&mut refs, &calls);
     refs
 }
@@ -712,9 +716,14 @@ pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
 /// `call_text` and the lookup of the call, from one read.
 fn call_text_and_lookup<'a>(text: &'a str, r: &RenderRef) -> (&'a str, Lookup) {
     let Some(parsed) = render_call::read(text, r.call, r.start) else {
-        return (&text[..render_call::window_end(text, r.call)], Lookup::default());
+        let line_end = text[r.call..].find('\n').map_or(text.len(), |at| r.call + at);
+        return (&text[..line_end.min(render_call::window_end(text, r.call))], Lookup::default());
     };
-    (&text[..parsed.end], lookup(&parsed, &RenderForm::of(text, r)))
+    // A `%>` right after the call stays with it, so a re-read of this text still knows it is ERB.
+    let rest = &text[parsed.end..];
+    let tag = rest.trim_start_matches([' ', '\t', '\r', '\n', '-', '=']);
+    let end = if tag.starts_with("%>") { text.len() - tag.len() + 2 } else { parsed.end };
+    (&text[..end], lookup(&parsed, &RenderForm::of(text, r)))
 }
 
 /// `local_key_at` for the text before `offset`, whose render call may start up to `MAX_CALL_LINES` lines higher.
@@ -1149,9 +1158,9 @@ mod tests {
     fn call_text_spans_continued_lines() {
         let call = |text: &str| call_text(text, &render_refs(text.lines().next().unwrap())[0]).to_string();
         assert_eq!(call("= render \"card\",\n  user: u,\n  size: 1\np next"), "= render \"card\",\n  user: u,\n  size: 1");
-        assert_eq!(call("<%= render(\"card\",\n user: u) %>\nx"), "<%= render(\"card\",\n user: u)");
-        assert_eq!(call("<%= render \"card\", locals: {\n a: \"),\" } %>"), "<%= render \"card\", locals: {\n a: \"),\" }");
-        assert_eq!(call("<%= render \"card\" %>, x\ny"), "<%= render \"card\"");
+        assert_eq!(call("<%= render(\"card\",\n user: u) %>\nx"), "<%= render(\"card\",\n user: u) %>");
+        assert_eq!(call("<%= render \"card\", locals: {\n a: \"),\" } %>"), "<%= render \"card\", locals: {\n a: \"),\" } %>");
+        assert_eq!(call("<%= render \"card\" %>, x\ny"), "<%= render \"card\" %>");
         assert_eq!(call("= render \"card\"\n= x,"), "= render \"card\"");
         assert_eq!(call("= render(\"card\", f("), "= render(\"card\", f(", "never closed");
         let text = "= render \"card\",\n  user: u,\n  size: 1\n";
@@ -1164,18 +1173,27 @@ mod tests {
         let text = "<%= render \"card\", a: items\n      .first %>";
         let r = &render_refs(text.lines().next().unwrap())[0];
         let call = call_text(text, r);
-        assert_eq!(call, "<%= render \"card\", a: items\n      .first");
+        assert_eq!(call, "<%= render \"card\", a: items\n      .first %>");
         assert_eq!(passed_locals(call, r), Some(vec!["a"]));
         let apply = |(range, new): ByteEdit| {
             let mut out = call.to_string();
             out.replace_range(range, &new);
             out
         };
-        assert_eq!(apply(add_locals_edit(call, r, &["b"]).unwrap()), "<%= render \"card\", a: items\n      .first, b: nil");
-        assert_eq!(apply(remove_local_edit(call, r, "a").unwrap()), "<%= render \"card\"");
+        assert_eq!(apply(add_locals_edit(call, r, &["b"]).unwrap()), "<%= render \"card\", a: items\n      .first, b: nil %>");
+        assert_eq!(apply(remove_local_edit(call, r, "a").unwrap()), "<%= render \"card\" %>");
         let call_of = |text: &str| call_text(text, &render_refs(text.lines().next().unwrap())[0]).to_string();
-        assert_eq!(call_of("<%= render \"card\", a: items,\n  b: 1\n  &.first %>"), "<%= render \"card\", a: items,\n  b: 1\n  &.first");
+        assert_eq!(call_of("<%= render \"card\", a: items,\n  b: 1\n  &.first %>"), "<%= render \"card\", a: items,\n  b: 1\n  &.first %>");
         assert_eq!(call_of("<%= render \"card\", a: 1\n..3 %>"), "<%= render \"card\", a: 1");
+        // On its own line inside a `<% %>` tag, re-reading the call text still continues it.
+        let own = "<%\n  render \"card\", a: items\n    .first\n%>";
+        let own_ref = &render_refs("  render \"card\", a: items")[0];
+        let own_call = call_text(&own[3..], own_ref);
+        assert_eq!(passed_locals(own_call, own_ref), Some(vec!["a"]));
+        let mut added = own_call.to_string();
+        let (range, new) = add_locals_edit(own_call, own_ref, &["b"]).unwrap();
+        added.replace_range(range, &new);
+        assert_eq!(added, "  render \"card\", a: items\n    .first, b: nil\n%>");
         // In Haml and Slim a leading-dot line is a `.class` element, not Ruby.
         assert_eq!(call_of("= render \"card\", a: 1\n.footer\n  %p hi"), "= render \"card\", a: 1");
         assert_eq!(call_of("== render \"card\", a: 1\n.row"), "== render \"card\", a: 1");
@@ -1427,7 +1445,7 @@ mod tests {
     fn call_text_counts_lines_inside_an_open_quote() {
         let text = format!("= render \"card\", a: \"x\n{}", "y\n".repeat(MAX_CALL_LINES * 2));
         let call = call_text(&text, &render_refs(text.lines().next().unwrap())[0]);
-        assert_eq!(call.lines().count(), MAX_CALL_LINES);
+        assert_eq!(call, text.lines().next().unwrap(), "an unclosed call is its own line");
     }
 
     #[test]
@@ -1524,7 +1542,7 @@ mod tests {
     fn call_text_stops_after_max_call_lines() {
         let text = format!("= render \"card\", a: (\n{}", "1,\n".repeat(MAX_CALL_LINES * 2));
         let call = call_text(&text, &render_refs(text.lines().next().unwrap())[0]);
-        assert_eq!(call.lines().count(), MAX_CALL_LINES);
+        assert_eq!(call, text.lines().next().unwrap(), "an unclosed call is its own line");
     }
 
     #[test]
@@ -1679,7 +1697,7 @@ mod tests {
         assert_eq!(passed_in("<%= render \"card\",\n  a: 1 -%>\n<% x %>"), strs(&["a"]));
         let line = r#"<%= render "card", a: 1 -%>"#;
         let call = call_text(line, &render_refs(line)[0]);
-        assert_eq!(call, r#"<%= render "card", a: 1"#);
+        assert_eq!(call, line, "the tag's end stays with the call");
     }
 
     #[test]
@@ -1821,6 +1839,19 @@ mod tests {
         assert_eq!(key(r#"<%= render "card", a: 1, | , b: 2 %>"#), at("a", ""));
         assert_eq!(key(r#"<%= render("card", a: 1,| b: 2) %>"#), at("a", ""));
         assert_eq!(key(r#"<%= render "card", "a" => 1, b| %>"#), None, "string keys are not locals");
+    }
+
+    #[test]
+    fn plain_renders_and_invalid_calls_cost_few_parses() {
+        let parses = |run: &dyn Fn()| {
+            render_call::PARSES.with(|count| count.set(0));
+            run();
+            render_call::PARSES.with(|count| count.get())
+        };
+        assert_eq!(parses(&|| drop(render_refs(r#"<%= render "card", user: u %>"#))), 0, "no lookup options to read");
+        let invalid = format!("= render \"card\", a: (1,), b: 2\n{}", "%p x\n".repeat(19));
+        let r = &render_refs(invalid.lines().next().unwrap())[0];
+        assert!(parses(&|| drop(passed_locals(&invalid, r))) <= 2, "later lines can't fix an invalid call");
     }
 
     #[test]
