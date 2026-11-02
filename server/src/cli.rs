@@ -5,13 +5,14 @@ use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
 use crate::project::Projects;
+use crate::util;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
-use tower_lsp::lsp_types::{DiagnosticSeverity, Url};
+use tower_lsp_server::ls_types::{DiagnosticSeverity, Uri};
 
 const OK: i32 = 0;
 const FINDINGS: i32 = 1;
@@ -158,9 +159,9 @@ fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
     entry.file_type().is_dir() && (name.starts_with('.') || name == "node_modules")
 }
 
-fn file_uri(path: &Path) -> Option<Url> {
+fn file_uri(path: &Path) -> Option<Uri> {
     let absolute = std::fs::canonicalize(path).or_else(|_| std::path::absolute(path)).ok()?;
-    Url::from_file_path(absolute).ok()
+    Uri::from_file_path(absolute)
 }
 
 fn language(path: &Path) -> Option<TemplateLang> {
@@ -291,7 +292,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, projects
     let shown = path.display();
     let result = match (file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
-            let mut resolved = config::settings_for(&uri.to_file_path().unwrap_or_else(|_| path.to_path_buf()));
+            let mut resolved = config::settings_for(&util::file_path(&uri).unwrap_or_else(|| path.to_path_buf()));
             resolved.settings.align_comments = args.align_comments;
             if args.verbose {
                 eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));

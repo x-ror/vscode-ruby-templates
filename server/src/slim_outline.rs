@@ -6,7 +6,7 @@ use crate::slim_parser::SLIM_ENGINES;
 use crate::util::LineIndex;
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
+use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
 
 static BRANCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:if|unless|elsif|else|case|when)\b").unwrap());
 
@@ -374,7 +374,7 @@ pub fn document_symbols(text: &str, extra_engines: &[String]) -> Vec<DocumentSym
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{Position, Range};
+    use tower_lsp_server::ls_types::{Position, Range};
 
     fn folds(text: &str) -> Vec<(u32, u32)> {
         folding_ranges(text, &[]).into_iter().map(|r| (r.start_line, r.end_line)).collect()

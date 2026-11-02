@@ -8,7 +8,7 @@ use crate::strict_locals::Close;
 use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};
+use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};
 
 pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<CompletionItem> {
     names

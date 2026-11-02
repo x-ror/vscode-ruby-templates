@@ -7,7 +7,7 @@ use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {

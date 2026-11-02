@@ -19,7 +19,7 @@ name = "ruby-templates"
 path = "src/bin/ruby-templates.rs"
 
 [dependencies]
-tower-lsp = "0.20"
+tower-lsp-server = "0.23"
 tokio = { version = "1", features = [
   "rt-multi-thread",
   "macros",
@@ -30,7 +30,7 @@ dashmap = "6"
 regex = "1"
 walkdir = "2"
 serde_json = "1"
-ruby-prism = "=2.0.0"
+ruby-prism = "=2.1.0"
 
 [profile.release]
 opt-level = 3

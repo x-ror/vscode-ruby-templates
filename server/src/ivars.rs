@@ -10,7 +10,7 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 static DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*)def\s+(?:self\.)?([a-z_]\w*[?!]?)").unwrap());
 // Not `@@class_var`, not `==` / `=~` / `=>`.
@@ -175,7 +175,8 @@ pub fn hover(assignments: &[Assignment], name: &str, view: &Path) -> Option<Stri
         .filter(|a| a.name == name && seen.insert((&a.file, a.line)))
         .map(|a| {
             let shown = format!("{}:{}", rails_relative(&a.file, view), a.line + 1);
-            let link = Url::from_file_path(&a.file).map_or_else(|()| shown.clone(), |uri| format!("[{shown}]({uri}#L{})", a.line + 1));
+            let link =
+                Uri::from_file_path(&a.file).map_or_else(|| shown.clone(), |uri| format!("[{shown}]({}#L{})", uri.as_str(), a.line + 1));
             format!("- {link}: {}", inline_code(&a.code))
         })
         .collect();
@@ -318,12 +319,14 @@ end
         let found =
             [at(3, "@user = User.find(params[:id])"), at(9, "@user ||= nil; @user = `whoami`"), at(9, "@user ||= nil; @user = `whoami`")];
         let md = hover(&found, "user", &view).unwrap();
-        let uri = Url::from_file_path(&file).unwrap();
+        let uri = Uri::from_file_path(&file).unwrap();
         let shown = "app/controllers/admin/users_controller.rb";
         assert_eq!(
             md,
             format!(
-                "`@user`\n\n- [{shown}:4]({uri}#L4): `@user = User.find(params[:id])`\n- [{shown}:10]({uri}#L10): `` @user ||= nil; @user = `whoami` ``"
+                "`@user`\n\n- [{shown}:4]({}#L4): `@user = User.find(params[:id])`\n- [{shown}:10]({}#L10): `` @user ||= nil; @user = `whoami` ``",
+                uri.as_str(),
+                uri.as_str()
             )
         );
         assert_eq!(hover(&found, "menu", &view), None);

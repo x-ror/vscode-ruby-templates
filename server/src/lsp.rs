@@ -20,17 +20,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 type LocaleFiles = Arc<i18n::Locales>;
 
 struct Backend {
     client: Client,
-    docs: Arc<DashMap<Url, Doc>>,
+    docs: Arc<DashMap<Uri, Doc>>,
     /// Open controllers, for navigation to their views only; no other request reads them.
-    controllers: DashMap<Url, String>,
+    controllers: DashMap<Uri, String>,
     /// Files under each app/views root, for render completion.
     templates: Arc<DashMap<PathBuf, Arc<Vec<PathBuf>>>>,
     /// Parsed locale files per config/locales directory.
@@ -52,7 +52,7 @@ struct Backend {
     /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
     local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
-    publishes: Arc<DashMap<Url, u64>>,
+    publishes: Arc<DashMap<Uri, u64>>,
     next_publish: AtomicU64,
 }
 
@@ -143,7 +143,7 @@ fn i18n_key_at(
 fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
     Some(DocumentLink {
         range,
-        target: Some(Url::from_file_path(target).ok()?),
+        target: Some(Uri::from_file_path(target)?),
         tooltip: Some(rails_paths::rails_relative(target, from)),
         data: None,
     })
@@ -153,7 +153,7 @@ fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
 fn translation_locations(files: &i18n::Locales, key: &str) -> Vec<Location> {
     let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
     i18n::lookup(files, key)
-        .filter_map(|(file, t)| Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start(t), start(t)))))
+        .filter_map(|(file, t)| Some(Location::new(Uri::from_file_path(file)?, Range::new(start(t), start(t)))))
         .collect()
 }
 
@@ -192,7 +192,7 @@ fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, rea
 
 /// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
 async fn off_server_task<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp::jsonrpc::Error::internal_error())
+    tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp_server::jsonrpc::Error::internal_error())
 }
 
 /// Edits replacing each line in `lines` that differs between `text` and `formatted`; `None` when formatting added or
@@ -218,7 +218,7 @@ const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.erbSpacing");
 
 /// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file when `only` asks
 /// for source actions: VS Code requests code actions on every cursor move, without `only`.
-fn spacing_actions(uri: &Url, text: &str, range: Range, only: Option<&[CodeActionKind]>) -> Vec<CodeActionOrCommand> {
+fn spacing_actions(uri: &Uri, text: &str, range: Range, only: Option<&[CodeActionKind]>) -> Vec<CodeActionOrCommand> {
     let (Some(from), Some(to)) = (util::position_to_offset(text, range.start), util::position_to_offset(text, range.end)) else {
         return vec![];
     };
@@ -253,7 +253,7 @@ fn file_location(file: impl AsRef<Path>) -> Option<Location> {
 
 fn line_location(file: impl AsRef<Path>, line: usize) -> Option<Location> {
     let start = Position::new(line as u32, 0);
-    Some(Location::new(Url::from_file_path(file).ok()?, Range::new(start, start)))
+    Some(Location::new(Uri::from_file_path(file)?, Range::new(start, start)))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -267,7 +267,7 @@ impl Backend {
     /// The document's text and the text formatted with the editor's `options`; `None` (logged) when it is left as it is,
     /// and, unlogged, when formatting is switched off for its language.
     /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
-    async fn formatted(&self, uri: &Url, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
+    async fn formatted(&self, uri: &Uri, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
         let (lang, plain_erb, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
         if !self.options().format_enabled(lang) {
             return None;
@@ -278,7 +278,7 @@ impl Backend {
         let extra_engines = self.options().extra_engines.clone();
         // Reads .editorconfig and the project from disk, and formats a whole file: off the server task.
         let result = off_server_task(move || {
-            let path = uri.to_file_path().ok();
+            let path = util::file_path(&uri);
             let mut settings =
                 path.map_or_else(format::Settings::default, |path| config::settings_for(&path).settings).with_editor(&options);
             if lines_only {
@@ -306,7 +306,7 @@ impl Backend {
     /// Publish the document's diagnostics after `delay`, unless a later call for it (an edit, a reopen, a file
     /// change on disk) supersedes this one. They are computed on a copy, off the server task: holding the `docs`
     /// guard would block the next `did_change`.
-    fn publish_later(&self, uri: Url, delay: Duration) {
+    fn publish_later(&self, uri: Uri, delay: Duration) {
         // Unique across closes and reopens, which may restart a document's versions.
         let run = self.next_publish.fetch_add(1, Ordering::Relaxed);
         self.publishes.insert(uri.clone(), run);
@@ -340,8 +340,8 @@ impl Backend {
 
     /// Fills the app/views and locale caches of `uri`'s app in the background, so the first render or i18n request
     /// after a view opens or files change finds them ready instead of walking the app on the server task.
-    fn warm_caches(&self, uri: &Url) {
-        let Ok(path) = uri.to_file_path() else { return };
+    fn warm_caches(&self, uri: &Uri) {
+        let Some(path) = util::file_path(uri) else { return };
         let claim = |root: &PathBuf, cached: bool| !cached && self.warming.insert(root.clone());
         let views = rails_paths::views_root(&path).filter(|views| claim(views, self.templates.contains_key(views)));
         let locales = i18n::locales_dir(&path).filter(|dir| claim(dir, self.locales.contains_key(dir)));
@@ -367,8 +367,6 @@ impl Backend {
         self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
     }
 
-    /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's URIs percent-encode `+`, `@`
-    /// and drive colons where `Url::from_file_path` doesn't.
     /// `rubyTemplates/routes`: `{ root, routes }` from the client's `bin/rails runner`.
     async fn set_routes(&self, params: serde_json::Value) {
         let Some(root) = params.get("root").and_then(serde_json::Value::as_str).map(PathBuf::from) else { return };
@@ -420,7 +418,7 @@ impl Backend {
         let Some(passed) = partials::passed_locals(call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
-        let (Ok(uri), Ok(partial_uri)) = (Url::from_file_path(path), Url::from_file_path(&partial)) else { return vec![] };
+        let (Some(uri), Some(partial_uri)) = (Uri::from_file_path(path), Uri::from_file_path(&partial)) else { return vec![] };
         let partial_text = match self.docs.get(&partial_uri) {
             Some(doc) => doc.text.clone(),
             None => std::fs::read_to_string(&partial).unwrap_or_default(),
@@ -466,11 +464,11 @@ impl Backend {
 
     /// The strict local under `pos` of the partial `uri` and its word's range: a read in code, or its parameter in the
     /// `locals:` comment; not a hash key of that name, nor a block variable hiding it.
-    fn strict_local_at(&self, uri: &Url, doc: &Doc, pos: Position) -> Option<StrictLocal> {
+    fn strict_local_at(&self, uri: &Uri, doc: &Doc, pos: Position) -> Option<StrictLocal> {
         if !is_partial(uri) {
             return None;
         }
-        let close = strict_locals::Close::of(&Project::for_template(&uri.to_file_path().ok()?));
+        let close = strict_locals::Close::of(&Project::for_template(&util::file_path(uri)?));
         let comment = strict_locals::find(&doc.text, close)?;
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let name = helper_defs::name_at(line, col)?;
@@ -488,7 +486,7 @@ impl Backend {
 
     /// Where the partial `path` (text `text`) declares and uses `local`, then the `render` calls passing it.
     async fn local_references(&self, path: &Path, text: &str, local: &StrictLocal, declaration: bool) -> Result<Vec<Location>> {
-        let Ok(uri) = Url::from_file_path(path) else { return Ok(vec![]) };
+        let Some(uri) = Uri::from_file_path(path) else { return Ok(vec![]) };
         let index = util::LineIndex::new(text);
         let span = |(start, end): (usize, usize)| Location::new(uri.clone(), Range::new(index.position(start), index.position(end)));
         let declared = local.declaration.filter(|_| declaration);
@@ -512,15 +510,16 @@ impl Backend {
         root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
     }
 
+    /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's Windows URIs differ in drive-letter
+    /// case and colon encoding (`c%3A` vs `C%3A`) from `Uri::from_file_path`.
     fn open_texts(&self) -> HashMap<PathBuf, String> {
-        let templates = self.docs.iter().filter_map(|d| Some((d.key().to_file_path().ok()?, d.text.clone())));
+        let templates = self.docs.iter().filter_map(|d| Some((util::file_path(d.key())?, d.text.clone())));
         // Partial and i18n references also scan controllers; their unsaved text is the current one.
-        let controllers = self.controllers.iter().filter_map(|c| Some((c.key().to_file_path().ok()?, c.value().clone())));
+        let controllers = self.controllers.iter().filter_map(|c| Some((util::file_path(c.key())?, c.value().clone())));
         templates.chain(controllers).collect()
     }
 }
 
-#[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let (options, ignored) = Options::from_init(params.initialization_options.as_ref());
@@ -532,11 +531,12 @@ impl LanguageServer for Backend {
         #[allow(deprecated)]
         let root_uri = params.root_uri.iter().cloned();
         let folders = params.workspace_folders.unwrap_or_default().into_iter().map(|f| f.uri);
-        let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| u.to_file_path().ok()).collect());
+        let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| util::file_path(&u)).collect());
         let dynamic_formatting =
             params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
         let _ = self.dynamic_formatting.set(dynamic_formatting);
         Ok(InitializeResult {
+            offset_encoding: None,
             server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
@@ -602,7 +602,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
         let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else {
-            if p.text_document.uri.to_file_path().is_ok_and(|path| controllers::controller_path(&path).is_some()) {
+            if util::file_path(&p.text_document.uri).is_some_and(|path| controllers::controller_path(&path).is_some()) {
                 self.controllers.insert(p.text_document.uri, p.text_document.text);
             }
             return;
@@ -637,13 +637,13 @@ impl LanguageServer for Backend {
 
     async fn did_change_watched_files(&self, p: DidChangeWatchedFilesParams) {
         let events: Vec<(PathBuf, FileChangeType)> =
-            p.changes.into_iter().filter_map(|e| Some((e.uri.to_file_path().ok()?, e.typ))).collect();
+            p.changes.into_iter().filter_map(|e| Some((util::file_path(&e.uri)?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
         self.local_callers.clear();
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
-        let open: Vec<Url> = self.docs.iter().map(|d| d.key().clone()).collect();
+        let open: Vec<Uri> = self.docs.iter().map(|d| d.key().clone()).collect();
         for uri in open {
             self.warm_caches(&uri);
             self.publish_later(uri, Duration::ZERO);
@@ -663,7 +663,7 @@ impl LanguageServer for Backend {
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = Project::for_template(&path);
         if let Some(text) = self.controllers.get(&uri) {
             let (_, line, col) = util::line_at(&text, pos);
@@ -729,7 +729,7 @@ impl LanguageServer for Backend {
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
-        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = Project::for_template(&path);
         if let Some(text) = self.controllers.get(&uri) {
             let links = util::lines_with_offsets(&text)
@@ -770,7 +770,7 @@ impl LanguageServer for Backend {
                 return Ok(markdown_hover(md.to_string()));
             }
         }
-        let file = uri.to_file_path().ok().map(|path| (Project::for_template(&path), path));
+        let file = util::file_path(&uri).map(|path| (Project::for_template(&path), path));
         if let Some((project, path)) = &file {
             if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
@@ -865,7 +865,7 @@ impl LanguageServer for Backend {
         let uri = p.text_document.uri;
         // A copy, so no guard is held while the fixes below read the partial from the same map.
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
-        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = util::file_path(&uri) else { return Ok(None) };
         // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
         let project = LazyCell::new(|| Project::for_template(&path));
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
@@ -881,7 +881,7 @@ impl LanguageServer for Backend {
             let r = partials::render_refs_in(&doc.text, line_start, line, |r| r.start == start).pop()?;
             let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
-                uri: Url::from_file_path(&target).ok()?,
+                uri: Uri::from_file_path(&target)?,
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
                 annotation_id: None,
             };
@@ -915,12 +915,12 @@ impl LanguageServer for Backend {
         let new = p.new_name;
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(local) = self.strict_local_at(&uri, &doc, p.text_document_position.position) else { return Ok(None) };
-        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = Project::for_template(&path);
         let close = strict_locals::Close::of(&project);
         let extra_engines = self.options().extra_engines.clone();
         if !self.free_local_name(&doc, close, &new) {
-            return Err(tower_lsp::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
+            return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
         }
         let index = util::LineIndex::new(&doc.text);
         let edit = |start: usize, end: usize, text: String| TextEdit::new(Range::new(index.position(start), index.position(end)), text);
@@ -956,7 +956,7 @@ impl LanguageServer for Backend {
     async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
-        let Ok(path) = uri.to_file_path() else { return Ok(None) };
+        let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = Project::for_template(&path);
         let extra_engines = self.options().extra_engines.clone();
         let i18n_key = {
@@ -1018,16 +1018,16 @@ impl LanguageServer for Backend {
     }
 
     /// Partials and templates by their render name (`users/card`), matched like VS Code's fuzzy filter.
-    async fn symbol(&self, p: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
+    async fn symbol(&self, p: WorkspaceSymbolParams) -> Result<Option<WorkspaceSymbolResponse>> {
         let query = p.query.to_lowercase();
-        let open = self.docs.iter().filter_map(|d| rails_paths::views_root(&d.key().to_file_path().ok()?)).collect::<Vec<_>>();
+        let open = self.docs.iter().filter_map(|d| rails_paths::views_root(&util::file_path(d.key())?)).collect::<Vec<_>>();
         let mut roots: Vec<PathBuf> =
             self.roots.get().into_iter().flatten().map(|r| r.join("app/views")).filter(|v| v.is_dir()).chain(open).collect();
         roots.sort();
         roots.dedup();
         let mut out = Vec::new();
         for views in roots {
-            let is_template = |f: &&PathBuf| Url::from_file_path(f).is_ok_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
+            let is_template = |f: &&PathBuf| Uri::from_file_path(f).is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
             let project = Project::for_template(&views.join("_"));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
@@ -1046,11 +1046,11 @@ impl LanguageServer for Backend {
                 });
             }
         }
-        Ok(Some(out))
+        Ok(Some(WorkspaceSymbolResponse::Flat(out)))
     }
 
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
-        let to_path = |uri: &str| Url::parse(uri).ok()?.to_file_path().ok();
+        let to_path = |uri: &str| util::file_path(&uri.parse::<Uri>().ok()?);
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
         let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| rails_paths::views_root(old)).collect();
         roots.sort();
@@ -1093,7 +1093,7 @@ impl LanguageServer for Backend {
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];
 
-        let path = uri.to_file_path().ok();
+        let path = util::file_path(&uri);
         let items = |items| Ok(Some(CompletionResponse::Array(items)));
         // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
         let project_cell = OnceCell::new();
@@ -1295,7 +1295,7 @@ mod tests {
         let mut got: Vec<String> = partial_rename::render_edits(&Project::unknown(), renames, &sources, &[])
             .into_iter()
             .flat_map(|(uri, edits)| {
-                let file = uri.path().rsplit('/').next().unwrap_or("").to_string();
+                let file = uri.path().as_str().rsplit('/').next().unwrap_or("").to_string();
                 edits.into_iter().map(move |e| format!("{file} {}:{} {}", e.range.start.line, e.range.start.character, e.new_text))
             })
             .collect();

@@ -6,7 +6,7 @@ use crate::lang::{html_host, is_partial, TemplateLang};
 use crate::project::Projects;
 use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim_ruby, util};
 use std::fmt;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Url};
+use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Uri};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -73,7 +73,7 @@ pub struct Formatted {
 
 /// `text` formatted, or why it is left as it is.
 pub fn format(
-    uri: &Url,
+    uri: &Uri,
     lang: TemplateLang,
     plain_erb: bool,
     text: &str,
@@ -85,7 +85,7 @@ pub fn format(
 
 /// `format`, taking the template's project from `projects` when a run already loaded it.
 pub(crate) fn format_in(
-    uri: &Url,
+    uri: &Uri,
     lang: TemplateLang,
     plain_erb: bool,
     text: &str,
@@ -93,7 +93,7 @@ pub(crate) fn format_in(
     extra_engines: &[String],
     projects: &mut Projects,
 ) -> Result<Formatted, Skipped> {
-    if uri.path().to_ascii_lowercase().ends_with(".tt") {
+    if uri.path().as_str().to_ascii_lowercase().ends_with(".tt") {
         return skip(SkipKind::NotHandled, "generator template: the generator's ERB is mixed in");
     }
     let settings = &effective_settings(lang, settings);
@@ -113,7 +113,7 @@ pub(crate) fn format_in(
 /// What is being formatted: where it lives, its language, and whether it was opened as plain `erb`.
 #[derive(Clone, Copy)]
 struct Template<'a> {
-    uri: &'a Url,
+    uri: &'a Uri,
     lang: TemplateLang,
     plain_erb: bool,
 }
@@ -223,8 +223,8 @@ fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String
 mod tests {
     use super::*;
 
-    fn uri(name: &str) -> Url {
-        Url::parse(&format!("file:///app/views/users/{name}")).unwrap()
+    fn uri(name: &str) -> Uri {
+        format!("file:///app/views/users/{name}").parse::<Uri>().unwrap()
     }
 
     fn fmt(name: &str, text: &str, settings: &Settings) -> Result<String, Skipped> {
@@ -257,7 +257,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rt-format-locals-{}", std::process::id()));
         let file = root.join("app/views/users/_card.html.erb");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let uri = Url::from_file_path(&file).unwrap();
+        let uri = Uri::from_file_path(&file).unwrap();
         // Rails 7.1 cuts `# locals: (a:)` out of the tag; before, the `#` comments out the rest of the line.
         let text = "<div>\n<%= render \"x\" # locals: (a:) %>\n</div>\n";
         let formatted = |actionview: &str| {
@@ -357,7 +357,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(fmt("a.js.erb", "x", &s).map_err(|e| e.kind), Err(SkipKind::NotHandled));
         assert!(fmt("a.json.jbuilder", "json.x 1", &s).is_err());
-        let template = Url::parse("file:///lib/templates/slim/scaffold/index.html.slim.tt").unwrap();
+        let template = "file:///lib/templates/slim/scaffold/index.html.slim.tt".parse::<Uri>().unwrap();
         assert!(format(&template, TemplateLang::Slim, false, "p", &s, &[]).is_err());
     }
 
@@ -435,7 +435,7 @@ mod tests {
         let mut violations = Vec::new();
         let ruby = RubyContext::outside_project();
         for entry in walkdir::WalkDir::new(dir).into_iter().filter_map(Result::ok).filter(|e| e.file_type().is_file()) {
-            let Ok(uri) = Url::from_file_path(entry.path()) else { continue };
+            let Some(uri) = Uri::from_file_path(entry.path()) else { continue };
             let (Some(lang), Ok(sample)) = (TemplateLang::from_uri_or_id(&uri, None), std::fs::read_to_string(entry.path())) else {
                 continue;
             };

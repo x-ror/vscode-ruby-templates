@@ -3,7 +3,7 @@
 use crate::slim_parser::{self, Piece, BOM, VOID_ELEMENTS};
 use crate::slim_ruby;
 use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
 pub mod code {
@@ -273,7 +273,7 @@ fn is_explicit_end(code: &str) -> bool {
 }
 
 /// Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
-fn check_explicit_end(code: &str, range: tower_lsp::lsp_types::Range, out: &mut Vec<Diagnostic>) {
+fn check_explicit_end(code: &str, range: tower_lsp_server::ls_types::Range, out: &mut Vec<Diagnostic>) {
     if is_explicit_end(code) {
         out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
     }
@@ -438,7 +438,7 @@ fn find_quoted(s: &str, q: char) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::{DiagnosticSeverity, NumberOrString};
+    use tower_lsp_server::ls_types::{DiagnosticSeverity, NumberOrString};
 
     fn diagnostics(text: &str, extra_engines: &[String]) -> Vec<Diagnostic> {
         super::diagnostics(text, extra_engines, ruby_prism::Version::Latest)

@@ -5,7 +5,7 @@ use crate::haml_parser::HAML_FILTERS;
 use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
 use crate::ruby;
 use crate::util::{completion_item, leading_ws};
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
+use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// What the cursor is completing, besides Ruby.
 #[derive(Debug, PartialEq, Eq)]

@@ -12,7 +12,7 @@ use crate::tags::{self, Block, PState, Tag, Token, OPTIONAL_END, VOID};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::DiagnosticSeverity;
+use tower_lsp_server::ls_types::DiagnosticSeverity;
 
 // A `<pre>`/`<textarea>` built by a helper: its block body keeps every space, but `tags.rs` sees no element.
 static PRE_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(tag\.(pre|textarea)|content_tag[ (]\s*:(pre|textarea))\b").unwrap());

@@ -4,7 +4,7 @@ use crate::generated_ruby::{push_ruby_string_body, Compiled};
 use crate::slim_parser::{Origin, Parsed, Piece};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp_server::ls_types::Diagnostic;
 
 // Slim::EndInserter, Slim::DoInserter and Slim::Controls decide where blocks open and close.
 static OPENS_BLOCK: LazyLock<Regex> =

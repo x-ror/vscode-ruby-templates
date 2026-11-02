@@ -1020,7 +1020,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
     use crate::util::position_to_offset;
-    use tower_lsp::lsp_types::Position;
+    use tower_lsp_server::ls_types::Position;
 
     /// The Ruby source of every span, in order.
     fn ruby(text: &str) -> Vec<&str> {

@@ -2,7 +2,7 @@
 
 use crate::haml_parser::{self, is_haml_multiline, is_ruby_multiline, strip_output_prefix};
 use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
 pub mod code {
@@ -335,7 +335,7 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::DiagnosticSeverity;
+    use tower_lsp_server::ls_types::DiagnosticSeverity;
 
     /// (line, start char, end char, message) for each Haml diagnostic.
     fn haml(text: &str) -> Vec<(u32, u32, u32, String)> {

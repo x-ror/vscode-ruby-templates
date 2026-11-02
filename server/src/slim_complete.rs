@@ -4,7 +4,7 @@
 use crate::helpers::DATA_KEYS;
 use crate::html::{ATTRIBUTES, BOOLEAN_ATTRIBUTES, TAGS};
 use crate::slim_parser::{Parsed, SLIM_ENGINES};
-use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
+use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name. `stimulus` gives the
 /// attributes the element's Stimulus controllers read.

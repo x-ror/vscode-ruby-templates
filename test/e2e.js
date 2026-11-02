@@ -3,7 +3,7 @@ import cp from "child_process";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { pathToFileURL } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { isDeepStrictEqual } from "util";
 // CI builds per target (`server/target/<triple>/release`) and passes the binary in.
 const bin =
@@ -1984,6 +1984,32 @@ const check = (label, actual, expected) => {
     "erb comments kept in a range without their first line",
     alignedRange ?? [],
     [],
+  );
+  // VS Code percent-encodes `@` and `+` and the server must answer with URIs that decode to the same files.
+  const oddDir = path.join(views, "my app @1+2");
+  fs.mkdirSync(oddDir, { recursive: true });
+  fs.writeFileSync(path.join(oddDir, "_note.html.erb"), "<i></i>\n");
+  const oddText = '<%= render "note" %>\n';
+  fs.writeFileSync(path.join(oddDir, "show.html.erb"), oddText);
+  const oddUri = fileUri(root) + "/app/views/my%20app%20%401%2B2/show.html.erb";
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: oddUri,
+        languageId: "erb",
+        version: 1,
+        text: oddText,
+      },
+    },
+    true,
+  );
+  check(
+    "definition in a dir with space, @ and +",
+    (await req("textDocument/definition", oddUri, 0, 14)).result?.map((l) =>
+      fs.realpathSync(fileURLToPath(l.uri)),
+    ),
+    [path.join(oddDir, "_note.html.erb")],
   );
   await aligned.send("shutdown", {});
   await aligned.send("exit", {}, true);

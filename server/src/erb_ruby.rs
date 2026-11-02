@@ -8,7 +8,7 @@ use crate::util::{error, LineIndex};
 use regex::Regex;
 use std::ops::Range as ByteRange;
 use std::sync::LazyLock;
-use tower_lsp::lsp_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 const OUTPUT_BUFFER: &str = " @output_buffer";
 /// The start of the method Rails wraps a template in, up to its parameters.
@@ -414,7 +414,7 @@ fn verbatim_range(index: &LineIndex, compiled: &Compiled, start: usize, end: usi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp::lsp_types::Position;
+    use tower_lsp_server::ls_types::Position;
 
     const IDENTIFIER: &str = "template.html.erb";
 
