@@ -73,7 +73,7 @@ pub struct Lookup {
 /// next to `template:` the layout is a template path.
 pub fn render_refs(line: &str) -> Vec<RenderRef> {
     let mut refs = refs_without_lookups(line);
-    let calls = vec![line; refs.len()];
+    let calls = vec![Some(line); refs.len()];
     set_lookups(&mut refs, &calls);
     refs
 }
@@ -131,20 +131,25 @@ pub fn render_calls_in<'a>(
     mut keep: impl FnMut(&RenderRef) -> bool,
 ) -> Vec<(RenderRef, &'a str)> {
     let mut refs = refs_without_lookups(line);
-    if !refs.iter().any(&mut keep) {
+    let kept: Vec<bool> = refs.iter().map(&mut keep).collect();
+    if !kept.contains(&true) {
         return vec![];
     }
-    let calls: Vec<&str> = refs.iter().map(|r| call_text(&text[line_start..], r)).collect();
+    // A kept `layout:` takes its partial's lookup, so that call is read too.
+    let needed = |i: usize| kept[i] || refs.iter().zip(&kept).any(|(r, &k)| k && r.from_layout && r.call == refs[i].call);
+    let calls: Vec<Option<&str>> = (0..refs.len()).map(|i| needed(i).then(|| call_text(&text[line_start..], &refs[i]))).collect();
     set_lookups(&mut refs, &calls);
-    refs.into_iter().zip(calls).filter(|(r, _)| keep(r)).collect()
+    refs.into_iter().zip(calls).zip(kept).filter_map(|((r, call), k)| k.then_some((r, call?))).collect()
 }
 
-/// Give each ref the lookup of its call, read from `calls[ref]`, the text of the call from its start; a `layout:` takes
+/// Give each ref the lookup of its call, read from `calls[ref]` (`None`: not needed), the text of the call from its start; a `layout:` takes
 /// its partial's (the nearest one before it, else after), since Rails resolves both with the same details; a `layout:` alone
 /// (block form) reads its own call.
-fn set_lookups(refs: &mut [RenderRef], calls: &[&str]) {
+fn set_lookups(refs: &mut [RenderRef], calls: &[Option<&str>]) {
     for (r, call) in refs.iter_mut().zip(calls).filter(|(r, _)| !r.from_layout) {
-        r.lookup = lookup(call, r);
+        if let Some(call) = call {
+            r.lookup = lookup(call, r);
+        }
     }
     for i in 0..refs.len() {
         if !refs[i].from_layout {
@@ -155,7 +160,7 @@ fn set_lookups(refs: &mut [RenderRef], calls: &[&str]) {
         let partner = partners.clone().rfind(|r| r.start < layout.start).or_else(|| partners.clone().next());
         refs[i].lookup = match partner {
             Some(partner) => partner.lookup.clone(),
-            None => lookup(calls[i], layout),
+            None => calls[i].map(|call| lookup(call, layout)).unwrap_or_default(),
         };
     }
 }
@@ -661,7 +666,16 @@ fn split_statement(s: &str) -> Option<(Vec<&str>, bool)> {
 /// Whether `arg` ends inside a regex (`/;/`) or `?;` character literal, so a `;` after it isn't a statement end.
 fn opens_literal(arg: &str) -> bool {
     let char_literal = arg.strip_suffix('?').is_some_and(|before| !before.ends_with(|c: char| c.is_alphanumeric() || c == '_'));
-    char_literal || arg.matches('/').count() % 2 == 1
+    let mut chars = arg.char_indices();
+    let mut slashes = 0;
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '"' | '\'' if skip_string(&mut chars, c).is_none() => break,
+            '/' => slashes += 1,
+            _ => {}
+        }
+    }
+    char_literal || slashes % 2 == 1
 }
 
 /// Consume the rest of a string opened with `quote`, including the code of `#{…}` in a double-quoted one; `None` if unterminated.
@@ -753,20 +767,20 @@ fn strip_do(text: &str) -> Option<&str> {
 /// Where a `{` opens a block in `args`: the one right after the call's closing `)`. A paren-less `render` takes no brace
 /// block, so any other `{` is a hash or a block of a nested call (`tags: post.tags.map { … }`).
 fn block_brace(args: &str) -> Option<usize> {
-    let (mut depth, mut quote, mut escaped, mut call_closed) = (0u32, None, false, false);
-    for (i, c) in args.char_indices() {
-        match (quote, c) {
-            _ if escaped => escaped = false,
-            (Some(_), '\\') => escaped = true,
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '{') if depth == 0 && call_closed => return Some(i),
-            (None, '(' | '[' | '{') => depth += 1,
+    let (mut depth, mut call_closed) = (0u32, false);
+    let mut chars = args.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' | '\'' => {
+                skip_string(&mut chars, c)?;
+                call_closed = false;
+            }
+            '{' if depth == 0 && call_closed => return Some(i),
+            '(' | '[' | '{' => depth += 1,
             // `args` has no opening paren for the call's own `)`: the one that finds depth 0.
-            (None, ')') if depth == 0 => call_closed = true,
-            (None, ')' | ']' | '}') => depth = depth.saturating_sub(1),
-            (None, c) if !c.is_whitespace() => call_closed = false,
+            ')' if depth == 0 => call_closed = true,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            c if !c.is_whitespace() => call_closed = false,
             _ => {}
         }
     }
@@ -922,6 +936,8 @@ const MAX_CALL_LINES: usize = 20;
 /// line ends in `,`, never past an ERB `%>` or `MAX_CALL_LINES` lines; all of `text` when the call doesn't close.
 pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
     let (mut depth, mut quote, mut escaped, mut last, mut lines) = (0u32, None, false, None, 0);
+    // The depths at which open `#{…}` of double-quoted strings started; their `}` reopens the string.
+    let mut interpolations: Vec<u32> = Vec::new();
     let args_at = (r.end + 1).min(text.len());
     for (i, c) in text[args_at..].char_indices().map(|(i, c)| (args_at + i, c)) {
         match (quote, c) {
@@ -929,6 +945,15 @@ pub fn call_text<'a>(text: &'a str, r: &RenderRef) -> &'a str {
             (_, '\n') if lines + 1 >= MAX_CALL_LINES => return &text[..i],
             (Some(_), '\\') => escaped = true,
             (Some(q), c) if c == q => quote = None,
+            (Some('"'), '#') if text[i..].starts_with("#{") => {
+                interpolations.push(depth);
+                quote = None;
+            }
+            (None, '}') if depth > 0 && interpolations.last() == Some(&(depth - 1)) => {
+                depth -= 1;
+                interpolations.pop();
+                quote = Some('"');
+            }
             (None, '"' | '\'') => quote = Some(c),
             (None, '%') if text[i..].starts_with("%>") => return &text[..i],
             (None, '(' | '[' | '{') => depth += 1,
@@ -1590,6 +1615,25 @@ mod tests {
         let locals = |line: &str| passed_locals(line, &render_refs(line)[0]).map(|names| names.join(","));
         assert_eq!(locals(r##"render "card", a: "#{f("a;b")}", b: 1"##).as_deref(), Some("a,b"));
         assert_eq!(locals(r##"render "card", a: "#{f("}")} ;", b: 1"##).as_deref(), Some("a,b"));
+    }
+
+    #[test]
+    fn interpolations_do_not_end_the_call_text() {
+        fn locals(text: &str) -> Option<Vec<&str>> {
+            let r = render_refs(text.lines().next().unwrap()).remove(0);
+            passed_locals(call_text(text, &r), &r)
+        }
+        assert_eq!(locals("<%= render \"card\", a: \"#{f(\"}\")}\", b: 1 %>"), Some(vec!["a", "b"]));
+        assert_eq!(locals("= render \"card\", a: \"#{t(\"(\")}\", b: 1\n= c: 2\n"), Some(vec!["a", "b"]));
+        assert_eq!(locals("<%= render(\"card\", a: \"#{b}\") { |y| y } %>"), Some(vec!["a"]));
+    }
+
+    #[test]
+    fn slashes_in_strings_are_not_regex_literals() {
+        assert_eq!(
+            passed_locals(r#"<% render "card", url: "/users"; foo %>"#, &render_refs(r#"<% render "card", url: "/users"; foo %>"#)[0]),
+            Some(vec!["url"])
+        );
     }
 
     #[test]
