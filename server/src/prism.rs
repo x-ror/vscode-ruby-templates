@@ -131,6 +131,8 @@ pub(crate) fn keyword_parameters(parameters: &str) -> Option<KeywordParameters> 
 
 /// Whether `arguments`, the text of a call's arguments, is balanced and stays inside one statement (no top-level `;`).
 pub(crate) fn is_one_statement(arguments: &str) -> bool {
+    #[cfg(test)]
+    crate::render_call::PARSES.with(|parses| parses.set(parses.get() + 1));
     syntax_errors(&format!("[{arguments}\n]"), ruby_prism::Version::Latest).is_empty()
 }
 
