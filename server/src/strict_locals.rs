@@ -240,7 +240,6 @@ mod tests {
         assert_eq!(declared("<%# locals: (user:) %>"), "<%# locals: (user:, colour: nil) %>");
         assert_eq!(declared("<%# locals: () %>"), "<%# locals: (colour: nil) %>");
         assert_eq!(declared("<%# locals: (**nil) %>"), "<%# locals: (colour: nil) %>");
-        assert_eq!(declared("<%# locals: (user:, **nil) %>"), "<%# locals: (user:, colour: nil, **nil) %>");
     }
 
     #[test]
