@@ -16,4 +16,4 @@ rescue LoadError
   require "erb"
   ERB.new(src.gsub("<%==", "<%="), trim_mode: "-").src
 end
-print(ARGV[0] == "compile" ? code : eval(code, empty_binding, "(template)"))
+print(ARGV[0] == "compile" ? code : eval(code, empty_binding, "(template)")) # rubocop:disable Security/Eval -- rendering the template is the point
