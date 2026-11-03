@@ -5,13 +5,15 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-// `#` keeps interpolated strings out.
 static ASSET_CALL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"\b(image_tag|image_path|asset_path|stylesheet_link_tag|javascript_include_tag|favicon_link_tag)\s*\(?\s*["']([^"'#]+)["']"#,
-    )
-    .unwrap()
+    Regex::new(r"\b(image_tag|image_path|asset_path|stylesheet_link_tag|javascript_include_tag|favicon_link_tag)\s*\(?").unwrap()
 });
+// A string argument with matching quotes; `#` keeps interpolated strings out.
+static STRING_ARG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*(?:"([^"'#]+)"|'([^"'#]+)')"#).unwrap());
+// What may follow a whole string argument; `"b" + x`, `"b" "c"` and the key `"b": 1` are not just that string.
+static ARG_END: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:$|[,)}\];]|#|-?%>|(?:if|unless|while|until|rescue|and|or|do)\b)").unwrap());
+const TAKES_MANY: [&str; 2] = ["stylesheet_link_tag", "javascript_include_tag"];
 const ASSET_DIRS: [&str; 6] =
     // Sources before app/assets/builds, so `javascript_include_tag "application"` opens what was written, not the bundle.
     ["app/assets/images", "app/assets/stylesheets", "app/assets/javascripts", "app/javascript", "app/assets/builds", "public"];
@@ -24,15 +26,35 @@ pub struct AssetRef<'a> {
     pub end: usize,
 }
 
-// ponytail: only the first argument; `stylesheet_link_tag "a", "b"` links `a`.
+/// The byte range of the string argument that starts `line[from..]`, when it is the whole argument.
+fn string_arg(line: &str, from: usize) -> Option<(usize, usize)> {
+    let path = STRING_ARG.captures(&line[from..]).and_then(|cap| cap.get(1).or_else(|| cap.get(2)))?;
+    let (start, end) = (from + path.start(), from + path.end());
+    ARG_END.is_match(&line[end + 1..]).then_some((start, end))
+}
+
+fn after_comma(line: &str, from: usize) -> Option<usize> {
+    let rest = line[from..].trim_start().strip_prefix(',')?;
+    Some(line.len() - rest.len())
+}
+
 pub fn asset_refs(line: &str) -> Vec<AssetRef<'_>> {
-    ASSET_CALL
-        .captures_iter(line)
-        .filter_map(|cap| {
-            let (helper, path) = (cap.get(1)?.as_str(), cap.get(2)?);
-            Some(AssetRef { helper, path: path.as_str(), start: path.start(), end: path.end() })
-        })
-        .collect()
+    let mut refs = vec![];
+    for call in ASSET_CALL.captures_iter(line) {
+        let (Some(helper), Some(whole)) = (call.get(1), call.get(0)) else { continue };
+        let helper = helper.as_str();
+        let Some((start, end)) = string_arg(line, whole.end()) else { continue };
+        refs.push(AssetRef { helper, path: &line[start..end], start, end });
+        if !TAKES_MANY.contains(&helper) {
+            continue;
+        }
+        let mut next_from = end + 1;
+        while let Some((start, end)) = after_comma(line, next_from).and_then(|at| string_arg(line, at)) {
+            refs.push(AssetRef { helper, path: &line[start..end], start, end });
+            next_from = end + 1;
+        }
+    }
+    refs
 }
 
 /// Asset directories for relative paths, public/ for `/absolute` ones; nothing for URLs or paths leaving those dirs.
@@ -81,6 +103,9 @@ mod tests {
             std::fs::write(p, "").unwrap();
         }
         let current = root.join("app/views/home/index.html.erb");
+        let many = r##"stylesheet_link_tag("application", 'admin', "data-turbo-track": "reload"); javascript_include_tag "app", "#{x}", "b"; image_tag "logo.png", "alt""##;
+        let paths = |line| asset_refs(line).iter().map(|r| r.path.to_string()).collect::<Vec<_>>();
+        assert_eq!(paths(many), ["application", "admin", "app", "logo.png"]);
         let line = concat!(
             r#"<%= image_tag "logo.png" %> <%= stylesheet_link_tag "application", "data-turbo-track": "reload" %> "#,
             r#"<%= javascript_include_tag("app") %> <%= favicon_link_tag "favicon.ico" %> <%= asset_path "/robots.txt" %> "#,
@@ -108,5 +133,39 @@ mod tests {
             assert!(at("asset_path", escape).is_empty(), "{escape}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn each_string_arg_of_stylesheet_and_javascript_tags_is_a_ref() {
+        let line = r#"é<%= stylesheet_link_tag "a", 'b', media: "all" %><%= javascript_include_tag("c", "d") %><%= stylesheet_link_tag :application %><%= stylesheet_link_tag "e", nonce: true %>"#;
+        let refs = asset_refs(line);
+        assert_eq!(refs.iter().map(|r| r.path).collect::<Vec<_>>(), ["a", "b", "c", "d", "e"]);
+        assert!(refs.iter().all(|r| &line[r.start..r.end] == r.path));
+        assert!(asset_refs("<%= image_tag :logo %>").is_empty());
+    }
+
+    #[test]
+    fn closing_brackets_semicolons_and_comments_end_a_string_arg() {
+        let paths = |line| asset_refs(line).iter().map(|r| r.path.to_string()).collect::<Vec<_>>();
+        assert_eq!(paths(r#"%img{src: image_path "a.png"}"#), ["a.png"]);
+        assert_eq!(paths(r#"<%= content_tag(:div) { image_tag "a.png" } %>"#), ["a.png"]);
+        assert_eq!(paths(r#"<%= [image_path "a.png"] %>"#), ["a.png"]);
+        assert_eq!(paths(r#"<%= image_tag "a.png" # logo %>"#), ["a.png"]);
+        assert_eq!(paths(r#"<%= image_tag "a.png"; x %>"#), ["a.png"]);
+        assert!(paths(r#"image_tag "b" + x"#).is_empty());
+        assert!(paths(r#"image_tag "b" "c""#).is_empty());
+        assert!(paths(r#"image_tag "b": 1"#).is_empty());
+    }
+
+    #[test]
+    fn only_whole_string_args_with_matching_quotes_are_refs() {
+        let paths = |line| asset_refs(line).iter().map(|r| r.path.to_string()).collect::<Vec<_>>();
+        assert_eq!(paths(r#"stylesheet_link_tag "a", "b" + x"#), ["a"]);
+        assert_eq!(paths(r#"stylesheet_link_tag "a", "b" "c""#), ["a"]);
+        assert_eq!(paths(r#"stylesheet_link_tag "a", "b' , 'c""#), ["a"]);
+        assert!(paths(r#"stylesheet_link_tag "b' , 'c""#).is_empty());
+        assert!(paths(r#"image_tag "a" + x"#).is_empty());
+        assert_eq!(paths(r#"image_tag "a" if x"#), ["a"]);
+        assert_eq!(paths(r#"stylesheet_link_tag("a", "b")"#), ["a", "b"]);
     }
 }

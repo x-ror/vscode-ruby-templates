@@ -33,6 +33,14 @@ fs.writeFileSync(
   "<%# locals: (a:, b: 1) %>\n",
 );
 fs.writeFileSync(
+  path.join(views, "strict", "_pick.html.erb"),
+  "<%# locals: (html_key:) %>\n",
+);
+fs.writeFileSync(
+  path.join(views, "strict", "_pick.json.erb"),
+  "<%# locals: (json_key:) %>\n",
+);
+fs.writeFileSync(
   path.join(views, "strict", "list.html.erb"),
   '<%= render "strict/row", a: 1 %>\n',
 );
@@ -1513,6 +1521,28 @@ const check = (label, actual, expected) => {
     haml: ["a:  (local (required))"],
     haml_pipes: ["a:  (local (required))"],
   });
+  const pickUri = fileUri(path.join(views, "strict", "keys_pick.html.erb"));
+  const pickText =
+    '<%= render partial: "strict/pick", formats: [:json],\n  locals: { } %>\n';
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: pickUri,
+        languageId: "erb",
+        version: 1,
+        text: pickText,
+      },
+    },
+    true,
+  );
+  check(
+    "render locals keys follow formats:",
+    (await req("textDocument/completion", pickUri, 1, 12)).result?.map(
+      (i) => i.label,
+    ),
+    ["json_key"],
+  );
   const rowUri = fileUri(path.join(views, "strict", "_row.html.erb"));
   await send(
     "textDocument/didOpen",

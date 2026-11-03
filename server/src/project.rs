@@ -3,8 +3,10 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::rails_paths::{app_root, files_under, is_known_format};
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
@@ -44,11 +46,29 @@ pub struct Project {
     formats: Vec<String>,
     /// The folder of the `Gemfile.lock`, which Rails.root is.
     root: Option<PathBuf>,
+    /// Ruby files in namespace folders of `app/models` (relative paths), listed on first use: a Project is one app's.
+    namespaced_models: OnceLock<Vec<PathBuf>>,
 }
 
 impl Project {
     pub fn unknown() -> Self {
-        Project { framework: Framework::Unknown, gems: HashMap::new(), ruby: None, formats: Vec::new(), root: None }
+        Project {
+            framework: Framework::Unknown,
+            gems: HashMap::new(),
+            ruby: None,
+            formats: Vec::new(),
+            root: None,
+            namespaced_models: OnceLock::new(),
+        }
+    }
+
+    /// The `.rb` files below the first level of `models` (not `concerns/`), relative to it.
+    pub fn namespaced_models(&self, models: &Path) -> &[PathBuf] {
+        self.namespaced_models.get_or_init(|| {
+            let files = WalkDir::new(models).min_depth(2).into_iter().filter_map(Result::ok);
+            let relative = files.filter_map(|entry| entry.path().strip_prefix(models).ok().map(Path::to_path_buf));
+            relative.filter(|path| path.extension().is_some_and(|ext| ext == "rb") && !path.starts_with("concerns")).collect()
+        })
     }
 
     /// The project of the nearest `Gemfile.lock` above `template`, unknown when there is none, with the formats
@@ -111,7 +131,7 @@ impl Project {
         } else {
             Framework::Unknown
         };
-        Project { framework, gems, ruby, formats: Vec::new(), root: None }
+        Project { framework, gems, ruby, formats: Vec::new(), root: None, namespaced_models: OnceLock::new() }
     }
 
     pub fn gem_version(&self, name: &str) -> Option<Version> {
