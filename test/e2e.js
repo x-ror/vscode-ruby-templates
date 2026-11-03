@@ -1463,20 +1463,24 @@ const check = (label, actual, expected) => {
     haml: [["block variable"], []],
   });
   const keyDocs = {
-    erb: '<%= render "strict/row", a: 1, | %>\n',
-    slim: '= render "strict/row",\n    b: 2,\n    |\n',
-    haml: '= render("strict/row", |, b: 2)\n',
+    erb: '<%= render "strict/row", a: 1, ^ %>\n',
+    slim: '= render "strict/row",\n    b: 2,\n    ^\n',
+    haml: '= render("strict/row", ^, b: 2)\n',
+    haml_pipes: '= render "strict/row", b: 2, |\n  ^ |\np x\n',
   };
   const renderKeys = {};
   for (const [lang, marked] of Object.entries(keyDocs)) {
-    const keysUri = fileUri(path.join(views, "strict", `keys.html.${lang}`));
-    const text = marked.replace("|", "");
+    const ext = lang.split("_")[0];
+    const keysUri = fileUri(
+      path.join(views, "strict", `keys_${lang}.html.${ext}`),
+    );
+    const text = marked.replace("^", "");
     await send(
       "textDocument/didOpen",
-      { textDocument: { uri: keysUri, languageId: lang, version: 1, text } },
+      { textDocument: { uri: keysUri, languageId: ext, version: 1, text } },
       true,
     );
-    const before = marked.slice(0, marked.indexOf("|")).split("\n");
+    const before = marked.slice(0, marked.indexOf("^")).split("\n");
     const r = await req(
       "textDocument/completion",
       keysUri,
@@ -1489,6 +1493,7 @@ const check = (label, actual, expected) => {
     erb: ["b:  (local = 1)"],
     slim: ["a:  (local (required))"],
     haml: ["a:  (local (required))"],
+    haml_pipes: ["a:  (local (required))"],
   });
   const rowUri = fileUri(path.join(views, "strict", "_row.html.erb"));
   await send(

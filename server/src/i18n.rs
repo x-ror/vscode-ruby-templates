@@ -5,7 +5,7 @@ use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::util::inline_code;
 use regex::Regex;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -150,12 +150,37 @@ pub fn completions(project: &Project, files: &Locales, current: &Path, prefix: &
     out
 }
 
-// ponytail: line-based YAML subset (block mappings, scalars, `|`/`>` blocks); flow mappings `{a: 1}` and
-// sequences aren't indexed, aliases show as `*name`. Enough for Rails locale files without a YAML crate.
+/// A flow collection or scalar written on one line: `{ a: 1, b: [x, y] }`.
+enum Flow {
+    Scalar(String),
+    Seq(Vec<Flow>),
+    Map(Vec<(String, Flow)>),
+}
+
+impl Flow {
+    fn text(&self) -> String {
+        match self {
+            Flow::Scalar(text) => text.clone(),
+            Flow::Seq(items) => format!("[{}]", items.iter().map(Flow::text).collect::<Vec<_>>().join(", ")),
+            Flow::Map(_) => "{…}".to_string(),
+        }
+    }
+}
+
+/// Where an anchored key (`&name`) lives: its locale and key.
+type Anchors = HashMap<String, (String, String)>;
+
+// Line-based YAML subset: block mappings, scalars, `|`/`>` blocks, block sequences of scalars, flow collections on one
+// line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
 pub fn parse(text: &str) -> Vec<Translation> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut out: Vec<Translation> = Vec::new();
     let mut path: Vec<(usize, String)> = Vec::new();
+    let mut anchors = Anchors::new();
+    // Entries a `<<` merge added: a key the mapping sets itself wins over them.
+    let mut merged: HashSet<usize> = HashSet::new();
+    // The valueless key a `- item` line right below it would belong to.
+    let mut list_key: Option<usize> = None;
     // Indent of the last key with a value or sequence item: deeper lines continue it (`|`/`>` blocks, wrapped
     // scalars, item mappings), plus the quote of a quoted scalar still open.
     let mut scalar: Option<(usize, Option<char>)> = None;
@@ -168,15 +193,15 @@ pub fn parse(text: &str) -> Vec<Translation> {
         if let Some((i, quote)) = scalar.filter(|&(i, _)| indent > i) {
             // A sequence's parent key is a mapping (no value), so item lines append nothing.
             if let Some(value) = out.last_mut().and_then(|t| t.value.as_mut()) {
-                let (more, open) = match quote {
+                let (more, closed) = match quote {
                     Some(q) => unquote(q, line.trim_end()),
-                    None => (line.trim_end().to_string(), false),
+                    None => (line.trim_end().to_string(), Some(0)),
                 };
                 if !value.is_empty() {
                     value.push(' ');
                 }
                 value.push_str(&more);
-                scalar = Some((i, quote.filter(|_| open)));
+                scalar = Some((i, quote.filter(|_| closed.is_none())));
             }
             continue;
         }
@@ -184,28 +209,116 @@ pub fn parse(text: &str) -> Vec<Translation> {
         if line.starts_with('#') || line.starts_with("---") {
             continue;
         }
-        if line.starts_with('-') {
-            scalar = Some((indent, None));
+        if let Some(item) = line.strip_prefix('-') {
+            let listed = list_key.is_some_and(|at| push_list_item(&mut out[at], item.trim()));
+            // A list with a non-scalar item is not indexed.
+            if !listed {
+                if let Some(at) = list_key.take() {
+                    out[at].value = None;
+                }
+            }
+            scalar = (!listed).then_some((indent, None));
             continue;
         }
+        list_key = None;
         let Some((key, rest)) = split_key(line) else { continue };
         while path.last().is_some_and(|(i, _)| *i >= indent) {
             path.pop();
         }
         path.push((indent, key.to_string()));
-        let value = scalar_value(rest);
+        let (anchor, rest) = split_anchor(rest);
+        let flow = flow_value(rest);
+        let value = if flow.is_some() { None } else { scalar_value(rest) };
         if let Some((_, open)) = &value {
             scalar = Some((indent, *open));
         }
-        let value = value.map(|(v, _)| v);
         // `I18n.t` splits on `.`, so a key containing one can never be looked up.
-        if path.len() < 2 || key == "<<" || path.iter().any(|(_, k)| k.contains('.')) {
+        if path.len() < 2 || path.iter().any(|(_, k)| k.contains('.')) {
             continue;
         }
-        let key = path[1..].iter().map(|(_, k)| k.as_str()).collect::<Vec<_>>().join(".");
-        out.push(Translation { locale: path[0].1.clone(), key, line: n, value });
+        let locale = path[0].1.clone();
+        if key == "<<" {
+            let target = joined(&path[1..path.len() - 1]);
+            for name in rest.split(|c: char| c.is_whitespace() || "[],".contains(c)).filter_map(|word| word.strip_prefix('*')) {
+                for (suffix, line, value) in aliased(&out, &anchors, name) {
+                    if let Some(suffix) = suffix.strip_prefix('.') {
+                        merged.insert(out.len());
+                        let key = if target.is_empty() { suffix.to_string() } else { format!("{target}.{suffix}") };
+                        out.push(Translation { locale: locale.clone(), key, line, value });
+                    }
+                }
+            }
+            continue;
+        }
+        let key = joined(&path[1..]);
+        if let Some(name) = anchor {
+            anchors.insert(name.to_string(), (locale.clone(), key.clone()));
+        }
+        let aliases = rest
+            .strip_prefix('*')
+            .map(|name| aliased(&out, &anchors, name.split_whitespace().next().unwrap_or_default()))
+            .filter(|found| !found.is_empty());
+        if let Some(found) = aliases {
+            for (suffix, line, value) in found {
+                let line = if suffix.is_empty() { n } else { line };
+                out.push(Translation { locale: locale.clone(), key: format!("{key}{suffix}"), line, value });
+            }
+        } else if let Some(flow) = flow {
+            push_flow(&mut out, &locale, key, n, flow);
+        } else {
+            let value = value.map(|(v, _)| v);
+            list_key = value.is_none().then_some(out.len());
+            out.push(Translation { locale, key, line: n, value });
+        }
     }
-    out
+    let explicit: HashSet<(&str, &str)> =
+        out.iter().enumerate().filter(|(i, _)| !merged.contains(i)).map(|(_, t)| (t.locale.as_str(), t.key.as_str())).collect();
+    let shadowed: HashSet<usize> =
+        merged.iter().copied().filter(|&i| explicit.contains(&(out[i].locale.as_str(), out[i].key.as_str()))).collect();
+    out.into_iter().enumerate().filter(|(i, _)| !shadowed.contains(i)).map(|(_, t)| t).collect()
+}
+
+fn joined(path: &[(usize, String)]) -> String {
+    path.iter().map(|(_, k)| k.as_str()).collect::<Vec<_>>().join(".")
+}
+
+/// The entries at and below the anchored key `name` as (key suffix, line, value); none when `name` is unknown.
+fn aliased(out: &[Translation], anchors: &Anchors, name: &str) -> Vec<(String, usize, Option<String>)> {
+    let Some((locale, key)) = anchors.get(name) else { return vec![] };
+    out.iter()
+        .filter(|t| &t.locale == locale)
+        .filter_map(|t| Some((t.key.strip_prefix(key.as_str())?, t)))
+        .filter(|(suffix, _)| suffix.is_empty() || suffix.starts_with('.'))
+        .map(|(suffix, t)| (suffix.to_string(), t.line, t.value.clone()))
+        .collect()
+}
+
+/// Adds a flow node under `key`; a mapping is a valueless key with its entries below.
+fn push_flow(out: &mut Vec<Translation>, locale: &str, key: String, line: usize, flow: Flow) {
+    let Flow::Map(entries) = flow else {
+        out.push(Translation { locale: locale.to_string(), key, line, value: Some(flow.text()) });
+        return;
+    };
+    for (name, node) in entries.into_iter().filter(|(name, _)| !name.contains('.')) {
+        push_flow(out, locale, format!("{key}.{name}"), line, node);
+    }
+    out.push(Translation { locale: locale.to_string(), key, line, value: None });
+}
+
+/// Appends the scalar `item` of a `- item` line to the list `key` holds; false when the item isn't a scalar.
+fn push_list_item(key: &mut Translation, item: &str) -> bool {
+    if item.is_empty() || item.starts_with('#') || split_key(item).is_some() {
+        return false;
+    }
+    let Some((item, _)) = scalar_value(item) else { return false };
+    match &mut key.value {
+        Some(list) => {
+            list.pop();
+            list.push_str(&format!(", {item}]"));
+        }
+        None => key.value = Some(format!("[{item}]")),
+    }
+    true
 }
 
 /// `key: rest` / `"key": rest`.
@@ -219,13 +332,18 @@ fn split_key(line: &str) -> Option<(&str, &str)> {
     (!key.is_empty()).then(|| (key, &line[colon + 1..]))
 }
 
-/// The scalar after `key:`, without anchor, quotes or comment, and the quote left open when it continues on
+/// The anchor name (`&name`) that starts `rest`, and what follows it.
+fn split_anchor(rest: &str) -> (Option<&str>, &str) {
+    let rest = rest.trim();
+    let Some(after) = rest.strip_prefix('&') else { return (None, rest) };
+    let (name, tail) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
+    (Some(name), tail.trim_start())
+}
+
+/// The scalar after `key:`, without quotes or comment, and the quote left open when it continues on
 /// the next line; `None` when a mapping follows.
 fn scalar_value(rest: &str) -> Option<(String, Option<char>)> {
-    let mut rest = rest.trim();
-    if rest.starts_with('&') {
-        rest = rest.split_once(char::is_whitespace).map_or("", |(_, r)| r.trim_start());
-    }
+    let rest = split_anchor(rest).1;
     if rest.is_empty() || rest.starts_with('#') {
         return None;
     }
@@ -233,33 +351,93 @@ fn scalar_value(rest: &str) -> Option<(String, Option<char>)> {
         return Some((String::new(), None));
     }
     if let Some(q) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') {
-        let (value, open) = unquote(q, &rest[1..]);
-        return Some((value, open.then_some(q)));
+        let (value, closed) = unquote(q, &rest[1..]);
+        return Some((value, closed.is_none().then_some(q)));
     }
     Some((rest.split(" #").next().unwrap_or(rest).trim_end().to_string(), None))
 }
 
-/// The quoted text up to the first unescaped `q` (`''` in single quotes; `\"`, `\\`, `\n` in double),
-/// and whether the closing quote is still to come.
-fn unquote(q: char, s: &str) -> (String, bool) {
+/// The `{…}` or `[…]` that is all of `rest` but a comment.
+fn flow_value(rest: &str) -> Option<Flow> {
+    if !rest.starts_with(['{', '[']) {
+        return None;
+    }
+    let (flow, after) = flow_node(rest)?;
+    let after = after.trim();
+    (after.is_empty() || after.starts_with('#')).then_some(flow)
+}
+
+/// The flow node that starts `s` and the text after it.
+fn flow_node(s: &str) -> Option<(Flow, &str)> {
+    let s = s.trim_start();
+    if let Some(mut rest) = s.strip_prefix('[') {
+        let mut items = Vec::new();
+        loop {
+            rest = rest.trim_start();
+            if let Some(after) = rest.strip_prefix(']') {
+                return Some((Flow::Seq(items), after));
+            }
+            let (item, after) = flow_node(rest)?;
+            items.push(item);
+            rest = after.trim_start();
+            rest = rest.strip_prefix(',').unwrap_or(rest);
+        }
+    }
+    if let Some(mut rest) = s.strip_prefix('{') {
+        let mut entries = Vec::new();
+        loop {
+            rest = rest.trim_start();
+            if let Some(after) = rest.strip_prefix('}') {
+                return Some((Flow::Map(entries), after));
+            }
+            let (key, after) = flow_key(rest)?;
+            let after = after.trim_start();
+            let (value, after) = if after.starts_with([',', '}']) { (Flow::Scalar(String::new()), after) } else { flow_node(after)? };
+            entries.push((key, value));
+            rest = after.trim_start();
+            rest = rest.strip_prefix(',').unwrap_or(rest);
+        }
+    }
+    if let Some(q) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        let (text, closed) = unquote(q, &s[1..]);
+        return Some((Flow::Scalar(text), &s[1 + closed?..]));
+    }
+    let end = s.find([',', ']', '}']).unwrap_or(s.len());
+    let text = s[..end].trim_end();
+    (!text.is_empty()).then(|| (Flow::Scalar(text.to_string()), &s[end..]))
+}
+
+/// The key of a flow mapping entry, quoted or plain, and the text after its colon.
+fn flow_key(s: &str) -> Option<(String, &str)> {
+    if let Some(q) = s.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        let (key, closed) = unquote(q, &s[1..]);
+        return Some((key, s[1 + closed?..].trim_start().strip_prefix(':')?));
+    }
+    let (colon, _) = s.match_indices(':').find(|(i, _)| s[i + 1..].chars().next().is_none_or(|c| c.is_whitespace() || c == ','))?;
+    Some((s[..colon].trim_end().to_string(), &s[colon + 1..]))
+}
+
+/// The quoted text up to the first unescaped `q` (`''` in single quotes; `\"`, `\\`, `\n` in double), and the
+/// bytes through the closing quote, `None` while the closing quote is still to come.
+fn unquote(q: char, s: &str) -> (String, Option<usize>) {
     let mut out = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
         match c {
-            '\'' if q == '\'' && chars.peek() == Some(&'\'') => {
+            '\'' if q == '\'' && chars.peek().is_some_and(|&(_, next)| next == '\'') => {
                 chars.next();
                 out.push('\'');
             }
             '\\' if q == '"' => match chars.next() {
-                Some('n') => out.push('\n'),
-                Some(other) => out.push(other),
+                Some((_, 'n')) => out.push('\n'),
+                Some((_, other)) => out.push(other),
                 None => {}
             },
-            c if c == q => return (out, false),
+            c if c == q => return (out, Some(i + 1)),
             c => out.push(c),
         }
     }
-    (out, true)
+    (out, None)
 }
 
 #[cfg(test)]
@@ -319,11 +497,12 @@ mod tests {
                 ("defaults".into(), 3, None),
                 ("defaults.ok".into(), 4, s("OK")),
                 ("users".into(), 5, None),
+                ("users.ok".into(), 4, s("OK")),
                 ("users.index".into(), 7, None),
                 ("users.index.title".into(), 8, s("Hello")),
                 ("users.index.body".into(), 10, s("Line one # not a comment")),
                 ("users.index.after".into(), 14, s("*alias")),
-                ("users.index.days".into(), 15, None),
+                ("users.index.days".into(), 15, s("[Sun, Mon]")),
                 ("users.index.folded".into(), 18, s("a b")),
                 ("users.index.url".into(), 21, s("http://x.io/a#b")),
                 ("users.index.c".into(), 22, s("Hello \"x\"")),
@@ -336,6 +515,144 @@ mod tests {
         assert_eq!(
             parse("\u{feff}en:\n  a: 'It''s'\n  b: \"x\\ny\"\n").into_iter().map(|t| (t.locale, t.value)).collect::<Vec<_>>(),
             [("en".to_string(), s("It's")), ("en".to_string(), s("x\ny"))]
+        );
+    }
+
+    fn parsed(yml: &str) -> Vec<(String, usize, Option<String>)> {
+        parse(yml).into_iter().map(|t| (t.key, t.line, t.value)).collect()
+    }
+
+    fn entry(key: &str, line: usize, value: Option<&str>) -> (String, usize, Option<String>) {
+        (key.to_string(), line, value.map(str::to_string))
+    }
+
+    #[test]
+    fn parses_flow_mappings_on_one_line() {
+        let yml = "en:\n  title: { short: \"A, a\", long: 'B', deep: { x: 1 } } # note\n  after: ok\n  empty: {}\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("title.short", 1, Some("A, a")),
+                entry("title.long", 1, Some("B")),
+                entry("title.deep.x", 1, Some("1")),
+                entry("title.deep", 1, None),
+                entry("title", 1, None),
+                entry("after", 2, Some("ok")),
+                entry("empty", 3, None),
+            ]
+        );
+        // An unclosed flow mapping stays the plain text it was.
+        assert_eq!(parsed("en:\n  a: { b: 1\n"), [entry("a", 1, Some("{ b: 1"))]);
+    }
+
+    #[test]
+    fn indexes_a_sequence_as_one_key() {
+        let yml = "en:\n  inline: [Sun, \"Mon, day\", 'Tue']\n  block:\n    - Sun\n    - \"Mon\" # c\n  flush:\n  - a\n  items:\n    - name: A\n      desc: B\n    - c\n  next: 1\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("inline", 1, Some("[Sun, Mon, day, Tue]")),
+                entry("block", 2, Some("[Sun, Mon]")),
+                entry("flush", 5, Some("[a]")),
+                entry("items", 7, None),
+                entry("next", 11, Some("1")),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_aliases_and_merge_keys_to_the_anchor() {
+        let yml = concat!(
+            "en:\n",
+            "  base: &base\n    ok: OK\n    nested:\n      deep: D\n",
+            "  one: &one Hi\n",
+            "  page:\n    <<: *base\n    ok: Mine\n    extra: E\n",
+            "  copy: *base\n",
+            "  hi: *one # c\n",
+            "  both:\n    <<: [*one, *base]\n",
+            "  lost: *nobody\n",
+        );
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("base", 1, None),
+                entry("base.ok", 2, Some("OK")),
+                entry("base.nested", 3, None),
+                entry("base.nested.deep", 4, Some("D")),
+                entry("one", 5, Some("Hi")),
+                entry("page", 6, None),
+                entry("page.nested", 3, None),
+                entry("page.nested.deep", 4, Some("D")),
+                entry("page.ok", 8, Some("Mine")),
+                entry("page.extra", 9, Some("E")),
+                entry("copy", 10, None),
+                entry("copy.ok", 2, Some("OK")),
+                entry("copy.nested", 3, None),
+                entry("copy.nested.deep", 4, Some("D")),
+                entry("hi", 11, Some("Hi")),
+                entry("both", 12, None),
+                entry("both.ok", 2, Some("OK")),
+                entry("both.nested", 3, None),
+                entry("both.nested.deep", 4, Some("D")),
+                entry("lost", 14, Some("*nobody")),
+            ]
+        );
+    }
+
+    #[test]
+    fn quoted_punctuation_and_alias_lookalikes_stay_plain_values() {
+        let yml = "en:\n  a: \"x, {b}: #c\"\n  b: \"*not\"\n  c: \"#tag\"\n  d: []\n  e: [a, b] # n\n  f: *later\n  g: &later Hi\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("a", 1, Some("x, {b}: #c")),
+                entry("b", 2, Some("*not")),
+                entry("c", 3, Some("#tag")),
+                entry("d", 4, Some("[]")),
+                entry("e", 5, Some("[a, b]")),
+                entry("f", 6, Some("*later")),
+                entry("g", 7, Some("Hi")),
+            ]
+        );
+    }
+
+    #[test]
+    fn merges_through_a_merged_anchor_and_scopes_anchors_to_their_locale() {
+        let yml = "en:\n  base: &b\n    k: 1\n  mid: &m\n    <<: *b\n    j: 2\n  top:\n    <<: *m\nuk:\n  base: &b\n    k: 2\n  x: *b\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("base", 1, None),
+                entry("base.k", 2, Some("1")),
+                entry("mid", 3, None),
+                entry("mid.k", 2, Some("1")),
+                entry("mid.j", 5, Some("2")),
+                entry("top", 6, None),
+                entry("top.k", 2, Some("1")),
+                entry("top.j", 5, Some("2")),
+                entry("base", 9, None),
+                entry("base.k", 10, Some("2")),
+                entry("x", 11, None),
+                entry("x.k", 10, Some("2")),
+            ]
+        );
+    }
+
+    #[test]
+    fn crlf_and_multibyte_keys_keep_line_numbers_and_values() {
+        let yml = "en:\r\n  a: Привіт\r\n  ключ: { х: \"й\" }\r\n  l:\r\n    - a\r\n    - b\r\n  z: &q\r\n    k: 1\r\n  y: *q\r\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("a", 1, Some("Привіт")),
+                entry("ключ.х", 2, Some("й")),
+                entry("ключ", 2, None),
+                entry("l", 3, Some("[a, b]")),
+                entry("z", 6, None),
+                entry("z.k", 7, Some("1")),
+                entry("y", 8, None),
+                entry("y.k", 7, Some("1")),
+            ]
         );
     }
 

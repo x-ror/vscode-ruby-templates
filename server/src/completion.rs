@@ -19,8 +19,8 @@ pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<Co
 }
 
 /// The current template's own strict locals, as completions.
-pub(crate) fn local_completions(text: &str, typed: &str, close: Close) -> Vec<CompletionItem> {
-    let Some(sig) = partials::strict_locals(text, close) else { return vec![] };
+pub(crate) fn local_completions(text: &str, typed: &str, close: Close, ruby: ruby_prism::Version) -> Vec<CompletionItem> {
+    let Some(sig) = partials::strict_locals(text, close, ruby) else { return vec![] };
     sig.locals.into_iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, default)| local_item(name, default)).collect()
 }
 
@@ -33,7 +33,9 @@ pub(crate) fn render_local_completions(
     typed: &str,
 ) -> Vec<CompletionItem> {
     let close = Close::of(project);
-    let Some(sig) = partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close)) else {
+    let Some(sig) =
+        partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close, project.prism_version()))
+    else {
         return vec![];
     };
     sig.locals
@@ -234,12 +236,12 @@ mod tests {
     fn local_completions_list_strict_locals() {
         let card = "<%# locals: (user:, size: :md) -%>\n<p><%= user.name %></p>\n";
         let items: Vec<(String, Option<String>)> =
-            local_completions(card, "", Close::default()).into_iter().map(|c| (c.label, c.detail)).collect();
+            local_completions(card, "", Close::default(), ruby_prism::Version::Latest).into_iter().map(|c| (c.label, c.detail)).collect();
         assert_eq!(
             items,
             vec![("user".to_string(), Some("local (required)".to_string())), ("size".to_string(), Some("local = :md".to_string())),]
         );
-        assert_eq!(local_completions(card, "si", Close::default()).len(), 1);
-        assert!(local_completions("<p>", "", Close::default()).is_empty());
+        assert_eq!(local_completions(card, "si", Close::default(), ruby_prism::Version::Latest).len(), 1);
+        assert!(local_completions("<p>", "", Close::default(), ruby_prism::Version::Latest).is_empty());
     }
 }
