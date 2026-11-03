@@ -140,10 +140,43 @@ fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> Vec<(Captures<'l>, Range<u
 fn top_level_keys(tail: &str) -> impl Iterator<Item = (&str, Range<usize>)> {
     // A `%>` ends the call, and keeps the parsed prefixes short.
     let tail = tail.find("%>").map_or(tail, |end| &tail[..end]);
-    OPTION_KEY.captures_iter(tail).take(MAX_KEY_CANDIDATES).filter_map(move |cap| {
-        let before = &tail[..cap.get(0)?.start()];
+    let keys: Vec<_> = OPTION_KEY.captures_iter(tail).filter_map(|cap| Some((cap.get(0)?.start(), cap))).collect();
+    let nested = inside_brackets(tail, keys.iter().map(|(start, _)| *start));
+    // Clearly nested candidates are skipped without using up the bound; Prism judges the rest.
+    let candidates = keys.into_iter().zip(nested).filter(|(_, nested)| !nested).map(|(key, _)| key);
+    candidates.take(MAX_KEY_CANDIDATES).filter_map(move |(start, cap)| {
+        let before = &tail[..start];
         (!ruby::comment_before(before) && prism::is_one_statement(before)).then_some((cap.get(1)?.as_str(), cap.get(2)?.range()))
     })
+}
+
+/// Whether each of `offsets` (ascending) is clearly inside brackets, in one pass. Never true once a `%`, `?`, `/`, `` ` `` or `#`
+/// (outside a `'` string) has been seen: this scan can't tell a literal, interpolation or comment from an operator there, and a
+/// wrong "nested" would hide a real key.
+fn inside_brackets(code: &str, offsets: impl IntoIterator<Item = usize>) -> Vec<bool> {
+    let (mut depth, mut unsure, mut quote) = (0isize, false, None);
+    let mut chars = code.char_indices().peekable();
+    offsets
+        .into_iter()
+        .map(|offset| {
+            while let Some((_, c)) = chars.next_if(|&(at, _)| at < offset) {
+                match (quote, c) {
+                    (Some(_), '\\') => {
+                        chars.next();
+                    }
+                    (Some(q), c) if c == q => quote = None,
+                    (Some('"'), '#') => unsure = true,
+                    (Some(_), _) => {}
+                    (None, '"' | '\'') => quote = Some(c),
+                    (None, '(' | '[' | '{') => depth += 1,
+                    (None, ')' | ']' | '}') => depth -= 1,
+                    (None, '%' | '?' | '/' | '#' | '`') => unsure = true,
+                    _ => {}
+                }
+            }
+            !unsure && depth > 0
+        })
+        .collect()
 }
 
 /// Whether the call `head` + `args` (cut at its `%>`) takes a block right after `after_layout`: a `do` or `{ |x|` in the call's
@@ -842,11 +875,6 @@ fn passed_names<'a>(call: &Call<'a>, form: &RenderForm) -> Option<Vec<&'a str>> 
     Some(names)
 }
 
-/// The call of `r`, read from `text`, which starts at `r`'s line; `haml`: `text` is Haml.
-pub fn read_call<'a>(text: &'a str, r: &RenderRef, haml: bool) -> RenderCall<'a> {
-    read_call_with_lookup(text, r, haml).0
-}
-
 fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml: bool) -> (RenderCall<'a>, Lookup) {
     let form = RenderForm::of(text, r);
     let parsed = render_call::read(text, r.call, r.start, haml);
@@ -973,6 +1001,11 @@ fn without_locals_key(before: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::rails_paths::files_under;
+
+    /// The call of `r`, read from `text`, which starts at `r`'s line; `haml`: `text` is Haml.
+    fn read_call<'a>(text: &'a str, r: &RenderRef, haml: bool) -> RenderCall<'a> {
+        read_call_with_lookup(text, r, haml).0
+    }
 
     #[test]
     fn local_edits_on_render_calls() {
@@ -1287,6 +1320,47 @@ mod tests {
         let (refs, parses) = parses(&joined);
         assert_eq!(refs, 100);
         assert!(parses <= 2 * refs, "{parses} parses for {refs} calls");
+    }
+
+    #[test]
+    fn nested_keys_cost_one_parse_however_many() {
+        render_call::PARSES.with(|count| count.set(0));
+        let nested = (0..5000).map(|i| format!(", layout: \"n{i}\"")).collect::<String>();
+        let line = format!(r#"render formats: [:json], locals: {{ a: 1{nested} }}, layout: "box" do"#);
+        let names: Vec<_> = refs_without_lookups(&line).into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["box"]);
+        assert!(render_call::PARSES.with(|count| count.get()) <= 2);
+    }
+
+    #[test]
+    fn literals_the_depth_scan_cannot_read_do_not_hide_keys() {
+        let names = |l: &str| refs_without_lookups(l).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        for literal in [r"%q{x {y} z}", r"/\(/", "?(", "%w|(|", r"%r{\{}"] {
+            assert_eq!(names(&format!(r#"render formats: [:json], locals: {{ s: {literal} }}, partial: "a""#)), ["a"], "{literal}");
+            assert_eq!(names(&format!(r#"json.x @y, sep: {literal}, partial: "a""#)), ["a"], "{literal}");
+        }
+        assert_eq!(names(r#"render formats: [:json], locals: { re: /\(/ }, partial: "a""#), ["a"]);
+        assert_eq!(names(r#"render partial: "a", locals: { s: %q{x {y} z} }, layout: "box" do"#), ["a", "box"]);
+        assert_eq!(names(r##"json.x @y, sep: "#{a("[")}", partial: "a""##), ["a"]);
+        assert_eq!(names(r##"render formats: [:json], locals: { t: "#{a("(")}" }, partial: "a""##), ["a"]);
+        assert_eq!(names("json.x @y, sep: `(`, partial: \"a\""), ["a"]);
+    }
+
+    #[test]
+    fn many_nested_keys_before_the_real_one_do_not_hide_it() {
+        let nested = (0..10).map(|i| format!(", layout: \"n{i}\"")).collect::<String>();
+        let line = format!(r#"<%= render formats: [:json], locals: {{ a: 1{nested} }}, layout: "box" do %>"#);
+        let names: Vec<_> = refs_without_lookups(&line).into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["box"]);
+    }
+
+    #[test]
+    fn jbuilder_keys_follow_literals_holding_a_hash_sign() {
+        let names = |l: &str| refs_without_lookups(l).into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"json.x @y, sep: ?#, partial: "a""#), ["a"]);
+        assert_eq!(names(r#"json.x @y, sep: %q{#}, partial: "a""#), ["a"]);
+        assert_eq!(names(r#"json.x @y, sep: %w[# a], partial: "a""#), ["a"]);
+        assert!(names(r#"json.x @y, sep: 1 # , partial: "a""#).is_empty());
     }
 
     #[test]

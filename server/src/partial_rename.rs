@@ -5,12 +5,11 @@
 use crate::code_context::render_filter;
 use crate::lang::TemplateLang;
 use crate::partials::{
-    first_folder_only, local_key_span, model_renders, passed_locals, read_call, render_refs_in, resolve, resolve_model, split_render_name,
-    RenderKind, RenderRef,
+    first_folder_only, local_key_span, model_renders, passed_locals, render_calls_in, resolve, resolve_model, split_render_name,
+    RenderCall, RenderKind, RenderRef,
 };
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
-use crate::render_call;
 use crate::util::{lines_with_offsets, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -56,26 +55,28 @@ fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, 
     qualified.rsplit('/').next().map(str::to_string)
 }
 
-/// The references `find` sees on each line that are inside code, as (byte start, byte end, reference); only those
+/// The references `find` sees on each line that are inside code, as (byte start, byte end, reference, its payload); only those
 /// `want` keeps, so the code filter is built only for sources with a candidate.
-fn code_refs(
-    source: &Source,
+fn code_refs<'s, T>(
+    source: &'s Source,
     extra_engines: &[String],
-    find: impl Fn(&str, usize, &str, bool) -> Vec<RenderRef>,
+    find: impl Fn(&'s str, usize, &'s str, bool) -> Vec<(RenderRef, T)>,
     want: impl Fn(&RenderRef) -> bool,
-) -> Vec<(usize, usize, RenderRef)> {
+) -> Vec<(usize, usize, RenderRef, T)> {
     let haml = source.lang == Some(TemplateLang::Haml);
-    let shift = |offset: usize| move |r: RenderRef| (offset + r.start, offset + r.end, r);
+    let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
         return spans
             .into_iter()
-            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], false).into_iter().filter(&want).map(shift(s)))
+            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], false).into_iter().filter(|(r, _)| want(r)).map(shift(s)))
             .collect();
     }
-    let candidates: Vec<(usize, usize, &str, RenderRef)> = lines_with_offsets(&source.text)
+    let candidates: Vec<(usize, usize, &str, (RenderRef, T))> = lines_with_offsets(&source.text)
         .enumerate()
-        .flat_map(|(i, (offset, line))| find(&source.text, offset, line, haml).into_iter().filter(&want).map(move |r| (i, offset, line, r)))
+        .flat_map(|(i, (offset, line))| {
+            find(&source.text, offset, line, haml).into_iter().filter(|(r, _)| want(r)).map(move |found| (i, offset, line, found))
+        })
         .collect();
     if candidates.is_empty() {
         return vec![];
@@ -83,11 +84,11 @@ fn code_refs(
     let template_code = source.lang.map(|lang| render_filter(lang, &source.text, extra_engines));
     candidates
         .into_iter()
-        .filter(|(i, offset, line, r)| match &template_code {
+        .filter(|(i, offset, line, (r, _))| match &template_code {
             Some(in_code) => in_code(*i, *offset, r),
             None => ruby::code_end(&line[..r.call]) == ruby::CodeEnd::Code,
         })
-        .map(|(_, offset, _, r)| shift(offset)(r))
+        .map(|(_, offset, _, found)| shift(offset)(found))
         .collect()
 }
 
@@ -158,8 +159,8 @@ fn may_name(stems: &[&str], name: &str) -> bool {
 }
 
 /// The renders on a line that may name one of `stems`, with lookups read from the whole call.
-fn renders_named<'s>(stems: &'s [&str]) -> impl Fn(&str, usize, &str, bool) -> Vec<RenderRef> + 's {
-    move |text, at, line, haml| render_refs_in(text, at, line, haml, |r| may_name(stems, &r.name))
+fn renders_named<'s, 'a>(stems: &'a [&str]) -> impl Fn(&'s str, usize, &'s str, bool) -> Vec<(RenderRef, RenderCall<'s>)> + 'a {
+    move |text, at, line, haml| render_calls_in(text, at, line, haml, |r| may_name(stems, &r.name))
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
@@ -171,17 +172,19 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
         let index = LineIndex::new(&source.text);
         let named = code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name))
             .into_iter()
-            .filter(|(_, _, r)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
-            .filter(|(start, _, r)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)));
+            .filter(|(_, _, r, _)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
+            .filter(|(start, _, r, _)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)))
+            .map(|(start, end, ..)| (start, end));
         let models = code_refs(
             source,
             extra_engines,
-            |_, _, line, _| model_refs(line),
+            |_, _, line, _| model_refs(line).into_iter().map(|r| (r, ())).collect(),
             |r| may_name(&stems, &crate::partials::singularize(&r.name)),
         )
         .into_iter()
-        .filter(|(_, _, r)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)));
-        for (start, end, _) in named.chain(models) {
+        .filter(|(_, _, r, _)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)))
+        .map(|(start, end, ..)| (start, end));
+        for (start, end) in named.chain(models) {
             let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
         }
@@ -243,15 +246,13 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
     let stems = partial_stems(project, &files);
     let mut out = Vec::new();
     for source in sources {
-        for (start, _, r) in code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name)) {
+        for (start, _, r, call) in code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name)) {
             if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
             {
                 continue;
             }
             let line_start = start - r.start;
-            let haml = render_call::haml_pipes_apply(&source.text, line_start, source.lang == Some(TemplateLang::Haml));
-            let call = read_call(&source.text[line_start..], &r, haml);
             let key = match passed_locals(&call, &r) {
                 Some(names) if !names.contains(&local) => continue,
                 Some(_) => local_key_span(&call, local).map(|(s, e)| (line_start + s, line_start + e)),
@@ -271,9 +272,10 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     for source in sources {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        for (start, end, _) in code_refs(source, extra_engines, |_, _, line, _| find(line), |r| key.ends_with(r.name.as_str()))
+        let found = |_: &str, _, line: &str, _| find(line).into_iter().map(|r| (r, ())).collect();
+        for (start, end, ..) in code_refs(source, extra_engines, found, |r| key.ends_with(r.name.as_str()))
             .into_iter()
-            .filter(|(_, _, r)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
+            .filter(|(_, _, r, _)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
             let range = Range::new(index.position(start), index.position(end));
             out.push(Location::new(uri.clone(), range));
@@ -355,12 +357,9 @@ pub fn render_edits(
     for source in sources {
         let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
-        for (start, end, r) in code_refs(
-            source,
-            extra_engines,
-            |text, at, line, haml| render_refs_in(text, at, line, haml, |r| folder_renamed || may_name(&stems, &r.name)),
-            |r| folder_renamed || may_name(&stems, &r.name),
-        ) {
+        let renamed = |r: &RenderRef| folder_renamed || may_name(&stems, &r.name);
+        let found = |text, at, line, haml| render_calls_in(text, at, line, haml, renamed);
+        for (start, end, r, _) in code_refs(source, extra_engines, found, renamed) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
                 .map(|t| new_ref_name(project, &r.name, &source.path, &moved(t, renames)?, renames))
@@ -382,6 +381,7 @@ pub fn render_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render_call;
     use tower_lsp_server::ls_types::Position;
 
     struct Tree(PathBuf);
@@ -701,6 +701,33 @@ mod tests {
             edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
         got.sort();
         assert_eq!(got, [(3, 4, 8, "member".into()), (8, 2, 7, "member: user".into())]);
+    }
+
+    #[test]
+    fn local_key_edits_reach_keys_in_haml_pipe_groups_and_hash_rockets() {
+        let t = Tree::new("local-keys-haml", &["app/views/users/_card.html.haml"]);
+        let text = "%p é\n= render \"card\", size: 1, |\n  user: u |\n%p x\n= render \"card\", :user => u\n";
+        let sources = [t.source("app/views/users/index.html.haml", HAML, text)];
+        let card = t.path("app/views/users/_card.html.haml");
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        assert!(unread.is_empty());
+        let mut got: Vec<(u32, u32, u32, String)> =
+            edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
+        got.sort();
+        assert_eq!(got, [(2, 2, 6, "member".into()), (4, 18, 22, "member".into())]);
+    }
+
+    #[test]
+    fn local_key_edits_read_each_render_once() {
+        let t = Tree::new("local-keys-parses", &["app/views/users/_card.html.erb"]);
+        let renders = 10;
+        let text = "<%= render \"card\", user: u %>\n".repeat(renders);
+        let sources = [t.source("app/views/users/index.html.erb", ERB, &text)];
+        let card = t.path("app/views/users/_card.html.erb");
+        render_call::PARSES.with(|parses| parses.set(0));
+        let (edits, _) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        assert_eq!(edits.len(), renders);
+        assert_eq!(render_call::PARSES.with(|parses| parses.get()), renders);
     }
 
     #[test]

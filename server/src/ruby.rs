@@ -4,8 +4,9 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-static STRINGS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)"#).unwrap());
+static STRINGS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|%[wiqQ]?\[[^\]]*\]|%[wiqQ]?\([^)]*\)|%[wiqQ]?\{(?:[^{}]|\{[^{}]*\})*\}"#).unwrap()
+});
 // Identifiers start at any letter, as in Ruby, so a keyword inside `éif` isn't one.
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<=|>=|=>|->|[^\W\d]\w*[?!]?|\d+|[^\w\s]").unwrap());
 // `=begin` … `=end` at line starts; kaminari's generated partials open with one.
@@ -44,39 +45,102 @@ pub enum CodeEnd {
 
 pub fn code_end(code: &str) -> CodeEnd {
     let mut quote = None;
-    // `"…#{` re-enters code: the enclosing strings and the brace depth inside each interpolation.
-    let mut interpolations: Vec<(char, usize)> = Vec::new();
-    let mut chars = code.chars().peekable();
+    // Inside a `%q{…}`-style literal: its delimiters and how many opened ones are unclosed.
+    let mut percent: Option<PercentLiteral> = None;
+    // `"…#{` re-enters code: the enclosing `%`-literal (`None`: a `"` string) and the brace depth inside each interpolation.
+    let mut interpolations: Vec<(Option<PercentLiteral>, usize)> = Vec::new();
+    let mut chars = code.chars();
+    let mut prev = None;
     while let Some(c) = chars.next() {
+        let before = prev.replace(c);
+        if let Some(literal) = &mut percent {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '#' if literal.interpolates && chars.clone().next() == Some('{') => {
+                    chars.next();
+                    interpolations.push((percent.take(), 0));
+                }
+                c if c == literal.close && literal.depth == 0 => percent = None,
+                c if c == literal.close => literal.depth -= 1,
+                c if c == literal.open => literal.depth += 1,
+                _ => {}
+            }
+            continue;
+        }
+        let next = chars.clone().next();
         match (quote, c) {
             (Some(_), '\\') => {
                 chars.next();
             }
-            (Some('"'), '#') if chars.peek() == Some(&'{') => {
+            (Some('"'), '#') if next == Some('{') => {
                 chars.next();
-                interpolations.push(('"', 0));
+                interpolations.push((None, 0));
                 quote = None;
             }
             (Some(q), c) if c == q => quote = None,
             (None, '"' | '\'') => quote = Some(c),
+            (None, '%') if !before.is_some_and(ends_value) => percent = PercentLiteral::open(&mut chars),
+            // `?#` is a character literal.
+            (None, '?') if next == Some('#') && !before.is_some_and(ends_value) => {
+                chars.next();
+            }
             (None, '{') => {
                 if let Some((_, depth)) = interpolations.last_mut() {
                     *depth += 1;
                 }
             }
             (None, '}') => match interpolations.last_mut() {
-                Some((_, 0)) => quote = interpolations.pop().map(|(q, _)| q),
+                Some((_, 0)) => match interpolations.pop() {
+                    Some((Some(literal), _)) => percent = Some(literal),
+                    _ => quote = Some('"'),
+                },
                 Some((_, depth)) => *depth -= 1,
                 None => {}
             },
-            (None, '#') if chars.peek() != Some(&'{') => return CodeEnd::Comment,
+            (None, '#') if next != Some('{') => return CodeEnd::Comment,
             _ => {}
         }
     }
-    if quote.is_some() {
+    if quote.is_some() || percent.is_some() {
         CodeEnd::String
     } else {
         CodeEnd::Code
+    }
+}
+
+/// Whether a `%` or `?` right after `c` is an operator, not the start of a literal.
+fn ends_value(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | ')' | ']' | '}' | '"' | '\'')
+}
+
+struct PercentLiteral {
+    open: char,
+    close: char,
+    depth: usize,
+    interpolates: bool,
+}
+
+impl PercentLiteral {
+    /// The literal that `chars`, the text after a `%`, opens (`w[`, `q{`, `(`, `|`), with its opening consumed.
+    fn open(chars: &mut std::str::Chars) -> Option<Self> {
+        let mut ahead = chars.clone();
+        let first = ahead.next()?;
+        let kind = "qQwWiIrsx".contains(first).then_some(first);
+        let delimiter = if kind.is_some() { ahead.next()? } else { first };
+        if delimiter.is_alphanumeric() || delimiter.is_whitespace() || delimiter == '=' {
+            return None;
+        }
+        *chars = ahead;
+        let close = match delimiter {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            '<' => '>',
+            same => same,
+        };
+        Some(PercentLiteral { open: delimiter, close, depth: 0, interpolates: !kind.is_some_and(|kind| "qwis".contains(kind)) })
     }
 }
 
@@ -351,6 +415,42 @@ mod tests {
         assert_eq!(code_end("x = \"a # b\""), CodeEnd::Code);
         assert_eq!(code_end("x = 1 # c"), CodeEnd::Comment);
         assert_eq!(code_end("x = #{y}"), CodeEnd::Code);
+        assert_eq!(code_end("x = ?#, y"), CodeEnd::Code);
+        assert_eq!(code_end("x = %q{#}, y # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = %(#{\")\"}) # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = %W[#{a}b] # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = %q(#{) # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = %w[a# b] + %(a (b) #)"), CodeEnd::Code);
+        assert_eq!(code_end("x = %q|#|, y"), CodeEnd::Code);
+        assert_eq!(code_end("x = %Q(a # b"), CodeEnd::String);
+        assert_eq!(code_end("x = a % b # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = a%(b) # c"), CodeEnd::Comment);
+        assert_eq!(code_end("n = 100 % 3 # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = \"%d\" % n # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = a %= 3 # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = \"%s\"%[a] # c"), CodeEnd::Comment);
+        assert_eq!(code_end("style = \"width: 50%\"; y # c"), CodeEnd::Comment);
+        assert_eq!(code_end("n = x.size % 2 # c"), CodeEnd::Comment);
+    }
+
+    #[test]
+    fn code_end_reads_ternaries_and_predicates_not_char_literals() {
+        assert_eq!(code_end("x = a ? \"#\" : y # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = a ?b : c # c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = a ? b : c"), CodeEnd::Code);
+        assert_eq!(code_end("x = a.empty?# c"), CodeEnd::Comment);
+        assert_eq!(code_end("x = a ?# c"), CodeEnd::Code);
+    }
+
+    #[test]
+    fn strip_drops_percent_literals_holding_keywords() {
+        assert_eq!(analyze("x = %q{if end}").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = %w(do end)").0, BlockEffect::Neutral);
+        assert_eq!(analyze("x = %q{a {if} b}; if y").0, BlockEffect::Open(1));
+    }
+
+    #[test]
+    fn comment_before_basics() {
         assert!(comment_before("link_to x # why"));
         assert!(!comment_before("link_to x"));
     }
