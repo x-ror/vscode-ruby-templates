@@ -27,7 +27,7 @@ static BLOCK_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdo\b\s*(?:\
 // Jbuilder's `json.array! @posts, partial: "posts/post", as: :post` and `json.comments @c, partial: "…"`.
 // A Haml/Slim element before its code (`#main=`, `%div.a#b=`): its `#` starts an id, not a comment.
 static ELEMENT_PREFIX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:%[\w:-]+|[.#][\w-]+)(?:[.#][\w-]+)*").unwrap());
-static JSON_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"json\.\w+!?[\s(]").unwrap());
+static JSON_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bjson\.\w+!?[\s(]").unwrap());
 // Each parse of a candidate costs its length; a call has a few file-naming keys, so a longer run is noise.
 const MAX_KEY_CANDIDATES: usize = 8;
 static RENDER_COMPONENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"render\s*\(?\s*((?:[A-Z]\w*::)*[A-Z]\w*Component)\b").unwrap());
@@ -281,7 +281,7 @@ struct Continued {
     on_call_line: RenderRef,
 }
 
-/// The line of `text` before `line_start` that starts the `render` call it continues after trailing commas.
+/// The line of `text` before `line_start` that starts the `render` or `json.` call it continues after trailing commas or an open paren.
 fn call_line_before(text: &str, line_start: usize, pipes: &HamlPipes) -> Option<usize> {
     let mut start = line_start;
     // `window_end` reads MAX_CALL_LINES lines from the call line, so the continued line must be within them.
@@ -290,11 +290,14 @@ fn call_line_before(text: &str, line_start: usize, pipes: &HamlPipes) -> Option<
         let previous = before.rfind('\n').map_or(0, |at| at + 1);
         let above = before[previous..].trim_end();
         let above = if pipes.apply(text, previous) { above.strip_suffix('|').unwrap_or(above).trim_end() } else { above };
-        // The trailing comma is also what keeps this to the few lines that continue a call.
-        if !above.ends_with(',') {
+        // The trailing comma or open paren is also what keeps this to the few lines that continue a call.
+        if !above.ends_with([',', '(']) {
             return None;
         }
-        if before[previous..].contains("render") {
+        let line_above = &before[previous..];
+        let call_at = [line_above.find("render"), JSON_CALL.find(line_above).map(|m| m.start())].into_iter().flatten().min();
+        // A `render (` in a trailing comment doesn't open a call.
+        if call_at.is_some_and(|at| is_code_at(line_above, at)) {
             return Some(previous);
         }
         start = previous;
@@ -302,10 +305,11 @@ fn call_line_before(text: &str, line_start: usize, pipes: &HamlPipes) -> Option<
     None
 }
 
-/// The option refs on the line at `line_start` whose `render` call began on an earlier line:
+/// The refs on the line at `line_start` whose `render` or `json.` call began on an earlier line:
 /// `render formats: [:json],` and, on the next line, `partial: "users/user"`.
 fn continued_refs(text: &str, line_start: usize, line: &str, pipes: &HamlPipes) -> Vec<Continued> {
-    if !["partial", "template", "layout"].iter().any(|key| line.contains(key)) {
+    // A file name is quoted; a bare one may follow an open paren, like `render(` and `"users/user"`.
+    if !line.contains(['"', '\'']) {
         return vec![];
     }
     let Some(call_line_start) = call_line_before(text, line_start, pipes) else { return vec![] };
@@ -315,7 +319,7 @@ fn continued_refs(text: &str, line_start: usize, line: &str, pipes: &HamlPipes) 
         false => text[call_line_start..].into(),
     };
     let Some(joined) = joined.get(..shift + line.len()) else { return vec![] };
-    option_refs(joined)
+    refs_without_lookups(joined)
         .into_iter()
         .filter(|r| r.call < shift && r.start >= shift)
         .map(|on_call_line| Continued {
@@ -461,16 +465,59 @@ pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
 }
 
 /// `user`/`users` → app/views/users/_user.* (`to_partial_path`); nothing when the inflection finds no file.
-// ponytail: namespaced models (`Admin::User` → admin/users/_user) aren't knowable from the variable.
+/// A model that only exists namespaced (`app/models/admin/user.rb`) looks in `admin/users`. A view under a namespace
+/// directory gets it prefixed first, as Rails does with `prefix_partial_path_with_controller_namespace`.
 pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathBuf> {
     let Some(views) = views_root(current) else { return vec![] };
     let singular = singularize(name);
-    let mut found: Vec<PathBuf> = matching_templates(project, &views.join(pluralize(&singular)), &format!("_{singular}"))
-        .into_iter()
-        .filter(|p| renders_format(project, current, p))
+    let plural = pluralize(&singular);
+    let view_dir = current.parent().and_then(|dir| dir.strip_prefix(&views).ok()).unwrap_or(Path::new(""));
+    let mut namespaces = model_namespaces(project, &views, current, &singular);
+    namespaces.push(PathBuf::new());
+    for namespace in namespaces {
+        let own = namespace.join(&plural);
+        for dir in [views.join(prefixed_with_view_namespace(view_dir, &namespace)).join(&plural), views.join(own)] {
+            let mut found: Vec<PathBuf> = matching_templates(project, &dir, &format!("_{singular}"))
+                .into_iter()
+                .filter(|p| renders_format(project, current, p))
+                .collect();
+            if !found.is_empty() {
+                sort_like_action_view(project, current, &Lookup::default(), &mut found);
+                return found;
+            }
+        }
+    }
+    vec![]
+}
+
+/// The model's namespace behind the namespace directories of `view_dir` (all but its last part) that it doesn't start with
+/// (ActionView's `merge_prefix_into_object_path`): `admin/orders` + `` → `admin`, `shop/orders` + `admin` → `shop/admin`.
+fn prefixed_with_view_namespace(view_dir: &Path, model_namespace: &Path) -> PathBuf {
+    let dirs: Vec<_> = view_dir.components().collect();
+    let Some((_, view_namespace)) = dirs.split_last() else { return model_namespace.to_path_buf() };
+    let mut model_parts = model_namespace.components();
+    let prefix: PathBuf = view_namespace.iter().map_while(|dir| (Some(*dir) != model_parts.next()).then_some(dir)).collect();
+    prefix.join(model_namespace)
+}
+
+/// The namespaces of `app/models/<namespace>/<singular>.rb`, those holding the view `current` first; none when a top-level
+/// `app/models/<singular>.rb` exists, since the variable is likely that one. `concerns/` is no namespace.
+fn model_namespaces(project: &Project, views: &Path, current: &Path, singular: &str) -> Vec<PathBuf> {
+    let Some(models) = views.parent().map(|app| app.join("models")) else { return vec![] };
+    let file = format!("{singular}.rb");
+    if models.join(&file).is_file() {
+        return vec![];
+    }
+    let mut namespaces: Vec<PathBuf> = project
+        .namespaced_models(&models)
+        .iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == file.as_str()))
+        .filter_map(|path| Some(path.parent()?.to_path_buf()))
         .collect();
-    sort_like_action_view(project, current, &Lookup::default(), &mut found);
-    found
+    let view_dir = current.parent().and_then(|dir| dir.strip_prefix(views).ok());
+    let outside_view = |namespace: &Path| !view_dir.is_some_and(|dir| dir.starts_with(namespace));
+    namespaces.sort_by(|a, b| (outside_view(a), a).cmp(&(outside_view(b), b)));
+    namespaces
 }
 
 /// Where a missing `dir/name` reference would live: `app/views/dir/_name.<format>+<variant>.<ext>` with the first of the
@@ -984,7 +1031,8 @@ fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml: bool, ruby: rub
 }
 
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `offset`;
-/// the render call may start up to `MAX_CALL_LINES` lines higher. `haml`: `text` is Haml. `ruby`: the grammar to read the call with, asked for once a partial ref is found.
+/// the render call may start up to `MAX_CALL_LINES` lines higher. `haml`: `text` is Haml. `ruby`: the grammar to read the call with
+/// (and its lookup options), asked for once a partial ref is found.
 pub fn local_key_before(
     text: &str,
     offset: usize,
@@ -995,8 +1043,9 @@ pub fn local_key_before(
     // Starts above the first one that sees the partial ref see the same ref, so they can't read the call any better.
     let (start, r) = line_starts.into_iter().find_map(|start| Some((start, partial_ref_before(&text[start..offset])?)))?;
     let haml = HamlPipes::new(haml).apply(text, start);
-    let (names, typed) = local_key_after(&text[start..], offset - start, &r, haml, ruby())?;
-    Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
+    let ruby = ruby();
+    let (names, typed, lookup) = local_key_after(&text[start..], offset - start, &r, haml, ruby)?;
+    Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, lookup, ..r }, names, typed))
 }
 
 const CURSOR_KEY: &str = "cursor_key__";
@@ -1006,12 +1055,18 @@ fn is_word_char(c: char) -> bool {
 }
 
 fn partial_ref_before(before: &str) -> Option<RenderRef> {
-    render_refs(before).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < before.len())
+    refs_without_lookups(before).into_iter().rev().find(|r| r.kind == RenderKind::Partial && !r.from_layout && r.end < before.len())
 }
 
-/// The locals already passed (before or after the cursor) and the name typed so far where a local's name may be typed at
-/// `col` in `text`, which starts at the render call's line.
-fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool, ruby: ruby_prism::Version) -> Option<(Vec<String>, &'a str)> {
+/// The locals already passed (before or after the cursor), the name typed so far and the call's lookup where a local's name
+/// may be typed at `col` in `text`, which starts at the render call's line.
+fn local_key_after<'a>(
+    text: &'a str,
+    col: usize,
+    r: &RenderRef,
+    haml: bool,
+    ruby: ruby_prism::Version,
+) -> Option<(Vec<String>, &'a str, Lookup)> {
     // The blanking keeps offsets, so the typed word is taken from `text`.
     let joined = if haml { render_call::haml_group_joined(text) } else { Cow::Borrowed(text) };
     let blanked = joined.as_ref();
@@ -1065,19 +1120,20 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool, rub
     };
     // The whole call, when it reads, decides: the probe is a local there or nowhere.
     if let Some(call) = render_call::read(&spliced, 0, name_at, haml, ruby).filter(|call| call.readable) {
-        return Some((others(passed_names(&call, &form)?)?, &text[col - typed.len()..col]));
+        return Some((others(passed_names(&call, &form)?)?, &text[col - typed.len()..col], lookup(&call, &form)));
     }
     // Cut at the cursor, the probe may also sit beside a hash the call ignores.
     let passed = |source: &str| {
         let call = render_call::read(source, 0, name_at, haml, ruby)?;
         let names = passed_names(&call, &form)?;
+        let lookup = lookup(&call, &form);
         if !names.contains(&CURSOR_KEY) && call.pairs.iter().any(|pair| pair.key == CURSOR_KEY) {
-            return Some(names.into_iter().map(str::to_string).collect());
+            return Some((names.into_iter().map(str::to_string).collect(), lookup));
         }
-        others(names)
+        Some((others(names)?, lookup))
     };
-    let names = passed(&source).or_else(|| passed(&format!("{source})")))?;
-    Some((names, &text[col - typed.len()..col]))
+    let (names, lookup) = passed(&source).or_else(|| passed(&format!("{source})")))?;
+    Some((names, &text[col - typed.len()..col], lookup))
 }
 
 /// Where the last `{` that `text` leaves open is, braces in string literals aside.
@@ -1558,6 +1614,87 @@ mod tests {
     }
 
     #[test]
+    fn model_render_partials_of_namespaced_models() {
+        let root = std::env::temp_dir().join(format!("rt-ns-models-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in [
+            "app/models/admin/user.rb",
+            "app/models/admin/post.rb",
+            "app/models/post.rb",
+            "app/models/billing/invoice.rb",
+            "app/views/admin/users/_user.html.erb",
+            "app/views/users/_user.html.erb",
+            "app/views/admin/posts/_post.html.erb",
+            "app/views/posts/_post.html.erb",
+            "app/views/billing/invoices/_invoice.html.erb",
+            "app/views/billing/reports/show.html.erb",
+            "app/views/admin/users/index.html.erb",
+            "app/views/home/index.html.erb",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let found = |view: &str, name: &str| resolve_model(&Project::unknown(), &views.join(view), name);
+        assert_eq!(found("home/index.html.erb", "users"), [views.join("admin/users/_user.html.erb")]);
+        assert_eq!(found("admin/users/index.html.erb", "user"), [views.join("admin/users/_user.html.erb")]);
+        assert_eq!(found("billing/reports/show.html.erb", "invoices"), [views.join("billing/invoices/_invoice.html.erb")]);
+        // Rails prefixes the view's namespace, whether the model is `Post` or `Admin::Post`.
+        assert_eq!(found("admin/users/index.html.erb", "posts"), [views.join("admin/posts/_post.html.erb")]);
+        assert_eq!(found("home/index.html.erb", "posts"), [views.join("posts/_post.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn namespaced_models_in_several_namespaces_prefer_the_views_own() {
+        let root = std::env::temp_dir().join(format!("rt-ns-two-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in [
+            "app/models/admin/user.rb",
+            "app/models/shop/user.rb",
+            "app/views/admin/users/_user.html.erb",
+            "app/views/shop/users/_user.html.erb",
+            "app/views/shop/orders/show.html.erb",
+            "app/views/admin/orders/show.html.erb",
+            "app/views/home/index.html.erb",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let found = |view: &str| resolve_model(&Project::unknown(), &views.join(view), "user");
+        assert_eq!(found("shop/orders/show.html.erb"), [views.join("shop/users/_user.html.erb")]);
+        assert_eq!(found("admin/orders/show.html.erb"), [views.join("admin/users/_user.html.erb")]);
+        assert_eq!(found("home/index.html.erb"), [views.join("admin/users/_user.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn model_partials_get_the_views_namespace_prefixed_like_rails() {
+        let root = std::env::temp_dir().join(format!("rt-ns-prefix-{}", std::process::id()));
+        let views = root.join("app/views");
+        for f in [
+            "app/models/admin/user.rb",
+            "app/models/concerns/taggable.rb",
+            "app/models/concerns/user.rb",
+            "app/views/shop/admin/users/_user.html.erb",
+            "app/views/admin/users/_user.html.erb",
+            "app/views/shop/orders/show.html.erb",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let found = |view: &str| resolve_model(&Project::unknown(), &views.join(view), "user");
+        assert_eq!(found("shop/orders/show.html.erb"), [views.join("shop/admin/users/_user.html.erb")]);
+        let prefixed = |view_dir: &str, namespace: &str| prefixed_with_view_namespace(Path::new(view_dir), Path::new(namespace));
+        assert_eq!(prefixed("a/b/c", "a/x"), Path::new("a/x"));
+        assert_eq!(prefixed("a/b/c", ""), Path::new("a/b"));
+        assert_eq!(prefixed("home", "admin"), Path::new("admin"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn resolve_leading_slash_folder_from_views_root() {
         let root = std::env::temp_dir().join(format!("rt-slash-{}", std::process::id()));
         let users = root.join("app/views/users");
@@ -1851,6 +1988,20 @@ mod tests {
         assert_eq!(key("p\n= render \"card\",\n  user: u,\n  si|"), card("user", "si"));
         assert_eq!(key("p\n= render(\"card\",\n  |)"), card("", ""));
         assert_eq!(key("p\n= render \"card\", user: u\n= link_to x, |"), None, "the call ended on its line");
+    }
+
+    #[test]
+    fn local_key_lookup_follows_the_ruby_version() {
+        let text = "<%= render partial: \"card\", formats: [:json], a: (1\n && 2), locals: { } %>";
+        let offset = text.find("{ ").unwrap() + 2;
+        let formats = |ruby| local_key_before(text, offset, false, || ruby).map(|(r, ..)| r.lookup.formats);
+        assert_eq!(formats(LATEST), Some(Some(vec!["json".to_string()])));
+        assert_eq!(formats(ruby_prism::Version::CRuby3_3), None);
+        let unclosed = "<%= render partial: \"card\", formats: [:json], locals: { ";
+        assert_eq!(
+            local_key_before(unclosed, unclosed.len(), false, || LATEST).map(|(r, ..)| r.lookup.formats),
+            Some(Some(vec!["json".to_string()]))
+        );
     }
 
     #[test]
@@ -2191,6 +2342,51 @@ mod tests {
         // No render above, or a line that ends the call: nothing continues.
         assert!(refs_by_line("<%= link_to \"x\", a,\n  partial: \"users/user\" %>\n", false).is_empty());
         assert!(refs_by_line("<%= render formats: [:json] %>\n  partial: \"users/user\"\n", false).is_empty());
+    }
+
+    #[test]
+    fn jbuilder_options_continued_on_a_later_line() {
+        let refs = |text: &str| {
+            let found = refs_by_line(text, false);
+            found.iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
+        };
+        assert_eq!(refs("json.partial! partial: \"users/user\",\n  locals: { user: @user }\n"), ["0:users/user"]);
+        assert_eq!(refs("json.partial! \"users/user\",\n  user: u\n"), ["0:users/user"]);
+        assert_eq!(refs("json.partial!(\n  partial: \"users/user\", locals: { user: u })\n"), ["1:users/user"]);
+        assert_eq!(refs("json.array! @posts,\n  partial: \"posts/post\", as: :post\n"), ["1:posts/post"]);
+        assert_eq!(refs("json.comments @c,\n  partial: \"comments/comment\"\n"), ["1:comments/comment"]);
+        assert_eq!(refs("render(\n  partial: \"users/user\")\n"), ["1:users/user"]);
+        assert!(refs("json.name user.name,\n  other: 1\n").is_empty());
+    }
+
+    #[test]
+    fn open_paren_continues_only_render_and_json_calls() {
+        let names =
+            |text: &str| refs_by_line(text, false).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>();
+        assert!(names("<%= link_to(\n  \"x\", partial: \"y\") %>\n").is_empty());
+        assert!(names("<%= my_json.map(\n  partial: \"x\") %>\n").is_empty());
+        assert!(names("<%= foo # render (\n  partial: \"x\" %>\n").is_empty());
+        assert_eq!(names("<%= render(\n  \"users/user\") %>\n"), ["1:users/user"]);
+        assert_eq!(names("json.partial!(\n  \"users/user\", user: u)\n"), ["1:users/user"]);
+        assert_eq!(names("<%= render(\n  partial: \"users/user\", locals: { a: { b: 1 } }) %>\n"), ["1:users/user"]);
+    }
+
+    #[test]
+    fn element_ids_and_html_before_a_call_are_not_comments() {
+        let names = |text: &str, haml| {
+            refs_by_line(text, haml).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
+        };
+        assert_eq!(names("#main= render formats: [:json],\n  partial: \"users/user\"\n", true), ["1:users/user"]);
+        assert_eq!(names("%div#main= render formats: [:json],\n  partial: \"users/user\"\n", true), ["1:users/user"]);
+        assert_eq!(names("#main = render(\n  \"users/user\")\n", true), ["1:users/user"]);
+        assert_eq!(names("<a href=#top><%= render(\n  \"users/user\") %>\n", false), ["1:users/user"]);
+    }
+
+    #[test]
+    fn continued_call_does_not_repeat_refs_of_its_first_line() {
+        let refs = refs_by_line("<%= render partial: \"a\",\n  layout: \"c\", as: :x %>\n", false);
+        let names: Vec<_> = refs.iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect();
+        assert_eq!(names, ["0:a", "1:c"]);
     }
 
     #[test]
