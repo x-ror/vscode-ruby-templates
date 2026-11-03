@@ -7,6 +7,7 @@ use crate::render_call::{self, Call, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
 use crate::strict_locals::{self, Close};
 use regex::{Captures, Regex};
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -745,15 +746,15 @@ pub struct StrictLocals {
     pub rest: bool,
 }
 
-pub fn strict_locals(text: &str, close: Close) -> Option<StrictLocals> {
+pub fn strict_locals(text: &str, close: Close, ruby: ruby_prism::Version) -> Option<StrictLocals> {
     let comment = strict_locals::find(text, close)?;
     let params = if comment.blank() { "" } else { comment.parameters.trim() };
-    let (locals, rest) = prism::keyword_parameters(params)?;
+    let (locals, rest) = prism::keyword_parameters(params, ruby)?;
     Some(StrictLocals { params: params.to_string(), locals, rest })
 }
 
-pub fn file_strict_locals(file: &Path, close: Close) -> Option<StrictLocals> {
-    strict_locals(&std::fs::read_to_string(file).ok()?, close)
+pub fn file_strict_locals(file: &Path, close: Close, ruby: ruby_prism::Version) -> Option<StrictLocals> {
+    strict_locals(&std::fs::read_to_string(file).ok()?, close, ruby)
 }
 
 /// A `render` call read with Prism, once, from the text that starts at its line; offsets are into that text.
@@ -906,7 +907,10 @@ fn partial_ref_before(before: &str) -> Option<RenderRef> {
 /// The locals already passed (before or after the cursor) and the name typed so far where a local's name may be typed at
 /// `col` in `text`, which starts at the render call's line.
 fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> Option<(Vec<String>, &'a str)> {
-    let line = text.get(..col)?;
+    // The blanking keeps offsets, so the typed word is taken from `text`.
+    let joined = if haml { render_call::haml_group_joined(text) } else { Cow::Borrowed(text) };
+    let blanked = joined.as_ref();
+    let line = blanked.get(..col)?;
     let args = line.get(r.end + 1..)?;
     if args.contains("%>") {
         return None;
@@ -929,7 +933,7 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> 
     // The call from its name on, with a key after the cursor: the call has it only if the cursor is still among its arguments.
     let source = format!("{call_start}{closed}, {CURSOR_KEY}: 1");
     // The same with the rest of the call after the cursor, to count the locals passed there.
-    let rest_end = text[col..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(text.len(), |(at, _)| col + at);
+    let rest_end = blanked[col..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(blanked.len(), |(at, _)| col + at);
     let rest = &text[col..rest_end];
     let after_word = rest.trim_start_matches(is_word_char);
     // The word being typed goes on after the cursor: it is dropped, unless a `:` follows, when it is a key to keep (but not to count).
@@ -956,7 +960,7 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> 
     };
     // The whole call, when it reads, decides: the probe is a local there or nowhere.
     if let Some(call) = render_call::read(&spliced, 0, name_at, haml).filter(|call| call.readable) {
-        return Some((others(passed_names(&call, &form)?)?, typed));
+        return Some((others(passed_names(&call, &form)?)?, &text[col - typed.len()..col]));
     }
     // Cut at the cursor, the probe may also sit beside a hash the call ignores.
     let passed = |source: &str| {
@@ -968,7 +972,7 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> 
         others(names)
     };
     let names = passed(&source).or_else(|| passed(&format!("{source})")))?;
-    Some((names, typed))
+    Some((names, &text[col - typed.len()..col]))
 }
 
 /// Where the last `{` that `text` leaves open is, braces in string literals aside.
@@ -1589,9 +1593,23 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    // Ruby 3.3 rejects a line starting with `&&` after an expression; the latest grammar takes it.
+    #[test]
+    fn strict_locals_signature_follows_the_ruby_version() {
+        let text = "<%# locals: (a: (1\n && 2)) %>";
+        let signature = |ruby| strict_locals(text, Close::default(), ruby);
+        assert!(signature(ruby_prism::Version::Latest).is_some());
+        assert!(signature(ruby_prism::Version::CRuby3_3).is_none());
+    }
+
     #[test]
     fn strict_locals_signature() {
-        let sig = strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>", Close::default()).unwrap();
+        let sig = strict_locals(
+            "<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>",
+            Close::default(),
+            ruby_prism::Version::Latest,
+        )
+        .unwrap();
         assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
         assert_eq!(
             sig.locals,
@@ -1602,25 +1620,25 @@ mod tests {
             ]
         );
         assert!(sig.rest);
-        let none = strict_locals("<%# locals: () -%>", Close::default()).unwrap();
+        let none = strict_locals("<%# locals: () -%>", Close::default(), ruby_prism::Version::Latest).unwrap();
         assert!(none.locals.is_empty() && !none.rest);
         assert_eq!(
-            strict_locals("-# locals: (user: nil)", Close::default()).unwrap().locals,
+            strict_locals("-# locals: (user: nil)", Close::default(), ruby_prism::Version::Latest).unwrap().locals,
             vec![("user".to_string(), Some("nil".to_string()))]
         );
         assert_eq!(
-            strict_locals("<%# locals: (a: ')') %>", Close::default()).unwrap().locals,
+            strict_locals("<%# locals: (a: ')') %>", Close::default(), ruby_prism::Version::Latest).unwrap().locals,
             vec![("a".to_string(), Some("')'".to_string()))]
         );
-        let no_rest = strict_locals("<%# locals: (**nil) %>", Close::default()).unwrap();
+        let no_rest = strict_locals("<%# locals: (**nil) %>", Close::default(), ruby_prism::Version::Latest).unwrap();
         assert_eq!((no_rest.locals.len(), no_rest.rest), (0, false));
         // Lazy: stops at the `)` that closes the tag, not the last one on the line.
-        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>", Close::default()).unwrap().params, "a:");
-        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>", Close::default()).unwrap();
+        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>", Close::default(), ruby_prism::Version::Latest).unwrap().params, "a:");
+        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>", Close::default(), ruby_prism::Version::Latest).unwrap();
         assert_eq!(multi.locals, vec![("a".to_string(), None), ("b".to_string(), Some("[1,\n 2]".to_string()))]);
         // ActionView needs whitespace before the parenthesis.
-        assert!(strict_locals("<%# locals:(a:) %>", Close::default()).is_none());
-        assert!(strict_locals("<%# just a comment %>", Close::default()).is_none());
+        assert!(strict_locals("<%# locals:(a:) %>", Close::default(), ruby_prism::Version::Latest).is_none());
+        assert!(strict_locals("<%# just a comment %>", Close::default(), ruby_prism::Version::Latest).is_none());
     }
 
     #[test]
@@ -2291,6 +2309,20 @@ mod tests {
         let text = text.replacen('|', "", 1);
         let passed = local_key_before(&text, col, false).map(|(_, passed, _)| passed.join(" "));
         assert_eq!(passed.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn haml_completion_inside_a_pipe_group() {
+        let complete = |text: &str| {
+            let col = text.find('^').unwrap();
+            let text = text.replacen('^', "", 1);
+            local_key_before(&text, col, true).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+        };
+        let expect = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
+        assert_eq!(complete("= render \"card\", a: 1, |\n  ^ |\np x"), expect("a", ""));
+        assert_eq!(complete("= render \"card\", a: 1, |\n  b: 2, |\n  z^ |\np x"), expect("a b", "z"));
+        assert_eq!(complete("= render \"card\", |\n  ^ |\np x"), expect("", ""));
+        assert_eq!(complete("= render \"card\", a: 1, |\r\n  é^ |\r\np x"), expect("a", "é"));
     }
 
     #[test]

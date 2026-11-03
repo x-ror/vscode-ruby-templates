@@ -92,6 +92,11 @@ pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool) -> Option<Ca
     Some(call)
 }
 
+/// `text` from the call's line on, as far as a call may reach, with its Haml `|` group joined (see `haml_markers_blanked`).
+pub fn haml_group_joined(text: &str) -> Cow<'_, str> {
+    haml_markers_blanked(text, 0, window_end(text, 0), true)
+}
+
 /// `text[call_at..end]`, with the ` |` and line breaks of a Haml `|` multiline group blanked, as Haml joins its lines, so
 /// the group reads as one line of Ruby and offsets stay the text's. Only a call whose own line ends in a ` |` marker is one.
 fn haml_markers_blanked(text: &str, call_at: usize, end: usize, haml: bool) -> Cow<'_, str> {

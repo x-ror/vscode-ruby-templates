@@ -103,9 +103,10 @@ pub(crate) fn local_uses(source: &str, name: &str) -> LocalUses {
 pub(crate) type KeywordParameters = (Vec<(String, Option<String>)>, bool);
 
 /// The keyword parameters of `parameters`, a method's parameter list; `None` when it isn't valid Ruby.
-pub(crate) fn keyword_parameters(parameters: &str) -> Option<KeywordParameters> {
+pub(crate) fn keyword_parameters(parameters: &str, version: ruby_prism::Version) -> Option<KeywordParameters> {
     let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
-    let result = ruby_prism::parse(source.as_bytes());
+    let options = ruby_prism::Options::default().version(version).build();
+    let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
     if result.errors().next().is_some() {
         return None;
     }

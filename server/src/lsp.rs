@@ -65,7 +65,7 @@ fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> Stri
     }
     let list: Vec<String> = found.iter().map(|f| format!("- `{}`", rails_paths::rails_relative(f, path))).collect();
     let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
-    if let Some(sig) = partials::file_strict_locals(&found[0], strict_locals::Close::of(project)) {
+    if let Some(sig) = partials::file_strict_locals(&found[0], strict_locals::Close::of(project), project.prism_version()) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
     }
     md
@@ -389,11 +389,12 @@ impl Backend {
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !is_builtin_helper(name)) else { return Ok(vec![]) };
         let project = Project::for_template(path);
         let close = strict_locals::Close::of(&project);
+        let ruby = project.prism_version();
         let passes = self.local_passes(project, path, name).await?;
         if !passes.is_empty() {
             return Ok(passes);
         }
-        let declared = partials::strict_locals(text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
+        let declared = partials::strict_locals(text, close, ruby).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name));
         let comment = text.lines().position(|l| l.contains("locals:"));
         Ok(comment.filter(|_| declared).and_then(|line| line_location(path, line)).into_iter().collect())
     }
@@ -426,7 +427,8 @@ impl Backend {
             None => std::fs::read_to_string(&partial).unwrap_or_default(),
         };
         let close = strict_locals::Close::of(project);
-        let (Some(sig), Some(comment)) = (partials::strict_locals(&partial_text, close), strict_locals::find(&partial_text, close)) else {
+        let sig = partials::strict_locals(&partial_text, close, project.prism_version());
+        let (Some(sig), Some(comment)) = (sig, strict_locals::find(&partial_text, close)) else {
             return vec![];
         };
         let missing: Vec<&str> =
@@ -470,11 +472,12 @@ impl Backend {
         if !is_partial(uri) {
             return None;
         }
-        let close = strict_locals::Close::of(&Project::for_template(&util::file_path(uri)?));
+        let project = Project::for_template(&util::file_path(uri)?);
+        let (close, ruby) = (strict_locals::Close::of(&project), project.prism_version());
         let comment = strict_locals::find(&doc.text, close)?;
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let name = helper_defs::name_at(line, col)?;
-        if !partials::strict_locals(&doc.text, close)?.locals.iter().any(|(local, _)| local == name) {
+        if !partials::strict_locals(&doc.text, close, ruby)?.locals.iter().any(|(local, _)| local == name) {
             return None;
         }
         let at = line_start + line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len();
@@ -499,8 +502,10 @@ impl Backend {
 
     /// Whether a partial's strict local can take the name `new`: a local's name nothing in the partial declares, reads or
     /// calls, so no read of the renamed local means something else.
-    fn free_local_name(&self, doc: &Doc, close: strict_locals::Close, new: &str) -> bool {
-        let declared = partials::strict_locals(&doc.text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == new));
+    fn free_local_name(&self, doc: &Doc, project: &Project, new: &str) -> bool {
+        let close = strict_locals::Close::of(project);
+        let declared = partials::strict_locals(&doc.text, close, project.prism_version())
+            .is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == new));
         let in_defaults = strict_locals::find(&doc.text, close).is_some_and(|comment| !comment.parameter_reads(new).is_empty());
         let uses = code_context::local_uses(doc.lang, &doc.text, close, new, &self.options().extra_engines);
         is_local_name(new) && !declared && !in_defaults && uses.spans.is_empty() && !uses.shadowed
@@ -707,7 +712,8 @@ impl LanguageServer for Backend {
             let strict_local = || {
                 let close = strict_locals::Close::of(&project);
                 is_partial(&uri)
-                    && partials::strict_locals(&text, close).is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name))
+                    && partials::strict_locals(&text, close, project.prism_version())
+                        .is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name))
             };
             if let Some(found) = found.filter(|found| found.parameter || !strict_local()) {
                 let index = util::LineIndex::new(&text);
@@ -803,7 +809,7 @@ impl LanguageServer for Backend {
         }
         let declared_local = file.as_ref().filter(|_| code_here && is_partial(&uri)).and_then(|(project, _)| {
             let name = helper_defs::name_at(line, col).filter(|_| !is_key(line, col))?;
-            let sig = partials::strict_locals(&doc.text, strict_locals::Close::of(project))?;
+            let sig = partials::strict_locals(&doc.text, strict_locals::Close::of(project), project.prism_version())?;
             let local = sig.locals.into_iter().find(|(local, _)| local == name)?;
             // A block variable of the same name shadows the local.
             let engines = &self.options().extra_engines;
@@ -921,9 +927,8 @@ impl LanguageServer for Backend {
         let Some(local) = self.strict_local_at(&uri, &doc, p.text_document_position.position) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = Project::for_template(&path);
-        let close = strict_locals::Close::of(&project);
         let extra_engines = self.options().extra_engines.clone();
-        if !self.free_local_name(&doc, close, &new) {
+        if !self.free_local_name(&doc, &project, &new) {
             return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
         }
         let index = util::LineIndex::new(&doc.text);
@@ -1206,11 +1211,14 @@ impl LanguageServer for Backend {
         if typed.is_empty() {
             return Ok(None);
         }
-        let close = path.as_deref().map(|p| strict_locals::Close::of(project(p))).unwrap_or_default();
+        let (close, ruby) = path
+            .as_deref()
+            .map(|p| (strict_locals::Close::of(project(p)), project(p).prism_version()))
+            .unwrap_or((Default::default(), ruby_prism::Version::Latest));
         let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, engines), typed);
         // A block variable shadows the strict local of the same name.
         let locals: Vec<_> =
-            local_completions(&doc.text, typed, close).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
+            local_completions(&doc.text, typed, close, ruby).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
         found.extend(locals);
         let called = has_arguments(&line[col..]);
         found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| helper_item(h, called)));

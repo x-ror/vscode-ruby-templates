@@ -290,8 +290,8 @@ impl Partials<'_> {
     }
 
     fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
-        let close = strict_locals::Close::of(self.project);
-        self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close)).as_ref()
+        let (close, ruby) = (strict_locals::Close::of(self.project), self.project.prism_version());
+        self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close, ruby)).as_ref()
     }
 }
 
