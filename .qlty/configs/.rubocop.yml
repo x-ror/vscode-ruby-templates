@@ -1,0 +1,16 @@
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: enable
+  SuggestExtensions: false
+
+Layout/LineLength:
+  Max: 140
+
+# The scripts are standalone helpers run with `ruby`, not a library.
+Style/Documentation:
+  Enabled: false
+Style/FrozenStringLiteralComment:
+  Enabled: false
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes

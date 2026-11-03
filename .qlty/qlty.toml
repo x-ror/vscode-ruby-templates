@@ -1,0 +1,66 @@
+# Configuration for Qlty CLI and Qlty Cloud: https://qlty.sh/d/qlty-toml
+config_version = "0"
+
+exclude_patterns = ["**/node_modules/**", "**/target/**", "dist/**", "bin/**"]
+
+test_patterns = ["test/**", "demo/rails_app/test/**"]
+
+[smells]
+mode = "comment"
+
+[[source]]
+name = "default"
+default = true
+
+# rustfmt and clippy run in CI with the crate's own edition and flags.
+[[plugin]]
+name = "actionlint"
+
+[[plugin]]
+name = "editorconfig-checker"
+mode = "comment"
+
+[[plugin]]
+name = "osv-scanner"
+
+[[plugin]]
+name = "ripgrep"
+mode = "comment"
+
+[[plugin]]
+name = "rubocop"
+drivers = ["lint"]
+
+[[plugin]]
+name = "shellcheck"
+
+[[plugin]]
+name = "trufflehog"
+
+[[plugin]]
+name = "zizmor"
+
+# Token snapshots and formatter/diagnostic fixtures are meant to hold odd whitespace, tabs and a BOM.
+[[exclude]]
+plugins = ["editorconfig-checker"]
+file_patterns = [
+  "test/__snapshots__/**",
+  "test/format/**",
+  "test/broken/**",
+  "demo/rails_app/app/views/playground/**",
+  # bun fmt owns Markdown layout.
+  "**/*.md",
+  # rustfmt owns Rust layout; the 2-space lines are Ruby and JS inside raw-string fixtures.
+  "**/*.rs",
+]
+
+# The demo app and the test oracles are tooling around the extension; the demo's dependencies stay
+# checked by osv-scanner.
+[[exclude]]
+plugins = ["rubocop"]
+file_patterns = ["demo/**", "test/**"]
+
+# Its only TODO is text inside a test string.
+[[exclude]]
+plugins = ["ripgrep"]
+file_patterns = ["server/src/partials.rs"]

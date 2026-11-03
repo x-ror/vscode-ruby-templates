@@ -1,11 +1,11 @@
 GEM
   remote: https://rubygems.org/
   specs:
-    actionview (8.0.2)
-    devise (4.9.4)
-    rails (8.0.2)
-    railties (8.0.2)
-    view_component (3.21.0)
+    actionview (8.0.5.1)
+    devise (5.0.4)
+    rails (8.0.5.1)
+    railties (8.0.5.1)
+    view_component (4.21.0)
 
 PLATFORMS
   x86_64-linux
