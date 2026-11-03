@@ -2,7 +2,7 @@
 
 use crate::haml_indent::haml_structure;
 use crate::haml_parser::{is_haml_multiline, RUBY_WHITESPACE};
-use ruby_prism::{ArgumentsNode, AssocNode, CallNode, InterpolatedStringNode, Location, StringNode, Visit};
+use ruby_prism::{ArgumentsNode, AssocNode, CallNode, InterpolatedStringNode, Location, Options, StringNode, Version, Visit};
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::ops::Range;
@@ -44,8 +44,8 @@ fn window_end(text: &str, call_at: usize) -> usize {
 
 /// The `render` or `json.…` call that starts at `call_at` in `text` and holds the name at `name_at`, read from the fewest
 /// lines that make Ruby; `None` when they don't (an unclosed call, or one that isn't the name's). In Haml (`haml`) the
-/// ` |` that ends the lines of a multiline group is not Ruby.
-pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool) -> Option<Call<'_>> {
+/// ` |` that ends the lines of a multiline group is not Ruby. `ruby`: the grammar to read with.
+pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool, ruby: Version) -> Option<Call<'_>> {
     let end = window_end(text, call_at);
     let window = haml_markers_blanked(text, call_at, end, haml);
     let window = window.trim_end();
@@ -57,7 +57,7 @@ pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool) -> Option<Ca
     let mut call = None;
     for line_end in line_ends.by_ref() {
         line_start = line_end;
-        match read_code(text, call_at, name_at, window[..line_end].trim_end()) {
+        match read_code(text, call_at, name_at, window[..line_end].trim_end(), ruby) {
             Ok(found) => {
                 call = Some(found);
                 break;
@@ -84,7 +84,7 @@ pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool) -> Option<Ca
         if !open && !is_method_chain(line) {
             break;
         }
-        match read_code(text, call_at, name_at, window[..line_end].trim_end()) {
+        match read_code(text, call_at, name_at, window[..line_end].trim_end(), ruby) {
             Ok(longer) => (call, open) = (longer, false),
             Err(Failure::EndsEarly) => open = true,
             Err(Failure::Invalid) => break,
@@ -189,15 +189,15 @@ thread_local! {
 /// A block whose closer lies in a later template tag is closed here so the call parses.
 const BLOCK_CLOSERS: [&str; 2] = ["\nend", "\n}"];
 
-fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str) -> Result<Call<'a>, Failure> {
-    match parse(text, call_at, name_at, code) {
+fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str, ruby: Version) -> Result<Call<'a>, Failure> {
+    match parse(text, call_at, name_at, code, ruby) {
         Err(Failure::EndsEarly) => {}
         plain => return plain.map(|found| found.call),
     }
     BLOCK_CLOSERS
         .iter()
         .find_map(|closer| {
-            let found = parse(text, call_at, name_at, &format!("{code}{closer}")).ok()?;
+            let found = parse(text, call_at, name_at, &format!("{code}{closer}"), ruby).ok()?;
             // The closer ends the call's block, or lies after the call.
             (found.has_block || found.node_end <= code.len()).then_some(found.call)
         })
@@ -216,10 +216,11 @@ enum Failure {
     Invalid,
 }
 
-fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str) -> Result<Found<'a>, Failure> {
+fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str, ruby: Version) -> Result<Found<'a>, Failure> {
     #[cfg(test)]
     PARSES.with(|parses| parses.set(parses.get() + 1));
-    let result = ruby_prism::parse(source.as_bytes());
+    let options = Options::default().version(ruby).build();
+    let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
     // An error in the last token (`x ?`, `a +`) is Prism's complaint about a missing operand, not about the code before it;
     // a trailing comment is no token.
     let mut code = source.trim_end();
@@ -245,7 +246,7 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str) -> Res
     // The code around the call (`f(render("x"), 1)`) is its own business: the call alone must be valid Ruby.
     #[cfg(test)]
     PARSES.with(|parses| parses.set(parses.get() + 1));
-    let alone = ruby_prism::parse(&source.as_bytes()[..found.node_end]);
+    let alone = ruby_prism::parse_with_options(&source.as_bytes()[..found.node_end], &options);
     if alone.errors().next().is_some() {
         return Err(Failure::Invalid);
     }

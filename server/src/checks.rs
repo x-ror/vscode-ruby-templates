@@ -247,7 +247,7 @@ fn render_diagnostics(
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    let renders = checked_renders(&views, text, haml, in_code);
+    let renders = checked_renders(&views, text, haml, project.prism_version(), in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
     out.extend(strict_locals_mismatches(project, &renders, &mut partials));
@@ -259,6 +259,7 @@ fn checked_renders<'a>(
     views: &Path,
     text: &'a str,
     haml: bool,
+    ruby: ruby_prism::Version,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
@@ -272,7 +273,7 @@ fn checked_renders<'a>(
     let pipes = HamlPipes::new(haml);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, &pipes, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        let refs = partials::render_calls_in(text, line_start, line, &pipes, ruby, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
@@ -1031,6 +1032,42 @@ mod tests {
             .collect();
         let range = Range::new(Position::new(6, 12), Position::new(6, 22));
         assert_eq!(got, vec![("missing local: :user".to_string(), range)]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_read_a_call_continued_on_the_line_of_its_partial() {
+        let root = std::env::temp_dir().join(format!("rt-locals-continued-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "<%# locals: (user:, size:) -%>\n").unwrap();
+        let file = users.join("index.html.erb");
+        let text = "<p>héllo</p>\r\n<%= render formats: [:html], locals: { user: u },\r\n  partial: \"users/card\" %>\r\n";
+        let got: Vec<(String, Range)> = render_checks(TemplateLang::Erb, &file, &lock_with("7.1.0"), text, STRICT_LOCALS)
+            .into_iter()
+            .map(|d| (d.message, d.range))
+            .collect();
+        let range = Range::new(Position::new(2, 12), Position::new(2, 22));
+        assert_eq!(got, vec![("missing local: :size".to_string(), range)]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_read_a_call_with_the_grammar_of_the_projects_ruby() {
+        let root = std::env::temp_dir().join(format!("rt-locals-ruby-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        std::fs::write(users.join("_card.html.erb"), "<%# locals: (user:, size:) -%>\n").unwrap();
+        let file = users.join("index.html.erb");
+        // Ruby 3.3 rejects a line starting with `&&`, so that call's locals can't be read; the latest grammar reads them.
+        let text = "<%= render \"users/card\", user: (u\n  && v) %>\n";
+        let missing = |lock: String| {
+            let found = render_checks(TemplateLang::Erb, &file, &Project::from_lockfile(&lock), text, STRICT_LOCALS);
+            found.into_iter().map(|d| d.message).collect::<Vec<_>>()
+        };
+        let lock = format!("{GEM_LOCK}    actionview (7.1.0)\n");
+        assert_eq!(missing(lock.clone()), ["missing local: :size"]);
+        assert!(missing(format!("{lock}\nRUBY VERSION\n   ruby 3.3.6p108\n")).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
