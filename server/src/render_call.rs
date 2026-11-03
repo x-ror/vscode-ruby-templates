@@ -4,6 +4,7 @@ use crate::haml_indent::haml_structure;
 use crate::haml_parser::{is_haml_multiline, RUBY_WHITESPACE};
 use ruby_prism::{ArgumentsNode, AssocNode, CallNode, InterpolatedStringNode, Location, StringNode, Visit};
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::ops::Range;
 
 /// How many lines up a multi-line render call may start from the cursor, and how many lines it may span.
@@ -139,21 +140,40 @@ thread_local! {
     pub static STRUCTURE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Does `|` end a multiline group on the Haml line of `text` at `line_start`? Not in a filter body (`:ruby`), which Haml
-/// leaves alone. The structure pass runs only for a line ending in ` |`.
-pub fn haml_pipes_apply(text: &str, line_start: usize, haml: bool) -> bool {
-    if !haml {
-        return false;
+/// Whether `|` ends a multiline group on the lines of one Haml document (`haml`): not in a filter body (`:ruby`), which
+/// Haml leaves alone. The structure pass runs once, for the first line ending in ` |`.
+pub struct HamlPipes {
+    haml: bool,
+    /// Per line: outside filter and comment bodies.
+    structural: OnceCell<Vec<bool>>,
+}
+
+impl HamlPipes {
+    pub fn new(haml: bool) -> Self {
+        HamlPipes { haml, structural: OnceCell::new() }
     }
-    let line = text[line_start..].lines().next().unwrap_or_default();
-    if !is_haml_multiline(line) {
-        return false;
+
+    /// Does `|` end a multiline group on the line of `text` at `line_start`?
+    pub fn apply(&self, text: &str, line_start: usize) -> bool {
+        if !self.haml {
+            return false;
+        }
+        let line = text[line_start..].lines().next().unwrap_or_default();
+        if !is_haml_multiline(line) {
+            return false;
+        }
+        let structural = self.structural.get_or_init(|| {
+            #[cfg(test)]
+            STRUCTURE_PASSES.with(|passes| passes.set(passes.get() + 1));
+            let mut structural = vec![false; text.lines().count()];
+            for (first, span) in haml_structure(text) {
+                let last = (first + span).min(structural.len());
+                structural[first..last].fill(true);
+            }
+            structural
+        });
+        structural.get(text[..line_start].matches('\n').count()).copied().unwrap_or(false)
     }
-    #[cfg(test)]
-    STRUCTURE_PASSES.with(|passes| passes.set(passes.get() + 1));
-    let line_index = text[..line_start].matches('\n').count();
-    let through_line = &text[..line_start + line.len()];
-    haml_structure(through_line).into_iter().any(|(first, span)| (first..first + span).contains(&line_index))
 }
 
 fn is_method_chain(line: &str) -> bool {

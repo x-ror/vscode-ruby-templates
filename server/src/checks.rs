@@ -5,7 +5,9 @@ use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
     erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
     project::{Framework, Project, Projects},
-    rails_paths, slim_indent, strict_locals, tags, util,
+    rails_paths,
+    render_call::HamlPipes,
+    slim_indent, strict_locals, tags, util,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -267,9 +269,10 @@ fn checked_renders<'a>(
         Some(dir) => *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir()),
         None => false,
     };
+    let pipes = HamlPipes::new(haml);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, haml, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        let refs = partials::render_calls_in(text, line_start, line, &pipes, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
@@ -754,6 +757,23 @@ mod tests {
         assert_eq!(messages(), ["Missing partial shared/_wrap"]);
         std::fs::write(shared.join("_wrap.json.erb"), "").unwrap();
         assert!(messages().is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_partial_on_a_continuation_line_is_reported_there() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-continued-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app/views/users")).unwrap();
+        let file = root.join("app/views/users/index.html.erb");
+        let missing = |text: &str| -> Vec<(u32, u32, String)> {
+            let found = unresolved(TemplateLang::Erb, &file, text);
+            found.into_iter().map(|d| (d.range.start.line, d.range.start.character, d.message)).collect()
+        };
+        let text = "<%= render formats: [:json],\r\n           partial: \"users/card\" %>\r\n";
+        assert_eq!(missing(text), [(1, 21, "Missing partial users/_card".to_string())]);
+        assert!(missing("<%= link_to \"x\",\n  partial: \"users/card\" %>\n").is_empty());
+        std::fs::write(root.join("app/views/users/_card.json.erb"), "").unwrap();
+        assert!(missing(text).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

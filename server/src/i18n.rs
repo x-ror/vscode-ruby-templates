@@ -167,8 +167,9 @@ impl Flow {
     }
 }
 
-/// Where an anchored key (`&name`) lives: its locale and key.
-type Anchors = HashMap<String, (String, String)>;
+/// Where an anchored key (`&name`) lives: its locale, its key (empty for a top-level key) and the index in the output
+/// where its entries start; they follow each other up to the next key outside it.
+type Anchors = HashMap<String, (String, String, usize)>;
 
 // Line-based YAML subset: block mappings, scalars, `|`/`>` blocks, block sequences of scalars, flow collections on one
 // line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
@@ -233,14 +234,20 @@ pub fn parse(text: &str) -> Vec<Translation> {
             scalar = Some((indent, *open));
         }
         // `I18n.t` splits on `.`, so a key containing one can never be looked up.
-        if path.len() < 2 || path.iter().any(|(_, k)| k.contains('.')) {
+        if path.iter().any(|(_, k)| k.contains('.')) {
             continue;
         }
         let locale = path[0].1.clone();
+        if path.len() < 2 {
+            if let Some(name) = anchor {
+                anchors.insert(name.to_string(), (locale, String::new(), out.len()));
+            }
+            continue;
+        }
         if key == "<<" {
             let target = joined(&path[1..path.len() - 1]);
             for name in rest.split(|c: char| c.is_whitespace() || "[],".contains(c)).filter_map(|word| word.strip_prefix('*')) {
-                for (suffix, line, value) in aliased(&out, &anchors, name) {
+                for (suffix, line, value) in aliased(&out, &anchors, name, &merged) {
                     if let Some(suffix) = suffix.strip_prefix('.') {
                         merged.insert(out.len());
                         let key = if target.is_empty() { suffix.to_string() } else { format!("{target}.{suffix}") };
@@ -252,11 +259,11 @@ pub fn parse(text: &str) -> Vec<Translation> {
         }
         let key = joined(&path[1..]);
         if let Some(name) = anchor {
-            anchors.insert(name.to_string(), (locale.clone(), key.clone()));
+            anchors.insert(name.to_string(), (locale.clone(), key.clone(), out.len()));
         }
         let aliases = rest
             .strip_prefix('*')
-            .map(|name| aliased(&out, &anchors, name.split_whitespace().next().unwrap_or_default()))
+            .map(|name| aliased(&out, &anchors, name.split_whitespace().next().unwrap_or_default(), &merged))
             .filter(|found| !found.is_empty());
         if let Some(found) = aliases {
             for (suffix, line, value) in found {
@@ -283,13 +290,26 @@ fn joined(path: &[(usize, String)]) -> String {
 }
 
 /// The entries at and below the anchored key `name` as (key suffix, line, value); none when `name` is unknown.
-fn aliased(out: &[Translation], anchors: &Anchors, name: &str) -> Vec<(String, usize, Option<String>)> {
-    let Some((locale, key)) = anchors.get(name) else { return vec![] };
-    out.iter()
-        .filter(|t| &t.locale == locale)
-        .filter_map(|t| Some((t.key.strip_prefix(key.as_str())?, t)))
-        .filter(|(suffix, _)| suffix.is_empty() || suffix.starts_with('.'))
-        .map(|(suffix, t)| (suffix.to_string(), t.line, t.value.clone()))
+/// An entry merged in with `<<` is left out where the range has an entry of its own under the same suffix.
+fn aliased(out: &[Translation], anchors: &Anchors, name: &str, merged: &HashSet<usize>) -> Vec<(String, usize, Option<String>)> {
+    let Some((locale, key, start)) = anchors.get(name) else { return vec![] };
+    let range: Vec<(usize, String, &Translation)> = out[*start..]
+        .iter()
+        .enumerate()
+        .take_while(|(_, t)| &t.locale == locale)
+        .map_while(|(i, t)| {
+            if key.is_empty() {
+                return Some((start + i, format!(".{}", t.key), t));
+            }
+            let suffix = t.key.strip_prefix(key.as_str())?;
+            (suffix.is_empty() || suffix.starts_with('.')).then(|| (start + i, suffix.to_string(), t))
+        })
+        .collect();
+    let own: HashSet<&str> = range.iter().filter(|(i, ..)| !merged.contains(i)).map(|(_, suffix, _)| suffix.as_str()).collect();
+    range
+        .iter()
+        .filter(|(i, suffix, _)| !merged.contains(i) || !own.contains(suffix.as_str()))
+        .map(|(_, suffix, t)| (suffix.clone(), t.line, t.value.clone()))
         .collect()
 }
 
@@ -307,10 +327,11 @@ fn push_flow(out: &mut Vec<Translation>, locale: &str, key: String, line: usize,
 
 /// Appends the scalar `item` of a `- item` line to the list `key` holds; false when the item isn't a scalar.
 fn push_list_item(key: &mut Translation, item: &str) -> bool {
-    if item.is_empty() || item.starts_with('#') || split_key(item).is_some() {
+    if item.is_empty() || item.starts_with(['#', '|', '>']) || split_key(item).is_some() {
         return false;
     }
     let Some((item, _)) = scalar_value(item) else { return false };
+    let item = if item.is_empty() { "\"\"" } else { item.as_str() };
     match &mut key.value {
         Some(list) => {
             list.pop();
@@ -636,6 +657,76 @@ mod tests {
                 entry("x.k", 10, Some("2")),
             ]
         );
+    }
+
+    #[test]
+    fn merges_locale_level_and_top_level_anchors() {
+        let yml = "en: &en\n  hello: Hi\n  a:\n    b: B\nen-GB:\n  <<: *en\n  hello: Hello\n";
+        assert_eq!(
+            parsed(yml),
+            [
+                entry("hello", 1, Some("Hi")),
+                entry("a", 2, None),
+                entry("a.b", 3, Some("B")),
+                entry("a", 2, None),
+                entry("a.b", 3, Some("B")),
+                entry("hello", 6, Some("Hello")),
+            ]
+        );
+        let yml = "defaults: &defaults\n  ok: OK\nen:\n  <<: *defaults\n  copy: *defaults\n";
+        let en: Vec<_> = parse(yml).into_iter().filter(|t| t.locale == "en").map(|t| (t.key, t.line)).collect();
+        assert_eq!(en, [("ok".to_string(), 1), ("copy.ok".to_string(), 1)]);
+    }
+
+    #[test]
+    fn merged_entries_overridden_in_the_anchored_range_are_not_copied() {
+        let yml = "defaults: &defaults\n  hello: Default\nen: &en\n  <<: *defaults\n  hello: Hi\nen-GB:\n  <<: *en\n";
+        let hello: Vec<_> = parse(yml).into_iter().filter(|t| t.locale == "en-GB").map(|t| (t.key, t.value)).collect();
+        assert_eq!(hello, [("hello".to_string(), Some("Hi".to_string()))]);
+        let yml = "en:\n  y:\n    m: base\n  a: &x\n    <<: *y\n    m: own\n  d: *x\n";
+        let yml = yml.replace("  y:\n", "  y: &y\n");
+        let d: Vec<_> = parse(&yml).into_iter().filter(|t| t.key.starts_with("d.")).map(|t| t.value).collect();
+        assert_eq!(d, [Some("own".to_string())]);
+    }
+
+    #[test]
+    fn alias_copies_exactly_the_anchored_subtree() {
+        let flow = "en:\n  a: &x { b: 1, c: { d: 2 } }\n  ab: other\n  e: *x\n";
+        assert_eq!(
+            parsed(flow),
+            [
+                entry("a.b", 1, Some("1")),
+                entry("a.c.d", 1, Some("2")),
+                entry("a.c", 1, None),
+                entry("a", 1, None),
+                entry("ab", 2, Some("other")),
+                entry("e.b", 1, Some("1")),
+                entry("e.c.d", 1, Some("2")),
+                entry("e.c", 1, None),
+                entry("e", 3, None),
+            ]
+        );
+        let merged = "base: &y
+  m: M
+en:
+  a: &x
+    <<: *y
+    c: 1
+  b: after
+  d: *x
+";
+        let en: Vec<_> = parse(merged).into_iter().filter(|t| t.locale == "en").map(|t| (t.key, t.line)).collect();
+        let keys: Vec<_> = en.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["a", "a.m", "a.c", "b", "d", "d.m", "d.c"]);
+        let nested = "en:\n  a: &outer\n    b: &inner\n      c: 1\n    d: 2\n  e: *inner\n  f: *outer\n";
+        let keys: Vec<_> = parse(nested).into_iter().map(|t| t.key).collect();
+        assert_eq!(keys, ["a", "a.b", "a.b.c", "a.d", "e", "e.c", "f", "f.b", "f.b.c", "f.d"]);
+    }
+
+    #[test]
+    fn list_items_keep_empty_strings_and_skip_block_scalars() {
+        let yml = "en:\n  a:\n    - \"\"\n    - Mon\n    - ''\n  b:\n    - |\n      body\n    - x\n  c: 1\n";
+        assert_eq!(parsed(yml), [entry("a", 1, Some("[\"\", Mon, \"\"]")), entry("b", 5, None), entry("c", 9, Some("1"))]);
     }
 
     #[test]

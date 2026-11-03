@@ -3,7 +3,7 @@
 use crate::prism;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
-use crate::render_call::{self, Call, Pair, MAX_CALL_LINES};
+use crate::render_call::{self, Call, HamlPipes, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
 use crate::strict_locals::{self, Close};
 use regex::{Captures, Regex};
@@ -55,7 +55,7 @@ pub struct RenderRef {
     /// Byte range of the string literal (without quotes) inside the line.
     pub start: usize,
     pub end: usize,
-    /// Byte start of the call (`render`, `json.partial!`, `json.array!`) the string belongs to.
+    /// Byte start of the call (`render`, `json.partial!`, `json.array!`) the string belongs to; 0 when it began on an earlier line.
     pub call: usize,
     /// The `layout:` of a `render partial:|template:` call; it receives that call's locals.
     pub from_layout: bool,
@@ -256,37 +256,112 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
 }
 
 /// `render_refs` for the line of `text` at `line_start`, keeping the refs `keep` accepts, with lookups read from the whole
-/// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep. `haml`: `text` is Haml.
-pub fn render_refs_in(text: &str, line_start: usize, line: &str, haml: bool, keep: impl FnMut(&RenderRef) -> bool) -> Vec<RenderRef> {
-    render_calls_in(text, line_start, line, haml, keep).into_iter().map(|(r, _)| r).collect()
+/// call: `formats:` may sit on a later line. Nothing is parsed for a line with no ref to keep. `pipes`: of `text`.
+pub fn render_refs_in(
+    text: &str,
+    line_start: usize,
+    line: &str,
+    pipes: &HamlPipes,
+    keep: impl FnMut(&RenderRef) -> bool,
+) -> Vec<RenderRef> {
+    render_calls_in(text, line_start, line, pipes, keep).into_iter().map(|(r, _)| r).collect()
 }
 
-/// `render_refs_in` with each ref's call, read once.
+/// A ref keyed on a line that continues a `render` call from an earlier line, and the same ref where that line starts.
+struct Continued {
+    on_line: RenderRef,
+    call_line_start: usize,
+    on_call_line: RenderRef,
+}
+
+/// The line of `text` before `line_start` that starts the `render` call it continues after trailing commas.
+fn call_line_before(text: &str, line_start: usize, pipes: &HamlPipes) -> Option<usize> {
+    let mut start = line_start;
+    // `window_end` reads MAX_CALL_LINES lines from the call line, so the continued line must be within them.
+    for _ in 0..MAX_CALL_LINES - 1 {
+        let before = text[..start].strip_suffix('\n')?;
+        let previous = before.rfind('\n').map_or(0, |at| at + 1);
+        let above = before[previous..].trim_end();
+        let above = if pipes.apply(text, previous) { above.strip_suffix('|').unwrap_or(above).trim_end() } else { above };
+        // The trailing comma is also what keeps this to the few lines that continue a call.
+        if !above.ends_with(',') {
+            return None;
+        }
+        if before[previous..].contains("render") {
+            return Some(previous);
+        }
+        start = previous;
+    }
+    None
+}
+
+/// The option refs on the line at `line_start` whose `render` call began on an earlier line:
+/// `render formats: [:json],` and, on the next line, `partial: "users/user"`.
+fn continued_refs(text: &str, line_start: usize, line: &str, pipes: &HamlPipes) -> Vec<Continued> {
+    if !["partial", "template", "layout"].iter().any(|key| line.contains(key)) {
+        return vec![];
+    }
+    let Some(call_line_start) = call_line_before(text, line_start, pipes) else { return vec![] };
+    let shift = line_start - call_line_start;
+    let joined = match pipes.apply(text, call_line_start) {
+        true => render_call::haml_group_joined(&text[call_line_start..]),
+        false => text[call_line_start..].into(),
+    };
+    let Some(joined) = joined.get(..shift + line.len()) else { return vec![] };
+    option_refs(joined)
+        .into_iter()
+        .filter(|r| r.call < shift && r.start >= shift)
+        .map(|on_call_line| Continued {
+            on_line: RenderRef { start: on_call_line.start - shift, end: on_call_line.end - shift, call: 0, ..on_call_line.clone() },
+            call_line_start,
+            on_call_line,
+        })
+        .collect()
+}
+
+/// `render_refs_in` with each ref's call, read once. A ref on a continuation line has its `call` at 0 and a call whose
+/// locals aren't read, only its lookups.
 pub fn render_calls_in<'a>(
     text: &'a str,
     line_start: usize,
     line: &str,
-    haml: bool,
+    pipes: &HamlPipes,
     mut keep: impl FnMut(&RenderRef) -> bool,
 ) -> Vec<(RenderRef, RenderCall<'a>)> {
     let mut refs = refs_without_lookups(line);
+    let own = refs.len();
+    let continued = continued_refs(text, line_start, line, pipes);
+    refs.extend(continued.iter().map(|c| c.on_line.clone()));
     let kept: Vec<bool> = refs.iter().map(&mut keep).collect();
     if !kept.contains(&true) {
         return vec![];
     }
-    let haml = render_call::haml_pipes_apply(text, line_start, haml);
+    let haml = pipes.apply(text, line_start);
     // A kept `layout:` takes its partial's lookup, so that call is read too.
-    let needed = |i: usize| kept[i] || refs.iter().zip(&kept).any(|(r, &k)| k && r.from_layout && r.call == refs[i].call);
+    // A continued ref's `call` is 0 in its own line, so it pairs only with refs from the same origin.
+    let needed = |i: usize| {
+        kept[i]
+            || refs.iter().zip(&kept).enumerate().any(|(j, (r, &k))| k && r.from_layout && r.call == refs[i].call && (j < own) == (i < own))
+    };
+    let read = |i: usize| match i.checked_sub(own).and_then(|j| continued.get(j)) {
+        Some(c) => {
+            let (_, lookup) = read_call_with_lookup(&text[c.call_line_start..], &c.on_call_line, pipes.apply(text, c.call_line_start));
+            (RenderCall { form: RenderForm::of(line, &refs[i]), parsed: None, continued: true }, lookup)
+        }
+        None => read_call_with_lookup(&text[line_start..], &refs[i], haml),
+    };
     let (calls, lookups): (Vec<_>, Vec<_>) = (0..refs.len())
         .map(|i| match needed(i) {
             true => {
-                let (call, lookup) = read_call_with_lookup(&text[line_start..], &refs[i], haml);
+                let (call, lookup) = read(i);
                 (Some(call), Some(lookup))
             }
             false => (None, None),
         })
         .unzip();
-    set_lookups(&mut refs, &lookups);
+    let (own_refs, after_call) = refs.split_at_mut(own);
+    set_lookups(own_refs, &lookups[..own]);
+    set_lookups(after_call, &lookups[own..]);
     refs.into_iter().zip(calls).zip(kept).filter_map(|((r, call), k)| k.then_some((r, call?))).collect()
 }
 
@@ -345,7 +420,7 @@ fn literal_names(value: &str) -> Option<Vec<String>> {
 /// Find a render reference whose string spans `col` (byte column) on `line`, the line of `text` at `line_start`.
 pub fn render_ref_at(text: &str, line_start: usize, line: &str, haml: bool, col: usize) -> Option<RenderRef> {
     let spans_col = |r: &RenderRef| col >= r.start.saturating_sub(1) && col <= r.end + 1;
-    render_refs_in(text, line_start, line, haml, spans_col).into_iter().next()
+    render_refs_in(text, line_start, line, &HamlPipes::new(haml), spans_col).into_iter().next()
 }
 
 pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
@@ -761,6 +836,8 @@ pub fn file_strict_locals(file: &Path, close: Close, ruby: ruby_prism::Version) 
 pub struct RenderCall<'a> {
     form: RenderForm,
     parsed: Option<Call<'a>>,
+    /// Keyed on a line that continues a call from an earlier line; the call's locals aren't read.
+    pub continued: bool,
 }
 
 /// Local names passed by a literal `render "x", a: 1` or `render partial: "x", locals: { a: 1 }`; `None` for anything
@@ -880,7 +957,7 @@ fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml: bool) -> (Rende
     let form = RenderForm::of(text, r);
     let parsed = render_call::read(text, r.call, r.start, haml);
     let lookup = parsed.as_ref().map(|parsed| lookup(parsed, &form)).unwrap_or_default();
-    (RenderCall { form, parsed }, lookup)
+    (RenderCall { form, parsed, continued: false }, lookup)
 }
 
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `offset`;
@@ -889,7 +966,7 @@ pub fn local_key_before(text: &str, offset: usize, haml: bool) -> Option<(Render
     let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
     // Starts above the first one that sees the partial ref see the same ref, so they can't read the call any better.
     let (start, r) = line_starts.into_iter().find_map(|start| Some((start, partial_ref_before(&text[start..offset])?)))?;
-    let haml = render_call::haml_pipes_apply(text, start, haml);
+    let haml = HamlPipes::new(haml).apply(text, start);
     let (names, typed) = local_key_after(&text[start..], offset - start, &r, haml)?;
     Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, ..r }, names, typed))
 }
@@ -933,7 +1010,7 @@ fn local_key_after<'a>(text: &'a str, col: usize, r: &RenderRef, haml: bool) -> 
     // The call from its name on, with a key after the cursor: the call has it only if the cursor is still among its arguments.
     let source = format!("{call_start}{closed}, {CURSOR_KEY}: 1");
     // The same with the rest of the call after the cursor, to count the locals passed there.
-    let rest_end = blanked[col..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(blanked.len(), |(at, _)| col + at);
+    let rest_end = text[col..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(text.len(), |(at, _)| col + at);
     let rest = &text[col..rest_end];
     let after_word = rest.trim_start_matches(is_word_char);
     // The word being typed goes on after the cursor: it is dropped, unless a `:` follows, when it is a key to keep (but not to count).
@@ -1694,6 +1771,16 @@ mod tests {
     }
 
     #[test]
+    fn haml_group_locals_after_the_cursor_are_counted_up_to_max_call_lines_below_it() {
+        let rows = |prefix: &str, from: usize, to: usize| (from..to).map(|i| format!("  {prefix}{i}: 1, |\n")).collect::<String>();
+        let head = "= render \"card\", |\n".to_string() + &rows("a", 0, 3);
+        let text = format!("{head}  x, |\n{}  z: 1 |\np x", rows("b", 0, 15));
+        let offset = head.len() + 3;
+        let passed = local_key_before(&text, offset, true).map(|(_, passed, _)| passed.len());
+        assert_eq!(passed, Some(3 + 15 + 1));
+    }
+
+    #[test]
     fn literal_render_locals() {
         fn span<'a>(line: &'a str, name: &str) -> Option<(usize, &'a str)> {
             local_key_span(&read_call(line, &render_refs(line)[0], false), name).map(|(s, e)| (s, &line[s..e]))
@@ -1996,6 +2083,56 @@ mod tests {
         assert_eq!(render_refs(r#"render partial: "a", partial: "b""#).len(), 1);
     }
 
+    /// The refs `render_calls_in` finds on each line of `text`, as `line:name:start-end:call:layout?:formats`.
+    fn refs_by_line(text: &str, haml: bool) -> Vec<String> {
+        let pipes = HamlPipes::new(haml);
+        let mut found = vec![];
+        for (i, (line_start, line)) in crate::util::lines_with_offsets(text).enumerate() {
+            for (r, _) in render_calls_in(text, line_start, line, &pipes, |_| true) {
+                assert_eq!(&line[r.start..r.end], r.name);
+                let formats = r.lookup.formats.map(|formats| formats.join(",")).unwrap_or_default();
+                found.push(format!("{i}:{}:{}-{}:{}:{}:{formats}", r.name, r.start, r.end, r.call, r.from_layout));
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn options_continued_after_a_trailing_comma() {
+        let erb = "<%= render formats: [:json],\n           partial: \"users/user\" %>\n";
+        assert_eq!(refs_by_line(erb, false), ["1:users/user:21-31:0:false:json"]);
+        let erb = "<%= render partial: \"row\",\n           layout: \"box\" %>\n";
+        assert_eq!(refs_by_line(erb, false), ["0:row:21-24:4:false:", "1:box:20-23:0:true:"]);
+        let haml = "= render formats: [:json],\n  layout: \"shared/wrap\" do\n  p x\n";
+        assert_eq!(refs_by_line(haml, true), ["1:shared/wrap:11-22:0:false:json"]);
+        // No render above, or a line that ends the call: nothing continues.
+        assert!(refs_by_line("<%= link_to \"x\", a,\n  partial: \"users/user\" %>\n", false).is_empty());
+        assert!(refs_by_line("<%= render formats: [:json] %>\n  partial: \"users/user\"\n", false).is_empty());
+    }
+
+    #[test]
+    fn continuation_refs_need_a_render_call_within_reach_and_a_trailing_comma() {
+        // A call line that ended its call has no continuation; CRLF lines continue like LF ones.
+        let quoted = "<%= render formats: [:json] %>\n<%= x \"a,\"\n  partial: \"users/user\" %>\n";
+        assert!(refs_by_line(quoted, false).is_empty());
+        let ended = "<%= render formats: [:json]\n  partial: \"users/user\" %>\n";
+        assert!(refs_by_line(ended, false).is_empty());
+        let crlf = "<%= render formats: [:json],\r\n  partial: \"users/user\" %>\r\n";
+        assert_eq!(refs_by_line(crlf, false), ["1:users/user:12-22:0:false:json"]);
+        // A call line further than MAX_CALL_LINES lines above is out of reach.
+        let filler = |n: usize| "  a: 1,\n".repeat(n);
+        let reach = |n: usize| format!("<%= render formats: [:json],\n{}  partial: \"users/user\" %>\n", filler(n));
+        let last = |text: String| refs_by_line(&text, false).pop();
+        assert_eq!(last(reach(MAX_CALL_LINES - 2)), Some(format!("{}:users/user:12-22:0:false:json", MAX_CALL_LINES - 1)));
+        assert_eq!(last(reach(MAX_CALL_LINES - 1)), None);
+    }
+
+    #[test]
+    fn continuation_refs_in_haml_with_pipes_and_trailing_commas() {
+        let haml = "= render formats: [:json], |\n  partial: \"users/user\" |\np x\n";
+        assert_eq!(refs_by_line(haml, true), ["1:users/user:12-22:0:false:json"]);
+    }
+
     #[test]
     fn options_before_the_name_in_haml() {
         let r = &render_refs(r#"= render formats: [:json], partial: "card""#)[0];
@@ -2046,7 +2183,7 @@ mod tests {
         let text = "p\n<%= render partial: \"card\", layout: \"wrap\",\n  formats: [:json], locals: { a: 1 } %>\n";
         let line_start = 2;
         let line = text[line_start..].lines().next().unwrap();
-        let found = render_calls_in(text, line_start, line, false, |r| r.from_layout);
+        let found = render_calls_in(text, line_start, line, &HamlPipes::new(false), |r| r.from_layout);
         assert_eq!(found.len(), 1);
         let (layout, call) = &found[0];
         assert_eq!((layout.name.as_str(), layout.lookup.formats.clone()), ("wrap", Some(vec!["json".to_string()])));
@@ -2245,34 +2382,36 @@ mod tests {
     fn haml_filter_bodies_have_no_pipe_groups() {
         let text = ":ruby\n  x = render \"card\", a: b |\n    c, d: 1\np x";
         let line_start = text.find("  x =").unwrap();
-        assert!(!render_call::haml_pipes_apply(text, line_start, true));
-        assert!(!render_call::haml_pipes_apply(text, text.find("p x").unwrap(), true));
+        assert!(!HamlPipes::new(true).apply(text, line_start));
+        assert!(!HamlPipes::new(true).apply(text, text.find("p x").unwrap()));
         let line = &text[line_start..text.find("\n    c").unwrap()];
-        let (r, call) = render_calls_in(text, line_start, line, true, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(true), |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
         let outside = ":ruby\n  x = 1\n= render \"card\", a: b, |\n    d: 1 |\np x";
         let line_start = outside.find("= render").unwrap();
-        let (r, call) = render_calls_in(outside, line_start, "= render \"card\", a: b, |", true, |_| true).remove(0);
+        let (r, call) = render_calls_in(outside, line_start, "= render \"card\", a: b, |", &HamlPipes::new(true), |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
         // A `:symbol` line above (attribute hash continuation) is no filter.
         let hash = "%section\n  %div{ :class => \"x\",\n  :id => \"y\" }\n    = render \"card\", a: 1, |\n      b: 2 |\n";
         let line_start = hash.find("    = render").unwrap();
         let line = "    = render \"card\", a: 1, |";
-        let (r, call) = render_calls_in(hash, line_start, line, true, |_| true).remove(0);
+        let (r, call) = render_calls_in(hash, line_start, line, &HamlPipes::new(true), |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
     }
 
     #[test]
-    fn haml_structure_pass_runs_only_for_pipe_lines() {
-        let text = "= render \"card\", a: 1\n".repeat(50) + "= render \"card\", a: 1, |\n  b: 2 |\n";
+    fn haml_structure_pass_runs_once_per_document_and_only_for_pipe_lines() {
         let passes = || render_call::STRUCTURE_PASSES.with(|passes| passes.get());
+        let render_all = |text: &str| {
+            let pipes = HamlPipes::new(true);
+            for (start, line) in crate::util::lines_with_offsets(text) {
+                render_calls_in(text, start, line, &pipes, |_| true);
+            }
+        };
         let before = passes();
-        for line in text.lines().take(50) {
-            render_calls_in(&text, text.find(line).unwrap(), line, true, |_| true);
-        }
+        render_all(&"= render \"card\", a: 1\n".repeat(50));
         assert_eq!(passes(), before);
-        let start = text.rfind("= render").unwrap();
-        render_calls_in(&text, start, "= render \"card\", a: 1, |", true, |_| true);
+        render_all(&"= render \"card\", a: 1, |\n  b: 2 |\n".repeat(50));
         assert_eq!(passes(), before + 1);
     }
 
@@ -2282,7 +2421,7 @@ mod tests {
         assert_eq!(passed_in("<%= render \"card\", a: x |\n y, b: 1 %>"), strs(&["a", "b"]));
         let text = "<%=\n  render \"card\", a: x |\n  y, b: 1 %>";
         let (line_start, line) = (4, "  render \"card\", a: x |");
-        let (r, call) = render_calls_in(text, line_start, line, false, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(false), |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert_eq!(passed_in("<%= render \"card\", a: 1 ||\n  b %>"), strs(&["a"]));
         // The same in a Ruby file.
@@ -2588,7 +2727,7 @@ mod tests {
     fn locals_and_edits_reuse_the_call_read_with_the_refs() {
         let text = "<%= render \"card\", a: 1, b: 2 %>\n";
         let before = render_call::PARSES.with(|parses| parses.get());
-        let (r, call) = render_calls_in(text, 0, text.lines().next().unwrap(), false, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, 0, text.lines().next().unwrap(), &HamlPipes::new(false), |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert!(add_locals_edit(&call, &r, &["c"]).is_some());
         assert!(remove_local_edit(&call, &r, "a").is_some());
@@ -2603,7 +2742,7 @@ mod tests {
         let before = render_call::PARSES.with(|parses| parses.get());
         let mut line_start = 0;
         for line in text.lines() {
-            render_calls_in(&text, line_start, line, false, |_| true);
+            render_calls_in(&text, line_start, line, &HamlPipes::new(false), |_| true);
             line_start += line.len() + 1;
         }
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
