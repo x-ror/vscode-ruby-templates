@@ -178,8 +178,9 @@ pub fn parse(text: &str) -> Vec<Translation> {
     let mut out: Vec<Translation> = Vec::new();
     let mut path: Vec<(usize, String)> = Vec::new();
     let mut anchors = Anchors::new();
-    // Entries a `<<` merge added: a key the mapping sets itself wins over them.
-    let mut merged: HashSet<usize> = HashSet::new();
+    // Entries a `<<` merge added, with the depth of the merging mapping: a key the mapping sets itself wins over them
+    // and over what is below it.
+    let mut merged: HashMap<usize, usize> = HashMap::new();
     // The valueless key a `- item` line right below it would belong to.
     let mut list_key: Option<usize> = None;
     // Indent of the last key with a value or sequence item: deeper lines continue it (`|`/`>` blocks, wrapped
@@ -249,7 +250,7 @@ pub fn parse(text: &str) -> Vec<Translation> {
             for name in rest.split(|c: char| c.is_whitespace() || "[],".contains(c)).filter_map(|word| word.strip_prefix('*')) {
                 for (suffix, line, value) in aliased(&out, &anchors, name, &merged) {
                     if let Some(suffix) = suffix.strip_prefix('.') {
-                        merged.insert(out.len());
+                        merged.insert(out.len(), path.len() - 2);
                         let key = if target.is_empty() { suffix.to_string() } else { format!("{target}.{suffix}") };
                         out.push(Translation { locale: locale.clone(), key, line, value });
                     }
@@ -279,9 +280,16 @@ pub fn parse(text: &str) -> Vec<Translation> {
         }
     }
     let explicit: HashSet<(&str, &str)> =
-        out.iter().enumerate().filter(|(i, _)| !merged.contains(i)).map(|(_, t)| (t.locale.as_str(), t.key.as_str())).collect();
-    let shadowed: HashSet<usize> =
-        merged.iter().copied().filter(|&i| explicit.contains(&(out[i].locale.as_str(), out[i].key.as_str()))).collect();
+        out.iter().enumerate().filter(|(i, _)| !merged.contains_key(i)).map(|(_, t)| (t.locale.as_str(), t.key.as_str())).collect();
+    let shadowed: HashSet<usize> = merged
+        .iter()
+        .filter(|&(&i, &depth)| {
+            let t = &out[i];
+            let ancestors = t.key.match_indices('.').map(|(at, _)| &t.key[..at]).chain([t.key.as_str()]);
+            ancestors.skip(depth).any(|key| explicit.contains(&(t.locale.as_str(), key)))
+        })
+        .map(|(&i, _)| i)
+        .collect();
     out.into_iter().enumerate().filter(|(i, _)| !shadowed.contains(i)).map(|(_, t)| t).collect()
 }
 
@@ -290,8 +298,8 @@ fn joined(path: &[(usize, String)]) -> String {
 }
 
 /// The entries at and below the anchored key `name` as (key suffix, line, value); none when `name` is unknown.
-/// An entry merged in with `<<` is left out where the range has an entry of its own under the same suffix.
-fn aliased(out: &[Translation], anchors: &Anchors, name: &str, merged: &HashSet<usize>) -> Vec<(String, usize, Option<String>)> {
+/// An entry merged in with `<<` is left out where the range has an entry of its own at or above its suffix.
+fn aliased(out: &[Translation], anchors: &Anchors, name: &str, merged: &HashMap<usize, usize>) -> Vec<(String, usize, Option<String>)> {
     let Some((locale, key, start)) = anchors.get(name) else { return vec![] };
     let range: Vec<(usize, String, &Translation)> = out[*start..]
         .iter()
@@ -305,12 +313,22 @@ fn aliased(out: &[Translation], anchors: &Anchors, name: &str, merged: &HashSet<
             (suffix.is_empty() || suffix.starts_with('.')).then(|| (start + i, suffix.to_string(), t))
         })
         .collect();
-    let own: HashSet<&str> = range.iter().filter(|(i, ..)| !merged.contains(i)).map(|(_, suffix, _)| suffix.as_str()).collect();
+    let anchor_depth = if key.is_empty() { 0 } else { key.split('.').count() };
+    let own: HashSet<&str> = range.iter().filter(|(i, ..)| !merged.contains_key(i)).map(|(_, suffix, _)| suffix.as_str()).collect();
     range
         .iter()
-        .filter(|(i, suffix, _)| !merged.contains(i) || !own.contains(suffix.as_str()))
+        .filter(|(i, suffix, _)| match merged.get(i) {
+            Some(depth) => !shadowed_by(&own, suffix, depth.saturating_sub(anchor_depth)),
+            None => true,
+        })
         .map(|(_, suffix, t)| (suffix.clone(), t.line, t.value.clone()))
         .collect()
+}
+
+/// Whether `own` has an entry at a prefix of `suffix` deeper than `merge_depth` segments.
+fn shadowed_by(own: &HashSet<&str>, suffix: &str, merge_depth: usize) -> bool {
+    let prefixes = suffix.match_indices('.').map(|(at, _)| &suffix[..at]).chain([suffix]);
+    prefixes.skip(merge_depth + 1).any(|prefix| own.contains(prefix))
 }
 
 /// Adds a flow node under `key`; a mapping is a valueless key with its entries below.
@@ -579,6 +597,50 @@ mod tests {
                 entry("next", 11, Some("1")),
             ]
         );
+    }
+
+    #[test]
+    fn a_key_set_in_a_mapping_replaces_the_merged_subtree() {
+        let yml =
+            "en:\n  base: &base\n    a:\n      m: M\n      n: N\n  page: &page\n    <<: *base\n    a:\n      n: Mine\n  copy: *page\n";
+        let keys: Vec<String> = parse(yml).into_iter().map(|t| t.key).collect();
+        assert_eq!(keys, ["base", "base.a", "base.a.m", "base.a.n", "page", "page.a", "page.a.n", "copy", "copy.a", "copy.a.n"]);
+    }
+
+    #[test]
+    fn an_own_key_above_a_nested_merge_keeps_the_merged_entries() {
+        let yml = "en:\n  base: &base\n    k: 1\n  page:\n    sub:\n      <<: *base\n      own: 2\n";
+        let keys: Vec<String> = parse(yml).into_iter().map(|t| t.key).collect();
+        assert_eq!(keys, ["base", "base.k", "page", "page.sub", "page.sub.k", "page.sub.own"]);
+    }
+
+    #[test]
+    fn an_alias_keeps_merged_entries_below_an_own_key() {
+        let yml = "en:\n  base: &base\n    k: 1\n  page: &page\n    sub:\n      <<: *base\n      own: 2\n  copy: *page\n";
+        let keys: Vec<String> = parse(yml).into_iter().map(|t| t.key).filter(|k| k.starts_with("copy")).collect();
+        assert_eq!(keys, ["copy", "copy.sub", "copy.sub.k", "copy.sub.own"]);
+    }
+
+    #[test]
+    fn a_locale_merge_keeps_merged_entries_below_a_nested_merge() {
+        let yml = "en: &en\n  base: &base\n    k: 1\n  page:\n    <<: *base\nen-GB:\n  <<: *en\n";
+        let gb: Vec<String> = parse(yml).into_iter().filter(|t| t.locale == "en-GB").map(|t| t.key).collect();
+        assert_eq!(gb, ["base", "base.k", "page", "page.k"]);
+    }
+
+    #[test]
+    fn a_locale_merge_drops_only_the_subtrees_the_locale_sets() {
+        let yml = "en: &en\n  users:\n    a: A\n  other: O\nen-GB:\n  <<: *en\n  users:\n    b: B\n";
+        let gb: Vec<String> = parse(yml).into_iter().filter(|t| t.locale == "en-GB").map(|t| t.key).collect();
+        assert_eq!(gb, ["other", "users", "users.b"]);
+    }
+
+    #[test]
+    fn every_merged_anchor_loses_the_subtree_the_mapping_sets() {
+        let yml =
+            "en:\n  x: &x\n    a:\n      p: P\n  y: &y\n    a:\n      q: Q\n    b: B\n  page:\n    <<: [*x, *y]\n    a:\n      own: 1\n";
+        let page: Vec<String> = parse(yml).into_iter().map(|t| t.key).filter(|k| k.starts_with("page")).collect();
+        assert_eq!(page, ["page", "page.b", "page.a", "page.a.own"]);
     }
 
     #[test]

@@ -764,6 +764,19 @@ const check = (label, actual, expected) => {
     ],
   );
   check(
+    "strict locals quick fixes on a call continued before its partial",
+    await strictFixes(
+      fileUri(path.join(views, "strict", "continued.html.erb")),
+      '<%= render formats: [:html], locals: { c: 2 },\n  partial: "strict/row" %>\n',
+      { start: { line: 1, character: 12 }, end: { line: 1, character: 22 } },
+    ),
+    [
+      'Pass `a` to the render | /app/views/strict/continued.html.erb 0:43-43 ", a: nil"',
+      'Remove `c` from the render | /app/views/strict/continued.html.erb 0:39-43 ""',
+      'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+    ],
+  );
+  check(
     "strict locals quick fixes",
     [
       await strictFixes(strictUri, '<%= render "strict/row" %>\n'),

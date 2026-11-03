@@ -160,8 +160,11 @@ fn may_name(stems: &[&str], name: &str) -> bool {
 }
 
 /// The renders on a line that may name one of `stems`, with lookups read from the whole call.
-fn renders_named<'s, 'a>(stems: &'a [&str]) -> impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, RenderCall<'s>)> + 'a {
-    move |text, at, line, pipes| render_calls_in(text, at, line, pipes, |r| may_name(stems, &r.name))
+fn renders_named<'s, 'a>(
+    stems: &'a [&str],
+    ruby: ruby_prism::Version,
+) -> impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, RenderCall<'s>)> + 'a {
+    move |text, at, line, pipes| render_calls_in(text, at, line, pipes, ruby, |r| may_name(stems, &r.name))
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
@@ -171,7 +174,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
     for source in sources {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        let named = code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name))
+        let named = code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
             .into_iter()
             .filter(|(_, _, r, _)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
             .filter(|(start, _, r, _)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)))
@@ -247,23 +250,22 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
     let stems = partial_stems(project, &files);
     let mut out = Vec::new();
     for source in sources {
-        for (start, _, r, call) in code_refs(source, extra_engines, renders_named(&stems), |r| may_name(&stems, &r.name)) {
+        for (start, _, r, call) in
+            code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
+        {
             if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
             {
                 continue;
             }
-            // The call's locals aren't read from a continuation line, so its keys can't be edited or told unreadable.
-            if call.continued {
-                continue;
-            }
             let line_start = start - r.start;
+            let base = call.base(line_start);
             let key = match passed_locals(&call, &r) {
                 Some(names) if !names.contains(&local) => continue,
-                Some(_) => local_key_span(&call, local).map(|(s, e)| (line_start + s, line_start + e)),
+                Some(_) => local_key_span(&call, local).map(|(s, e)| (base + s, base + e)),
                 None => None,
             };
-            out.push(LocalKey { source, call: line_start + r.call, key });
+            out.push(LocalKey { source, call: call.call_start(line_start), key });
         }
     }
     out
@@ -363,7 +365,7 @@ pub fn render_edits(
         let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
         let renamed = |r: &RenderRef| folder_renamed || may_name(&stems, &r.name);
-        let found = |text, at, line, pipes: &HamlPipes| render_calls_in(text, at, line, pipes, renamed);
+        let found = |text, at, line, pipes: &HamlPipes| render_calls_in(text, at, line, pipes, project.prism_version(), renamed);
         for (start, end, r, _) in code_refs(source, extra_engines, found, renamed) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
@@ -718,13 +720,15 @@ mod tests {
     }
 
     #[test]
-    fn local_key_edits_skip_calls_keyed_on_a_continuation_line() {
+    fn local_key_edits_reach_calls_keyed_on_a_continuation_line() {
         let t = Tree::new("local-keys-continued", &["app/views/users/_card.json.erb"]);
-        let text = "<%= render formats: [:json], locals: { user: u },\n  partial: \"users/card\" %>\n<%= render formats: [:json],\n  partial: \"users/card\" %>\n";
+        let text = "<%= render formats: [:json], locals: { user: u },\r\n  partial: \"users/card\" %>\r\n<%= render formats: [:json], \"é\" => 1,\r\n  partial: \"users/card\" %>\r\n";
         let sources = [t.source("app/views/users/index.json.erb", ERB, text)];
         let card = t.path("app/views/users/_card.json.erb");
         let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
-        assert!(edits.is_empty() && unread.is_empty());
+        let got: Vec<_> = edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character)).collect();
+        let unread: Vec<_> = unread.iter().map(|l| (l.range.start.line, l.range.start.character)).collect();
+        assert_eq!((got, unread), (vec![(0, 39, 43)], vec![(2, 4)]));
     }
 
     #[test]
