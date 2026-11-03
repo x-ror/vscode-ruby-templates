@@ -10,6 +10,7 @@ use crate::partials::{
 };
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::render_call::HamlPipes;
 use crate::util::{lines_with_offsets, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -60,22 +61,22 @@ fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, 
 fn code_refs<'s, T>(
     source: &'s Source,
     extra_engines: &[String],
-    find: impl Fn(&'s str, usize, &'s str, bool) -> Vec<(RenderRef, T)>,
+    find: impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, T)>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef, T)> {
-    let haml = source.lang == Some(TemplateLang::Haml);
+    let pipes = HamlPipes::new(source.lang == Some(TemplateLang::Haml));
     let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
         return spans
             .into_iter()
-            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], false).into_iter().filter(|(r, _)| want(r)).map(shift(s)))
+            .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], &pipes).into_iter().filter(|(r, _)| want(r)).map(shift(s)))
             .collect();
     }
     let candidates: Vec<(usize, usize, &str, (RenderRef, T))> = lines_with_offsets(&source.text)
         .enumerate()
         .flat_map(|(i, (offset, line))| {
-            find(&source.text, offset, line, haml).into_iter().filter(|(r, _)| want(r)).map(move |found| (i, offset, line, found))
+            find(&source.text, offset, line, &pipes).into_iter().filter(|(r, _)| want(r)).map(move |found| (i, offset, line, found))
         })
         .collect();
     if candidates.is_empty() {
@@ -159,8 +160,8 @@ fn may_name(stems: &[&str], name: &str) -> bool {
 }
 
 /// The renders on a line that may name one of `stems`, with lookups read from the whole call.
-fn renders_named<'s, 'a>(stems: &'a [&str]) -> impl Fn(&'s str, usize, &'s str, bool) -> Vec<(RenderRef, RenderCall<'s>)> + 'a {
-    move |text, at, line, haml| render_calls_in(text, at, line, haml, |r| may_name(stems, &r.name))
+fn renders_named<'s, 'a>(stems: &'a [&str]) -> impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, RenderCall<'s>)> + 'a {
+    move |text, at, line, pipes| render_calls_in(text, at, line, pipes, |r| may_name(stems, &r.name))
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
@@ -252,6 +253,10 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
             {
                 continue;
             }
+            // The call's locals aren't read from a continuation line, so its keys can't be edited or told unreadable.
+            if call.continued {
+                continue;
+            }
             let line_start = start - r.start;
             let key = match passed_locals(&call, &r) {
                 Some(names) if !names.contains(&local) => continue,
@@ -272,7 +277,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
     for source in sources {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        let found = |_: &str, _, line: &str, _| find(line).into_iter().map(|r| (r, ())).collect();
+        let found = |_: &str, _, line: &str, _: &HamlPipes| find(line).into_iter().map(|r| (r, ())).collect();
         for (start, end, ..) in code_refs(source, extra_engines, found, |r| key.ends_with(r.name.as_str()))
             .into_iter()
             .filter(|(_, _, r, _)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
@@ -358,7 +363,7 @@ pub fn render_edits(
         let index = LineIndex::new(&source.text);
         let mut edits = Vec::new();
         let renamed = |r: &RenderRef| folder_renamed || may_name(&stems, &r.name);
-        let found = |text, at, line, haml| render_calls_in(text, at, line, haml, renamed);
+        let found = |text, at, line, pipes: &HamlPipes| render_calls_in(text, at, line, pipes, renamed);
         for (start, end, r, _) in code_refs(source, extra_engines, found, renamed) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
@@ -463,6 +468,15 @@ mod tests {
             ("app/views/users/_row.html+phone.erb", "app/views/users/_line.html+phone.erb"),
         ];
         assert_eq!(t.edits(&both, &sources), [("app/views/users/index.html.slim".into(), 3, 10, "line".into())]);
+    }
+
+    #[test]
+    fn renames_a_partial_named_on_a_continuation_line() {
+        let t = Tree::new("continued", &["app/views/users/_card.json.erb"]);
+        let text = "<%= render formats: [:json],\r\n  partial: \"users/card\" %>\r\n";
+        let sources = [t.source("app/views/users/index.json.erb", ERB, text)];
+        let edits = t.edits(&[("app/views/users/_card.json.erb", "app/views/users/_tile.json.erb")], &sources);
+        assert_eq!(edits, [("app/views/users/index.json.erb".into(), 1, 12, "users/tile".into())]);
     }
 
     #[test]
@@ -701,6 +715,16 @@ mod tests {
             edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
         got.sort();
         assert_eq!(got, [(3, 4, 8, "member".into()), (8, 2, 7, "member: user".into())]);
+    }
+
+    #[test]
+    fn local_key_edits_skip_calls_keyed_on_a_continuation_line() {
+        let t = Tree::new("local-keys-continued", &["app/views/users/_card.json.erb"]);
+        let text = "<%= render formats: [:json], locals: { user: u },\n  partial: \"users/card\" %>\n<%= render formats: [:json],\n  partial: \"users/card\" %>\n";
+        let sources = [t.source("app/views/users/index.json.erb", ERB, text)];
+        let card = t.path("app/views/users/_card.json.erb");
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        assert!(edits.is_empty() && unread.is_empty());
     }
 
     #[test]

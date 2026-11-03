@@ -8,8 +8,8 @@ use crate::completion::{
 use crate::lang::{file_name, html_host, is_partial, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, outline, partial_rename,
-    partials, project::Project, rails_paths, routes, ruby, schema, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
-    strict_locals, tags, util,
+    partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, slim_complete, slim_hover, slim_outline,
+    slim_parser, slots, stimulus, strict_locals, tags, util,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
@@ -416,8 +416,8 @@ impl Backend {
     fn strict_locals_fixes(&self, project: &Project, path: &Path, doc: &Doc, d: &Diagnostic) -> Vec<CodeAction> {
         let text = &doc.text;
         let (line_start, line, start) = util::line_at(text, d.range.start);
-        let haml = doc.lang == TemplateLang::Haml;
-        let Some((r, call)) = partials::render_calls_in(text, line_start, line, haml, |r| r.start == start).pop() else { return vec![] };
+        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
+        let Some((r, call)) = partials::render_calls_in(text, line_start, line, &pipes, |r| r.start == start).pop() else { return vec![] };
         let Some(passed) = partials::passed_locals(&call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
@@ -749,13 +749,13 @@ impl LanguageServer for Backend {
         }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
+        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
             // Same renders as diagnostics and references: code only, and the file Rails would pick.
-            let renders =
-                partials::render_refs_in(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, |r| in_code(i, line_start, r))
-                    .into_iter()
-                    .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
+            let renders = partials::render_refs_in(&doc.text, line_start, line, &pipes, |r| in_code(i, line_start, r))
+                .into_iter()
+                .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
             for (start, end, found) in renders.chain(convention_targets(&project, &path, line, None)) {
                 links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target, &path)));
             }
@@ -886,9 +886,10 @@ impl LanguageServer for Backend {
             actions.extend(self.strict_locals_fixes(&project, &path, &doc, d).into_iter().map(CodeActionOrCommand::CodeAction));
         }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
+        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
         let quick_fixes = unresolved.filter_map(|d| {
             let (line_start, line, start) = util::line_at(&doc.text, d.range.start);
-            let r = partials::render_refs_in(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, |r| r.start == start).pop()?;
+            let r = partials::render_refs_in(&doc.text, line_start, line, &pipes, |r| r.start == start).pop()?;
             let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
                 uri: crate::util::file_uri(&target)?,
