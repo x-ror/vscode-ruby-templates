@@ -8,7 +8,7 @@ use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::ruby::BlockEffect;
-use crate::tags::{self, Block, PState, Tag, Token, OPTIONAL_END, VOID};
+use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END, VOID};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -302,7 +302,7 @@ impl Nesting<'_> {
             // Branches that disagree (`<% if a %><div><% end %>`) go on with the tags the last one left open: the usual
             // conditional wrapper closes them under the same condition, and a guess that's wrong ends in a mismatch.
             Token::Erb(e) => {
-                self.agreed = tags::apply(e, &mut self.stack, &mut self.p, &mut self.blocks);
+                self.agreed = tags::apply(e, &mut self.stack, &mut self.p, &mut self.blocks) == Paths::Agree;
                 true
             }
             Token::Open { tag, pairs, .. } => {

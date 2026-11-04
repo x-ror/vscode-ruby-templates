@@ -44,6 +44,23 @@ pub(crate) struct Tag {
     pub name: String,
     pub start: usize,
     pub end: usize,
+    /// Set on a tag a lone `if`/`unless` left open: only the same condition at the same level closes it.
+    pub wrapper: Option<Wrapper>,
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct Wrapper {
+    condition: String,
+    level: usize,
+}
+
+/// How the branches of the ERB blocks an event closed ended, worst last.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Paths {
+    Agree,
+    /// A conditional wrapper: the stack is certain, but the block has no single end to line up with.
+    Wrapper,
+    Differ,
 }
 
 /// An open ERB block: the tag stack and `p` state on entry, and those each finished branch left.
@@ -55,6 +72,8 @@ pub(crate) struct Block {
     branch_p_ends: Vec<PState>,
     has_else: bool,
     in_branch: bool,
+    /// `if`/`unless` and its whitespace-normalised condition.
+    condition: Option<String>,
 }
 
 /// Whether a `p` element is open, tracked through ERB branches like the tag stack.
@@ -72,6 +91,7 @@ pub(crate) struct ErbEvent<'a> {
     pub end: usize,
     pub effect: BlockEffect,
     pub keyword: &'a str,
+    pub code: &'a str,
     pub comment: bool,
 }
 
@@ -155,8 +175,9 @@ pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
         .collect()
 }
 
-/// Body byte ranges of the JS/CSS block helpers (`javascript_tag do … end`), up to their matching `end`, or the
-/// end of the text when it never comes.
+/// Body byte ranges of the JS/CSS block helpers (`javascript_tag do … end`), up to their matching `end`. When the
+/// depth never closes (an inner `if` lacks its `end`), up to the last `end` before the next markup line that is no
+/// more indented than the helper; failing that, the end of the text.
 fn raw_block_bodies(text: &str, analyzed: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> Vec<(usize, usize)> {
     let mut bodies = Vec::new();
     for (i, (tag, effect)) in analyzed.iter().enumerate() {
@@ -173,9 +194,38 @@ fn raw_block_bodies(text: &str, analyzed: &[(erb_ruby::ErbTag<'_>, BlockEffect)]
             }
             (depth == 0).then_some(t.start)
         });
-        bodies.push((tag.end, close.unwrap_or(text.len())));
+        let close = close.unwrap_or_else(|| unbalanced_body_end(text, tag.start, opened, &analyzed[i + 1..]));
+        bodies.push((tag.end, close));
     }
     bodies
+}
+
+fn unbalanced_body_end(text: &str, helper_start: usize, opened: usize, after: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> usize {
+    let indentation = |line: &str| line.len() - line.trim_start().len();
+    let helper_line = &text[text[..helper_start].rfind('\n').map_or(0, |i| i + 1)..];
+    let helper_indent = indentation(helper_line);
+    let markup_line = text[helper_start..].match_indices('\n').map(|(i, _)| helper_start + i + 1).find(|&start| {
+        let line = text[start..].lines().next().unwrap_or("");
+        let Some(tag) = line.trim_start().strip_prefix('<') else { return false };
+        tag.strip_prefix('/').unwrap_or(tag).starts_with(|c: char| c.is_ascii_alphabetic()) && indentation(line) <= helper_indent
+    });
+    let Some(markup_line) = markup_line else { return text.len() };
+    // Only an `end` that could close the helper itself: a balanced inner `if`'s end is JS body.
+    let mut depth = opened;
+    let mut last_end = None;
+    for (t, effect) in after.iter().take_while(|(t, _)| t.end <= markup_line) {
+        match *effect {
+            BlockEffect::Open(n) => depth += n,
+            BlockEffect::Close(n) => {
+                if depth <= opened {
+                    last_end = Some(t.start);
+                }
+                depth = depth.saturating_sub(n);
+            }
+            _ => {}
+        }
+    }
+    last_end.unwrap_or(markup_line)
 }
 
 /// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
@@ -195,16 +245,16 @@ fn split<'a>(
     let mut events = Vec::new();
     for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
         html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
-        let (effect, keyword) = if tag.is_comment() {
-            (BlockEffect::Neutral, "")
+        let (effect, keyword, code) = if tag.is_comment() {
+            (BlockEffect::Neutral, "", "")
         } else {
             let snippet = &text[tag.code.clone()];
             if RAW_BLOCK.is_match(snippet) && (!skip_raw_blocks || BRACE_BLOCK_OPEN.is_match(snippet)) {
                 return None;
             }
-            (*effect, snippet.split_whitespace().next().unwrap_or(""))
+            (*effect, snippet.split_whitespace().next().unwrap_or(""), snippet)
         };
-        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, comment: tag.is_comment() });
+        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, code, comment: tag.is_comment() });
     }
     if skip_raw_blocks {
         for (from, to) in raw_block_bodies(text, analyzed) {
@@ -252,7 +302,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
             return Some(tokens);
         };
         i = end;
-        let tag = Tag { name, start, end };
+        let tag = Tag { name, start, end, wrapper: None };
         if closing {
             tokens.push(Token::Close { tag, quoted });
         } else if RAW_TEXT.contains(&tag.name.as_str()) && !self_closing {
@@ -273,22 +323,25 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
     Some(tokens)
 }
 
-/// Track the tag stack and `p` state through ERB branches. Returns false when the stack is no longer certain; the blocks
-/// are closed anyway, and the stack is the one the last branch left.
+/// Track the tag stack and `p` state through ERB branches. When the branches disagree the blocks are closed anyway,
+/// and the stack is the one the last branch left.
 // ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
-// open makes the stack path-dependent, so checking stops there. Conditional wrappers
-// (`<% if a %><div><% end %>…<% if a %></div><% end %>`) are therefore unchecked; per-path stacks would cover them.
-pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, blocks: &mut Vec<Block>) -> bool {
+// open makes the stack path-dependent, so checking stops there. The exception is a conditional wrapper, a lone
+// `if`/`unless` that opens tags and a later one with the same condition at the same level that closes them.
+pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, blocks: &mut Vec<Block>) -> Paths {
     match event.effect {
         BlockEffect::Open(n) => {
             for _ in 0..n {
                 let in_branch = event.keyword != "case";
                 let entry = stack.clone();
-                blocks.push(Block { entry, entry_p: *p, branch_ends: Vec::new(), branch_p_ends: Vec::new(), has_else: false, in_branch });
+                let condition =
+                    matches!(event.keyword, "if" | "unless").then(|| event.code.split_whitespace().collect::<Vec<_>>().join(" "));
+                let (branch_ends, branch_p_ends) = (Vec::new(), Vec::new());
+                blocks.push(Block { entry, entry_p: *p, branch_ends, branch_p_ends, has_else: false, in_branch, condition });
             }
         }
         BlockEffect::Continue => {
-            let Some(block) = blocks.last_mut() else { return false };
+            let Some(block) = blocks.last_mut() else { return Paths::Differ };
             if block.in_branch {
                 block.branch_ends.push(names(stack));
                 block.branch_p_ends.push(*p);
@@ -299,19 +352,52 @@ pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, bloc
             *p = block.entry_p;
         }
         BlockEffect::Close(n) => {
-            let mut agree = true;
+            let mut paths = Paths::Agree;
             for _ in 0..n {
-                let Some(block) = blocks.pop() else { return false };
-                agree &= paths_agree(&block.branch_ends, &names(&block.entry), block.has_else, &names(stack));
+                let Some(block) = blocks.pop() else { return Paths::Differ };
+                let agree = paths_agree(&block.branch_ends, &names(&block.entry), block.has_else, &names(stack));
+                paths = paths.max(if agree {
+                    Paths::Agree
+                } else if is_conditional_wrapper(&block, stack, blocks.len()) {
+                    Paths::Wrapper
+                } else {
+                    Paths::Differ
+                });
                 if !paths_agree(&block.branch_p_ends, &block.entry_p, block.has_else, p) {
                     *p = PState::Unknown;
                 }
             }
-            return agree;
+            return paths;
         }
         BlockEffect::Neutral => {}
     }
-    true
+    Paths::Agree
+}
+
+/// A lone `if`/`unless` that leaves tags open (and marks them) or closes ones an earlier `if` with its condition left.
+fn is_conditional_wrapper(block: &Block, stack: &mut [Tag], level: usize) -> bool {
+    let Some(condition) = &block.condition else { return false };
+    if !block.branch_ends.is_empty() || block.has_else {
+        return false;
+    }
+    let entry = &block.entry;
+    let wrapper = Wrapper { condition: condition.clone(), level };
+    if stack.len() > entry.len()
+        && stack.iter().zip(entry).all(|(a, b)| a.name == b.name)
+        && stack[entry.len()..].iter().all(|t| t.wrapper.is_none())
+    {
+        stack[entry.len()..].iter_mut().for_each(|t| t.wrapper = Some(wrapper.clone()));
+        return true;
+    }
+    stack.len() < entry.len()
+        && stack.iter().zip(entry).all(|(a, b)| a.name == b.name)
+        && entry[stack.len()..].iter().all(|t| t.wrapper.as_ref() == Some(&wrapper))
+}
+
+/// Whether `tag`, a wrapper's, is being closed inside the `if` that matches its condition.
+fn closes_in_matching_if(tag: &Tag, blocks: &[Block]) -> bool {
+    let Some(wrapper) = &tag.wrapper else { return true };
+    blocks.len() == wrapper.level + 1 && blocks.last().and_then(|b| b.condition.as_ref()) == Some(&wrapper.condition)
 }
 
 /// Every finished branch, and the fall-through when there's no `else`, ends in `now`.
@@ -388,7 +474,7 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
     for token in tokens {
         match token {
             Token::Erb(event) => {
-                if !apply(&event, &mut stack, &mut p, &mut blocks) {
+                if apply(&event, &mut stack, &mut p, &mut blocks) == Paths::Differ {
                     return;
                 }
             }
@@ -412,10 +498,10 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
                     optional.push(tag);
                 }
             }
-            Token::Close { tag: Tag { name, start, end }, .. } if VOID.contains(&name.as_str()) => {
+            Token::Close { tag: Tag { name, start, end, .. }, .. } if VOID.contains(&name.as_str()) => {
                 out.push(void_close_tag(&name, range(start, end)));
             }
-            Token::Close { tag: Tag { name, start, end }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
+            Token::Close { tag: Tag { name, start, end, .. }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
                 // `<p>a<div>b</div></p>`: the `div` closed the `p`, and the parser inserts an empty one for this end tag.
                 if name == "p" {
                     if p == PState::Closed && !partial {
@@ -428,9 +514,10 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
                     optional.truncate(at);
                 }
             }
-            Token::Close { tag: Tag { name, start, end }, .. } => match stack.last() {
+            Token::Close { tag: Tag { name, start, end, .. }, .. } => match stack.last() {
                 None if partial => {}
                 None => out.push(unexpected_close_tag(&name, range(start, end))),
+                Some(top) if top.wrapper.is_some() && (top.name != name || !closes_in_matching_if(top, &blocks)) => return,
                 Some(top) if top.name == name => {
                     elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
                     stack.pop();
@@ -450,7 +537,8 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
         let unclosed = |t: &Tag| {
             coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
         };
-        out.extend(stack.iter().map(unclosed));
+        // A wrapper's closing `if` may be in another file (layout, partial).
+        out.extend(stack.iter().filter(|t| t.wrapper.is_none()).map(unclosed));
     }
 }
 
@@ -559,6 +647,16 @@ mod tests {
         assert_eq!(messages(&format!("{nested}</span>")).len(), 1);
         assert!(messages(&format!("<div>{js}{js}</div>")).is_empty());
         assert!(messages("<%= javascript_tag do %>\"</div>\"<div>").is_empty(), "unclosed helper skips the rest");
+        let lacking_end = "<div>\n  <%= javascript_tag do %>\n    <% if x %>\n    f(\"</p>\");\n  <% end %>\n  <span></div>\n";
+        assert_eq!(messages(lacking_end).len(), 1, "an inner `if` without `end` ends the body at the next markup line");
+        assert!(messages("<%= javascript_tag do %>\n  <% if x %>\n    <b>\n<% end %>\n").is_empty());
+        let template_literal =
+            "<%= javascript_tag do %>\n  <% if x %>\n    el.innerHTML = `\n      <div>\n    `;\n<% end %>\n<span></div>\n";
+        assert_eq!(messages(template_literal).len(), 1, "a markup line deeper than the helper stays in the body");
+        let balanced_inner =
+            "<div>\n<%= javascript_tag do %>\n  <% if x %>\n    a();\n  <% end %>\n  <% if y %>\n    b(\"</p>\");\n</div>\n";
+        assert!(messages(balanced_inner).is_empty(), "a balanced inner `if`'s end is not the helper's");
+        assert_eq!(messages(&lacking_end.replace('\n', "\r\n")).len(), 1, "CRLF");
     }
 
     #[test]
@@ -639,6 +737,57 @@ mod tests {
         ] {
             assert!(diagnostics(ok).is_empty(), "{ok}: {:?}", messages(ok));
         }
+    }
+
+    #[test]
+    fn conditional_wrappers_are_balanced() {
+        let wrap = "<% if link %><a href=\"<%= link %>\"><% end %>\n<b>x</b>\n<% if link %></a><% end %>";
+        assert!(messages(wrap).is_empty());
+        assert_eq!(messages(&format!("{wrap}</span>")).len(), 1, "error after");
+        assert_eq!(messages("<% if link %><a><% end %><div></span></div><% if link %></a><% end %>").len(), 1, "error between");
+        assert!(messages("<% unless x %><a><% end %>y<% unless x %></a><% end %>").is_empty());
+        assert!(messages("<%if  link%><a><%end%>y<% if link %></a><% end %>").is_empty(), "whitespace is normalised");
+        let nested = "<% if a %><div><% end %><% if b %><span><% end %>x<% if b %></span><% end %><% if a %></div><% end %>";
+        assert_eq!(messages(&format!("{nested}</i>")).len(), 1);
+        assert_eq!(messages("<div><% if a %><p><% end %></i><% if a %></p><% end %></div>").len(), 1);
+        assert!(messages("<% if a %><div><% end %><% if b %></div><% end %></i>").is_empty(), "different condition stops");
+        assert!(messages("<% if a %><div><% end %></div></i>").is_empty(), "plain close of a wrapper stops");
+        assert!(messages("<% if a %><div><% end %><% unless a %></div><% end %></i>").is_empty(), "if vs unless stops");
+        assert!(messages("<% if a %><div><% end %><% if a %><% if c %></div><% end %><% end %></i>").is_empty(), "other level stops");
+        assert_eq!(messages("<% if a %><div><% end %><span></div>").len(), 1, "real mismatch above a wrapper");
+    }
+
+    #[test]
+    fn conditional_wrapper_conditions_ignore_erb_trim_markers_and_then() {
+        assert_eq!(messages("<%- if a -%><div><%- end -%>x<%- if a -%></div><%- end -%></i>").len(), 1);
+        assert_eq!(messages("<% if a -%><div><% end %>x<% if a %></div><% end %></i>").len(), 1);
+        assert_eq!(messages("<% if a then %><div><% end %>x<% if a then %></div><% end %></i>").len(), 1);
+    }
+
+    #[test]
+    fn conditional_wrapper_with_several_tags_and_in_a_loop() {
+        assert_eq!(messages("<% if a %><div><span><% end %>x<% if a %></span></div><% end %></i>").len(), 1);
+        let looped = "<% items.each do |i| %><% if i %><div><% end %>x<% if i %></div><% end %><% end %>";
+        assert!(messages(looped).is_empty());
+        assert_eq!(messages(&format!("{looped}</i>")).len(), 1);
+    }
+
+    #[test]
+    fn conditional_wrapper_is_not_marked_twice() {
+        let text = "<% if x %>\n<% if a %><div><% end %>\n<% end %>\n<% if x %></div><% end %></i>";
+        assert!(messages(text).is_empty(), "path-dependent stack: checking stops instead of trusting a re-marked wrapper");
+    }
+
+    #[test]
+    fn conditional_wrapper_close_before_open_is_unexpected() {
+        assert_eq!(messages("<% if a %></div><% end %><% if a %><div><% end %>").len(), 1);
+    }
+
+    #[test]
+    fn elements_pair_across_a_conditional_wrapper() {
+        let text = "<% if a %><div><% end %>x<% if a %></div><% end %><p></p>";
+        let pairs: Vec<(String, usize, usize)> = elements(text).into_iter().map(|e| (e.name, e.start, e.end)).collect();
+        assert_eq!(pairs, [("div".to_string(), 10, 41), ("p".to_string(), 50, 57)]);
     }
 
     #[test]

@@ -8,7 +8,14 @@ import {
   actionLine,
   previewPartners,
 } from "../src/related.js";
-import { tagToClose, isHtmlView, doubledErbClose } from "../src/autoClose.js";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  tagToClose,
+  isHtmlView,
+  doubledErbClose,
+  HTML_TAGS,
+} from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
 import { routesFromOutput } from "../src/routes.js";
 import { spawnSync } from "node:child_process";
@@ -132,7 +139,62 @@ for (const [file, html] of [
   ["nginx.conf.erb", false],
   ["index.js.erb", false],
 ]) {
-  assert.strictEqual(isHtmlView(file), html, file);
+  assert.strictEqual(
+    isHtmlView(file, () => "<div>"),
+    html,
+    file,
+  );
+}
+
+// a bare app/views/**/name.erb is HTML when its first text outside ERB is markup, as on the server
+for (const [file, text, html] of [
+  ["/r/app/views/pages/about.erb", "<div>", true],
+  ["/r/app/views/about.erb", "\uFEFF\n<%# c %>\n<!DOCTYPE html>", true],
+  ["C:\\r\\app\\views\\pages\\about.erb", "<% x = 1 %><DIV>", true],
+  ["/r/app/views/pages/about.erb", "<turbo-frame id=x>", true],
+  ["/r/app/views/pages/about.erb", "<rss><link>", false],
+  ["/r/app/views/pages/about.erb", "Hello <b>", false],
+  ["/r/app/views/pages/about.erb", "<% if a %>", false],
+  ["/r/app/views/pages/about.erb", "", false],
+  ["/r/app/views/pages/about.de.erb", "Hello", true],
+  ["/r/app/views/pages/about.pt-BR.erb", "", true],
+  ["/r/app/views/pages/about.js.erb", "Hello", false],
+  ["/r/App/Views/pages/about.erb", "<div>", false],
+  ["/r/config/about.erb", "<div>", false],
+  ["/r/app/views/pages/nginx.conf.erb", "<div>", false],
+]) {
+  assert.strictEqual(
+    isHtmlView(file, () => text),
+    html,
+    `${file} ${text}`,
+  );
+}
+
+// a long run of ERB tags before the first text must not hang the markup check
+assert.strictEqual(
+  isHtmlView("/r/app/views/a.erb", () => "<% a %>\n".repeat(1000) + "Hello"),
+  false,
+);
+
+// the client's tag list is the server's html::TAGS
+const htmlRs = fs.readFileSync(
+  path.join(import.meta.dirname, "../server/src/html.rs"),
+  "utf8",
+);
+const serverTags = [
+  ...htmlRs.match(/TAGS: &\[&str\] = &\[([^\]]*)\]/)[1].matchAll(/"([^"]+)"/g),
+].map((m) => m[1]);
+assert.deepStrictEqual([...HTML_TAGS].sort(), serverTags.sort());
+
+// the text is only read for a bare .erb view: a named HTML view or an unrelated file never pays for it
+const unread = () => assert.fail("getText must not be called");
+for (const file of [
+  "/r/app/views/pages/show.html.erb",
+  "C:\\r\\app\\views\\show.html.erb",
+  "/r/config/about.erb",
+  "/r/app/views/pages/nginx.conf.erb",
+]) {
+  assert.doesNotThrow(() => isHtmlView(file, unread), file);
 }
 
 // doubledErbClose: what auto-closing left after a tag typed in full

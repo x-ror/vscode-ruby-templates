@@ -116,6 +116,19 @@ const checks = {
     await vscode.commands.executeCommand("workbench.action.files.revert");
   },
 
+  async "auto-close an HTML tag in a bare views .erb that starts with markup"() {
+    const editor = await open("app/views/users/bare.erb");
+    await editor.edit((b) => b.insert(new vscode.Position(1, 0), "<div"));
+    editor.selection = new vscode.Selection(1, 4, 1, 4);
+    await vscode.commands.executeCommand("type", { text: ">" });
+    const line = await until("end tag", () => {
+      const text = editor.document.lineAt(1).text;
+      return text.endsWith("</div>") && text;
+    });
+    assert.strictEqual(line, "<div></div>");
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+  },
+
   async "toggle ERB tag"() {
     const editor = await open("app/views/users/toggle.html.erb");
     editor.selection = new vscode.Selection(0, 3, 0, 3);

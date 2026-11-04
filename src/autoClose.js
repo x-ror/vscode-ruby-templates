@@ -44,11 +44,50 @@ function tagToClose(textBefore) {
   return match[1];
 }
 
-/** Views whose output is HTML, by the name the server's `html_host` uses: `show.html.erb`, `x.html+phone.erb`, `x.rhtml`. */
-const isHtmlView = (fileName) =>
-  /\.(html|turbo_stream)(\+[\w-]+)?\.(erb|erubi|erubis)$|\.rhtml$/i.test(
-    fileName,
+// The server's `html::TAGS`.
+const HTML_TAGS = new Set(
+  "a abbr article aside audio b blockquote body br button canvas caption code col colgroup dd details dialog div dl dt em fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hr html i iframe img input label legend li link main meta nav noscript ol optgroup option p picture pre progress script section select small source span strong style sub summary sup svg table tbody td template textarea tfoot th thead time title tr ul video".split(
+    " ",
+  ),
+);
+const VIEWS_DIR = /\/app\/views\//;
+const BARE_ERB_VIEW = /^[^./]+\.(erb|erubi|erubis)$/i;
+// A locale (`about.de.erb`) but not the `js` format, as the server's `is_locale` and `is_known_format` decide.
+const LOCALE_ERB_VIEW =
+  /^[^./]+\.(?!js\.)[a-z]{2}(?:[-_][A-Z]{2})?\.(erb|erubi|erubis)$/i;
+// An ERB tag never runs past its own `%>`, so a failed match can't backtrack through the tags.
+const FIRST_MARKUP = /^\s*(?:<%(?:(?!%>)[\s\S])*%>\s*)*<(!|[a-z][a-z0-9-]*)/i;
+// The markup test only needs the top of the file.
+const MARKUP_SCAN_LENGTH = 4096;
+
+/** Whether the first text outside ERB tags opens an HTML element, a custom element, a comment or a doctype, as the server decides it. */
+function startsWithMarkup(text) {
+  const name = FIRST_MARKUP.exec(
+    text.slice(0, MARKUP_SCAN_LENGTH),
+  )?.[1].toLowerCase();
+  return (
+    name !== undefined &&
+    (name === "!" || name.includes("-") || HTML_TAGS.has(name))
   );
+}
+
+/**
+ * Views whose output is HTML, by the name the server's `html_host` uses: `show.html.erb`, `x.html+phone.erb`, `x.rhtml`;
+ * a bare `app/views/**\/x.erb` counts when `getText()` starts with markup.
+ */
+function isHtmlView(fileName, getText) {
+  if (
+    /\.(html|turbo_stream)(\+[\w-]+)?\.(erb|erubi|erubis)$|\.rhtml$/i.test(
+      fileName,
+    )
+  )
+    return true;
+  const path = fileName.replaceAll("\\", "/");
+  if (!VIEWS_DIR.test(path)) return false;
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (LOCALE_ERB_VIEW.test(name)) return true;
+  return BARE_ERB_VIEW.test(name) && startsWithMarkup(getText());
+}
 
 /**
  * After typing the `>` of a `%>`, the length of the ` %>` that auto-closing put after the cursor when `<%` was
@@ -61,4 +100,4 @@ function doubledErbClose(lineBefore, lineAfter) {
   return lineAfter.match(/^ ?%>/)?.[0].length ?? 0;
 }
 
-export { tagToClose, isHtmlView, doubledErbClose };
+export { tagToClose, isHtmlView, doubledErbClose, HTML_TAGS };
