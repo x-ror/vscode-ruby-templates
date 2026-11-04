@@ -1,5 +1,6 @@
 //! Which template language a document is, and whether its output is HTML.
 
+use crate::html;
 use crate::rails_paths::{is_known_format, is_locale, template_format, views_root};
 use crate::util;
 use std::path::Path;
@@ -61,8 +62,9 @@ pub const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
 /// format (`app/views/pages/about.de.erb`), which is HTML in practice.
-// ponytail: a bare `.erb` is skipped; its host (`nginx.conf.erb`…) is unknown.
-pub fn html_host(uri: &Uri, plain_erb: bool) -> bool {
+/// A bare `app/views/**/x.erb` counts when its first text outside ERB tags is markup; elsewhere a bare `.erb`
+/// (`nginx.conf.erb`, `Dockerfile.erb`) has an unknown host.
+pub fn html_host(uri: &Uri, plain_erb: bool, text: &str) -> bool {
     let file = file_name(uri).to_ascii_lowercase();
     // An untitled document names no host; the plain `erb` language id (not `erb-js`, ...) is HTML ERB, as for Slim.
     if file.ends_with(".rhtml") || (plain_erb && !file.contains('.')) {
@@ -75,11 +77,32 @@ pub fn html_host(uri: &Uri, plain_erb: bool) -> bool {
     let in_views = views_root(Path::new(&util::percent_decode(uri.path().as_str()))).is_some();
     let original = file_name(uri);
     let parts: Vec<&str> = original.split('.').collect();
-    in_views
-        && parts.len() == 3
-        && is_locale(parts[1])
-        && template_format(is_known_format, Path::new(&file)).is_none()
-        && ERB_EXTENSIONS.contains(&format!(".{}", parts[2].to_ascii_lowercase()).as_str())
+    let erb_extension = |part: &str| ERB_EXTENSIONS.contains(&format!(".{}", part.to_ascii_lowercase()).as_str());
+    if !in_views {
+        return false;
+    }
+    match parts[..] {
+        [_, locale, ext] => is_locale(locale) && template_format(is_known_format, Path::new(&file)).is_none() && erb_extension(ext),
+        [_, ext] => erb_extension(ext) && starts_with_markup(text),
+        _ => false,
+    }
+}
+
+/// Whether the first text outside ERB tags opens an HTML element (or custom element), a comment or a doctype; other
+/// XML (`<rss>`) isn't HTML.
+fn starts_with_markup(text: &str) -> bool {
+    let mut rest = text.trim_start();
+    while let Some(after_open) = rest.strip_prefix("<%") {
+        let Some((_, after_close)) = after_open.split_once("%>") else { return false };
+        rest = after_close.trim_start();
+    }
+    let Some(after_lt) = rest.strip_prefix('<') else { return false };
+    if after_lt.starts_with('!') {
+        return true;
+    }
+    let name_len = after_lt.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(after_lt.len());
+    let name = after_lt[..name_len].to_ascii_lowercase();
+    html::TAGS.contains(&name.as_str()) || (name.contains('-') && name.starts_with(|c: char| c.is_ascii_alphabetic()))
 }
 
 /// Like `html_host`, but a bare `x.slim` (and an untitled document) counts as HTML, Slim's default.
@@ -129,7 +152,6 @@ mod tests {
             ("/v/users/show.de.erb", false),
             ("/r/app/views/pages/about.de.erb", true),
             ("/r/app/views/pages/about.pt-BR.erb", true),
-            ("/r/app/views/pages/about.erb", false),
             ("/r/app/views/pages/about.yml.erb", false),
             ("/r/app/views/pages/index.js.erb", false),
             ("/r/app/views/pages/feed.rss.erb", false),
@@ -138,8 +160,34 @@ mod tests {
             ("/v/show.html.erubis", true),
             ("/v/feed.xml.erubi", false),
         ] {
-            assert_eq!(html_host(&format!("file://{path}").parse::<Uri>().unwrap(), false), html, "{path}");
+            assert_eq!(html_host(&format!("file://{path}").parse::<Uri>().unwrap(), false, ""), html, "{path}");
         }
+    }
+
+    #[test]
+    fn bare_erb_view_is_html_when_it_starts_with_markup() {
+        let host = |path: &str, text: &str| html_host(&format!("file://{path}").parse::<Uri>().unwrap(), false, text);
+        let view = "/r/app/views/pages/about.erb";
+        for text in
+            ["<div>", "  \n<p>x", "<%# c %>\n<!DOCTYPE html>", "<% x = 1 %><%= y %><!-- c -->", "<h1>", "<turbo-frame id=\"x\">", "<DIV>"]
+        {
+            assert!(host(view, text), "{text}");
+        }
+        for text in [
+            "",
+            "<rss version=\"2.0\"><channel><link><%= root_url %></link>",
+            "<feed>",
+            "Hello <b>",
+            "<%= x %>",
+            "<% if a %>",
+            "<?xml version=\"1.0\"?>",
+            "< div>",
+            "<",
+        ] {
+            assert!(!host(view, text), "{text}");
+        }
+        assert!(!host("/r/config/about.erb", "<div>"));
+        assert!(!host("/r/app/views/pages/nginx.conf.erb", "<div>"));
     }
 
     #[test]
@@ -157,9 +205,9 @@ mod tests {
     #[test]
     fn untitled_erb_is_html() {
         let untitled = "untitled:Untitled-1".parse::<Uri>().unwrap();
-        assert!(html_host(&untitled, true));
-        assert!(!html_host(&untitled, false));
-        assert!(!html_host(&"file:///v/nginx.erb".parse::<Uri>().unwrap(), true));
+        assert!(html_host(&untitled, true, ""));
+        assert!(!html_host(&untitled, false, ""));
+        assert!(!html_host(&"file:///v/nginx.erb".parse::<Uri>().unwrap(), true, ""));
     }
 
     #[test]

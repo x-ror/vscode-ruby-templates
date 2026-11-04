@@ -864,7 +864,7 @@ impl LanguageServer for Backend {
         else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&p.text_document.uri, plain_erb), self.options().extra_engines.clone());
+        let (html, extra_engines) = (html_host(&p.text_document.uri, plain_erb, &text), self.options().extra_engines.clone());
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
@@ -881,7 +881,7 @@ impl LanguageServer for Backend {
         let Some((lang, plain_erb, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone())) else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&uri, plain_erb), self.options().extra_engines.clone());
+        let (html, extra_engines) = (html_host(&uri, plain_erb, &text), self.options().extra_engines.clone());
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
@@ -1043,7 +1043,7 @@ impl LanguageServer for Backend {
 
     async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
         let uri = p.text_document_position_params.text_document.uri;
-        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri, d.plain_erb)) else {
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri, d.plain_erb, &d.text)) else {
             return Ok(None);
         };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
@@ -1168,7 +1168,7 @@ impl LanguageServer for Backend {
         // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
         let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
         let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
-        if doc.lang == TemplateLang::Erb && html_host(&uri, doc.plain_erb) && !code_here() {
+        if doc.lang == TemplateLang::Erb && html_host(&uri, doc.plain_erb, &doc.text) && !code_here() {
             let offset = line_start + col;
             if let Some(context) = erb_complete::context(&doc.text, offset) {
                 let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
