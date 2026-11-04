@@ -1,9 +1,10 @@
 //! Instance variables a view gets from its controller: those assigned in the action and in the `before_action`
 //! callbacks that run for it. A partial has no action of its own, so it gets every action's.
 
+use crate::controllers::controller_path;
 use crate::partials::snake_case;
 use crate::project::Project;
-use crate::rails_paths::{app_root, rails_relative, template_stem, views_root};
+use crate::rails_paths::{app_root, files_under, rails_relative, template_stem, views_root};
 use crate::ruby::logical_lines;
 use crate::util::{inline_code, word_at};
 use regex::Regex;
@@ -20,7 +21,7 @@ static FILTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:\b(only|except):|:(only|except)\s*=>)\s*(\[[^\]]*\]|%[iw][\[(][^\])]*[\])]|:\w+[?!]?|["']\w+["'])"#).unwrap()
 });
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z_]\w*[?!]?").unwrap());
-static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[\w:]+\s*<\s*((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
+static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[\w:]+\s*<\s*(?:::)?((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
 static MODULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*module\s+((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
 /// Deep enough for `UsersController < Admin::BaseController < ApplicationController < ActionController::Base`.
 const MAX_ANCESTORS: usize = 4;
@@ -113,6 +114,62 @@ fn ancestry(app: &Path, first: PathBuf) -> Vec<(PathBuf, String)> {
         out.push((file, text));
     }
     out
+}
+
+/// Parents that end a controller chain: ActionController's abstract classes add no view folder.
+const ABSTRACT_CONTROLLERS: [&str; 2] = ["ActionController::Base", "ActionController::API"];
+
+/// Names that change the folders Rails searches for a controller's views, which the class chain can't tell.
+const LOOKUP_CHANGES: [&str; 4] = ["view_path", "controller_path", "_prefixes", "inherit_views"];
+
+/// The view folders Rails searches for a bare `render "x"` in `view` (`_prefixes`): its controller's, then each parent's.
+/// `None` unless the controller and every parent up to ActionController::Base are in this app, none of them changes
+/// the lookup paths, and no other controller inherits from this one (it renders this folder's views too).
+pub fn view_prefixes(project: &Project, view: &Path) -> Option<Vec<String>> {
+    project.view_prefixes_of(view.parent()?, || prefixes_of(project, view))
+}
+
+fn prefixes_of(project: &Project, view: &Path) -> Option<Vec<String>> {
+    let (controller, _) = source_of(project, view)?;
+    let app = app_root(view)?;
+    let chain = ancestry(&app, controller);
+    let (_, last) = chain.last()?;
+    let root_parent = PARENT.captures(last)?;
+    let ends_at_base = ABSTRACT_CONTROLLERS.iter().any(|&base| base == &root_parent[1]);
+    let chain_changes_lookup = chain.iter().any(|(_, text)| changes_lookup(text));
+    if !ends_at_base || chain_changes_lookup || project.adds_view_paths {
+        return None;
+    }
+    let scan = project.controller_scan(&app, || scan_controllers(&app));
+    if scan.concerns_change_lookup || scan.subclassed.contains(chain[0].0.file_stem()?.to_str()?) {
+        return None;
+    }
+    chain.iter().map(|(file, _)| controller_path(file)).collect()
+}
+
+fn changes_lookup(text: &str) -> bool {
+    LOOKUP_CHANGES.iter().any(|name| text.contains(name))
+}
+
+/// What the controllers of an app say about every controller's view lookup, read once per Project.
+#[derive(Debug, Clone, Default)]
+pub struct ControllerScan {
+    /// Stems (`users_controller`) of the controllers some other controller inherits from, by the last part of the parent's name.
+    subclassed: HashSet<String>,
+    /// Does a file in `controllers/concerns` change the lookup paths? Any controller may include it.
+    concerns_change_lookup: bool,
+}
+
+fn scan_controllers(app: &Path) -> ControllerScan {
+    let controllers = app.join("controllers");
+    let concerns = controllers.join("concerns");
+    let mut scan = ControllerScan::default();
+    for file in files_under(&controllers, usize::MAX).into_iter().filter(|file| file.extension().is_some_and(|ext| ext == "rb")) {
+        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        scan.subclassed.extend(PARENT.captures_iter(&text).map(|cap| snake_case(cap[1].rsplit("::").next().unwrap_or(&cap[1]))));
+        scan.concerns_change_lookup |= file.starts_with(&concerns) && changes_lookup(&text);
+    }
+    scan
 }
 
 /// The constants Ruby tries for `parent` in a class inside the `module` blocks of `before`, innermost first: in

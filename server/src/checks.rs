@@ -3,12 +3,13 @@
 use crate::code_context::render_filter;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
-    erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
+    erb, haml_indent, haml_parser, haml_ruby, html_lint, ivars, partials,
     project::{Framework, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
     slim_indent, strict_locals, tags, util,
 };
+use std::cell::LazyCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{Diagnostic, Uri};
@@ -247,33 +248,46 @@ fn render_diagnostics(
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    let renders = checked_renders(&views, text, haml, project.prism_version(), in_code);
+    let renders = checked_renders(project, path, &views, text, haml, in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
     out.extend(strict_locals_mismatches(project, &renders, &mut partials));
     out
 }
 
-/// Literal renders in code that name `dir/name` under an existing app/views/dir, as (line index, line, render).
+/// Is `root` a gem or engine, whose templates also render the host app's partials?
+fn is_gem_root(root: &Path) -> bool {
+    std::fs::read_dir(root).is_ok_and(|mut files| files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "gemspec"))))
+}
+
+/// Literal renders in code that can be checked, as (line index, line, call, render): `dir/name` with an existing
+/// app/views/dir (a missing dir is usually a gem's, `devise/…`, or a pack's), and a bare name in an action template
+/// when its controller chain is in the app and the app isn't a gem or engine (a partial's bare names follow whichever
+/// controller renders it).
 fn checked_renders<'a>(
+    project: &Project,
+    path: &Path,
     views: &Path,
     text: &'a str,
     haml: bool,
-    ruby: ruby_prism::Version,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
-    // ponytail: only `dir/name` with an existing app/views/dir is checked. Bare names resolve via the
-    // controller's prefix and its ancestors, and missing dirs are usually gem/engine views (devise/…);
-    // neither is knowable without reading controllers or the bundle.
+    let bare_names_known = LazyCell::new(|| {
+        let in_engine = views.parent().and_then(Path::parent).is_some_and(is_gem_root);
+        let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
+        !in_engine && !is_partial && ivars::view_prefixes(project, path).is_some()
+    });
     let mut dirs: HashMap<String, bool> = HashMap::new();
-    let mut in_views_dir = |name: &str| match partials::split_render_name(name).0 {
-        Some(dir) => *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir()),
-        None => false,
+    let mut checkable = |name: &str| {
+        let Some(dir) = partials::split_render_name(name).0 else { return *bare_names_known };
+        *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir())
     };
     let pipes = HamlPipes::new(haml);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, &pipes, ruby, |r| in_code(i, line_start, r) && in_views_dir(&r.name));
+        let refs = partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
+            in_code(i, line_start, r) && checkable(&r.name)
+        });
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
@@ -377,6 +391,7 @@ fn strict_locals_message(missing: &[&str], unknown: &[&str], no_locals: bool) ->
 mod tests {
     use super::*;
     use crate::code_context::in_ruby_context;
+    use crate::util::write_files;
     use std::collections::BTreeSet;
     use tower_lsp_server::ls_types::{DiagnosticSeverity, NumberOrString, Position, Range};
 
@@ -732,6 +747,165 @@ mod tests {
         assert_eq!(lines, ["Missing partial admin/_x"]);
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bare_names_are_checked_against_the_controllers_prefixes() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-bare-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "class Admin::UsersController < Admin::BaseController\nend\n"),
+                ("app/controllers/engine/pages_controller.rb", "class Engine::PagesController < Engine::Gem::Controller\nend\n"),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/admin/users/_row.html.erb", ""),
+                ("app/views/admin/base/_nav.html.erb", ""),
+                ("app/views/application/_flash.html.erb", ""),
+                ("app/views/engine/pages/index.html.erb", ""),
+                ("app/views/shared/_box.html.erb", ""),
+                ("app/views/user_mailer/welcome.html.erb", ""),
+            ],
+        );
+        let messages = |view: &str, text: &str| {
+            let found = unresolved(TemplateLang::Erb, &root.join("app/views").join(view), text);
+            found.into_iter().map(|d| d.message).collect::<Vec<_>>()
+        };
+        let text = "<%= render \"row\" %><%= render \"nav\" %><%= render \"flash\" %><%= render partial: \"crad\" %>";
+        assert_eq!(messages("admin/users/index.html.erb", text), ["Missing partial _crad"]);
+        assert!(messages("engine/pages/index.html.erb", text).is_empty(), "a superclass outside the app");
+        assert!(messages("shared/_box.html.erb", text).is_empty(), "the rendering controller is unknown");
+        assert!(messages("user_mailer/welcome.html.erb", text).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bare_names_follow_the_controller_class_however_it_is_written() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-bare-forms-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "module Admin\n  class BaseController < ApplicationController\n  end\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "module Admin\n  class UsersController < BaseController\n  end\nend\n"),
+                ("app/controllers/users/sessions_controller.rb", "class Users::SessionsController < Devise::SessionsController\nend\n"),
+                ("app/views/admin/users/index.html.haml", ""),
+                ("app/views/admin/base/_nav.html.haml", ""),
+                ("app/views/users/sessions/new.html.slim", ""),
+            ],
+        );
+        let messages = |lang, view: &str, text: &str| {
+            let found = unresolved(lang, &root.join("app/views").join(view), text);
+            found.into_iter().map(|d| d.message).collect::<Vec<_>>()
+        };
+        let haml = "= render \"nav\"\n= render \"crad\"\n";
+        assert_eq!(messages(TemplateLang::Haml, "admin/users/index.html.haml", haml), ["Missing partial _crad"]);
+        let slim = "== render \"crad\"\n";
+        assert!(messages(TemplateLang::Slim, "users/sessions/new.html.slim", slim).is_empty(), "a gem controller's views");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bare_names_are_unchecked_when_lookup_paths_come_from_elsewhere() {
+        let path_gem = "PATH\n  remote: engines/theme\n  specs:\n    theme (0.1.0)\n\n";
+        let themeable = "module Themeable\n  included { prepend_view_path \"themes\" }\nend\n";
+        type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
+        let cases: [Case; 5] = [
+            ("baseline", &[], ""),
+            ("absolute-parent", &[("app/controllers/admin/users_controller.rb", "class Admin::UsersController < ::UsersController\n")], ""),
+            ("concern", &[("app/controllers/concerns/themeable.rb", themeable)], ""),
+            ("initializer", &[("config/initializers/views.rb", "ActionController::Base.prepend_view_path \"themes\"\n")], ""),
+            ("path-gem", &[("engines/theme/app/views/x/.keep", "")], path_gem),
+        ];
+        for (name, extra, lock_head) in cases {
+            let root = std::env::temp_dir().join(format!("rt-unresolved-lookup-{name}-{}", std::process::id()));
+            let lock = format!("{lock_head}{GEM_LOCK}    actionview (7.1.0)\n");
+            write_files(
+                &root,
+                &[
+                    ("Gemfile.lock", &lock),
+                    ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                    ("app/controllers/users_controller.rb", "class UsersController < ApplicationController\nend\n"),
+                    ("app/views/users/index.html.erb", ""),
+                    ("app/views/admin/users/_admin_bar.html.erb", ""),
+                ],
+            );
+            write_files(&root, extra);
+            let view = root.join("app/views/users/index.html.erb");
+            let found =
+                render_checks(TemplateLang::Erb, &view, &Project::for_template(&view), "<%= render \"admin_bar\" %>", UNRESOLVED_RENDER);
+            assert_eq!(found.len(), usize::from(name == "baseline"), "{name}");
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_partial_is_checked_for_qualified_names_only_since_its_renderer_varies() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-shared-folder-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/users_controller.rb", "class UsersController < ApplicationController\nend\n"),
+                ("app/views/users/_card.html.erb", ""),
+            ],
+        );
+        let card = root.join("app/views/users/_card.html.erb");
+        assert!(unresolved(TemplateLang::Erb, &card, "<%= render \"badge\" %>").is_empty(), "a bare name follows the rendering controller");
+        let found = unresolved(TemplateLang::Erb, &card, "<%= render \"users/badge\" %>");
+        assert_eq!(found.into_iter().map(|d| d.message).collect::<Vec<_>>(), ["Missing partial users/_badge"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bare_names_are_unchecked_where_the_lookup_folders_are_not_the_chain() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-bare-unknown-{}", std::process::id()));
+        let base = "class ApplicationController < ActionController::Base\nend\n";
+        write_files(
+            &root,
+            &[
+                ("app/controllers/application_controller.rb", base),
+                ("app/controllers/posts_controller.rb", "class PostsController < ApplicationController\nend\n"),
+                (
+                    "app/controllers/users_controller.rb",
+                    "class UsersController < ApplicationController\n  prepend_view_path \"themes\"\nend\n",
+                ),
+                (
+                    "app/controllers/pages_controller.rb",
+                    "class PagesController < ApplicationController\n  def self.local_prefixes = [\"x\"]\nend\n",
+                ),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "class Admin::UsersController < Admin::BaseController\nend\n"),
+                ("app/views/posts/index.html.erb", ""),
+                ("app/views/users/index.html.erb", ""),
+                ("app/views/pages/index.html.erb", ""),
+                ("app/views/application/index.html.erb", ""),
+                ("app/views/admin/base/_nav.html.erb", ""),
+            ],
+        );
+        let messages = |view: &str| {
+            let found = unresolved(TemplateLang::Erb, &root.join("app/views").join(view), "<%= render \"crad\" %>");
+            found.into_iter().map(|d| d.message).collect::<Vec<_>>()
+        };
+        assert_eq!(messages("posts/index.html.erb"), ["Missing partial _crad"]);
+        for view in ["users/index.html.erb", "pages/index.html.erb"] {
+            assert!(messages(view).is_empty(), "{view} changes its lookup folders");
+        }
+        for view in ["application/index.html.erb", "admin/base/_nav.html.erb"] {
+            assert!(messages(view).is_empty(), "{view} is rendered by subclasses too");
+        }
+        write_files(
+            &root,
+            &[(
+                "app/controllers/application_controller.rb",
+                "class ApplicationController < ActionController::Base\n  before_action { append_view_path \"x\" }\nend\n",
+            )],
+        );
+        assert!(messages("posts/index.html.erb").is_empty(), "a parent changes the lookup folders");
+        write_files(&root, &[("app/controllers/application_controller.rb", base), ("shop.gemspec", "")]);
+        assert!(messages("posts/index.html.erb").is_empty(), "an engine renders the host app's partials");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

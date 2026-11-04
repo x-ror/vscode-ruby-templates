@@ -110,7 +110,14 @@ fn local_hover(name: &str, default: Option<&str>, passes: usize) -> String {
 
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
 /// With `col`, only the ones under it are resolved.
-fn convention_targets(project: &Project, path: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
+fn convention_targets(
+    project: &Project,
+    path: &Path,
+    text: &str,
+    line_start: usize,
+    line: &str,
+    col: Option<usize>,
+) -> Vec<(usize, usize, Vec<PathBuf>)> {
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
     let models = partials::model_renders(line)
         .into_iter()
@@ -118,7 +125,10 @@ fn convention_targets(project: &Project, path: &Path, line: &str, col: Option<us
         .map(|(s, e, name)| (s, e, partials::resolve_model(project, path, name)));
     let controllers =
         stimulus::identifiers(line).into_iter().filter(|&(s, e, _)| at(s, e)).map(|(s, e, id)| (s, e, stimulus::resolve(path, &id)));
-    let assets = assets::asset_refs(line).into_iter().filter(|r| at(r.start, r.end)).map(|r| (r.start, r.end, assets::resolve(path, &r)));
+    let assets = assets::asset_refs(text, line_start, line)
+        .into_iter()
+        .filter(|r| at(r.start, r.end))
+        .map(|r| (r.start, r.end, assets::resolve(path, &r)));
     models.chain(controllers).chain(assets).filter(|(_, _, found)| !found.is_empty()).collect()
 }
 
@@ -698,7 +708,11 @@ impl LanguageServer for Backend {
         } else if let Some(c) = partials::component_ref_at(line, col) {
             partials::resolve_component(&project, &path, &c)
         } else {
-            convention_targets(&project, &path, line, Some(col)).into_iter().next().map(|(_, _, found)| found).unwrap_or_default()
+            convention_targets(&project, &path, &doc.text, line_start, line, Some(col))
+                .into_iter()
+                .next()
+                .map(|(_, _, found)| found)
+                .unwrap_or_default()
         };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
         if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
@@ -763,7 +777,7 @@ impl LanguageServer for Backend {
                 partials::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| in_code(i, line_start, r))
                     .into_iter()
                     .map(|r| (r.start, r.end, partials::first_folder_only(partials::resolve(&project, &path, &r))));
-            for (start, end, found) in renders.chain(convention_targets(&project, &path, line, None)) {
+            for (start, end, found) in renders.chain(convention_targets(&project, &path, &doc.text, line_start, line, None)) {
                 links.extend(found.first().and_then(|target| file_link(util::span_range(i, line, start, end), target, &path)));
             }
         }

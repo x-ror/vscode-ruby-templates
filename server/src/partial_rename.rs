@@ -3,10 +3,11 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::code_context::render_filter;
+use crate::ivars::view_prefixes;
 use crate::lang::TemplateLang;
 use crate::partials::{
-    first_folder_only, local_key_span, model_renders, passed_locals, render_calls_in, resolve, resolve_model, split_render_name,
-    RenderCall, RenderKind, RenderRef,
+    first_folder_only, local_key_span, matching_templates, model_renders, passed_locals, render_calls_in, resolve, resolve_model,
+    split_render_name, RenderCall, RenderKind, RenderRef,
 };
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
@@ -46,14 +47,29 @@ fn moved(path: &Path, renames: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
     })
 }
 
-/// A bare name stays bare only while it is looked up first in the referencing file's own folder.
+/// A bare name stays bare only while the partial stays in the referencing file's own folder, or in a folder its
+/// controller's chain searches (a file that moves has another controller, whose chain isn't known yet).
 fn new_ref_name(project: &Project, written: &str, source: &Path, target: &Path, renames: &[(PathBuf, PathBuf)]) -> Option<String> {
-    let qualified = qualified_name(project, &views_root(target)?, target)?;
-    let source_after = moved(source, renames).unwrap_or_else(|| source.to_path_buf());
-    if written.contains('/') || source_after.parent() != target.parent() {
+    let views = views_root(target)?;
+    let qualified = qualified_name(project, &views, target)?;
+    let moved_source = moved(source, renames);
+    let source_after = moved_source.as_deref().unwrap_or(source);
+    let searched = || is_first_match_from(project, source, &views, &qualified);
+    if written.contains('/') || (source_after.parent() != target.parent() && (moved_source.is_some() || !searched())) {
         return Some(qualified);
     }
     qualified.rsplit('/').next().map(str::to_string)
+}
+
+/// Does the bare name of `qualified` resolve to it from `source` when it sits in a folder the controller chain searches:
+/// no folder searched before it has a partial of that name?
+fn is_first_match_from(project: &Project, source: &Path, views: &Path, qualified: &str) -> bool {
+    let Some((dir, base)) = qualified.rsplit_once('/') else { return false };
+    let folders = inherited_folders(project, source, views);
+    let Some(at) = folders.iter().position(|folder| folder == &views.join(dir)) else { return false };
+    let earlier = source.parent().into_iter().chain(folders[..at].iter().map(PathBuf::as_path));
+    let basename = format!("_{base}");
+    earlier.into_iter().all(|folder| matching_templates(project, folder, &basename).is_empty())
 }
 
 /// The references `find` sees on each line that are inside code, as (byte start, byte end, reference, its payload); only those
@@ -112,14 +128,24 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
     }
 }
 
+/// The parent controllers' folders under `views` where `resolve` looks for a bare name from `source`.
+fn inherited_folders(project: &Project, source: &Path, views: &Path) -> Vec<PathBuf> {
+    view_prefixes(project, source).unwrap_or_default().into_iter().map(|folder| views.join(folder)).collect()
+}
+
 /// Whether `resolve` could look in `dir` for `r` from `source`: a cheap test before its directory listing.
-fn may_look_in(source: &Path, r: &RenderRef, dir: &Path) -> bool {
+fn may_look_in(project: &Project, source: &Path, r: &RenderRef, dir: &Path) -> bool {
     let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
     match (split_render_name(&r.name).0, views) {
         // The folders `resolve` lists, compared as paths: `./users` is `users` there too.
         (Some(d), Some(v)) => v.join(d) == dir,
         (Some(_), None) => true,
-        (None, v) => source.parent() == Some(dir) || v.is_some_and(|v| v.join("application") == dir),
+        (None, v) => {
+            source.parent() == Some(dir)
+                || v.is_some_and(|v| {
+                    v.join("application") == dir || inherited_folders(project, source, &v).iter().any(|folder| folder == dir)
+                })
+        }
     }
 }
 
@@ -176,7 +202,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
         let index = LineIndex::new(&source.text);
         let named = code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
             .into_iter()
-            .filter(|(_, _, r, _)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(&source.path, r, d))))
+            .filter(|(_, _, r, _)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(project, &source.path, r, d))))
             .filter(|(start, _, r, _)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)))
             .map(|(start, end, ..)| (start, end));
         let models = code_refs(
@@ -253,7 +279,7 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
         for (start, _, r, call) in
             code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
         {
-            if !files[0].parent().is_some_and(|d| may_look_in(&source.path, &r, d))
+            if !files[0].parent().is_some_and(|d| may_look_in(project, &source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
             {
                 continue;
@@ -510,6 +536,46 @@ mod tests {
         // The sibling's bare name no longer finds it after the move, so it gets the qualified name.
         let moved = t.edits(&[(card, "app/views/shared/_card.html.erb")], &sources);
         assert_eq!(moved.iter().map(|e| e.3.as_str()).collect::<Vec<_>>(), ["shared/card", "shared/card", "shared/card"]);
+    }
+
+    #[test]
+    fn bare_names_reach_the_partials_of_parent_controllers() {
+        let t = Tree::new("parent-folders", &["app/views/admin/users/index.html.erb", "app/views/admin/base/_nav.html.erb"]);
+        crate::util::write_files(
+            &t.0,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "class Admin::UsersController < Admin::BaseController\nend\n"),
+            ],
+        );
+        let index = "app/views/admin/users/index.html.erb";
+        let sources = [t.source(index, ERB, "<%= render \"nav\" %>\n")];
+        let nav = t.path("app/views/admin/base/_nav.html.erb");
+        assert_eq!(references(&Project::unknown(), &[nav], &sources, &[]).len(), 1);
+        let nav = "app/views/admin/base/_nav.html.erb";
+        assert_eq!(t.edits(&[(nav, "app/views/admin/base/_menu.html.erb")], &sources), [(index.into(), 0, 12, "menu".into())]);
+        assert_eq!(t.edits(&[(nav, "app/views/shared/_nav.html.erb")], &sources), [(index.into(), 0, 12, "shared/nav".into())]);
+    }
+
+    #[test]
+    fn a_renamed_partial_is_qualified_when_an_earlier_folder_has_the_new_name() {
+        let t = Tree::new(
+            "parent-shadow",
+            &["app/views/admin/users/index.html.erb", "app/views/admin/base/_nav.html.erb", "app/views/admin/users/_menu.html.erb"],
+        );
+        crate::util::write_files(
+            &t.0,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "class Admin::UsersController < Admin::BaseController\nend\n"),
+            ],
+        );
+        let index = "app/views/admin/users/index.html.erb";
+        let sources = [t.source(index, ERB, "<%= render \"nav\" %>\n")];
+        let edits = t.edits(&[("app/views/admin/base/_nav.html.erb", "app/views/admin/base/_menu.html.erb")], &sources);
+        assert_eq!(edits, [(index.into(), 0, 12, "admin/base/menu".into())]);
     }
 
     #[test]

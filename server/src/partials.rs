@@ -1,5 +1,6 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
+use crate::ivars;
 use crate::prism;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
@@ -115,6 +116,14 @@ fn is_code_at(line: &str, at: usize) -> bool {
         || before.rfind("#{").is_some_and(|open| !before[open..].contains('}') && ruby::code_end(&before[open + 2..]) == CodeEnd::Code)
 }
 
+/// Whether the `render`/`json.` call matched at `at` has no receiver: `markdown.render "x"`, `@r.render "x"` and `md_render "x"` are
+/// other methods. `self.render` is the view's own.
+fn is_receiverless(line: &str, at: usize) -> bool {
+    let before = &line[..at];
+    let before = before.strip_suffix("self.").unwrap_or(before);
+    !before.ends_with(|c: char| c.is_alphanumeric() || matches!(c, '_' | '.' | ':' | '@' | '$'))
+}
+
 /// Bracket depth at the end of `code`, strings and comments aside.
 fn bracket_depth(code: &str) -> isize {
     ruby::strip(code)
@@ -130,7 +139,10 @@ fn bracket_depth(code: &str) -> isize {
 /// Each match of `heads` in code, with the text after it up to its `%>` or the next match outside its brackets: a call's
 /// own arguments (a `render(…)` nested in them doesn't end them).
 fn call_tails<'l>(line: &'l str, heads: &'l Regex) -> Vec<(Captures<'l>, Range<usize>)> {
-    let heads: Vec<_> = heads.captures_iter(line).filter(|head| head.get(0).is_some_and(|m| is_code_at(line, m.start()))).collect();
+    let heads: Vec<_> = heads
+        .captures_iter(line)
+        .filter(|head| head.get(0).is_some_and(|m| is_receiverless(line, m.start()) && is_code_at(line, m.start())))
+        .collect();
     let ranges = heads.iter().enumerate().map(|(i, head)| {
         let start = head.get(0).map_or(line.len(), |m| m.end());
         let tag_end = line[start..].find("%>").map_or(line.len(), |end| start + end);
@@ -241,6 +253,9 @@ fn refs_without_lookups(line: &str) -> Vec<RenderRef> {
     }
     let calls = RENDER_STR.captures_iter(line).filter_map(|cap| {
         let (call, name) = (cap.get(0)?, cap.get(2)?);
+        if !is_receiverless(line, call.start()) {
+            return None;
+        }
         let key = cap.get(1).map_or("", |key| key.as_str());
         // `render layout: "x"` names a partial only with a block or a `partial:`/`template:` next to it.
         let (quoted, after) = (&line[name.start() - 1..], &line[name.end() + 1..]);
@@ -439,7 +454,7 @@ pub fn render_ref_at(text: &str, line_start: usize, line: &str, haml: bool, ruby
 pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
     for cap in RENDER_COMPONENT.captures_iter(line) {
         let m = cap.get(1)?;
-        if col >= m.start() && col <= m.end() {
+        if is_receiverless(line, cap.get(0)?.start()) && col >= m.start() && col <= m.end() {
             return Some(m.as_str().to_string());
         }
     }
@@ -456,7 +471,7 @@ pub fn model_renders(line: &str) -> Vec<(usize, usize, &str)> {
         .captures_iter(line)
         .filter_map(|cap| {
             let m = cap.get(1)?;
-            if line[m.end()..].starts_with(['.', '(']) {
+            if !is_receiverless(line, cap.get(0)?.start()) || line[m.end()..].starts_with(['.', '(']) {
                 return None;
             }
             Some((m.start(), m.end(), m.as_str().rsplit(['.', '@']).next()?))
@@ -475,8 +490,14 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
     let mut namespaces = model_namespaces(project, &views, current, &singular);
     namespaces.push(PathBuf::new());
     for namespace in namespaces {
-        let own = namespace.join(&plural);
-        for dir in [views.join(prefixed_with_view_namespace(view_dir, &namespace)).join(&plural), views.join(own)] {
+        let prefixed = views.join(prefixed_with_view_namespace(view_dir, &namespace)).join(&plural);
+        // Rails raises MissingTemplate rather than trying the model's own folder, but only for a controller's action views.
+        let dirs = if project.prefixes_partial_paths && !is_partial_file(current) && is_controller_folder(&views, view_dir) {
+            vec![prefixed]
+        } else {
+            vec![prefixed, views.join(namespace.join(&plural))]
+        };
+        for dir in dirs {
             let mut found: Vec<PathBuf> = matching_templates(project, &dir, &format!("_{singular}"))
                 .into_iter()
                 .filter(|p| renders_format(project, current, p))
@@ -488,6 +509,16 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
         }
     }
     vec![]
+}
+
+fn is_partial_file(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
+}
+
+/// Is `views/<view_dir>` the folder of an existing controller (`admin/users` for `admin/users_controller.rb`)?
+fn is_controller_folder(views: &Path, view_dir: &Path) -> bool {
+    let Some(app) = views.parent() else { return false };
+    app.join("controllers").join(format!("{}_controller.rb", view_dir.display())).is_file()
 }
 
 /// The model's namespace behind the namespace directories of `view_dir` (all but its last part) that it doesn't start with
@@ -671,7 +702,13 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
                 dirs.push(p.to_path_buf());
             }
             if let Some(v) = &views {
-                dirs.push(v.join("application"));
+                let inherited = ivars::view_prefixes(project, current).unwrap_or_default();
+                for prefix in inherited.iter().map(String::as_str).chain(["application"]) {
+                    let dir = v.join(prefix);
+                    if !dirs.contains(&dir) {
+                        dirs.push(dir);
+                    }
+                }
             }
         }
     }
@@ -1345,6 +1382,39 @@ mod tests {
     }
 
     #[test]
+    fn calls_on_another_receiver_are_not_renders() {
+        for line in [
+            r#"<%= markdown.render("hi") %>"#,
+            r#"<%= @renderer.render "summary" %>"#,
+            r#"<%= md_render "intro" %>"#,
+            r#"= presenter.render "summary""#,
+            r#"<%= obj.render formats: [:html], partial: "x" %>"#,
+            r#"<%= obj&.render partial: "x" %>"#,
+            r#"<%= Foo::render "x" %>"#,
+        ] {
+            assert!(render_refs(line).is_empty(), "{line}");
+        }
+        assert!(component_ref_at("= md.render Users::CardComponent.new", 20).is_none());
+        assert!(model_renders("<%= md.render @user %>").is_empty());
+        assert_eq!(render_refs(r#"<%= self.render "x" %>"#).len(), 1);
+        assert_eq!(render_refs(r#"<%= myself.render "x" %>"#).len(), 0);
+        assert_eq!(render_refs(r#"json.partial! "x""#).len(), 1);
+        assert_eq!(render_refs(r#"<%= foo(render("x")) %>"#).len(), 1);
+    }
+
+    #[test]
+    fn a_render_in_a_block_keeps_its_lookup() {
+        for line in [
+            r#"xml.feed { render partial: "post", formats: [:html] }"#,
+            r#"<%= content_tag(:div) { render partial: "post", formats: [:html] } %>"#,
+            r#"= content_tag(:div) { render partial: "post", formats: [:html] }"#,
+        ] {
+            let found = render_refs_in(line, 0, line, &HamlPipes::new(false), LATEST, |_| true);
+            assert_eq!(found[0].lookup.formats, Some(vec!["html".to_string()]), "{line}");
+        }
+    }
+
+    #[test]
     fn file_keys_after_other_keys_and_hash_noise() {
         let refs = |l: &str| render_refs(l).into_iter().map(|r| (r.name, r.from_layout)).collect::<Vec<_>>();
         let one = |name: &str| vec![(name.to_string(), false)];
@@ -1646,6 +1716,25 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_under_a_controller_folder_falls_back_to_the_model_folder() {
+        let root = std::env::temp_dir().join(format!("rt-model-partial-fallback-{}", std::process::id()));
+        crate::util::write_files(
+            &root,
+            &[
+                ("app/controllers/admin/users_controller.rb", ""),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/admin/users/_row.html.erb", ""),
+                ("app/views/posts/_post.html.erb", ""),
+            ],
+        );
+        let views = root.join("app/views");
+        let found = |view: &str| resolve_model(&Project::unknown(), &views.join(view), "posts");
+        assert!(found("admin/users/index.html.erb").is_empty(), "an action view gets no fallback");
+        assert_eq!(found("admin/users/_row.html.erb"), [views.join("posts/_post.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn namespaced_models_in_several_namespaces_prefer_the_views_own() {
         let root = std::env::temp_dir().join(format!("rt-ns-two-{}", std::process::id()));
         let views = root.join("app/views");
@@ -1691,6 +1780,60 @@ mod tests {
         assert_eq!(prefixed("a/b/c", "a/x"), Path::new("a/x"));
         assert_eq!(prefixed("a/b/c", ""), Path::new("a/b"));
         assert_eq!(prefixed("home", "admin"), Path::new("admin"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn model_partials_of_namespaced_views_fall_back_only_when_rails_would() {
+        let root = std::env::temp_dir().join(format!("rt-ns-fallback-{}", std::process::id()));
+        let views = root.join("app/views");
+        let controller = "class Admin::UsersController < ApplicationController\nend\n";
+        crate::util::write_files(
+            &root,
+            &[
+                ("app/views/posts/_post.html.erb", ""),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/shared/forms/show.html.erb", ""),
+                ("app/views/posts/partials/_list.html.erb", ""),
+                ("app/controllers/admin/users_controller.rb", controller),
+            ],
+        );
+        let own = [views.join("posts/_post.html.erb")];
+        let found = |view: &str| {
+            let current = views.join(view);
+            resolve_model(&Project::for_template(&current), &current, "posts")
+        };
+        assert!(found("admin/users/index.html.erb").is_empty(), "Rails raises MissingTemplate for admin/posts/_post");
+        assert_eq!(found("shared/forms/show.html.erb"), own, "shared partials have no controller namespace");
+        assert_eq!(found("posts/partials/_list.html.erb"), own, "a folder that is no controller's has no namespace");
+        std::fs::create_dir_all(root.join("config/initializers")).unwrap();
+        let setting = "Rails.application.config.action_view.prefix_partial_path_with_controller_namespace = false\n";
+        std::fs::write(root.join("config/initializers/action_view.rb"), format!("# {setting}")).unwrap();
+        assert!(found("admin/users/index.html.erb").is_empty(), "a comment doesn't turn it off");
+        std::fs::write(root.join("config/initializers/action_view.rb"), setting).unwrap();
+        assert_eq!(found("admin/users/index.html.erb"), own);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bare_names_resolve_through_the_controllers_parents() {
+        let root = std::env::temp_dir().join(format!("rt-bare-prefixes-{}", std::process::id()));
+        crate::util::write_files(
+            &root,
+            &[
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                ("app/controllers/admin/users_controller.rb", "class Admin::UsersController < Admin::BaseController\nend\n"),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/admin/base/_nav.html.erb", ""),
+                ("app/views/application/_flash.html.erb", ""),
+            ],
+        );
+        let views = root.join("app/views");
+        let current = views.join("admin/users/index.html.erb");
+        let found = |name: &str| resolve(&Project::unknown(), &current, &render_refs(&format!("render \"{name}\"")).remove(0));
+        assert_eq!(found("nav"), [views.join("admin/base/_nav.html.erb")]);
+        assert_eq!(found("flash"), [views.join("application/_flash.html.erb")]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

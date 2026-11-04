@@ -179,6 +179,23 @@ try {
     '<%= render template: "users/gone" %>\n',
   );
   assert.match(run(["check", template]).stdout, /Missing template users\/gone/);
+  const controllers = path.join(root, "app", "controllers");
+  fs.mkdirSync(controllers);
+  fs.writeFileSync(
+    path.join(controllers, "application_controller.rb"),
+    "class ApplicationController < ActionController::Base\nend\n",
+  );
+  const bare = file("bare.html.erb", '<%= render "crad" %>\n');
+  assert.doesNotMatch(
+    run(["check", bare]).stdout,
+    /Missing partial/,
+    "no controller",
+  );
+  fs.writeFileSync(
+    path.join(controllers, "users_controller.rb"),
+    "class UsersController < ApplicationController\nend\n",
+  );
+  assert.match(run(["check", bare]).stdout, /Missing partial _crad/);
   fs.rmSync(lock);
 
   console.log("cli ok");
