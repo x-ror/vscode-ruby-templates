@@ -702,8 +702,8 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
                 dirs.push(p.to_path_buf());
             }
             if let Some(v) = &views {
-                let inherited = ivars::view_prefixes(project, current).unwrap_or_default();
-                for prefix in inherited.iter().map(String::as_str).chain(["application"]) {
+                let prefixes = ivars::view_prefixes(project, current).unwrap_or_else(|| vec!["application".to_string()]);
+                for prefix in &prefixes {
                     let dir = v.join(prefix);
                     if !dirs.contains(&dir) {
                         dirs.push(dir);

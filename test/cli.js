@@ -195,7 +195,10 @@ try {
     path.join(controllers, "users_controller.rb"),
     "class UsersController < ApplicationController\nend\n",
   );
-  assert.match(run(["check", bare]).stdout, /Missing partial _crad/);
+  assert.match(
+    run(["check", bare]).stdout,
+    /Missing partial users\/_crad, application\/_crad/,
+  );
   fs.rmSync(lock);
 
   console.log("cli ok");

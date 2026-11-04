@@ -214,7 +214,7 @@ pub(crate) fn language_diagnostics(
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
         out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
-    if lang == TemplateLang::Erb && html_host(uri, plain_erb) {
+    if lang == TemplateLang::Erb && html_host(uri, plain_erb, text) {
         out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));
@@ -315,21 +315,32 @@ impl Partials<'_> {
 
 /// Literal `render "x"` / `render partial:|template: "x"` with no matching file under app/views.
 fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
+    let path = partials.path;
     renders
         .iter()
         .filter(|(.., r)| partials.resolve(r).is_empty() && !is_gem_view(project, &r.name))
         .map(|(i, line, _, r)| {
-            util::coded(util::warning(util::span_range(*i, line, r.start, r.end), missing_message(r)), UNRESOLVED_RENDER)
+            let message = missing_message(r, &searched_folders(project, path));
+            util::coded(util::warning(util::span_range(*i, line, r.start, r.end), message), UNRESOLVED_RENDER)
         })
         .collect()
 }
 
-/// Rails' MissingTemplate message up to ` with {…}.`; the rest lists the request's formats and paths, which vary.
-fn missing_message(r: &partials::RenderRef) -> String {
+/// The folders Rails searches for a bare name in `view`: its controller's view folders; `application` when they're unknown.
+fn searched_folders(project: &Project, view: &Path) -> Vec<String> {
+    ivars::view_prefixes(project, view).unwrap_or_else(|| vec!["application".to_string()])
+}
+
+/// Rails' MissingTemplate message up to ` with {…}.`, which lists the request's formats and paths; they vary.
+/// A bare name lists each folder in `searched`.
+fn missing_message(r: &partials::RenderRef, searched: &[String]) -> String {
     let (dir, name) = partials::split_render_name(&r.name);
     let (kind, prefix) = if r.kind == partials::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
-    let dir = dir.map_or(String::new(), |dir| format!("{dir}/"));
-    format!("Missing {kind} {dir}{prefix}{name}")
+    let paths = match dir {
+        Some(dir) => format!("{dir}/{prefix}{name}"),
+        None => searched.iter().map(|folder| format!("{folder}/{prefix}{name}")).collect::<Vec<_>>().join(", "),
+    };
+    format!("Missing {kind} {paths}")
 }
 
 /// Is `name`'s top folder (`devise/shared/links`) a gem's own view folder? Gems and engines ship views under their
@@ -593,6 +604,36 @@ mod tests {
     }
 
     #[test]
+    fn bare_erb_view_that_starts_with_markup_gets_html_diagnostics() {
+        let codes = |uri: &str, text: &str| {
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, version: 0 };
+            let found = diagnostics(&uri.parse::<Uri>().unwrap(), &doc, &Options::default());
+            found.iter().filter_map(util::code).map(str::to_owned).collect::<Vec<_>>()
+        };
+        let unclosed = [tags::code::UNCLOSED_ELEMENT];
+        assert_eq!(codes("file:///r/app/views/users/show.erb", "<%# hi %>\n<div>\n"), unclosed);
+        assert!(codes("file:///r/app/views/users/show.erb", "Hello <div>\n").is_empty());
+        assert_eq!(codes("file:///r/app/views/users/show.erb", "<%= x %>\n<div>\n"), unclosed);
+        assert!(codes("file:///r/app/views/users/show.erb", "<%= x %>\nHello <div>\n").is_empty());
+        assert!(codes("file:///r/config/nginx.erb", "<div>\n").is_empty());
+        assert!(codes("file:///r/app/views/users/nginx.conf.erb", "<div>\n").is_empty());
+        assert!(codes("file:///r/app/views/users/Dockerfile.erb", "<?xml version=\"1.0\"?><a>\n").is_empty());
+    }
+
+    #[test]
+    fn missing_message_names_each_searched_folder_only_for_bare_names() {
+        let message = |text: &str, searched: &[&str]| {
+            let refs = partials::render_refs(text);
+            let searched: Vec<String> = searched.iter().map(|s| s.to_string()).collect();
+            missing_message(&refs[0], &searched)
+        };
+        assert_eq!(message("render \"crad\"", &["posts", "application"]), "Missing partial posts/_crad, application/_crad");
+        assert_eq!(message("render \"crad\"", &["application"]), "Missing partial application/_crad");
+        assert_eq!(message("render \"shared/crad\"", &["posts", "application"]), "Missing partial shared/_crad");
+        assert_eq!(message("render template: \"crad\"", &["posts", "application"]), "Missing template posts/crad, application/crad");
+    }
+
+    #[test]
     fn skim_skips_ruby_checks() {
         let uri = "untitled:Untitled-1".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&uri, Some("skim")), Some(TemplateLang::Skim));
@@ -774,7 +815,10 @@ mod tests {
             found.into_iter().map(|d| d.message).collect::<Vec<_>>()
         };
         let text = "<%= render \"row\" %><%= render \"nav\" %><%= render \"flash\" %><%= render partial: \"crad\" %>";
-        assert_eq!(messages("admin/users/index.html.erb", text), ["Missing partial _crad"]);
+        assert_eq!(
+            messages("admin/users/index.html.erb", text),
+            ["Missing partial admin/users/_crad, admin/base/_crad, application/_crad"]
+        );
         assert!(messages("engine/pages/index.html.erb", text).is_empty(), "a superclass outside the app");
         assert!(messages("shared/_box.html.erb", text).is_empty(), "the rendering controller is unknown");
         assert!(messages("user_mailer/welcome.html.erb", text).is_empty());
@@ -801,9 +845,32 @@ mod tests {
             found.into_iter().map(|d| d.message).collect::<Vec<_>>()
         };
         let haml = "= render \"nav\"\n= render \"crad\"\n";
-        assert_eq!(messages(TemplateLang::Haml, "admin/users/index.html.haml", haml), ["Missing partial _crad"]);
+        assert_eq!(
+            messages(TemplateLang::Haml, "admin/users/index.html.haml", haml),
+            ["Missing partial admin/users/_crad, admin/base/_crad, application/_crad"]
+        );
         let slim = "== render \"crad\"\n";
         assert!(messages(TemplateLang::Slim, "users/sessions/new.html.slim", slim).is_empty(), "a gem controller's views");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_controller_below_action_controller_base_does_not_search_application() {
+        let root = std::env::temp_dir().join(format!("rt-unresolved-api-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("app/controllers/api_controller.rb", "class ApiController < ActionController::Base\nend\n"),
+                ("app/views/api/index.html.erb", ""),
+                ("app/views/application/_crad.html.erb", ""),
+            ],
+        );
+        let view = root.join("app/views/api/index.html.erb");
+        let found = unresolved(TemplateLang::Erb, &view, "<%= render \"crad\" %>");
+        assert_eq!(found.into_iter().map(|d| d.message).collect::<Vec<_>>(), ["Missing partial api/_crad"]);
+        assert!(
+            crate::partials::resolve(&Project::for_template(&view), &view, &crate::partials::render_refs("render \"crad\"")[0]).is_empty()
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -889,7 +956,7 @@ mod tests {
             let found = unresolved(TemplateLang::Erb, &root.join("app/views").join(view), "<%= render \"crad\" %>");
             found.into_iter().map(|d| d.message).collect::<Vec<_>>()
         };
-        assert_eq!(messages("posts/index.html.erb"), ["Missing partial _crad"]);
+        assert_eq!(messages("posts/index.html.erb"), ["Missing partial posts/_crad, application/_crad"]);
         for view in ["users/index.html.erb", "pages/index.html.erb"] {
             assert!(messages(view).is_empty(), "{view} changes its lookup folders");
         }

@@ -36,6 +36,9 @@ const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
 static RAW_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(javascript_tag|tag\.(script|style)|content_tag[ (]\s*:(script|style))\b").unwrap());
 
+// A `{ … }` block has no `end` for `raw_block_bodies` to find, so its helper is left unchecked like the formatter does.
+static BRACE_BLOCK_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\s*(\|[^|]*\|\s*)?$").unwrap());
+
 #[derive(Clone)]
 pub(crate) struct Tag {
     pub name: String,
@@ -152,9 +155,37 @@ pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
         .collect()
 }
 
+/// Body byte ranges of the JS/CSS block helpers (`javascript_tag do … end`), up to their matching `end`, or the
+/// end of the text when it never comes.
+fn raw_block_bodies(text: &str, analyzed: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> Vec<(usize, usize)> {
+    let mut bodies = Vec::new();
+    for (i, (tag, effect)) in analyzed.iter().enumerate() {
+        let BlockEffect::Open(opened) = *effect else { continue };
+        if tag.is_literal() || tag.is_comment() || !RAW_BLOCK.is_match(&text[tag.code.clone()]) {
+            continue;
+        }
+        let mut depth = opened;
+        let close = analyzed[i + 1..].iter().find_map(|(t, effect)| {
+            match *effect {
+                BlockEffect::Open(n) => depth += n,
+                BlockEffect::Close(n) => depth = depth.saturating_sub(n),
+                _ => {}
+            }
+            (depth == 0).then_some(t.start)
+        });
+        bodies.push((tag.end, close.unwrap_or(text.len())));
+    }
+    bodies
+}
+
 /// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
-/// renders as text, so it stays in the HTML.
-fn split<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Option<(Vec<u8>, Vec<ErbEvent<'a>>)> {
+/// renders as text, so it stays in the HTML. With `skip_raw_blocks` the JS/CSS block helpers' bodies are blanked and
+/// their events dropped; without, any such helper makes the result `None`.
+fn split<'a>(
+    text: &'a str,
+    analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)],
+    skip_raw_blocks: bool,
+) -> Option<(Vec<u8>, Vec<ErbEvent<'a>>)> {
     // An unclosed `<%` is reported elsewhere; tag positions would be guesswork. `<%%` is text.
     let tail = &text[analyzed.last().map_or(0, |(t, _)| t.end)..];
     if tail.match_indices("<%").any(|(at, _)| !tail[at..].starts_with("<%%")) {
@@ -168,24 +199,30 @@ fn split<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) ->
             (BlockEffect::Neutral, "")
         } else {
             let snippet = &text[tag.code.clone()];
-            // ponytail: a JS/CSS block body anywhere skips the whole file; per-block raw spans would keep checking.
-            if RAW_BLOCK.is_match(snippet) {
+            if RAW_BLOCK.is_match(snippet) && (!skip_raw_blocks || BRACE_BLOCK_OPEN.is_match(snippet)) {
                 return None;
             }
             (*effect, snippet.split_whitespace().next().unwrap_or(""))
         };
         events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, comment: tag.is_comment() });
     }
+    if skip_raw_blocks {
+        for (from, to) in raw_block_bodies(text, analyzed) {
+            html[from..to].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+            events.retain(|e| e.at < from || e.at >= to);
+        }
+    }
     Some((html, events))
 }
 
-/// The template's tokens; `None` for broken ERB or a JS/CSS block helper, where tag positions are guesswork.
+/// The template's tokens; `None` for broken ERB or a JS/CSS block helper, which the formatter can't re-indent.
 pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
-    tokens_of(text, &analyzed(text))
+    tokens_of(text, &analyzed(text), false)
 }
 
-fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Option<Vec<Token<'a>>> {
-    let (html, events) = split(text, analyzed)?;
+/// `skip_raw_blocks`: keep the tokens around JS/CSS block helpers and leave their bodies out.
+fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)], skip_raw_blocks: bool) -> Option<Vec<Token<'a>>> {
+    let (html, events) = split(text, analyzed, skip_raw_blocks)?;
     let mut events = events.into_iter().peekable();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -306,7 +343,7 @@ pub fn elements(text: &str) -> Vec<Element> {
 
 pub(crate) fn elements_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Vec<Element> {
     let mut elements = Vec::new();
-    scan_tokens(text, tokens_of(text, analyzed), true, &mut Vec::new(), &mut elements);
+    scan_tokens(text, tokens_of(text, analyzed, true), true, &mut Vec::new(), &mut elements);
     elements
 }
 
@@ -336,7 +373,7 @@ fn void_close_tag(name: &str, range: Range) -> Diagnostic {
 }
 
 fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
-    scan_tokens(text, tokens(text), partial, out, elements)
+    scan_tokens(text, tokens_of(text, &analyzed(text), true), partial, out, elements)
 }
 
 fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
@@ -511,6 +548,62 @@ mod tests {
         assert!(super::diagnostics(header, true).is_empty());
         assert!(super::diagnostics("</div></body>", true).is_empty());
         assert_eq!(super::diagnostics("<div></span>", true).len(), 1);
+    }
+
+    #[test]
+    fn js_block_helper_skips_only_its_body() {
+        let js = "<%= javascript_tag do %>\n x = \"<span>\" + \"</div>\";\n<% end %>";
+        assert_eq!(messages(&format!("<div>\n{js}\n<span>x</div>")).len(), 1);
+        assert_eq!(messages(&format!("{js}<section>")), ["`<section>` is never closed (HTML 13.2.6.4.7)"]);
+        let nested = "<%= javascript_tag do %><% if a %>\"</b>\"<% end %>\"<i>\"<% end %>";
+        assert_eq!(messages(&format!("{nested}</span>")).len(), 1);
+        assert!(messages(&format!("<div>{js}{js}</div>")).is_empty());
+        assert!(messages("<%= javascript_tag do %>\"</div>\"<div>").is_empty(), "unclosed helper skips the rest");
+    }
+
+    #[test]
+    fn every_js_css_helper_form_skips_its_body_but_not_the_rest() {
+        for open in [
+            "<%= javascript_tag do %>",
+            "<%= javascript_tag(nonce: true) do %>",
+            "<%= tag.script do %>",
+            "<%= tag.style(media: \"print\") do %>",
+            "<%= content_tag :style do %>",
+            "<%= content_tag(:script, type: \"x\") do %>",
+            "<%- javascript_tag do -%>",
+        ] {
+            let body = format!("{open}\n s = \"<b></i>\"; // <% if a %>\n<% end %>\n<% end -%>");
+            assert!(messages(&format!("<div>{body}</div>")).is_empty(), "{open}");
+            assert_eq!(messages(&format!("<i></b>{body}")).len(), 1, "{open}: error before");
+            assert_eq!(messages(&format!("{body}<i></b>")).len(), 1, "{open}: error after");
+        }
+        assert_eq!(messages("<%= content_tag :div do %><b></i><% end %>").len(), 1, "other helpers stay checked");
+        for open in ["<%= javascript_tag { %>", "<%= tag.script() { %>", "<%= tag.script { |t| %>"] {
+            let text = format!("<div>\n{open}\n  var s = \"</p>\";\n<% }} %>\n</div>\n");
+            assert!(messages(&text).is_empty(), "{open}");
+        }
+    }
+
+    #[test]
+    fn elements_after_a_js_helper_keep_their_positions() {
+        let text = "<%= javascript_tag do %>\"</b>\"<% end %><ul><li>a</li></ul>";
+        let mut found: Vec<_> = elements(text).into_iter().map(|e| e.name).collect();
+        found.sort();
+        assert_eq!(found, ["li", "ul"]);
+    }
+
+    #[test]
+    fn literal_raw_text_blocks_skip_only_their_body() {
+        for ok in [
+            "<script type=\"text/template\"><div></script><p>x</p>",
+            "<SCRIPT>if (a<b) {}</SCRIPT><div></div>",
+            "<script>x = \"<%= y %></div>\"</script><div></div>",
+            "<script>x = '<% if a %>'</script><div></div>",
+        ] {
+            assert!(messages(ok).is_empty(), "{ok}: {:?}", messages(ok));
+        }
+        assert_eq!(messages("<script>a</script>\n<div>\n<span>x</div>").len(), 1);
+        assert!(messages("<script>\n<div>").is_empty());
     }
 
     #[test]

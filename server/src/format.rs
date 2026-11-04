@@ -152,7 +152,7 @@ fn format_once(
     let Template { uri, lang, plain_erb } = template;
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
-        TemplateLang::Erb if !html_host(uri, plain_erb) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
+        TemplateLang::Erb if !html_host(uri, plain_erb, text) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
         TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
@@ -359,6 +359,15 @@ mod tests {
         assert!(fmt("a.json.jbuilder", "json.x 1", &s).is_err());
         let template = "file:///lib/templates/slim/scaffold/index.html.slim.tt".parse::<Uri>().unwrap();
         assert!(format(&template, TemplateLang::Slim, false, "p", &s, &[]).is_err());
+    }
+
+    #[test]
+    fn bare_erb_view_is_formatted_only_when_it_starts_with_markup() {
+        let s = Settings::default();
+        let view = "app/views/pages/about.erb";
+        assert_eq!(fmt(view, "<%# c %>\n<div>\n<p>x</p>\n</div>\n", &s).as_deref(), Ok("<%# c %>\n<div>\n  <p>x</p>\n</div>\n"));
+        assert_eq!(fmt(view, "Hello <%= name %>\n<div>\n<p>x</p>\n</div>\n", &s).map_err(|e| e.kind), Err(SkipKind::NotHandled));
+        assert_eq!(fmt("app/views/pages/nginx.conf.erb", "<div>\n<p>x</p>\n</div>\n", &s).map_err(|e| e.kind), Err(SkipKind::NotHandled));
     }
 
     const SAMPLES: [(&str, &str); 10] = [
