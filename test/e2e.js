@@ -93,6 +93,13 @@ fs.writeFileSync(
 );
 fs.mkdirSync(path.join(root, "app", "assets", "images"), { recursive: true });
 fs.writeFileSync(path.join(root, "app", "assets", "images", "logo.png"), "");
+fs.mkdirSync(path.join(root, "app", "assets", "stylesheets"), {
+  recursive: true,
+});
+fs.writeFileSync(
+  path.join(root, "app", "assets", "stylesheets", "admin.css"),
+  "",
+);
 fs.mkdirSync(path.join(root, "db"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "db", "schema.rb"),
@@ -1298,6 +1305,24 @@ const check = (label, actual, expected) => {
       (await req("textDocument/definition", helperUri, 0, 26)).result,
     ],
     [["/app/helpers/users_helper.rb:1"], null],
+  );
+  const tagsUri = fileUri(path.join(views, "users", "tags.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: tagsUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= stylesheet_link_tag "application",\n                        "admin",\n                        "data-turbo-track": "reload" %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "definition on a stylesheet_link_tag continuation line",
+    targets(await req("textDocument/definition", tagsUri, 1, 26)),
+    ["/app/assets/stylesheets/admin.css"],
   );
   await send(
     "textDocument/didChange",

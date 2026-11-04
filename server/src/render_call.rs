@@ -36,10 +36,51 @@ pub struct Call<'a> {
     pub commented: bool,
 }
 
-/// Where the call text starting at `call_at` in `text` may end at most: an ERB `%>` or `MAX_CALL_LINES` lines.
+/// Where the call text starting at `call_at` in `text` may end at most: an ERB `%>`, the `}` closing the block the call sits
+/// in (`feed { render … }`), or `MAX_CALL_LINES` lines.
 fn window_end(text: &str, call_at: usize) -> usize {
     let end = text[call_at..].match_indices('\n').nth(MAX_CALL_LINES - 1).map_or(text.len(), |(at, _)| call_at + at);
-    text[call_at..end].find("%>").map_or(end, |at| call_at + at)
+    let end = text[call_at..end].find("%>").map_or(end, |at| call_at + at);
+    unmatched_close_brace(&text[call_at..end]).map_or(end, |at| call_at + at)
+}
+
+/// The first `}` in `code` that closes a `{` opened before `code`, skipping quoted strings and their interpolations.
+fn unmatched_close_brace(code: &str) -> Option<usize> {
+    close_of_level(&mut code.char_indices().peekable())
+}
+
+type Chars<'a> = std::iter::Peekable<std::str::CharIndices<'a>>;
+
+/// The offset of the `}` that ends the brace level `chars` is in, `None` when the input ends first.
+fn close_of_level(chars: &mut Chars) -> Option<usize> {
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '"' | '\'' => skip_string(chars, c)?,
+            '{' => {
+                close_of_level(chars)?;
+            }
+            '}' => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Consumes a string up to its closing `quote`; `None` when the input ends first.
+fn skip_string(chars: &mut Chars, quote: char) -> Option<()> {
+    while let Some((_, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            c if c == quote => return Some(()),
+            '#' if quote == '"' && chars.next_if(|&(_, next)| next == '{').is_some() => {
+                close_of_level(chars)?;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The `render` or `json.…` call that starts at `call_at` in `text` and holds the name at `name_at`, read from the fewest

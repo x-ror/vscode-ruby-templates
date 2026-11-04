@@ -262,6 +262,16 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
     text.replace_range(start..end, &change.text);
 }
 
+/// Writes `files` (path relative to `root`, text) for a test, creating folders.
+#[cfg(test)]
+pub fn write_files(root: &Path, files: &[(&str, &str)]) {
+    for (file, text) in files {
+        let path = root.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -3,8 +3,9 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use crate::ivars::ControllerScan;
 use crate::rails_paths::{app_root, files_under, is_known_format};
 use walkdir::WalkDir;
 
@@ -37,17 +38,25 @@ impl ProjectKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Project {
     pub framework: Framework,
     gems: HashMap<String, String>,
     ruby: Option<Version>,
     /// Format names the app registers in `config/initializers/**/*.rb`, beyond Rails' own.
     formats: Vec<String>,
+    /// `config.action_view.prefix_partial_path_with_controller_namespace`, true unless the app's config turns it off.
+    pub prefixes_partial_paths: bool,
     /// The folder of the `Gemfile.lock`, which Rails.root is.
     root: Option<PathBuf>,
     /// Ruby files in namespace folders of `app/models` (relative paths), listed on first use: a Project is one app's.
     namespaced_models: OnceLock<Vec<PathBuf>>,
+    /// `ivars::view_prefixes` by view folder: read from controller files once per Project.
+    view_prefixes: Arc<Mutex<HashMap<PathBuf, Option<Vec<String>>>>>,
+    /// Each app's controllers (by app folder) read once, on first use.
+    controller_scan: Arc<Mutex<HashMap<PathBuf, Arc<ControllerScan>>>>,
+    /// Does the app add view folders for every controller (`prepend_view_path` in its config, an engine or path gem with views)?
+    pub adds_view_paths: bool,
 }
 
 impl Project {
@@ -57,9 +66,25 @@ impl Project {
             gems: HashMap::new(),
             ruby: None,
             formats: Vec::new(),
+            prefixes_partial_paths: true,
             root: None,
             namespaced_models: OnceLock::new(),
+            view_prefixes: Arc::default(),
+            controller_scan: Arc::default(),
+            adds_view_paths: false,
         }
+    }
+
+    /// The view folders for views in `dir`, from `compute` the first time.
+    pub fn view_prefixes_of(&self, dir: &Path, compute: impl FnOnce() -> Option<Vec<String>>) -> Option<Vec<String>> {
+        let mut cache = self.view_prefixes.lock().unwrap_or_else(PoisonError::into_inner);
+        cache.entry(dir.to_path_buf()).or_insert_with(compute).clone()
+    }
+
+    /// The scan of the app at `app`, from `scan` the first time.
+    pub fn controller_scan(&self, app: &Path, scan: impl FnOnce() -> ControllerScan) -> Arc<ControllerScan> {
+        let mut cache = self.controller_scan.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(cache.entry(app.to_path_buf()).or_insert_with(|| Arc::new(scan())))
     }
 
     /// The `.rb` files below the first level of `models` (not `concerns/`), relative to it.
@@ -85,21 +110,19 @@ impl Project {
 
     fn load(key: &ProjectKey) -> Self {
         let lock_dir = key.lock_dir.as_deref();
-        let project = lock_dir
-            .and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok())
-            .map_or_else(Self::unknown, |lock| Self::from_lockfile(&lock));
-        let mut formats: Vec<String> = key
-            .template_app
-            .iter()
-            .map(PathBuf::as_path)
-            .chain(lock_dir)
-            .flat_map(|app| registered_formats(&app.join("config/initializers")))
-            .collect();
+        let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok());
+        let project = lock_text.as_deref().map_or_else(Self::unknown, Self::from_lockfile);
+        let configs: Vec<AppConfig> =
+            key.template_app.iter().map(PathBuf::as_path).chain(lock_dir).map(|app| read_app_config(&app.join("config"))).collect();
+        let prefixes_partial_paths = configs.iter().all(|config| config.prefixes_partial_paths);
+        let adds_view_paths = configs.iter().any(|config| config.adds_view_paths)
+            || lock_dir.zip(lock_text.as_deref()).is_some_and(|(dir, lock)| path_gem_has_views(lock, dir));
+        let mut formats: Vec<String> = configs.into_iter().flat_map(|config| config.formats).collect();
         formats.sort();
         formats.dedup();
         let ruby =
             key.ruby_version.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
-        Project { formats, ruby: ruby.or(project.ruby), root: key.lock_dir.clone(), ..project }
+        Project { formats, prefixes_partial_paths, adds_view_paths, ruby: ruby.or(project.ruby), root: key.lock_dir.clone(), ..project }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
@@ -131,7 +154,18 @@ impl Project {
         } else {
             Framework::Unknown
         };
-        Project { framework, gems, ruby, formats: Vec::new(), root: None, namespaced_models: OnceLock::new() }
+        Project {
+            framework,
+            gems,
+            ruby,
+            formats: Vec::new(),
+            prefixes_partial_paths: true,
+            root: None,
+            namespaced_models: OnceLock::new(),
+            view_prefixes: Arc::default(),
+            controller_scan: Arc::default(),
+            adds_view_paths: false,
+        }
     }
 
     pub fn gem_version(&self, name: &str) -> Option<Version> {
@@ -179,14 +213,60 @@ fn ruby_release(text: &str) -> Option<Version> {
     release.contains('.').then(|| Version::parse(release)).flatten()
 }
 
-/// Names registered by `Mime::Type.register` / `register_alias` in the `*.rb` files under `dir`, as Rails loads them.
-fn registered_formats(dir: &Path) -> Vec<String> {
-    files_under(dir, usize::MAX)
-        .into_iter()
-        .filter(|p| p.extension().is_some_and(|e| e == "rb"))
-        .filter_map(|p| std::fs::read_to_string(p).ok())
-        .flat_map(|text| text.lines().filter_map(registered_format).map(str::to_string).collect::<Vec<_>>())
-        .collect()
+const PARTIAL_PREFIX_SETTING: &str = "prefix_partial_path_with_controller_namespace";
+
+/// What an app's config files set that templates depend on.
+struct AppConfig {
+    /// Names registered by `Mime::Type.register` / `register_alias` in the initializers, as Rails loads them.
+    formats: Vec<String>,
+    /// False when `config/application.rb`, an environment or an initializer turns the partial path prefix off.
+    prefixes_partial_paths: bool,
+    /// True when a config file adds view paths: `prepend_view_path`, `config.paths["app/views"]`.
+    adds_view_paths: bool,
+}
+
+/// The `*.rb` files of `config` that Rails loads, read once for all settings.
+fn read_app_config(config: &Path) -> AppConfig {
+    let initializers = files_under(&config.join("initializers"), usize::MAX).into_iter().map(|file| (file, true));
+    let others = [config.join("application.rb")].into_iter().chain(files_under(&config.join("environments"), 1)).map(|file| (file, false));
+    let mut app = AppConfig { formats: Vec::new(), prefixes_partial_paths: true, adds_view_paths: false };
+    for (file, is_initializer) in initializers.chain(others).filter(|(file, _)| file.extension().is_some_and(|e| e == "rb")) {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        if is_initializer {
+            app.formats.extend(text.lines().filter_map(registered_format).map(str::to_string));
+        }
+        app.prefixes_partial_paths &= !turns_off_partial_prefix(&text);
+        app.adds_view_paths |= adds_view_paths(&text);
+    }
+    app
+}
+
+/// Does the Ruby `text` set `prefix_partial_path_with_controller_namespace = false`?
+fn turns_off_partial_prefix(text: &str) -> bool {
+    let code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
+    code.filter_map(|line| line.split_once(PARTIAL_PREFIX_SETTING)).any(|(_, rest)| {
+        let value = rest.trim_start().strip_prefix('=').map(|value| value.split('#').next().unwrap_or(value).trim());
+        value == Some("false")
+    })
+}
+
+/// Does the Ruby `text` call `*_view_path(s)` or touch `paths["app/views"]`?
+fn adds_view_paths(text: &str) -> bool {
+    let mut code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
+    code.any(|line| line.contains("view_path") || line.contains(r#"paths["app/views"]"#) || line.contains("paths['app/views']"))
+}
+
+/// Does a gem from the lockfile's `PATH` sections (an engine) ship `app/views`? The app itself (`remote: .`) doesn't count.
+fn path_gem_has_views(lock: &str, lock_dir: &Path) -> bool {
+    let mut in_path = false;
+    lock.lines().any(|line| {
+        if !line.starts_with(' ') {
+            in_path = line.trim_end() == "PATH";
+            return false;
+        }
+        let remote = line.trim().strip_prefix("remote:").map(str::trim).filter(|remote| !remote.trim_matches(['.', '/']).is_empty());
+        in_path && remote.is_some_and(|remote| lock_dir.join(remote).join("app/views").is_dir())
+    })
 }
 
 // Rails API `Mime::Type.register(string, symbol, …)` and `register_alias(string, symbol, …)` (actionpack mime_type.rb).
@@ -340,6 +420,48 @@ mod tests {
         assert_eq!(name(r#"Mime::Type.register "a/b", "ab""#), None);
         assert_eq!(name("Mime::Type.register"), None);
         assert_eq!(name("config.x = 1"), None);
+    }
+
+    #[test]
+    fn partial_prefix_setting_is_read_from_application_environments_and_initializers() {
+        let off = "config.action_view.prefix_partial_path_with_controller_namespace = false\n";
+        let prefixes_in = |file: &str, text: &str| {
+            let root = std::env::temp_dir().join(format!("rt-project-prefix-{}-{}", std::process::id(), file.replace('/', "_")));
+            std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
+            std::fs::write(root.join(file), text).unwrap();
+            let found = read_app_config(&root.join("config")).prefixes_partial_paths;
+            std::fs::remove_dir_all(&root).unwrap();
+            found
+        };
+        assert!(!prefixes_in("config/application.rb", off));
+        assert!(!prefixes_in("config/environments/production.rb", off), "any environment counts");
+        assert!(!prefixes_in("config/initializers/a/b.rb", off));
+        assert!(prefixes_in("config/application.rb", "config.action_view.prefix_partial_path_with_controller_namespace = true\n"));
+        assert!(prefixes_in("config/application.rb", &format!("  # {off}")));
+        assert!(prefixes_in("config/locales/x.rb", off), "only the config files Rails loads");
+    }
+
+    #[test]
+    fn partial_prefix_setting_with_a_trailing_comment_is_off() {
+        let setting = |value: &str| format!("config.action_view.prefix_partial_path_with_controller_namespace = {value}\n");
+        assert!(turns_off_partial_prefix(&setting("false # legacy")));
+        assert!(!turns_off_partial_prefix(&setting("true # was false")));
+    }
+
+    #[test]
+    fn view_paths_added_app_wide() {
+        assert!(adds_view_paths("ActionController::Base.prepend_view_path Rails.root.join(\"themes\")\n"));
+        assert!(adds_view_paths("config.paths[\"app/views\"] << \"x\"\n"));
+        assert!(!adds_view_paths("# prepend_view_path \"x\"\nconfig.x = 1\n"));
+        let root = std::env::temp_dir().join(format!("rt-project-pathgem-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("engines/admin/app/views")).unwrap();
+        std::fs::create_dir_all(root.join("app/views")).unwrap();
+        let lock = |remote: &str| format!("PATH\n  remote: {remote}\n  specs:\n    admin (0.1.0)\n\nGEM\n  remote: engines/admin\n");
+        assert!(path_gem_has_views(&lock("engines/admin"), &root));
+        assert!(!path_gem_has_views(&lock("."), &root), "the app itself");
+        assert!(!path_gem_has_views(&lock("engines/other"), &root));
+        assert!(!path_gem_has_views("GEM\n  remote: engines/admin\n", &root));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
