@@ -1,10 +1,10 @@
 //! Controllers → views: `layout "admin"`, an action's `def show`, and `render :edit` / `render "users/show"`.
 //! Controllers reach the server only for navigation; Ruby LSP owns everything else in them.
 
+use crate::controller_classes::controller_path;
 use crate::partials::{matching_templates, split_render_name};
 use crate::project::Project;
 use crate::rails_paths::app_root;
-use crate::util::slash_path;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -14,13 +14,6 @@ static ACTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*def\s+([a-z_]
 // `render :edit`, `render "users/show"`, `render action: :edit`, `render :template => "x"`, `render partial: "form"`.
 static RENDER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\brender\s*\(?\s*(?::?(action|template|partial)\s*(?::|=>)\s*)?(?::(\w+)|["']([\w/]+)["'])"#).unwrap());
-
-/// `app/controllers/admin/users_controller.rb` → `admin/users`.
-pub fn controller_path(file: &Path) -> Option<String> {
-    let rel = file.strip_prefix(app_root(file)?.join("controllers")).ok()?;
-    let rel = slash_path(rel);
-    rel.strip_suffix("_controller.rb").filter(|p| !p.is_empty()).map(str::to_string)
-}
 
 /// Byte ranges on `line` of a controller that name views, with the files they name. `col` keeps only the
 /// reference under the cursor; links (`col` = None) leave out action names, which every `def` would carry.
@@ -53,6 +46,7 @@ pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::slash_path;
 
     #[test]
     fn controller_views() {

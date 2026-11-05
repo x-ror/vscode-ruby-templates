@@ -6,6 +6,7 @@ pub mod cli;
 mod code_context;
 mod completion;
 mod config;
+mod controller_classes;
 mod controllers;
 mod erb;
 mod erb_complete;

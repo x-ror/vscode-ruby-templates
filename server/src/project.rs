@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use crate::ivars::ControllerScan;
+use crate::controller_classes::ControllerScan;
 use crate::rails_paths::{app_root, files_under, is_known_format};
 use crate::strict_locals::{self, Close, RubyContext};
 use crate::view_roots;
@@ -53,7 +53,7 @@ pub struct Project {
     root: Option<PathBuf>,
     /// Ruby files in namespace folders of `app/models` (relative paths), listed on first use: a Project is one app's.
     namespaced_models: OnceLock<Vec<PathBuf>>,
-    /// `ivars::view_prefixes` by view folder: read from controller files once per Project.
+    /// `controller_classes::view_prefixes` by view folder: read from controller files once per Project.
     view_prefixes: Arc<Mutex<HashMap<PathBuf, Option<Vec<String>>>>>,
     /// Each app's controllers (by app folder) read once, on first use.
     controller_scan: Arc<Mutex<HashMap<PathBuf, Arc<ControllerScan>>>>,

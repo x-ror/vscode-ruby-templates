@@ -1,7 +1,7 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
+use crate::controller_classes::{self, controller_file};
 use crate::inflect::{self, pluralize, singularize};
-use crate::ivars;
 use crate::prism;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
@@ -520,7 +520,7 @@ fn is_partial_file(path: &Path) -> bool {
 /// Is `views/<view_dir>` the folder of an existing controller (`admin/users` for `admin/users_controller.rb`)?
 fn is_controller_folder(views: &Path, view_dir: &Path) -> bool {
     let Some(app) = views.parent() else { return false };
-    app.join("controllers").join(format!("{}_controller.rb", view_dir.display())).is_file()
+    controller_file(app, &view_dir.to_string_lossy()).is_file()
 }
 
 /// The model's namespace behind the namespace directories of `view_dir` (all but its last part) that it doesn't start with
@@ -647,7 +647,7 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
                 dirs.push(p.to_path_buf());
             }
             if let Some(v) = &views {
-                let prefixes = ivars::view_prefixes(project, current).unwrap_or_else(|| vec!["application".to_string()]);
+                let prefixes = controller_classes::view_prefixes(project, current).unwrap_or_else(|| vec!["application".to_string()]);
                 for prefix in &prefixes {
                     let dir = v.join(prefix);
                     if !dirs.contains(&dir) {
@@ -1751,10 +1751,10 @@ mod tests {
         let current = views.join("admin/users/index.html.erb");
         let project = Project::for_template(&current);
         assert_eq!(
-            ivars::view_prefixes(&project, &current),
+            controller_classes::view_prefixes(&project, &current),
             Some(vec!["admin/users".to_string(), "admin/base".to_string(), "application".to_string()])
         );
-        assert!(!ivars::bare_lookup_is_certain(&project, &current));
+        assert!(!controller_classes::bare_lookup_is_certain(&project, &current));
         assert_eq!(resolve(&project, &current, &render_refs("render \"nav\"").remove(0)), [views.join("admin/base/_nav.html.erb")]);
         std::fs::remove_dir_all(&root).unwrap();
     }

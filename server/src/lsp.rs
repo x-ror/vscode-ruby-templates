@@ -7,8 +7,8 @@ use crate::completion::{
 };
 use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::{
-    assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns, outline,
-    partial_rename, partials,
+    assets, config, controller_classes, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars,
+    model_columns, outline, partial_rename, partials,
     project::{Project, ProjectKey, Projects},
     rails_paths,
     render_call::HamlPipes,
@@ -917,7 +917,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, p: DidOpenTextDocumentParams) {
         let Some(lang) = TemplateLang::from_uri_or_id(&p.text_document.uri, Some(&p.text_document.language_id)) else {
-            if util::file_path(&p.text_document.uri).is_some_and(|path| controllers::controller_path(&path).is_some()) {
+            if util::file_path(&p.text_document.uri).is_some_and(|path| controller_classes::controller_path(&path).is_some()) {
                 self.controllers.insert(p.text_document.uri, p.text_document.text);
             }
             return;

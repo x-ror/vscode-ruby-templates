@@ -3,7 +3,7 @@
 use crate::code_context::render_filter;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::{
-    erb, haml_indent, haml_parser, haml_ruby, html_lint, ivars, partials,
+    controller_classes, erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
     project::{Framework, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
@@ -269,7 +269,7 @@ fn checked_renders<'a>(
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
     let bare_names_known = LazyCell::new(|| {
         let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
-        !*in_engine && !is_partial && ivars::bare_lookup_is_certain(project, path)
+        !*in_engine && !is_partial && controller_classes::bare_lookup_is_certain(project, path)
     });
     let mut dirs: HashMap<String, bool> = HashMap::new();
     let mut checkable = |name: &str| {
@@ -322,7 +322,7 @@ fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &m
 
 /// The folders Rails searches for a bare name in `view`: its controller's view folders; `application` when they're unknown.
 fn searched_folders(project: &Project, view: &Path) -> Vec<String> {
-    ivars::view_prefixes(project, view).unwrap_or_else(|| vec!["application".to_string()])
+    controller_classes::view_prefixes(project, view).unwrap_or_else(|| vec!["application".to_string()])
 }
 
 /// Rails' MissingTemplate message up to ` with {…}.`, which lists the request's formats and paths; they vary.

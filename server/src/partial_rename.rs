@@ -3,7 +3,7 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::code_context::render_filter;
-use crate::ivars::view_prefixes;
+use crate::controller_classes::view_prefixes;
 use crate::lang::TemplateLang;
 use crate::partials::{
     first_folder_only, local_key_span, matching_templates, model_renders, passed_locals, render_calls_in, resolve, resolve_model,
