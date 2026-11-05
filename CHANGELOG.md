@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New `liquid` language for `.liquid` and `.html.liquid` files: highlighting of `{{ }}` outputs (filters, strings, numbers, ranges, operators), `{% %}` tags, `{% comment %}` and `{% # %}` comments, `{% raw %}` and multi-line `{% liquid %}` tags over HTML, JavaScript and CSS, plus comment toggling, auto-closing and indentation. The server accepts these files and answers nothing for them (no Rails lookups, checks or formatting). Plain `.html` files are not claimed; map Jekyll includes with `files.associations`.
+
 ## 0.9.0
 
 - Bare-name render checks (`render "post"`) are also skipped when a module the controller includes (found by Zeitwerk naming in `app/*`, `app/*/concerns` or `lib`, and the modules it includes) mentions `prepend_view_path`, `_prefixes` or another lookup change, or when an installed gem has `app/views/<controller folder>` (or its gems aren't installed), so they no longer warn where Rails finds the view elsewhere.

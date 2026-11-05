@@ -40,7 +40,7 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 
 ### Highlighting and editing
 
-- Full syntax highlighting for ERB (`.html.erb`, `.erubi`, `.js.erb`, `.css.erb`, `.json.erb`, `.yml.erb`, …), Haml, Slim and Skim, including embedded JavaScript, CSS, SCSS, CoffeeScript and Markdown blocks.
+- Full syntax highlighting for ERB (`.html.erb`, `.erubi`, `.js.erb`, `.css.erb`, `.json.erb`, `.yml.erb`, …), Haml, Slim, Skim and Liquid, including embedded JavaScript, CSS, SCSS, CoffeeScript and Markdown blocks.
 - Comment toggling, bracket matching, auto-closing `<% %>`, smart indentation and folding.
 - Typing `>` in ERB closes the HTML tag; renaming `<div>` renames its `</div>` (linked editing).
 - 50+ snippets per language for Rails, Hotwire and ViewComponent: `link_to`, `render`, `form_with`, `ff`, `turbo_frame`, `ts-append`, `stimulus`, `locals`, `flash`, …
@@ -77,25 +77,28 @@ Plus: rename or move a partial in the Explorer and every `render` that points to
 
 The file name picks the language id, which decides the comment syntax and the `[erb-js]`-style editor settings; the server picks the checks by the same name.
 
-| Files                                                                                                                                               | Language id                      | Comment toggle | Highlighting      | Extra checks     | Formatting |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------------- | ----------------- | ---------------- | ---------- |
-| `.html.erb`, `.html+phone.erb`, `.turbo_stream.erb`, `.rhtml`, `.html.erubi`, `.html.erubis`, bare `.erb` under `app/views` with a locale or markup | `erb` (also `.erubi`, `.erubis`) | `<%# %>`       | HTML + Ruby       | HTML tags, links | yes        |
-| `.js.erb`                                                                                                                                           | `erb-js`                         | `//`, `/* */`  | JavaScript + Ruby | none             | no         |
-| `.scss.erb`                                                                                                                                         | `erb-scss`                       | `//`, `/* */`  | SCSS + Ruby       | none             | no         |
-| `.css.erb`                                                                                                                                          | `erb-css`                        | `/* */`        | CSS + Ruby        | none             | no         |
-| `.json.erb`                                                                                                                                         | `erb-json`                       | `<%# %>`       | JSON + Ruby       | none             | no         |
-| `.text.erb`, `.txt.erb`                                                                                                                             | `erb-text`                       | `<%# %>`       | Text + Ruby       | none             | no         |
-| Any file you assign to `erb-percent` (see below)                                                                                                    | `erb-percent`                    | `<%# %>`       | Text + Ruby       | none             | no         |
-| `.xml.erb`, `.rss.erb`, `.atom.erb`, `.svg.erb`                                                                                                     | `erb-xml`                        | `<!-- -->`     | XML + Ruby        | none             | no         |
-| `.md.erb`                                                                                                                                           | `erb-markdown`                   | `<!-- -->`     | Markdown + Ruby   | none             | no         |
-| `.rb.erb`                                                                                                                                           | `erb-ruby`                       | `#`            | Ruby              | none             | no         |
-| `.yml.erb`, `.yaml.erb`                                                                                                                             | `erb-yaml`                       | `#`            | YAML + Ruby       | none             | no         |
+| Files                                                                                                                                               | Language id                      | Comment toggle  | Highlighting      | Extra checks     | Formatting |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------- | ----------------- | ---------------- | ---------- |
+| `.html.erb`, `.html+phone.erb`, `.turbo_stream.erb`, `.rhtml`, `.html.erubi`, `.html.erubis`, bare `.erb` under `app/views` with a locale or markup | `erb` (also `.erubi`, `.erubis`) | `<%# %>`        | HTML + Ruby       | HTML tags, links | yes        |
+| `.js.erb`                                                                                                                                           | `erb-js`                         | `//`, `/* */`   | JavaScript + Ruby | none             | no         |
+| `.scss.erb`                                                                                                                                         | `erb-scss`                       | `//`, `/* */`   | SCSS + Ruby       | none             | no         |
+| `.css.erb`                                                                                                                                          | `erb-css`                        | `/* */`         | CSS + Ruby        | none             | no         |
+| `.json.erb`                                                                                                                                         | `erb-json`                       | `<%# %>`        | JSON + Ruby       | none             | no         |
+| `.text.erb`, `.txt.erb`                                                                                                                             | `erb-text`                       | `<%# %>`        | Text + Ruby       | none             | no         |
+| Any file you assign to `erb-percent` (see below)                                                                                                    | `erb-percent`                    | `<%# %>`        | Text + Ruby       | none             | no         |
+| `.xml.erb`, `.rss.erb`, `.atom.erb`, `.svg.erb`                                                                                                     | `erb-xml`                        | `<!-- -->`      | XML + Ruby        | none             | no         |
+| `.md.erb`                                                                                                                                           | `erb-markdown`                   | `<!-- -->`      | Markdown + Ruby   | none             | no         |
+| `.rb.erb`                                                                                                                                           | `erb-ruby`                       | `#`             | Ruby              | none             | no         |
+| `.yml.erb`, `.yaml.erb`                                                                                                                             | `erb-yaml`                       | `#`             | YAML + Ruby       | none             | no         |
+| `.liquid`, `.html.liquid`                                                                                                                           | `liquid`                         | `{% comment %}` | HTML + Liquid     | none             | no         |
 
 Every row gets the ERB and Ruby checks and, under `app/views`, the `render` checks (`unresolved-render`, `strict-locals`). Only HTML hosts add the HTML ones (unclosed or unbalanced tags, missing `alt`, duplicate `id`), linked tag renaming and attribute completion. Any other bare `.erb` (`nginx.conf.erb`) gets the ERB and Ruby checks only.
 
 `erb-percent` is for plain-Ruby ERB with `trim_mode: "%"` (RDoc-style templates, some gems): a line starting with `%` is Ruby and `%%` is a literal `%`. Rails' Erubi has no such lines (`% complete` in a view is text), so no file gets it by default; opt in with `"files.associations": { "lib/**/*.erb": "erb-percent" }`. It gets the ERB and Ruby checks with every `%` line compiled as Ruby, so `% if x` … `<% else %>` … `% end` is one block and a syntax error in a `%` line is reported on it. `%` lines get diagnostics and the preview (stdlib ERB, `trim_mode: "%-"`) only: no completion or definition inside them, no formatting, no HTML checks.
 
 The comment column applies to a line that starts outside a tag. On lines strictly inside a multi-line `<% %>` or `<%= %>` tag (not its `<%` or `%>` line), <kbd>Ctrl+/</kbd> toggles a Ruby `# ` instead; on the `<%` line it comments as usual, and _Toggle ERB Tag_ comments a whole tag.
+
+`liquid` (Shopify themes, Jekyll) is highlighting, comment toggling, bracket and `{{ }}` / `{% %}` auto-closing and indentation only: none of the Rails lookups or checks apply to it. Plain `.html` files are not claimed, so Jekyll includes need `"files.associations": { "**/_includes/**/*.html": "liquid" }`. If Shopify's Liquid extension also contributes `liquid`, disable one of the two for the workspace: VS Code uses one grammar per language id.
 
 ### Formatting
 

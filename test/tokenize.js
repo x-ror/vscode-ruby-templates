@@ -53,6 +53,7 @@ const samples = {
   "sample.html.slim": "text.slim",
   "smart_text.slim": "text.slim",
   "sample.skim": "text.skim",
+  "sample.html.liquid": "text.html.liquid",
   "sample.js.erb": "source.js.erb",
   "sample.json.erb": "source.json.erb",
   "sample.text.erb": "text.plain.erb",
