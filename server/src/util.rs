@@ -329,6 +329,17 @@ pub fn balanced_across_lines(head: &mut String, at: usize, lines: &[&str], consu
     None
 }
 
+/// The lines of `text` split at `\n`, a final empty one included: where each starts, its content less a `\r` before
+/// the break, and that `\r` (or "").
+pub fn raw_lines(text: &str) -> impl Iterator<Item = (usize, &str, &str)> {
+    text.split('\n').scan(0, |start, raw| {
+        let at = *start;
+        *start += raw.len() + 1;
+        let (line, cr) = raw.strip_suffix('\r').map_or((raw, ""), |line| (line, "\r"));
+        Some((at, line, cr))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

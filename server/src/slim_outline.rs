@@ -3,7 +3,7 @@
 use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
 use crate::partials::render_refs;
 use crate::slim_parser::SLIM_ENGINES;
-use crate::util::LineIndex;
+use crate::util::{raw_lines, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
@@ -48,14 +48,7 @@ enum Tail {
 
 /// (byte offset, content without `\r`) per line.
 fn line_spans(text: &str) -> Vec<(usize, &str)> {
-    let mut offset = 0;
-    text.split('\n')
-        .map(|l| {
-            let span = (offset, l.strip_suffix('\r').unwrap_or(l));
-            offset += l.len() + 1;
-            span
-        })
-        .collect()
+    raw_lines(text).map(|(offset, line, _)| (offset, line)).collect()
 }
 
 fn line_end(lines: &[(usize, &str)], i: usize) -> usize {

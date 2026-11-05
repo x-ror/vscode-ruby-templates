@@ -4,6 +4,7 @@
 use crate::generated_ruby::ruby_string_body;
 use crate::ruby::{CONTINUERS, REGEXP_SPACE, RUBY_WHITESPACE};
 use crate::slim_parser::VOID_ELEMENTS;
+use crate::util::leading_ws;
 use regex::Regex;
 use std::collections::VecDeque;
 use std::convert::Infallible;
@@ -318,7 +319,7 @@ fn split_lines(text: &str) -> Vec<Line<'_>> {
         .into_iter()
         .enumerate()
         .map(|(index, full)| {
-            let indent_len = full.len() - full.trim_start_matches([' ', '\t']).len();
+            let indent_len = leading_ws(full).len();
             Line {
                 whitespace: (indent_len > 0).then(|| &full[..indent_len]),
                 text: full[indent_len..].trim_end_matches(RUBY_WHITESPACE).into(),

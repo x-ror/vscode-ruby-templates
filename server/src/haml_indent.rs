@@ -95,7 +95,7 @@ pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
     let mut roles = vec![LineRole::Start; lines.len()];
     let visits = visit_lines(&lines);
     for (n, v) in visits.iter().enumerate() {
-        let content = lines[v.line].trim_start_matches([' ', '\t']);
+        let content = &lines[v.line][leading_ws(lines[v.line]).len()..];
         let continuation = match v.kind {
             LineKind::Ruby => LineRole::Ruby,
             LineKind::Tag if tag_head_len(content).is_none() || haml_code_start(lines[v.line]).is_some() => LineRole::Ruby,
