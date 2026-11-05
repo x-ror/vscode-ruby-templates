@@ -65,6 +65,12 @@ header.header {
   outline-offset: 2px;
 }
 
+/* The page title speaks in the landing's display voice. */
+h1#_top {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
 .sl-markdown-content :is(h2, h3) {
   letter-spacing: -0.015em;
 }

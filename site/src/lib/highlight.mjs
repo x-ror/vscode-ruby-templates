@@ -1,5 +1,6 @@
 import { createHighlighter } from "shiki";
-import { LANGS, THEMES } from "./grammars.mjs";
+import { LANGS } from "./grammars.mjs";
+import { THEMES } from "./themes.mjs";
 
 let highlighter;
 
@@ -11,7 +12,7 @@ export async function tokenLines(code, lang) {
   });
   const { tokens } = (await highlighter).codeToTokens(code, {
     lang,
-    themes: THEMES,
+    themes: { light: THEMES.light.name, dark: THEMES.dark.name },
     defaultColor: false,
   });
   return tokens;

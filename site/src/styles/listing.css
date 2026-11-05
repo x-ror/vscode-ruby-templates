@@ -23,7 +23,7 @@
   overflow-x: auto;
   font-family: var(--rt-font-mono);
   font-size: 0.875rem;
-  line-height: 1.7;
+  line-height: 1.75;
   tab-size: 2;
 }
 
@@ -64,25 +64,24 @@
   white-space: pre;
 }
 
-.listing__text span {
+.listing__token {
   color: var(--shiki-light);
 }
 
-:root[data-theme="dark"] .listing__text span {
+:root[data-theme="dark"] .listing__token {
   color: var(--shiki-dark);
 }
 
 /* ---- fault mark: the one sign every diagnostic wears ---- */
 
+/* A 24px target holding a rotated square drawn behind the number. */
 .fault-mark {
+  position: relative;
   display: inline-grid;
   place-items: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  rotate: 45deg;
-  background: var(--rt-fault);
+  width: 1.5rem;
+  height: 1.5rem;
   color: var(--rt-card);
-  border-radius: 3px;
   font-family: var(--rt-font);
   font-size: 0.6875rem;
   font-weight: 800;
@@ -90,8 +89,20 @@
   text-decoration: none;
 }
 
+.fault-mark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 1.0625rem;
+  height: 1.0625rem;
+  margin: auto;
+  rotate: 45deg;
+  background: var(--rt-fault);
+  border-radius: 3px;
+}
+
 .fault-mark__number {
-  rotate: -45deg;
+  position: relative;
 }
 
 @media (min-width: 64rem) {

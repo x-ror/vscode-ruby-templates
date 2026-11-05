@@ -239,9 +239,19 @@ body {
 }
 
 @media (max-width: 40rem) {
-  .course-index__item + .course-index__item {
-    border-left: 0;
-    border-top: 1px solid var(--rt-hairline);
+  /* One scrolling row, so the first course is in view on a phone. */
+  .course-index {
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    overflow-x: auto;
+  }
+
+  .course-index__link {
+    white-space: nowrap;
+  }
+
+  .site-header__list {
+    gap: 0.25rem 1rem;
   }
 }
 
@@ -369,12 +379,12 @@ body {
   font-weight: 600;
 }
 
-.course__more a {
+.course__link {
   color: var(--rt-link);
   text-underline-offset: 0.2em;
 }
 
-.course__more a:hover {
+.course__link:hover {
   text-decoration-thickness: 2px;
 }
 

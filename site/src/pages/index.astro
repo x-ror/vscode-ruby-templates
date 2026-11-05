@@ -167,7 +167,7 @@ npx ruby-templates format --write app/views   # format them
           looked up the way Rails would. These are the server's messages for this view.
         </p>
         <Listing id="checks-index" file="app/views/users/index.html.erb" lang="erb" code={index} faults={indexFaults} notesBeside />
-        <p class="course__more"><a href={`${base}/reference/diagnostics/`}>Every diagnostic, with how to turn it off</a></p>
+        <p class="course__more"><a class="course__link" href={`${base}/reference/diagnostics/`}>Every diagnostic, with how to turn it off</a></p>
       </Course>
 
       <Course id="rails" numeral="02" title="It knows your app">
@@ -195,7 +195,7 @@ npx ruby-templates format --write app/views   # format them
             }
           </tbody>
         </table>
-        <p class="course__more"><a href={`${base}/guides/rails-navigation/`}>Navigation and completion in detail</a></p>
+        <p class="course__more"><a class="course__link" href={`${base}/guides/rails-navigation/`}>Navigation and completion in detail</a></p>
       </Course>
 
       <Course id="languages" numeral="03" title="One partial, three languages">
@@ -207,7 +207,7 @@ npx ruby-templates format --write app/views   # format them
           <Listing id="badge-haml" file="users/_badge.html.haml" lang="haml" code={badge.haml} />
           <Listing id="badge-slim" file="users/_badge.html.slim" lang="slim" code={badge.slim} />
         </div>
-        <p class="course__more"><a href={`${base}/examples/erb/`}>More examples</a></p>
+        <p class="course__more"><a class="course__link" href={`${base}/examples/erb/`}>More examples</a></p>
       </Course>
 
       <Course id="formatting" numeral="04" title="Formatting that only moves whitespace">
@@ -219,7 +219,7 @@ npx ruby-templates format --write app/views   # format them
           <Listing id="format-before" file="Before" lang="erb" code={unformatted} />
           <Listing id="format-after" file="After Format Document" lang="erb" code={formatted} />
         </div>
-        <p class="course__more"><a href={`${base}/guides/formatting/`}>How the formatter decides</a></p>
+        <p class="course__more"><a class="course__link" href={`${base}/guides/formatting/`}>How the formatter decides</a></p>
       </Course>
 
       <Course id="ci" numeral="05" title="The same checks in CI">
@@ -228,7 +228,7 @@ npx ruby-templates format --write app/views   # format them
           agree. Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors.
         </p>
         <Listing id="ci-commands" file="Terminal" lang="shellscript" code={ci} />
-        <p class="course__more"><a href={`${base}/guides/command-line/`}>Command line options</a></p>
+        <p class="course__more"><a class="course__link" href={`${base}/guides/command-line/`}>Command line options</a></p>
       </Course>
 
     </main>
