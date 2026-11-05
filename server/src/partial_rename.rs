@@ -10,7 +10,7 @@ use crate::partials::{
     split_render_name, RenderCall, RenderKind, RenderRef,
 };
 use crate::project::Project;
-use crate::rails_paths::{app_views, template_stem, views_root};
+use crate::rails_paths::{app_root, app_views, template_stem, views_root};
 use crate::render_call::HamlPipes;
 use crate::util::{lines_with_offsets, slash_path, LineIndex};
 use crate::{i18n, ruby, slim_outline};
@@ -120,7 +120,7 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
             RenderKind::Partial => resolve(project, &source.path, &as_partial),
         };
     }
-    let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
+    let controller = app_root(&source.path).is_some_and(|app| source.path.starts_with(app.join("controllers")));
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
     match app_views(&source.path) {
         Some(views) if partial && r.name.contains('/') => resolve(project, &views.join("_"), &as_partial),
@@ -586,6 +586,19 @@ mod tests {
             [("app/views/users/_card.html.erb", "app/views/_card.html.erb"), ("app/views/users/_row.html.erb", "app/views/_row.html.erb")];
         let got = t.edits(&renames, &sources);
         assert_eq!(got.iter().map(|e| (e.2, e.3.as_str())).collect::<Vec<_>>(), [(12, "/card"), (32, "/row")]);
+    }
+
+    #[test]
+    fn only_app_controllers_render_templates_by_default() {
+        let t = Tree::new("in-controllers", &["controllers/app/views/users/_card.html.erb"]);
+        let sources = [
+            t.source("controllers/app/helpers/cards_helper.rb", None, "render \"users/card\"\n"),
+            t.source("controllers/app/controllers/users_controller.rb", None, "render \"users/card\"\n"),
+        ];
+        let card = t.path("controllers/app/views/users/_card.html.erb");
+        let found: Vec<String> =
+            references(&Project::unknown(), &[card], &sources, &[]).iter().map(|l| t.rel(&l.uri.to_file_path().unwrap())).collect();
+        assert_eq!(found, ["controllers/app/helpers/cards_helper.rb"], "a folder named controllers above the app is no controller");
     }
 
     #[test]
