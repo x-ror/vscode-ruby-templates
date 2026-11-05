@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{
-    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, TextDocumentContentChangeEvent,
-    Uri,
+    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, Location, NumberOrString, Position, Range,
+    TextDocumentContentChangeEvent, Uri,
 };
 
 pub const BOM: char = '\u{feff}';
@@ -43,7 +43,7 @@ impl<'a> LineIndex<'a> {
     /// The line and UTF-16 column of `offset`, moved back to a character boundary and clamped to the text.
     pub fn position(&self, offset: usize) -> Position {
         let offset = char_floor(self.text, offset);
-        let line = self.starts.partition_point(|&s| s <= offset) - 1;
+        let line = self.line_of(offset);
         column_position(self.text, line, self.starts[line], offset)
     }
 
@@ -131,17 +131,17 @@ pub fn file_uri(path: impl AsRef<Path>) -> Option<Uri> {
 }
 
 /// `range` in `file`.
-pub fn file_range_location(file: impl AsRef<Path>, range: Range) -> Option<tower_lsp_server::ls_types::Location> {
-    Some(tower_lsp_server::ls_types::Location::new(file_uri(file)?, range))
+pub fn file_range_location(file: impl AsRef<Path>, range: Range) -> Option<Location> {
+    Some(Location::new(file_uri(file)?, range))
 }
 
 /// The start of `file`.
-pub fn file_location(file: impl AsRef<Path>) -> Option<tower_lsp_server::ls_types::Location> {
+pub fn file_location(file: impl AsRef<Path>) -> Option<Location> {
     line_location(file, 0)
 }
 
 /// The start of 0-based `line` in `file`.
-pub fn line_location(file: impl AsRef<Path>, line: usize) -> Option<tower_lsp_server::ls_types::Location> {
+pub fn line_location(file: impl AsRef<Path>, line: usize) -> Option<Location> {
     let start = Position::new(line as u32, 0);
     file_range_location(file, Range::new(start, start))
 }

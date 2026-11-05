@@ -8,7 +8,7 @@ use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use tower_lsp_server::ls_types::{Diagnostic, Range};
+use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {
@@ -92,17 +92,16 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let spans = erb::code_spans(text);
     let tags = start_tags(text, &regions);
     let index = LineIndex::new(text);
-    let range = |start: usize, end: usize| index.range(start, end);
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
-        let tag_range = range(tag.start, tag.start + "<img".len());
+        let tag_range = index.range(tag.start, tag.start + "<img".len());
         let has_alt = tag.attrs.iter().any(|a| a.name == "alt" || (a.name == NO_ALT_AVAILABLE && a.value.is_none_or(|(s, e)| s == e)));
         if !tag.dynamic && !has_alt {
             out.push(coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT));
         }
     }
-    out.extend(image_tags_without_alt(text, &spans, &range));
-    out.extend(duplicate_ids(text, &regions, &spans, &tags, &range));
+    out.extend(image_tags_without_alt(text, &spans, &index));
+    out.extend(duplicate_ids(text, &regions, &spans, &tags, &index));
     out
 }
 
@@ -186,17 +185,13 @@ fn quoted_end(text: &str, regions: &[(usize, usize)], pos: usize, quote: char) -
 }
 
 /// `image_tag` calls in output tags whose options give no `alt:` (a `**splat` may).
-fn image_tags_without_alt<'a>(
-    text: &'a str,
-    spans: &'a [(usize, usize)],
-    range: &'a impl Fn(usize, usize) -> Range,
-) -> impl Iterator<Item = Diagnostic> + 'a {
+fn image_tags_without_alt<'a>(text: &'a str, spans: &'a [(usize, usize)], index: &'a LineIndex) -> impl Iterator<Item = Diagnostic> + 'a {
     spans.iter().filter_map(move |&(s, e)| {
         let code = &text[s..e.min(text.len())];
         let call = IMAGE_TAG.find(code)?;
         (!ALT_OPTION.is_match(&code[call.end()..])).then(|| {
             coded(
-                warning(range(s + call.start(), s + call.end()), format!("`image_tag` without `alt:`: {ALT_RULE}")),
+                warning(index.range(s + call.start(), s + call.end()), format!("`image_tag` without `alt:`: {ALT_RULE}")),
                 code::IMG_MISSING_ALT,
             )
         })
@@ -209,7 +204,7 @@ fn duplicate_ids(
     regions: &[(usize, usize)],
     spans: &[(usize, usize)],
     tags: &[StartTag],
-    range: &impl Fn(usize, usize) -> Range,
+    index: &LineIndex,
 ) -> Vec<Diagnostic> {
     let templates = template_bodies(text, regions);
     let ids = tags
@@ -228,9 +223,9 @@ fn duplicate_ids(
             if !branch_between(text, spans, first, s) {
                 let message = format!(
                     "Duplicate id `{id}` (first on line {}): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
-                    range(first, first).start.line + 1
+                    index.line_of(first) + 1
                 );
-                out.push(coded(warning(range(s, e), message), code::DUPLICATE_ID));
+                out.push(coded(warning(index.range(s, e), message), code::DUPLICATE_ID));
             }
         }
     }

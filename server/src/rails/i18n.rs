@@ -166,8 +166,6 @@ impl Flow {
 /// where its entries start; they follow each other up to the next key outside it.
 type Anchors = HashMap<String, (String, String, usize)>;
 
-// Line-based YAML subset: block mappings, scalars, `|`/`>` blocks, block sequences of scalars, flow collections on one
-// line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
 /// `value` cut to `VALUE_PREVIEW` characters, with `…` when something was cut.
 fn value_preview(value: &str) -> String {
     match value.char_indices().nth(VALUE_PREVIEW) {
@@ -176,6 +174,8 @@ fn value_preview(value: &str) -> String {
     }
 }
 
+// Line-based YAML subset: block mappings, scalars, `|`/`>` blocks, block sequences of scalars, flow collections on one
+// line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
 pub fn parse(text: &str) -> Vec<Translation> {
     let text = text.strip_prefix(crate::util::BOM).unwrap_or(text);
     let mut parser = LocaleParser::default();

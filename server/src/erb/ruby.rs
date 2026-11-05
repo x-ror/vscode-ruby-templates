@@ -65,6 +65,7 @@ pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
 }
 
 /// The Ruby Rails compiles `text` to; with `close`, the `locals:` comment it finds makes the method's parameters.
+/// For local lookups only: its lines aren't mapped back, so `diagnostics` goes through `Method` instead.
 pub fn compiled(text: &str, close: Option<Close>) -> Compiled {
     compile(text, close, false).ruby
 }
