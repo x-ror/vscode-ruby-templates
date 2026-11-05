@@ -1,7 +1,7 @@
 //! Every `app/views` folder a Rails app can render from: its own and its engines', packs' and components' under the
 //! Rails root, and those of the installed gems that could ship views.
 
-use crate::rails_paths::{files_under, is_app_views};
+use crate::rails_paths::{is_app_views, ruby_files_under};
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -251,7 +251,7 @@ fn code_adds_view_paths(views: &Path) -> bool {
     let Some(app) = views.parent() else { return false };
     let inside_app =
         WalkDir::new(app).into_iter().filter_entry(|entry| !(entry.depth() == 1 && NOT_CODE.iter().any(|name| entry.file_name() == *name)));
-    let outside_app = files_under(&app.join("../lib"), usize::MAX).into_iter().chain(files_under(&app.join("../config"), usize::MAX));
+    let outside_app = ruby_files_under(&app.join("../lib")).into_iter().chain(ruby_files_under(&app.join("../config")));
     for entry in inside_app.flatten() {
         if entry.depth() > 1 && entry.file_type().is_dir() && entry.file_name() == "views" {
             return true;

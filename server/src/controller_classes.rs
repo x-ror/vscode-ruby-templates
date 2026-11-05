@@ -3,7 +3,7 @@
 
 use crate::inflect::{constant_path, snake_case};
 use crate::project::Project;
-use crate::rails_paths::{app_root, files_under, template_stem, view_relative};
+use crate::rails_paths::{app_root, ruby_files_under, template_stem, view_relative};
 use crate::ruby::logical_lines;
 use crate::util::slash_path;
 use regex::Regex;
@@ -209,7 +209,7 @@ fn scan_controllers(app: &Path) -> ControllerScan {
     let controllers = app.join("controllers");
     let concerns = controllers.join("concerns");
     let mut scan = ControllerScan::default();
-    for file in files_under(&controllers, usize::MAX).into_iter().filter(|file| file.extension().is_some_and(|ext| ext == "rb")) {
+    for file in ruby_files_under(&controllers) {
         let Ok(text) = std::fs::read_to_string(&file) else { continue };
         scan.subclassed.extend(PARENT.captures_iter(&text).map(|cap| snake_case(cap[1].rsplit("::").next().unwrap_or(&cap[1]))));
         scan.skipped.extend(skipped_callbacks(&text));

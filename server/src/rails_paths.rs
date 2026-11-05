@@ -153,6 +153,13 @@ pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Every `.rb` file under `root`, at any depth.
+pub fn ruby_files_under(root: &Path) -> Vec<PathBuf> {
+    let mut files = files_under(root, usize::MAX);
+    files.retain(|file| file.extension().is_some_and(|ext| ext == "rb"));
+    files
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
