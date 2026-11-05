@@ -28,6 +28,7 @@ const COMMANDS = {
   "rubyTemplates.reindentHaml": reindentActiveHaml,
   "rubyTemplates.toggleSlimTag": toggleSlimTag,
   "rubyTemplates.wrapInSlim": wrapInSlim,
+  // The former Slim-only id, kept for keybindings that still name it.
   "rubyTemplates.extractSlimPartial": extractPartial,
 };
 

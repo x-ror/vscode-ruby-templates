@@ -545,9 +545,7 @@ const checks = {
       const editor = await open(rel);
       try {
         select(editor, 1, 0, 2, 5);
-        await vscode.commands.executeCommand(
-          "rubyTemplates.extractSlimPartial",
-        );
+        await vscode.commands.executeCommand("rubyTemplates.extractPartial");
         assert.strictEqual(
           editor.document.getText(),
           'div\n  = render "users/slim_part"\n',

@@ -451,10 +451,6 @@
         "title": "Ruby Templates: Wrap Selection in Slim Output (= / #{})"
       },
       {
-        "command": "rubyTemplates.extractSlimPartial",
-        "title": "Ruby Templates: Extract Selection to Slim Partial"
-      },
-      {
         "command": "rubyTemplates.preview",
         "title": "Ruby Templates: Preview Rendered HTML"
       },
@@ -558,11 +554,6 @@
           "group": "rubyTemplates@2"
         },
         {
-          "command": "rubyTemplates.extractSlimPartial",
-          "when": "editorLangId == slim && editorHasSelection && resourceScheme == file",
-          "group": "rubyTemplates@2"
-        },
-        {
           "command": "rubyTemplates.preview",
           "when": "editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim",
           "group": "rubyTemplates@3"
@@ -574,7 +565,7 @@
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "(editorLangId =~ /^erb/ || editorLangId == haml) && editorHasSelection && resourceScheme == file",
+          "when": "(editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim) && editorHasSelection && resourceScheme == file",
           "group": "rubyTemplates@2"
         },
         {
@@ -615,10 +606,6 @@
           "when": "editorLangId == slim"
         },
         {
-          "command": "rubyTemplates.extractSlimPartial",
-          "when": "editorLangId == slim && editorHasSelection && resourceScheme == file"
-        },
-        {
           "command": "rubyTemplates.convertToHaml",
           "when": "editorLangId == erb || editorLangId == html"
         },
@@ -632,7 +619,7 @@
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "(editorLangId =~ /^erb/ || editorLangId == haml) && resourceScheme == file"
+          "when": "(editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim) && resourceScheme == file"
         },
         {
           "command": "rubyTemplates.toggleHamlPrefix",
