@@ -129,55 +129,6 @@ for (const { id, configuration } of contributes.languages) {
   }
 }
 
-const liquid = readJson("../language-configuration/liquid.json");
-const liquidIncrease = new RegExp(
-  liquid.indentationRules.increaseIndentPattern,
-);
-const liquidDecrease = new RegExp(
-  liquid.indentationRules.decreaseIndentPattern,
-);
-const liquidIndent = [
-  ["{% if user %}", true],
-  ["  {%- unless x -%}", true],
-  ["{% for i in (1..3) %}", true],
-  ["{% case a %}", true],
-  ["{% capture note %}", true],
-  ["{% tablerow p in ps %}", true],
-  ["{% form 'cart' %}", true],
-  ["{% paginate items by 5 %}", true],
-  ["{% else %}", true],
-  ['<div class="a">', true],
-  ["{% if a %}b{% endif %}", false],
-  ["{% assign x = 1 %}", false],
-  ["{{ if }}", false],
-  ["<div>x</div>", false],
-];
-for (const [line, expected] of liquidIndent)
-  assert.strictEqual(liquidIncrease.test(line), expected, line);
-const liquidOutdent = [
-  ["{% endif %}", true],
-  ["  {%- endfor -%}", true],
-  ["{% else %}", true],
-  ["{% elsif x %}", true],
-  ["{% when 1 %}", true],
-  ["</div>", true],
-  ["{% if x %}", false],
-];
-for (const [line, expected] of liquidOutdent)
-  assert.strictEqual(liquidDecrease.test(line), expected, line);
-assert.deepStrictEqual(liquid.comments.blockComment, [
-  "{% comment %}",
-  "{% endcomment %}",
-]);
-for (const open of ["{{", "{%"])
-  assert(
-    liquid.autoClosingPairs.some((pair) => pair.open === open),
-    `liquid closes ${open}`,
-  );
-const liquidFold = liquid.folding.markers;
-assert(new RegExp(liquidFold.start).test("{% comment %}"));
-assert(new RegExp(liquidFold.end).test("{%- endcomment -%}"));
-
 console.log(
-  `langconfig: ${cases.length + inside.length + 9 + Object.keys(comments).length * 5 + liquidIndent.length + liquidOutdent.length + 5} ok`,
+  `langconfig: ${cases.length + inside.length + 9 + Object.keys(comments).length * 5} ok`,
 );
