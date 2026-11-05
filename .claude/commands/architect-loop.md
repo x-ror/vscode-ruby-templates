@@ -16,7 +16,7 @@ Report and progress live in `.claude/reviews/architect.md` (git-ignored). If it 
 - [ ] 6. Completion and hover: completion.rs, lsp/complete.rs, erb/complete.rs, slim/complete.rs, slim/hover.rs, helpers.rs, html.rs, rails/helper_defs.rs, rails/ivars.rs, rails/controller_classes.rs, rails/i18n.rs, rails/routes.rs, rails/stimulus.rs, rails/assets.rs, rails/schema.rs, rails/model_columns.rs, rails/controllers.rs, rails/slots.rs
 - [ ] 7. Partials, references, rename: rails/render_refs.rs, rails/render_call.rs, rails/partials.rs, partial_rename.rs, rails/paths.rs, rails/inflect.rs
 - [ ] 8. Formatting and indentation: format.rs, format/erb.rs, format/haml.rs, format/slim.rs, haml/indent.rs, slim/indent.rs
-- [ ] 9. Outline: outline.rs, outline/slim.rs, lang.rs
+- [ ] 9. Outline: outline.rs, outline/haml.rs, outline/slim.rs, lang.rs
 - [ ] 10. Command line: cli.rs, bin/ruby-templates.rs
 ```
 

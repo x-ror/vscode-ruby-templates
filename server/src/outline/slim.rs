@@ -357,23 +357,15 @@ fn depths(s: &str) -> impl Iterator<Item = (usize, char, i32)> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::outline::names;
     use tower_lsp_server::ls_types::{Position, Range};
 
     fn folds(text: &str) -> Vec<(u32, u32)> {
         folding_ranges(text, &[]).into_iter().map(|r| (r.start_line, r.end_line)).collect()
     }
 
-    fn outline(syms: &[DocumentSymbol]) -> Vec<String> {
-        syms.iter()
-            .map(|s| match &s.children {
-                Some(c) => format!("{}[{}]", s.name, outline(c).join(",")),
-                None => s.name.clone(),
-            })
-            .collect()
-    }
-
     fn symbols(text: &str) -> Vec<String> {
-        outline(&document_symbols(text, &[]))
+        names(&document_symbols(text, &[]))
     }
 
     #[test]
@@ -440,7 +432,7 @@ mod tests {
         assert_eq!(symbols("javascript nonce=n:\n  .x\n"), ["javascript:"]);
         assert_eq!(symbols("mjml:\n  .x\n"), [".x"]);
         let extra = ["mjml".to_string()];
-        assert_eq!(outline(&document_symbols("mjml:\n  .x\n", &extra)), ["mjml:"]);
+        assert_eq!(names(&document_symbols("mjml:\n  .x\n", &extra)), ["mjml:"]);
         assert_eq!(symbols("css.theme\n  .x\n"), ["css.theme[.x]"]);
     }
 
@@ -460,7 +452,7 @@ mod tests {
     #[test]
     fn inline_tags_each_get_a_symbol() {
         let syms = document_symbols("ul\n  li: a#x href=\"/\" = render \"a\"\n  li: nav: a id=\"y\"\n", &[]);
-        assert_eq!(outline(&syms), ["a#x[render \"a\"]", "nav[a#y]"]);
+        assert_eq!(names(&syms), ["a#x[render \"a\"]", "nav[a#y]"]);
         assert_eq!(syms[0].selection_range, Range::new(Position::new(1, 6), Position::new(1, 9)));
     }
 

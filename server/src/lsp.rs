@@ -463,7 +463,7 @@ impl LanguageServer for Backend {
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
-            TemplateLang::Haml => Some(outline::haml_folding_ranges(&text)),
+            TemplateLang::Haml => Some(outline::haml::folding_ranges(&text)),
             TemplateLang::Slim | TemplateLang::Skim => Some(outline::slim::folding_ranges(&text, &extra_engines)),
             TemplateLang::Erb if html => Some(outline::folding_ranges(&text)),
             TemplateLang::Erb | TemplateLang::Ruby | TemplateLang::Liquid => None,
@@ -497,7 +497,7 @@ impl LanguageServer for Backend {
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
-                TemplateLang::Haml => outline::haml_document_symbols(&text),
+                TemplateLang::Haml => outline::haml::document_symbols(&text),
                 TemplateLang::Slim | TemplateLang::Skim => outline::slim::document_symbols(&text, &extra_engines),
                 TemplateLang::Ruby | TemplateLang::Liquid => return None,
             };

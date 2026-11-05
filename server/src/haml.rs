@@ -406,8 +406,8 @@ mod tests {
                 hover(line, col);
             }
         }
-        crate::outline::haml_document_symbols(sample);
-        crate::outline::haml_folding_ranges(sample);
+        crate::outline::haml::document_symbols(sample);
+        crate::outline::haml::folding_ranges(sample);
     }
 
     #[test]

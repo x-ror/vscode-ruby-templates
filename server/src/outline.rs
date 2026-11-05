@@ -1,13 +1,13 @@
-//! Folding ranges and document symbols for ERB and Haml templates.
+//! Folding ranges and document symbols for ERB templates, and what the Haml and Slim outlines share.
 
+pub mod haml;
 pub mod slim;
 
 use crate::erb::tags;
-use crate::haml::indent::{haml_code_start, haml_structure, is_haml_tag, tag_name_len};
 use crate::rails::render_refs::render_refs;
 use crate::ruby;
 use crate::ruby::BlockEffect;
-use crate::util::{closing_bracket, find_balanced, leading_ws, LineIndex};
+use crate::util::LineIndex;
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
@@ -15,12 +15,6 @@ use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind,
 // `folding.markers` from language-configuration/erb.json; VS Code stops applying them once a provider answers.
 static REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#region\b.*-->|^\s*<%#\s*region\b").unwrap());
 static REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#endregion\b.*-->|^\s*<%#\s*endregion\b").unwrap());
-// `folding.markers` from language-configuration/haml.json.
-static HAML_REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*region\b").unwrap());
-static HAML_REGION_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*-#\s*endregion\b").unwrap());
-// A literal id in `{id: "x"}`, `{:id => "x"}`, `{"id" => "x"}` or `(id="x")`; interpolated ids are skipped.
-static HAML_ATTR_ID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?:^|[\s,{(])(?:id:|:id\s*=>|["']id["']\s*=>|id\s*=)\s*["']([^"'#]+)["']"#).unwrap());
 
 static CONTENT_FOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*content_for\s*\(?\s*:(\w+)").unwrap());
 static FORM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
@@ -76,25 +70,6 @@ pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
     let syntax_starts: std::collections::HashSet<u32> = out.iter().map(|r| r.start_line).collect();
     for (start_line, end_line) in indentation_folds(text, false) {
         if !syntax_starts.contains(&start_line) {
-            out.push(FoldingRange { start_line, end_line, ..Default::default() });
-        }
-    }
-    out
-}
-
-/// VS Code's off-side indentation folding plus what it misses: region markers, and `|` / `,` / multi-line `{}`
-/// groups whose continuation lines aren't indented deeper.
-pub fn haml_folding_ranges(text: &str) -> Vec<FoldingRange> {
-    let mut out = region_folds(text, &HAML_REGION_START, &HAML_REGION_END);
-    out.extend(indentation_folds(text, true).into_iter().map(|(start_line, end_line)| FoldingRange {
-        start_line,
-        end_line,
-        ..Default::default()
-    }));
-    let starts: std::collections::HashSet<u32> = out.iter().map(|r| r.start_line).collect();
-    for (line, span) in haml_structure(text) {
-        let (start_line, end_line) = (line as u32, (line + span - 1) as u32);
-        if span > 1 && !starts.contains(&start_line) {
             out.push(FoldingRange { start_line, end_line, ..Default::default() });
         }
     }
@@ -216,80 +191,6 @@ pub(crate) fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
     FORM.is_match(code).then(|| (BLOCK_TAIL.replace(code, "").split_whitespace().collect::<Vec<_>>().join(" "), SymbolKind::OBJECT))
 }
 
-/// Haml outline: the same symbols as ERB (`content_for`, forms, Turbo Frames, `render`), landmark tags and
-/// `#id` tags, each spanning its line and the lines nested under it.
-pub fn haml_document_symbols(text: &str) -> Vec<DocumentSymbol> {
-    let lines: Vec<&str> = text.split('\n').collect();
-    let index = LineIndex::new(text);
-    let line_end = |i: usize| index.line_start(i) + lines[i].trim_end().len();
-    let mut symbols = Symbols::new(&index);
-    for (i, span) in haml_structure(text) {
-        let line = lines[i];
-        let line_start = index.line_start(i);
-        let content_start = line_start + leading_ws(line).len();
-        let selection = (content_start, line_end(i + span - 1));
-        let range = (content_start, line_end(block_end(&lines, i, span)));
-        if let Some(code_start) = haml_code_start(line) {
-            let code = &line[code_start..];
-            symbols.add_render_refs(code, line_start + code_start);
-            if let Some((name, kind)) = erb_symbol(code) {
-                symbols.add(name, kind, range, selection);
-            }
-        }
-        if let Some(name) = haml_element_name(&line[leading_ws(line).len()..]) {
-            symbols.add(name, SymbolKind::FIELD, range, selection);
-        }
-    }
-    symbols.finish()
-}
-
-/// Last line of the block a structural line opens: its own span, then every following line indented deeper
-/// (trailing blank lines excluded).
-fn block_end(lines: &[&str], i: usize, span: usize) -> usize {
-    let Some(indent) = indent_level(lines[i]) else { return i };
-    let mut end = i + span - 1;
-    for (j, l) in lines.iter().enumerate().skip(i + span) {
-        match indent_level(l) {
-            None => {}
-            Some(level) if level > indent => end = j,
-            Some(_) => break,
-        }
-    }
-    end
-}
-
-/// `section#main` for `%section#main.wide`, `div#cart` for `#cart`, `nav` for `%nav`; `None` for other tags.
-fn haml_element_name(content: &str) -> Option<String> {
-    if !is_haml_tag(content) {
-        return None;
-    }
-    let head = &content[..tag_name_len(content)];
-    let tag = head.strip_prefix('%').map_or("div", |rest| &rest[..rest.find(['.', '#']).unwrap_or(rest.len())]);
-    let shorthand = head.split_once('#').map(|(_, rest)| &rest[..rest.find(['.', '#']).unwrap_or(rest.len())]);
-    let id = shorthand.filter(|id| !id.is_empty()).or_else(|| haml_attribute_id(&content[head.len()..]));
-    match id {
-        Some(id) => Some(format!("{tag}#{id}")),
-        None => LANDMARKS.contains(&tag).then(|| tag.to_string()),
-    }
-}
-
-/// The literal top-level `id` in the `{…}` / `(…)` attribute groups right after a tag head (first line only).
-fn haml_attribute_id(mut attrs: &str) -> Option<&str> {
-    while let Some(close) = attrs.chars().next().and_then(closing_bracket) {
-        let open = attrs.chars().next()?;
-        let group = &attrs[..find_balanced(attrs, open, close)?];
-        // `{data: {id: 1}}` renders `data-id`, so only depth one counts.
-        let top_level = |at: usize| group[..at].matches('{').count() <= group[..at].matches('}').count() + 1;
-        if open != '[' {
-            if let Some(m) = HAML_ATTR_ID.captures_iter(group).filter_map(|c| c.get(1)).find(|m| top_level(m.start())) {
-                return Some(m.as_str());
-            }
-        }
-        attrs = &attrs[group.len()..];
-    }
-    None
-}
-
 /// The literal `id` in a start tag's attributes.
 pub(crate) fn id_attr(attributes: &str) -> Option<&str> {
     ID_ATTR.captures(attributes).and_then(|c| c.iter().skip(1).flatten().next()).map(|m| m.as_str())
@@ -360,6 +261,18 @@ fn close_innermost(stack: &mut Vec<(usize, DocumentSymbol)>, roots: &mut Vec<Doc
         Some((_, parent)) => parent.children.get_or_insert_with(Vec::new).push(sym),
         None => roots.push(sym),
     }
+}
+
+/// Symbol names with their children in brackets: `section#main[render "card"]`.
+#[cfg(test)]
+pub(crate) fn names(symbols: &[DocumentSymbol]) -> Vec<String> {
+    symbols
+        .iter()
+        .map(|s| match &s.children {
+            Some(c) => format!("{}[{}]", s.name, names(c).join(",")),
+            None => s.name.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -454,15 +367,6 @@ mod tests {
         document_symbols(&text, true);
     }
 
-    fn outline(syms: &[DocumentSymbol]) -> Vec<String> {
-        syms.iter()
-            .map(|s| match &s.children {
-                Some(c) => format!("{}[{}]", s.name, outline(c).join(",")),
-                None => s.name.clone(),
-            })
-            .collect()
-    }
-
     #[test]
     fn symbols_nest_by_containment() {
         let text = concat!(
@@ -478,7 +382,7 @@ mod tests {
             "<%= turbo_frame_tag dom_id(@x), src: y %>\n",
         );
         assert_eq!(
-            outline(&document_symbols(text, true)),
+            names(&document_symbols(text, true)),
             [
                 "content_for :sidebar[nav[render \"shared/menu\"]]",
                 "section#main-<%= x %>[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
@@ -486,7 +390,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            outline(&document_symbols(text, false)),
+            names(&document_symbols(text, false)),
             [
                 "content_for :sidebar[render \"shared/menu\"]",
                 "turbo_frame_tag \"cart\"[form_with model: @cart]",
@@ -496,77 +400,11 @@ mod tests {
     }
 
     #[test]
-    fn haml_symbols_nest_by_indentation() {
-        let text = concat!(
-            "- content_for :sidebar do\n",
-            "  %nav= render \"shared/menu\"\n",
-            "\n",
-            "%section#main.wide\n",
-            "  = turbo_frame_tag \"cart\" do\n",
-            "    = form_with model: @cart do |f|\n",
-            "      #f x\n",
-            "  %div plain\n",
-            ":markdown\n",
-            "  #not-a-tag\n",
-            "- # render \"old\"\n",
-            "%p{id: x}= render 'card'\n",
-            "%div{id: \"cart\", class: \"x\"}\n",
-            "%form(id='signup' method='post')\n",
-            "%aside{data: {id: \"no\"}}[@user]{:id => 'sidebar'}\n",
-            "%span{\"id\" => \"a#{b}\"}\n",
-            "%p(title=\"}\" id=\"intro\")\n",
-        );
-        assert_eq!(
-            outline(&haml_document_symbols(text)),
-            [
-                "content_for :sidebar[nav[render \"shared/menu\"]]",
-                "section#main[turbo_frame_tag \"cart\"[form_with model: @cart[div#f]]]",
-                "render \"card\"",
-                "div#cart",
-                "form#signup",
-                "aside#sidebar",
-                "p#intro",
-            ]
-        );
-        let syms = haml_document_symbols(text);
-        assert_eq!(syms[0].range, Range::new(Position::new(0, 0), Position::new(1, 28)));
-        assert_eq!(syms[1].selection_range, Range::new(Position::new(3, 0), Position::new(3, 18)));
-    }
-
-    fn haml_folds(text: &str) -> Vec<(u32, u32, Option<FoldingRangeKind>)> {
-        let mut f: Vec<_> = haml_folding_ranges(text).into_iter().map(|r| (r.start_line, r.end_line, r.kind)).collect();
-        f.sort_by_key(|&(s, e, _)| (s, e));
-        f
-    }
-
-    #[test]
-    fn haml_folds_indentation_regions_and_continuations() {
-        let text = concat!(
-            "%div\n",            // 0
-            "  %p x\n",          // 1
-            "\n",                // 2
-            "-# region Form\n",  // 3
-            "%a{href: \"x\",\n", // 4
-            "title: \"y\"} z\n", // 5
-            "= \"a\" + |\n",     // 6
-            "\"b\" |\n",         // 7
-            "-# endregion\n",    // 8
-            "%b{c: 1,\n",        // 9
-            "   d: 2}\n",        // 10
-            "  %i\n",            // 11
-        );
-        assert_eq!(
-            haml_folds(text),
-            vec![(0, 1, None), (3, 8, Some(FoldingRangeKind::Region)), (4, 5, None), (6, 7, None), (9, 11, None),]
-        );
-    }
-
-    #[test]
     fn render_behind_a_ruby_comment_is_no_symbol() {
         let text = "<% # render \"old\" %>\n<%= render \"card\" %>\n<% x = 1 # render \"note\" %>\n";
-        assert_eq!(outline(&document_symbols(text, false)), ["render \"card\""]);
+        assert_eq!(names(&document_symbols(text, false)), ["render \"card\""]);
         let after_comment_line = "<%\n  # the card\n  render \"card\"\n%>\n";
-        assert_eq!(outline(&document_symbols(after_comment_line, false)), ["render \"card\""]);
+        assert_eq!(names(&document_symbols(after_comment_line, false)), ["render \"card\""]);
     }
 
     #[test]
