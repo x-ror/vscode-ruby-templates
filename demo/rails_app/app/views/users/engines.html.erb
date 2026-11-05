@@ -1,0 +1,5 @@
+<%# Partials of the in-repo engine engines/blog: the app's own app/views is searched first, then the engines'. %>
+<% @user.posts.each do |post| %>
+  <%= render "blog/post", post: post %>
+<% end %>
+<%= render "blog/sidebar" %>

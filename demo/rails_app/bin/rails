@@ -19,10 +19,12 @@ routes = [
   route("", "POST", "/users", "users#create", 4),
   route("new_user", "GET", "/users/new", "users#new", 4),
   route("edit_user", "GET", "/users/:id/edit", "users#edit", 4),
+  route("engines_user", "GET", "/users/:id/engines", "users#engines", 5),
+  route("formats_user", "GET", "/users/:id/formats", "users#formats", 6),
   route("user", "GET", "/users/:id", "users#show", 4),
   route("", "PATCH", "/users/:id", "users#update", 4),
   route("", "PUT", "/users/:id", "users#update", 4),
   route("", "DELETE", "/users/:id", "users#destroy", 4),
-  route("admin_reports", "GET", "/admin/reports", "admin/reports#index", 7)
+  route("admin_reports", "GET", "/admin/reports", "admin/reports#index", 10)
 ]
 puts "", "__RUBY_TEMPLATES_ROUTES__", JSON.generate(routes)

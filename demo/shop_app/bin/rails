@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+# A stand-in for Rails: answers only the extension's routes query (`bin/rails runner <ext>/ruby/routes.rb`)
+# with the routes of config/routes.rb, so route helpers can be tried without installing Rails.
+require "json"
+
+script = ARGV[1].to_s
+unless ARGV[0] == "runner" && File.basename(script) == "routes.rb"
+  warn "demo bin/rails only answers the routes query; use a real Rails app for `#{ARGV.join(" ")}`"
+  exit 1
+end
+
+def route(name, verb, path, action, line)
+  { name: name, verb: verb, path: "#{path}(.:format)", action: action, source: "config/routes.rb:#{line}" }
+end
+
+routes = [
+  route("root", "GET", "/", "products#index", 2),
+  route("products", "GET", "/products", "products#index", 4),
+  route("product", "GET", "/products/:id", "products#show", 4),
+  route("about", "GET", "/about", "pages#index", 5)
+]
+puts "", "__RUBY_TEMPLATES_ROUTES__", JSON.generate(routes)

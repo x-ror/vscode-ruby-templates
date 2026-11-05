@@ -5,8 +5,9 @@
     <%= csrf_meta_tags %>
     <%= stylesheet_link_tag "application" %>
   </head>
-  <body>
+  <body class="<%= "signed-in" if @current_user %>">
     <%= render "shared/nav" %>
+    <%= render "shared/notice" %>
     <main>
       <%= yield %>
     </main>

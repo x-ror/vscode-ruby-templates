@@ -1,0 +1,11 @@
+<% users = %w[Ann Bob] -%>
+Users: <%= users.size %>
+% users.each do |user|
+  - <%= user %>
+% end
+% if users.empty?
+Nobody yet.
+<% else -%>
+Done.
+% end
+%% not a Ruby line

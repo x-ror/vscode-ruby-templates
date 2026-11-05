@@ -1,0 +1,10 @@
+{% comment %} Product card of a theme: nothing here is Rails. {% endcomment %}
+<article class="product">
+  <h2>{{ product.title | escape }}</h2>
+  <p>{{ product.price | money }}</p>
+  {% render "card", product: product %}
+  {% render "users/card", user: product %}
+  {% if product.available %}
+    <a href="{{ product.url }}">Buy</a>
+  {% endif %}
+</article>

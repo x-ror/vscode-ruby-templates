@@ -1,0 +1,9 @@
+<div class="actions">
+  <%
+    count = @users.size
+    label = count == 1 ? "user" : "users"
+  %>
+  <%= link_to "#{count} #{label}",
+        users_path,
+        class: "btn" %>
+</div>

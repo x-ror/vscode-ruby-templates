@@ -10,3 +10,5 @@
     console.log("profile #{@user.id}");
   :css
     .badge { color: red; }
+- @user.roles.each do |role|
+  %span.role= role

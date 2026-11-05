@@ -6,3 +6,12 @@ end_of_line = lf
 insert_final_newline = true
 indent_style = space
 indent_size = 2
+
+[app/views/playground/editorconfig/**/*.html.erb]
+indent_size = 4
+
+[page{1..3}.html.erb]
+indent_size = 3
+
+[{brace.html.erb]
+indent_size = 6

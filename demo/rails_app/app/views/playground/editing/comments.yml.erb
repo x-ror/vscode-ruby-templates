@@ -1,0 +1,3 @@
+default: &default
+  adapter: sqlite3
+  database: <%= ENV.fetch("DB_NAME", "demo") %>
