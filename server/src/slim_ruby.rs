@@ -4,7 +4,6 @@ use crate::generated_ruby::{push_ruby_string_body, Compiled};
 use crate::slim_parser::{Origin, Parsed, Piece};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp_server::ls_types::Diagnostic;
 
 // Slim::EndInserter, Slim::DoInserter and Slim::Controls decide where blocks open and close.
 static OPENS_BLOCK: LazyLock<Regex> =
@@ -51,28 +50,9 @@ pub fn same_compilation(before: &str, after: &str, extra_engines: &[String]) -> 
     before == after || generated(before, extra_engines) == generated(after, extra_engines)
 }
 
-pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version) -> Vec<Diagnostic> {
-    compile(&parsed.pieces).diagnostics(text, ruby)
-}
-
-/// The template byte ranges where the local `name` is read or assigned.
-pub fn local_uses(parsed: &Parsed, name: &str) -> crate::prism::LocalUses {
-    compile(&parsed.pieces).local_uses(name)
-}
-
-/// Where the template declares the local variable at `offset`.
-pub fn local_definition(parsed: &Parsed, offset: usize) -> Option<crate::prism::LocalDefinition> {
-    compile(&parsed.pieces).local_definition(offset)
-}
-
-/// The block variables in scope at `offset` of the template.
-pub fn block_locals(parsed: &Parsed, offset: usize) -> Vec<String> {
-    compile(&parsed.pieces).block_locals(offset)
-}
-
-/// The template's local variables.
-pub fn local_tokens(parsed: &Parsed) -> Vec<crate::prism::LocalToken> {
-    compile(&parsed.pieces).local_tokens()
+/// The Ruby `Slim::Engine` generates from the parser's output.
+pub fn compiled(parsed: &Parsed) -> Compiled {
+    compile(&parsed.pieces)
 }
 
 fn compile(pieces: &[Piece]) -> Compiled {
@@ -281,9 +261,10 @@ impl<'a> Generator<'a> {
 mod tests {
     use super::*;
     use crate::slim_parser::parse;
+    use tower_lsp_server::ls_types::Diagnostic;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, &parse(text, &[]), ruby_prism::Version::Latest)
+        compiled(&parse(text, &[])).diagnostics(text, ruby_prism::Version::Latest)
     }
 
     /// (0-based line, Prism's message) of each error.
@@ -441,7 +422,8 @@ mod tests {
     fn block_locals_in_nested_lines_only() {
         let text = "- @users.each do |user|\n  p #{us}\n= us\n";
         let at = |needle: &str| text.find(needle).unwrap() + needle.len();
-        assert_eq!(block_locals(&parse(text, &[]), at("#{us")), ["user"]);
-        assert!(block_locals(&parse(text, &[]), text.len() - 1).is_empty());
+        let compiled = compiled(&parse(text, &[]));
+        assert_eq!(compiled.block_locals(at("#{us")), ["user"]);
+        assert!(compiled.block_locals(text.len() - 1).is_empty());
     }
 }

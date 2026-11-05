@@ -4,7 +4,6 @@ use crate::generated_ruby::Compiled;
 use crate::haml_parser::{Chunk, Parsed, Piece};
 use crate::strict_locals::{self, Comment};
 use crate::util::BOM;
-use tower_lsp_server::ls_types::Diagnostic;
 
 /// The method Rails compiles a template into, up to its parameters.
 const WRAPPER_DEF: &str = "def _template(";
@@ -14,32 +13,8 @@ const PREAMBLE: &str = "@output_buffer = output_buffer || ActionView::OutputBuff
 const ATTRIBUTES_CALL: &str = "::Haml::AttributeBuilder.build(true, \"\\\"\".freeze, :html, ";
 const VARIABLE: &str = "_haml_compiler";
 
-/// `comment` is the strict locals comment, whose signature `strict_locals::comment_diagnostics` checks.
-pub fn diagnostics(text: &str, parsed: &Parsed, ruby: ruby_prism::Version, comment: Option<&Comment>) -> Vec<Diagnostic> {
-    compile_template(text, parsed, comment).diagnostics(text, ruby)
-}
-
-/// The template byte ranges where the local `name` is read or assigned; `comment`, the strict locals, makes the method's parameters.
-pub fn local_uses(text: &str, parsed: &Parsed, comment: Option<&Comment>, name: &str) -> crate::prism::LocalUses {
-    compile_template(text, parsed, comment).local_uses(name)
-}
-
-/// Where the template declares the local variable at `offset`.
-pub fn local_definition(text: &str, parsed: &Parsed, offset: usize) -> Option<crate::prism::LocalDefinition> {
-    compile_template(text, parsed, None).local_definition(offset)
-}
-
-/// The block variables in scope at `offset` of the template.
-pub fn block_locals(text: &str, parsed: &Parsed, offset: usize) -> Vec<String> {
-    compile_template(text, parsed, None).block_locals(offset)
-}
-
-/// The template's local variables; `comment`, the strict locals, makes the method's parameters.
-pub fn local_tokens(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Vec<crate::prism::LocalToken> {
-    compile_template(text, parsed, comment).local_tokens()
-}
-
-fn compile_template(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Compiled {
+/// The Ruby Rails compiles the template to; `comment`, the strict locals, makes the method's parameters.
+pub fn compiled(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Compiled {
     let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
     // Haml drops the blank lines at the end, so the source ends on the last line that holds something.
     let last_line = text.lines().enumerate().filter(|(_, line)| !line.trim().is_empty()).last().map_or(0, |(index, _)| index);
@@ -161,9 +136,10 @@ fn line_of(chunks: &[Chunk]) -> usize {
 mod tests {
     use super::*;
     use crate::haml_parser::parse_with_ruby as parse;
+    use tower_lsp_server::ls_types::Diagnostic;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, None)
+        compiled(text, &parse(text), None).diagnostics(text, ruby_prism::Version::Latest)
     }
 
     /// (0-based line, first column, Prism's message) of each error.
@@ -348,18 +324,19 @@ mod tests {
     fn strict_locals_are_the_parameters() {
         let find = |text: &str| strict_locals::find(text, strict_locals::Close::default());
         let text = "-# locals: (**)\n= render \"x\", **\n";
-        let found = super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, find(text).as_ref());
+        let found = compiled(text, &parse(text), find(text).as_ref()).diagnostics(text, ruby_prism::Version::Latest);
         assert!(found.is_empty(), "{found:?}");
         // A bad signature is `strict_locals::diagnostics`'s to report.
         let text = "-# locals: (a b)\n%p= a\n";
-        assert_eq!(super::diagnostics(text, &parse(text), ruby_prism::Version::Latest, find(text).as_ref()).len(), 0);
+        assert_eq!(compiled(text, &parse(text), find(text).as_ref()).diagnostics(text, ruby_prism::Version::Latest).len(), 0);
     }
 
     #[test]
     fn block_locals_in_nested_lines_only() {
         let text = "- @users.each do |user|\n  %p= us\n= us\n";
         let at = |needle: &str| text.find(needle).unwrap() + needle.len();
-        assert_eq!(block_locals(text, &parse(text), at("%p= us")), ["user"]);
-        assert!(block_locals(text, &parse(text), text.len() - 1).is_empty());
+        let compiled = compiled(text, &parse(text), None);
+        assert_eq!(compiled.block_locals(at("%p= us")), ["user"]);
+        assert!(compiled.block_locals(text.len() - 1).is_empty());
     }
 }

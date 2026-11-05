@@ -83,7 +83,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
     if filters_pass && invalid_doctype.is_none() {
-        out.extend(slim_ruby::diagnostics(text, &parsed, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+        out.extend(slim_ruby::compiled(&parsed).diagnostics(text, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };

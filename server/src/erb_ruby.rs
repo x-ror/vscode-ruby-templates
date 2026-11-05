@@ -1,7 +1,7 @@
 //! Ruby syntax errors in an ERB template: the method source Rails 8.1.4 evals for it (Erubi 1.13.1 with the
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
-use crate::generated_ruby::{generated_offset, template_span};
+use crate::generated_ruby::Compiled;
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
 use crate::util::{error, LineIndex};
@@ -320,37 +320,16 @@ pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
 }
 
 /// The method source Rails evals for a template, and where the template's text went in it.
-struct Compiled {
-    source: String,
+struct Method {
+    ruby: Compiled,
     /// The line the template's first line is on.
     code_line: usize,
-    /// Code copied as it is: its byte range in `source` and the offset of its first byte in the template.
-    verbatim: Vec<(usize, usize, usize)>,
     /// The `locals:` comment, which the wrapper's `def` line holds the parameters of.
     strict_locals: Option<Comment>,
-    /// What Rails cut out of the template before Erubi saw it.
-    cut: Cut,
-}
-
-#[derive(Default)]
-struct Cut {
-    encoding_tag: usize,
-    strict_locals: Option<ByteRange<usize>>,
-}
-
-impl Cut {
-    /// The offset in the original template of `offset` in the text Erubi read.
-    fn original(&self, offset: usize) -> usize {
-        let offset = offset + self.encoding_tag;
-        match &self.strict_locals {
-            Some(comment) if offset >= comment.start => offset + comment.len(),
-            _ => offset,
-        }
-    }
 }
 
 /// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
-fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Compiled {
+fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Method {
     let strict = close.and_then(|close| strict_locals::find(text, close));
     let mut template = text.to_string();
     if let Some(strict) = &strict {
@@ -360,13 +339,19 @@ fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Compiled {
 
     let parameters = strict_locals::method_parameters(strict.as_ref());
     let head = format!("{WRAPPER_DEF}{parameters})\n            @virtual_path = \"template\";;");
-    Compiled {
+    let verbatim = erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect();
+    // Rails cuts the `locals:` comment first, then the encoding tag.
+    let cuts = std::iter::once((0, encoding_tag)).chain(strict.as_ref().map(|s| (s.range.start, s.range.len()))).collect();
+    Method {
         code_line: head.matches('\n').count(),
-        verbatim: erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect(),
-        source: format!("{head}{}\n          end\n", erubi.src),
-        cut: Cut { encoding_tag, strict_locals: strict.as_ref().map(|s| s.range.clone()) },
+        ruby: Compiled::from_verbatim(format!("{head}{}\n          end\n", erubi.src), verbatim, cuts),
         strict_locals: strict,
     }
+}
+
+/// The Ruby Rails compiles `text` to; with `close`, the `locals:` comment it finds makes the method's parameters.
+pub fn compiled(text: &str, close: Option<Close>) -> Compiled {
+    compile(text, close, false).ruby
 }
 
 /// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
@@ -374,7 +359,7 @@ fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Compiled {
 pub fn diagnostics(text: &str, ruby: ruby_prism::Version, percent_lines: bool, rails: Option<&Rails>) -> Vec<Diagnostic> {
     let compiled = compile(text, rails.map(|r| r.close), percent_lines);
     let index = LineIndex::new(text);
-    let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
+    let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.ruby.source, ruby);
     let found: Vec<Diagnostic> =
         errors.into_iter().filter_map(|e| Some(error(template_range(text, &index, &compiled, &e)?, e.message))).collect();
     if !found.is_empty() {
@@ -385,50 +370,14 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, percent_lines: bool, r
     strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
 }
 
-/// The block variables in scope at `offset` of the template.
-pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
-    let compiled = compile(text, None, false);
-    let Some(read_at) = offset.checked_sub(compiled.cut.encoding_tag) else { return Vec::new() };
-    generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
-}
-
-/// Where the template declares the local variable at `offset`: its block parameter or first assignment.
-pub fn local_definition(text: &str, offset: usize) -> Option<prism::LocalDefinition> {
-    let compiled = compile(text, None, false);
-    let at = generated_offset(&compiled.verbatim, offset.checked_sub(compiled.cut.encoding_tag)?)?;
-    let found = prism::local_definition(&compiled.source, at)?;
-    let (start, end) = template_span(&compiled.verbatim, found.start, found.end)?;
-    Some(prism::LocalDefinition { start: compiled.cut.original(start), end: compiled.cut.original(end), ..found })
-}
-
-/// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
-/// method's parameters.
-pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
-    let compiled = compile(text, Some(close), false);
-    let original = |(start, end): (usize, usize)| (compiled.cut.original(start), compiled.cut.original(end));
-    let uses = prism::local_uses(&compiled.source, name);
-    let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original)).collect();
-    prism::LocalUses { spans, ..uses }
-}
-
-/// The template's local variables; `close` finds the `locals:` comment, whose parameters are the strict locals.
-pub fn local_tokens(text: &str, close: Close) -> Vec<prism::LocalToken> {
-    let compiled = compile(text, Some(close), false);
-    let tokens = prism::local_tokens(&compiled.source);
-    let mapped = tokens.into_iter().filter_map(|t| Some((template_span(&compiled.verbatim, t.start, t.end)?, t)));
-    mapped
-        .map(|((start, end), t)| prism::LocalToken { start: compiled.cut.original(start), end: compiled.cut.original(end), ..t })
-        .collect()
-}
-
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
-fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
-    if let Some(range) = verbatim_range(index, compiled, e.start, e.end) {
+fn template_range(text: &str, index: &LineIndex, compiled: &Method, e: &prism::RubyError) -> Option<Range> {
+    if let Some(range) = compiled.ruby.verbatim_range(index, e.start, e.end) {
         return Some(range);
     }
     // The wrapper's own `end` is the unexpected one when a stray `end` in the template closed the method first.
-    let stray = (e.message == UNEXPECTED_END).then(|| prism::wrapper_end(&compiled.source)).flatten();
-    if let Some(range) = stray.and_then(|(start, end)| verbatim_range(index, compiled, start, end)) {
+    let stray = (e.message == UNEXPECTED_END).then(|| prism::wrapper_end(&compiled.ruby.source)).flatten();
+    if let Some(range) = stray.and_then(|(start, end)| compiled.ruby.verbatim_range(index, start, end)) {
         return Some(range);
     }
     let generated_line = e.range.start.line as usize;
@@ -446,15 +395,6 @@ fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism:
         (generated_line - compiled.code_line).min(index.line_count().saturating_sub(1))
     };
     Some(index.text_range(line))
-}
-
-/// The template range of generated bytes `start..end` that are code the template wrote.
-fn verbatim_range(index: &LineIndex, compiled: &Compiled, start: usize, end: usize) -> Option<Range> {
-    // Erubi records the runs in source order: the first that ends at or after `start` is the only one that may hold it.
-    let run = compiled.verbatim.get(compiled.verbatim.partition_point(|&(_, to, _)| to < start));
-    let &(from, to, at) = run.filter(|&&(from, _, _)| from <= start)?;
-    let position = |offset: usize| index.position(compiled.cut.original(at + offset - from));
-    Some(Range::new(position(start), position(end.min(to))))
 }
 
 #[cfg(test)]
@@ -565,7 +505,7 @@ mod tests {
         ("<%# locals: (a:, &block) -%>\n<%= a %>", "          def _template(local_assigns, output_buffer, a:, &block)\n            @virtual_path = \"template\";; \n @output_buffer.append=( a );\n@output_buffer\n          end\n"),
         ];
         for (template, rails) in cases {
-            assert_eq!(compile(template, Some(Close::default()), false).source, rails, "{template:?}");
+            assert_eq!(compile(template, Some(Close::default()), false).ruby.source, rails, "{template:?}");
         }
     }
 
@@ -726,7 +666,7 @@ mod tests {
     fn locals_line_is_a_plain_comment_without_strict_locals() {
         let text = "<%# locals: (a: ] ) %>\n<p>\n";
         assert!(super::diagnostics(text, ruby_prism::Version::Latest, false, None).is_empty());
-        assert!(compile(text, None, false).source.contains("(local_assigns, output_buffer, &_)"));
+        assert!(compile(text, None, false).ruby.source.contains("(local_assigns, output_buffer, &_)"));
         assert_eq!(errors(text)[0].1, "unexpected ']'; expected a `)` to close the parameters");
     }
 
@@ -754,7 +694,7 @@ mod tests {
     fn blank_signature_is_nil_keywords() {
         for blank in ["", " ", "\u{a0}"] {
             let template = format!("<%# locals: ({blank}) -%>\n<p>x</p>");
-            assert!(compile(&template, Some(Close::default()), false).source.contains("output_buffer, **nil, &_)"), "{template:?}");
+            assert!(compile(&template, Some(Close::default()), false).ruby.source.contains("output_buffer, **nil, &_)"), "{template:?}");
             assert!(errors(&template).is_empty());
         }
     }
@@ -792,8 +732,9 @@ mod tests {
     fn block_locals_after_an_encoding_tag_and_before_the_end() {
         let text = "<%# encoding: utf-8 %>\n<% @users.each do |user| %>\n<%= us %>\n<% end %>\n<%= us %>\n";
         let first = text.find("us %>").unwrap() + 2;
-        assert_eq!(block_locals(text, first), ["user"]);
-        assert!(block_locals(text, text.rfind("us").unwrap() + 2).is_empty());
-        assert!(block_locals(text, 5).is_empty());
+        let compiled = compiled(text, None);
+        assert_eq!(compiled.block_locals(first), ["user"]);
+        assert!(compiled.block_locals(text.rfind("us").unwrap() + 2).is_empty());
+        assert!(compiled.block_locals(5).is_empty());
     }
 }
