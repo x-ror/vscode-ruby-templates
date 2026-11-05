@@ -49,6 +49,8 @@
     --rt-link: #b9c1dc;
     --rt-focus: #b9c1dc;
     --rt-code-bg: #22272e;
+    --rt-selection: #34407a;
+    --rt-seal-shadow: rgb(0 0 0 / 0.6);
     color-scheme: dark;
   }
 }

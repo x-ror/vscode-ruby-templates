@@ -23,7 +23,7 @@ body {
 
 :focus-visible {
   outline: 2px solid var(--rt-focus);
-  outline-offset: 3px;
+  outline-offset: 2px;
   border-radius: 2px;
 }
 
@@ -290,10 +290,6 @@ body {
     transform: translateY(2px) scale(0.985);
     box-shadow: 0 1px 2px -1px var(--rt-seal-shadow);
   }
-}
-
-.seal:focus-visible {
-  outline-offset: 4px;
 }
 
 /* ---- course: one section of the card ---- */
