@@ -86,7 +86,7 @@ async function renderToHtml(doc) {
 /** Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. */
 async function renderInRails(root, dir, lang, src) {
   const r = await run(
-    "ruby",
+    cfg().get("commands.ruby", "ruby"),
     [path.join("bin", "rails"), "runner", railsRenderScript(dir, lang)],
     { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS },
     src,
