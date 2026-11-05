@@ -284,6 +284,41 @@ pub fn write_files(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
+/// The bracket that closes `open`: `(`, `[` or `{`.
+pub fn closing_bracket(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
+    }
+}
+
+/// How many lines a Haml or Slim tag head's bracketed attributes may run over before they count as unclosed.
+pub const MAX_ATTRIBUTE_LINES: usize = 20;
+
+/// `find_balanced` for the bracket at `head[at..]`, appending the next of `lines` to `head` while it is open;
+/// `consumed` counts the lines `head` holds, and the first of `lines` is the first of them.
+pub fn balanced_across_lines(head: &mut String, at: usize, lines: &[&str], consumed: &mut usize) -> Option<usize> {
+    let open = head[at..].chars().next()?;
+    let close = closing_bracket(open)?;
+    if let Some(len) = find_balanced(&head[at..], open, close) {
+        return Some(len);
+    }
+    for next in lines.iter().skip(*consumed) {
+        *consumed += 1;
+        head.push('\n');
+        head.push_str(next);
+        if let Some(len) = find_balanced(&head[at..], open, close) {
+            return Some(len);
+        }
+        if *consumed > MAX_ATTRIBUTE_LINES {
+            break;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

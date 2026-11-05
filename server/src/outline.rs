@@ -5,7 +5,7 @@ use crate::partials::render_refs;
 use crate::ruby;
 use crate::ruby::BlockEffect;
 use crate::tags;
-use crate::util::{find_balanced, leading_ws, LineIndex};
+use crate::util::{closing_bracket, find_balanced, leading_ws, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
@@ -285,12 +285,7 @@ fn haml_element_name(content: &str) -> Option<String> {
 
 /// The literal top-level `id` in the `{…}` / `(…)` attribute groups right after a tag head (first line only).
 fn haml_attribute_id(mut attrs: &str) -> Option<&str> {
-    while let Some(close) = attrs.chars().next().and_then(|c| match c {
-        '{' => Some('}'),
-        '(' => Some(')'),
-        '[' => Some(']'),
-        _ => None,
-    }) {
+    while let Some(close) = attrs.chars().next().and_then(closing_bracket) {
         let open = attrs.chars().next()?;
         let group = &attrs[..find_balanced(attrs, open, close)?];
         // `{data: {id: 1}}` renders `data-id`, so only depth one counts.

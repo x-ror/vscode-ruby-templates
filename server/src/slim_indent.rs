@@ -3,7 +3,7 @@
 use crate::slim_parser::{self, Piece, VOID_ELEMENTS};
 use crate::slim_ruby;
 use crate::util::BOM;
-use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
+use crate::util::{balanced_across_lines, coded, error, leading_ws, span_range, warning};
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
@@ -337,27 +337,7 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
             }
             continue;
         }
-        let close = match ch {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
-        };
-        if let Some(len) = find_balanced(&s[pos..], ch, close) {
-            pos += len;
-            continue;
-        }
-        // Try to extend across following lines (multiline attributes).
-        let mut balanced = None;
-        while let Some(next) = lines.get(i + consumed) {
-            consumed += 1;
-            s.push('\n');
-            s.push_str(next);
-            balanced = find_balanced(&s[pos..], ch, close);
-            if balanced.is_some() || consumed > 20 {
-                break;
-            }
-        }
-        let Some(len) = balanced else {
+        let Some(len) = balanced_across_lines(&mut s, pos, &lines[i..], &mut consumed) else {
             return (String::new(), consumed);
         };
         pos += len;

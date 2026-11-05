@@ -3,6 +3,7 @@
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
 use crate::ruby::comment_before;
+use crate::util::closing_bracket;
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -246,15 +247,6 @@ fn trim_start(s: &str) -> &str {
 /// `get_indent`: a tab advances to the next multiple of `TABSIZE`.
 pub fn indent_width(line: &str) -> usize {
     line.chars().take_while(|c| matches!(c, ' ' | '\t')).fold(0, |col, c| if c == '\t' { (col / TABSIZE + 1) * TABSIZE } else { col + 1 })
-}
-
-fn closer(open: char) -> Option<char> {
-    match open {
-        '(' => Some(')'),
-        '[' => Some(']'),
-        '{' => Some('}'),
-        _ => None,
-    }
 }
 
 /// Length of an attribute name: anything but whitespace, NUL, quotes, `<>/=` and brackets.
@@ -738,7 +730,7 @@ impl<'a> Parser<'a> {
     fn parse_attributes(&mut self, names: &mut Vec<&'a str>) {
         let mut close = None;
         let t = trim_start(self.rest());
-        if let Some(c) = t.chars().next().and_then(closer) {
+        if let Some(c) = t.chars().next().and_then(closing_bracket) {
             self.skip(self.rest().len() - t.len() + 1);
             close = Some(c);
         }
@@ -828,7 +820,7 @@ impl<'a> Parser<'a> {
                 } else if c == close {
                     depth -= 1;
                 }
-            } else if let Some(cl) = closer(c) {
+            } else if let Some(cl) = closing_bracket(c) {
                 depth = 1;
                 (open, close) = (c, cl);
             }

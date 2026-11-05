@@ -1,7 +1,7 @@
 //! Haml's diagnostics: the first error `haml_parser` finds, or the void elements that hold content.
 
 use crate::haml_parser::{self, is_haml_multiline, is_ruby_multiline, strip_output_prefix};
-use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
+use crate::util::{balanced_across_lines, closing_bracket, coded, error, find_balanced, leading_ws, span_range, warning};
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
@@ -234,12 +234,8 @@ pub struct AttrGroup {
 pub fn tag_attr_groups(s: &str) -> Vec<AttrGroup> {
     let mut pos = tag_name_len(s);
     let mut groups = Vec::new();
-    while let Some(open @ ('{' | '(' | '[')) = s[pos..].chars().next() {
-        let close = match open {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
-        };
+    while let Some(open) = s[pos..].chars().next() {
+        let Some(close) = closing_bracket(open) else { break };
         let end = find_balanced(&s[pos..], open, close).map(|len| pos + len);
         groups.push(AttrGroup { open, start: pos, end });
         let Some(end) = end else { break };
@@ -298,36 +294,11 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let mut consumed = 1;
     let mut s: String = raw[leading_ws(raw).len()..].to_string();
     let mut pos = tag_name_len(&s);
-    while let Some(ch @ ('{' | '(' | '[')) = s[pos..].chars().next() {
-        let close = match ch {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
+    while s[pos..].starts_with(['{', '(', '[']) {
+        let Some(len) = balanced_across_lines(&mut s, pos, &lines[i..], &mut consumed) else {
+            return (String::new(), consumed);
         };
-        match find_balanced(&s[pos..], ch, close) {
-            Some(len) => pos += len,
-            None => {
-                // Try to extend across following lines (multiline attributes).
-                let mut extended = false;
-                while let Some(next) = lines.get(i + consumed) {
-                    consumed += 1;
-                    s.push('\n');
-                    s.push_str(next);
-                    if find_balanced(&s[pos..], ch, close).is_some() {
-                        extended = true;
-                        break;
-                    }
-                    if consumed > 20 {
-                        break;
-                    }
-                }
-                if extended {
-                    pos += find_balanced(&s[pos..], ch, close).unwrap();
-                } else {
-                    return (String::new(), consumed);
-                }
-            }
-        }
+        pos += len;
     }
     (s[pos..].to_string(), consumed)
 }

@@ -134,11 +134,8 @@ impl PercentLiteral {
         }
         *chars = ahead;
         let close = match delimiter {
-            '(' => ')',
-            '[' => ']',
-            '{' => '}',
             '<' => '>',
-            same => same,
+            other => crate::util::closing_bracket(other).unwrap_or(other),
         };
         Some(PercentLiteral { open: delimiter, close, depth: 0, interpolates: !kind.is_some_and(|kind| "qwis".contains(kind)) })
     }
