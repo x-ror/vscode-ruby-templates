@@ -185,6 +185,10 @@ fn translation_locations(files: &i18n::Locales, key: &str) -> Vec<Location> {
     i18n::lookup(files, key).filter_map(|(file, t)| line_location(file, t.line)).collect()
 }
 
+fn locations_response(locations: Vec<Location>) -> Option<GotoDefinitionResponse> {
+    (!locations.is_empty()).then_some(GotoDefinitionResponse::Array(locations))
+}
+
 fn markdown_hover(value: String) -> Option<Hover> {
     Some(Hover { contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }), range: None })
 }
@@ -335,6 +339,12 @@ impl Backend {
     /// Liquid is highlighted only: every Rails lookup would misfire on it.
     fn is_liquid(&self, uri: &Uri) -> bool {
         self.docs.get(uri).is_some_and(|doc| doc.lang == TemplateLang::Liquid)
+    }
+
+    /// A copy of the open template at `uri`, so no `docs` guard is held across an `.await` (it would block the next
+    /// `did_change`) or while other documents are read; none for Liquid.
+    fn template_doc(&self, uri: &Uri) -> Option<Doc> {
+        self.docs.get(uri).filter(|doc| doc.lang != TemplateLang::Liquid).map(|doc| doc.clone())
     }
 
     fn options(&self) -> &Options {
@@ -968,15 +978,13 @@ impl LanguageServer for Backend {
             let (_, line, col) = util::line_at(&text, pos);
             let found =
                 controllers::targets(&project, &path, line, Some(col)).into_iter().next().map(|target| target.files).unwrap_or_default();
-            let locs: Vec<Location> = found.into_iter().filter_map(file_location).collect();
-            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+            return Ok(locations_response(found.into_iter().filter_map(file_location).collect()));
         }
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
-
-        if let Some(key) = i18n_key_at(&project, &doc, &path, pos, &self.options().extra_engines) {
-            let locs = translation_locations(&self.locale_files(&path), &key);
-            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        let engines = &self.options().extra_engines;
+        if let Some(key) = i18n_key_at(&project, &doc, &path, pos, engines) {
+            return Ok(locations_response(translation_locations(&self.locale_files(&path), &key)));
         }
         let targets: Vec<PathBuf> =
             if let Some(r) = render_refs::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
@@ -991,10 +999,9 @@ impl LanguageServer for Backend {
                     .unwrap_or_default()
             };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
-        if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
-            return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
+        if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, engines) {
+            return Ok(locations_response(locs));
         }
-        let engines = &self.options().extra_engines;
         let declaration = |at| code_context::local_definition(doc.lang, &doc.text, at, engines).filter(|d| d.parameter).map(|d| d.start);
         if let Some(found) = model_columns::column_at(&project, &path, &doc.text, line_start, col, declaration) {
             return Ok(line_location(&found.schema, found.column.line).map(GotoDefinitionResponse::Scalar));
@@ -1002,12 +1009,9 @@ impl LanguageServer for Backend {
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
         let helper = helper_defs::name_at(line, col).map(str::to_string);
         let route = helper.as_deref().and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
-        let (owned, line) = (Doc::clone(&doc), line.to_string());
-        // The guard would block the next `did_change` while the work below waits.
-        drop(doc);
         // A block variable or a local the template assigns hides a helper of the same name.
         if let Some(name) = helper.as_deref().filter(|name| !is_builtin_helper(name)) {
-            if let Some(range) = self.local_definition_range(&uri, &project, &owned, line_start + col, name).await? {
+            if let Some(range) = self.local_definition_range(&uri, &project, &doc, line_start + col, name).await? {
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, range))));
             }
         }
@@ -1021,9 +1025,9 @@ impl LanguageServer for Backend {
             (None, None) => {}
         }
         if locs.is_empty() {
-            locs.extend(self.variable_definitions(&owned.text, &path, &line, col).await?);
+            locs.extend(self.variable_definitions(&doc.text, &path, line, col).await?);
         }
-        Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
+        Ok(locations_response(locs))
     }
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
@@ -1071,9 +1075,10 @@ impl LanguageServer for Backend {
             Some(path) => Some((self.project_of(&path).await?, path)),
             None => None,
         };
-        let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
+        let engines = &self.options().extra_engines;
         if doc.lang == TemplateLang::Slim {
-            let parsed = slim_parser::parse(&doc.text, &self.options().extra_engines);
+            let parsed = slim_parser::parse(&doc.text, engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
             if let Some(md) = marker {
                 return Ok(markdown_hover(md));
@@ -1089,9 +1094,7 @@ impl LanguageServer for Backend {
             if let Some(r) = render_refs::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
             }
-            if let Some(md) = i18n_key_at(project, &doc, path, pos, &self.options().extra_engines)
-                .and_then(|key| i18n::hover(&self.locale_files(path), &key))
-            {
+            if let Some(md) = i18n_key_at(project, &doc, path, pos, engines).and_then(|key| i18n::hover(&self.locale_files(path), &key)) {
                 return Ok(markdown_hover(md));
             }
         }
@@ -1104,7 +1107,7 @@ impl LanguageServer for Backend {
         }
         let word = util::word_at(line, col);
         // `<p>Clear the cache</p>` names no helper.
-        let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines);
+        let code_here = role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
         // `@tag` is a variable, though `tag` is a helper.
         if let Some(name) = ivars::name_at(line, col).filter(|_| code_here) {
             let assignments = file.as_ref().map(|(project, path)| ivars::for_view(project, path)).unwrap_or_default();
@@ -1112,7 +1115,6 @@ impl LanguageServer for Backend {
             return Ok(ivars::hover(&assignments, name, view).and_then(markdown_hover));
         }
         if let Some((project, path)) = file.as_ref().filter(|_| code_here) {
-            let engines = &self.options().extra_engines;
             let declaration =
                 |at| code_context::local_definition(doc.lang, &doc.text, at, engines).filter(|d| d.parameter).map(|d| d.start);
             if let Some(found) = model_columns::column_at(project, path, &doc.text, line_start, col, declaration) {
@@ -1124,12 +1126,9 @@ impl LanguageServer for Backend {
             let sig = project.strict_locals(&doc.text)?;
             let local = sig.locals.into_iter().find(|(local, _)| local == name)?;
             // A block variable of the same name shadows the local.
-            let engines = &self.options().extra_engines;
             (!block_locals(doc.lang, &doc.text, line_start + col, engines).contains(&local.0)).then_some(local)
         });
         if let (Some((name, default)), Some((project, path))) = (declared_local, &file) {
-            // The guard would block the next `did_change` while the views are read.
-            drop(doc);
             let passes = self.local_caller_count(project.clone(), path, &name).await?;
             return Ok(markdown_hover(local_hover(&name, default.as_deref(), passes)));
         }
@@ -1148,9 +1147,7 @@ impl LanguageServer for Backend {
         let (Some(name), Some((_, path))) = (name.filter(|_| ruby::code_end(code_before) == ruby::CodeEnd::Code), file) else {
             return Ok(None);
         };
-        let (name, lang, text, offset, engines) =
-            (name.to_string(), doc.lang, doc.text.clone(), line_start + col, self.options().extra_engines.clone());
-        drop(doc);
+        let (name, lang, text, offset, engines) = (name.to_string(), doc.lang, doc.text, line_start + col, engines.clone());
         off_server_task(move || {
             // A block variable (also where it is declared) or a local the template assigns hides a helper of the same name.
             let local = code_context::local_definition(lang, &text, offset, &engines).is_some()
@@ -1219,11 +1216,7 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = p.text_document.uri;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
-        // A copy, so no guard is held while the fixes below read the partial from the same map.
-        let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
         let strict_fix = p.context.diagnostics.iter().any(|d| util::code(d) == Some(STRICT_LOCALS));
@@ -1266,11 +1259,7 @@ impl LanguageServer for Backend {
     }
 
     async fn prepare_rename(&self, p: TextDocumentPositionParams) -> Result<Option<PrepareRenameResponse>> {
-        if self.is_liquid(&p.text_document.uri) {
-            return Ok(None);
-        }
-        // A copy, so no guard is held while the template compiles.
-        let Some(doc) = self.docs.get(&p.text_document.uri).map(|doc| doc.clone()) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&p.text_document.uri) else { return Ok(None) };
         let Some(path) = util::file_path(&p.text_document.uri) else { return Ok(None) };
         if Project::for_template(&path).is_gem_file(&path) {
             return Ok(None);
@@ -1283,10 +1272,7 @@ impl LanguageServer for Backend {
     async fn rename(&self, p: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = p.text_document_position.text_document.uri;
         let new = p.new_name;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
-        let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         let Some(local) = self.strict_local_at(&uri, &doc, p.text_document_position.position) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = self.project_for(&path);
