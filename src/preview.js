@@ -26,37 +26,61 @@ let previewPanel;
 /** @type {string | undefined} */
 let previewUri;
 
-/** Render a template document to HTML with the matching CLI. */
-async function renderToHtml(doc) {
+/** Slim's flags: pretty HTML for a render, `--rails` or plain Ruby for a compile. */
+function slimArgs(mode) {
+  if (mode === "render") return ["--pretty"];
+  return cfg().get("slim.compileForRails", false) ? ["--rails"] : ["--compile"];
+}
+
+/** Runs the template engine's CLI on the document, `mode` being "render" (HTML) or "compile" (Ruby source). */
+function runEngine(doc, mode) {
   const lang = engineOf(doc.languageId);
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
-  const railsRoot =
-    cfg().get("preview.useRails", false) && doc.uri.scheme === "file"
-      ? findUp(path.dirname(doc.uri.fsPath), path.join("bin", "rails"))
-      : undefined;
-  if (railsRoot)
-    return renderInRails(
-      railsRoot,
-      viewDir(railsRoot, doc.uri.fsPath),
-      lang,
+  if (lang === "slim")
+    return run(
+      cfg().get("commands.slimrb", "slimrb"),
+      slimArgs(mode),
+      { cwd },
       src,
     );
-  if (lang === "slim") {
-    const bin = cfg().get("commands.slimrb", "slimrb");
-    return run(bin, ["--pretty"], { cwd }, src);
-  }
   if (lang === "haml") {
-    return runHaml(cfg().get("commands.haml", "haml"), "render", [], cwd, src);
+    const legacyArgs = mode === "compile" ? ["--debug"] : [];
+    return runHaml(
+      cfg().get("commands.haml", "haml"),
+      mode,
+      legacyArgs,
+      cwd,
+      src,
+    );
   }
   if (lang === "erb")
     return run(
       cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("render", doc.languageId === "erb-percent"),
+      erbRubyArgs(mode, doc.languageId === "erb-percent"),
       { cwd },
       src,
     );
-  return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
+  return Promise.resolve({
+    code: 1,
+    stdout: "",
+    stderr: `Unsupported language: ${lang}`,
+  });
+}
+
+/** Render a template document to HTML, inside the Rails app when the setting asks for it. */
+async function renderToHtml(doc) {
+  const railsRoot =
+    cfg().get("preview.useRails", false) && doc.uri.scheme === "file"
+      ? findUp(path.dirname(doc.uri.fsPath), path.join("bin", "rails"))
+      : undefined;
+  if (!railsRoot) return runEngine(doc, "render");
+  return renderInRails(
+    railsRoot,
+    viewDir(railsRoot, doc.uri.fsPath),
+    engineOf(doc.languageId),
+    doc.getText(),
+  );
 }
 
 /** Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. */
@@ -74,36 +98,6 @@ async function renderInRails(root, dir, lang, src) {
       stderr: `bin/rails runner timed out after ${RAILS_RENDER_TIMEOUT_MS / 1000}s.\n${r.stderr}`,
     };
   return r;
-}
-
-/** Compile a template to the Ruby source the engine generates. */
-async function compileToRuby(doc) {
-  const lang = engineOf(doc.languageId);
-  const cwd = workspaceFolderFor(doc);
-  const src = doc.getText();
-  if (lang === "slim") {
-    const args = cfg().get("slim.compileForRails", false)
-      ? ["--rails"]
-      : ["--compile"];
-    return run(cfg().get("commands.slimrb", "slimrb"), args, { cwd }, src);
-  }
-  if (lang === "haml") {
-    return runHaml(
-      cfg().get("commands.haml", "haml"),
-      "compile",
-      ["--debug"],
-      cwd,
-      src,
-    );
-  }
-  if (lang === "erb")
-    return run(
-      cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("compile", doc.languageId === "erb-percent"),
-      { cwd },
-      src,
-    );
-  return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
 }
 
 async function openPreview(context) {
@@ -179,7 +173,7 @@ function closePreview() {
 async function showCompiledSource() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) return;
-  const r = await compileToRuby(ed.document);
+  const r = await runEngine(ed.document, "compile");
   if (r.err?.code === "ENOENT") {
     vscode.window.showErrorMessage(
       missingToolMessage(r.err.path, ed.document.languageId),

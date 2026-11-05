@@ -1,5 +1,5 @@
 // Pure part of the preview and compiled-source commands (no vscode dependency; tested in test/clientPure.js).
-import path from "node:path";
+import path from "path";
 
 const TEMPLATE_LANGS = new Set(["erb", "haml", "slim"]);
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
