@@ -1,8 +1,5 @@
 // Pure Slim editing helpers; kept free of `vscode` so `test/slim.js` can run them under plain Node.
-import path from "path";
-
 import { leadingWhitespace } from "./text.js";
-import { viewsRoot } from "./views.js";
 
 // `/!` (HTML comment) and `/[` (conditional comment) are not code markers, nor is a `-#` Ruby comment.
 // Only output lines take `<`/`>` modifiers; a line-start `='x'` is Ruby `'x'` in Slim 5.
@@ -43,19 +40,4 @@ function wrapSlim(text, wholeLine) {
     : `#{${text}}`;
 }
 
-/**
- * Where `render "name"` from `file` looks for the partial: next to `file` for a bare name,
- * under the `app/views` root for `dir/name`. Null when `dir/name` is used outside app/views.
- * Keeps the file's format (`feed.xml.slim` → `_x.xml.slim`) minus any `+variant`, else `html`.
- */
-function partialPath(file, name) {
-  const slash = name.lastIndexOf("/");
-  const format =
-    /\.([^.+]+)(?:\+[^.]*)?\.slim$/.exec(path.basename(file))?.[1] ?? "html";
-  const partial = `_${name.slice(slash + 1)}.${format}.slim`;
-  if (slash < 0) return path.join(path.dirname(file), partial);
-  const root = viewsRoot(file);
-  return root ? path.join(root, name.slice(0, slash), partial) : null;
-}
-
-export { toggleSlimMarker, inVerbatimBlock, wrapSlim, partialPath };
+export { toggleSlimMarker, inVerbatimBlock, wrapSlim };

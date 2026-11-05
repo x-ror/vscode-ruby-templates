@@ -17,7 +17,7 @@ import {
   HTML_TAGS,
 } from "../src/autoClose.js";
 import { routesFromOutput, routesFromRun } from "../src/routes.js";
-import { viewsRoot } from "../src/views.js";
+import { viewsRoot, viewDirOf } from "../src/views.js";
 import { engineOf, isTemplateLanguage, isErb } from "../src/languages.js";
 import {
   erbRubyArgs,
@@ -344,6 +344,10 @@ assert.strictEqual(
 assert.strictEqual(viewsRoot("C:\\r\\app\\views\\a.erb"), "C:\\r\\app\\views");
 assert.strictEqual(viewsRoot("/r/app/views"), undefined);
 assert.strictEqual(viewsRoot("/r/myapp/views/a.erb"), undefined);
+assert.strictEqual(viewDirOf("/r/app/views/admin/users/a.erb"), "admin/users");
+assert.strictEqual(viewDirOf("C:\\r\\app\\views\\users\\a.erb"), "users");
+assert.strictEqual(viewDirOf("/r/app/views/a.erb"), undefined);
+assert.strictEqual(viewDirOf("/r/lib/a.erb"), undefined);
 
 // viewDir
 const appRoot = path.join(path.sep, "app-root");

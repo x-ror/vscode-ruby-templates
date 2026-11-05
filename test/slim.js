@@ -2,12 +2,7 @@ import assert from "assert";
 import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
-import {
-  toggleSlimMarker,
-  inVerbatimBlock,
-  wrapSlim,
-  partialPath,
-} from "../src/slim.js";
+import { toggleSlimMarker, inVerbatimBlock, wrapSlim } from "../src/slim.js";
 import { dedent } from "../src/text.js";
 
 for (const [line, next] of [
@@ -61,25 +56,6 @@ assert.deepStrictEqual(dedent(["  \ta", "  b"]), {
   indent: "  ",
   lines: ["\ta", "b"],
 });
-
-// partialPath joins with the platform separator, so the expected paths do too.
-assert.strictEqual(
-  partialPath("/app/views/users/show.html.slim", "card"),
-  path.normalize("/app/views/users/_card.html.slim"),
-);
-assert.strictEqual(
-  partialPath("/r/app/views/users/show.slim", "shared/ui/card"),
-  path.normalize("/r/app/views/shared/ui/_card.html.slim"),
-);
-assert.strictEqual(partialPath("/tmp/show.slim", "shared/card"), null);
-assert.strictEqual(
-  partialPath("/app/views/posts/feed.xml.slim", "item"),
-  path.normalize("/app/views/posts/_item.xml.slim"),
-);
-assert.strictEqual(
-  partialPath("/app/views/posts/show.html+phone.slim", "item"),
-  path.normalize("/app/views/posts/_item.html.slim"),
-);
 
 const { onEnterRules } = JSON.parse(
   fs.readFileSync(

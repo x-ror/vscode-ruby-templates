@@ -550,7 +550,7 @@ const checks = {
         );
         assert.strictEqual(
           editor.document.getText(),
-          'div\n  = render "slim_part"\n',
+          'div\n  = render "users/slim_part"\n',
         );
         assert.strictEqual(
           fs.readFileSync(
@@ -563,6 +563,36 @@ const checks = {
         await revert(editor);
       }
     });
+  },
+
+  async "extract partial over an existing file keeps CRLF"() {
+    const rel = "app/views/users/extract_crlf.html.erb";
+    const original = vscode.window.showWarningMessage;
+    vscode.window.showWarningMessage = async () => "Overwrite";
+    try {
+      return await answeringInputBox("crlf_part", async () => {
+        const editor = await open(rel);
+        try {
+          select(editor, 1, 0, 2, 0);
+          await vscode.commands.executeCommand("rubyTemplates.extractPartial");
+          assert.strictEqual(
+            editor.document.getText(),
+            '<div>\r\n  <%= render "users/crlf_part" %>\r\n</div>\r\n',
+          );
+          assert.strictEqual(
+            fs.readFileSync(
+              path.join(app, "app/views/users/_crlf_part.html.erb"),
+              "utf8",
+            ),
+            "<p>a</p>\r\n",
+          );
+        } finally {
+          await revert(editor);
+        }
+      });
+    } finally {
+      vscode.window.showWarningMessage = original;
+    }
   },
 
   async "switch to related: component class"() {

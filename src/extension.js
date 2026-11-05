@@ -8,7 +8,7 @@ import {
 } from "./erbCommands.js";
 import { toggleActiveHamlLines, reindentActiveHaml } from "./hamlCommands.js";
 import { toggleSlimTag, wrapInSlim } from "./slimCommands.js";
-import { extractPartial, extractSlimPartial } from "./extractPartial.js";
+import { extractPartial } from "./extractPartial.js";
 import { switchRelated } from "./relatedFile.js";
 import { registerPreview } from "./preview.js";
 import { convert } from "./convertTemplate.js";
@@ -28,7 +28,7 @@ const COMMANDS = {
   "rubyTemplates.reindentHaml": reindentActiveHaml,
   "rubyTemplates.toggleSlimTag": toggleSlimTag,
   "rubyTemplates.wrapInSlim": wrapInSlim,
-  "rubyTemplates.extractSlimPartial": extractSlimPartial,
+  "rubyTemplates.extractSlimPartial": extractPartial,
 };
 
 function activate(context) {
