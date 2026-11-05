@@ -558,7 +558,7 @@ impl Backend {
             return vec![];
         };
         let missing = sig.missing(&passed);
-        let unknown: Vec<&str> = passed.iter().copied().filter(|p| !sig.rest && !sig.declares(p)).collect();
+        let unknown = sig.unknown(&passed);
         let base = call.base(line_start);
         let at = |text: &str, offset: usize| util::offset_to_position(text, offset);
         let here = |(range, new): partials::ByteEdit| {
