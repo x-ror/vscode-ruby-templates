@@ -1,0 +1,108 @@
+/* Starlight dressed as the menu card: one reading surface, quiet links, the same type and rules. */
+@import "./tokens.css";
+
+:root {
+  --sl-font: var(--rt-font);
+  --sl-font-mono: var(--rt-font-mono);
+  --sl-text-h1: clamp(2.25rem, 1.6rem + 2.4vw, 3.25rem);
+  --sl-line-height-headings: 1.12;
+}
+
+:root[data-theme="light"] {
+  --sl-color-white: #121216;
+  --sl-color-gray-1: #24232a;
+  --sl-color-gray-2: #3a3940;
+  --sl-color-gray-3: #55545c;
+  --sl-color-gray-4: #85848c;
+  --sl-color-gray-5: #c9c8ce;
+  --sl-color-gray-6: #ebeaee;
+  --sl-color-gray-7: #f5f5f3;
+  --sl-color-black: var(--rt-card);
+  --sl-color-accent-low: #e6e7ee;
+  --sl-color-accent: var(--rt-link);
+  --sl-color-accent-high: #232a40;
+  --sl-color-text-accent: var(--rt-link);
+  --sl-color-bg-sidebar: var(--rt-card);
+  --sl-color-hairline: var(--rt-hairline);
+  --sl-color-hairline-light: #ebeaee;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-white: #f6f5f9;
+  --sl-color-gray-1: #e4e3e8;
+  --sl-color-gray-2: #cfced5;
+  --sl-color-gray-3: #a9a8b1;
+  --sl-color-gray-4: #75747d;
+  --sl-color-gray-5: #44434b;
+  --sl-color-gray-6: #2b2a31;
+  --sl-color-black: var(--rt-card);
+  --sl-color-accent-low: #2c2f3d;
+  --sl-color-accent: var(--rt-link);
+  --sl-color-accent-high: #dfe2ee;
+  --sl-color-text-accent: var(--rt-link);
+  --sl-color-bg-sidebar: var(--rt-card);
+  --sl-color-hairline: var(--rt-hairline);
+}
+
+/* The header is the card itself, divided from the page by one rule. */
+header.header {
+  background-color: var(--rt-card);
+  border-bottom: 1px solid var(--rt-hairline);
+}
+
+.site-title {
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+:root {
+  --sl-nav-height: 4.25rem;
+}
+
+/* One focus ring everywhere. */
+:focus-visible {
+  outline: 2px solid var(--rt-focus);
+  outline-offset: 2px;
+}
+
+.sl-markdown-content :is(h2, h3) {
+  letter-spacing: -0.015em;
+}
+
+.sl-markdown-content a {
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+.sl-markdown-content a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.sl-markdown-content table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The current page is marked by weight and a quiet ground, not a coloured pill. */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+  background-color: var(--rt-code-bg);
+  color: var(--rt-ink);
+  font-weight: 650;
+}
+
+.right-sidebar [aria-current="true"] {
+  font-weight: 650;
+}
+
+/* Previous / next: plain links, not panels. */
+.pagination-links a {
+  padding: 0.625rem 0.875rem;
+  border-color: var(--rt-hairline);
+  box-shadow: none;
+}
+
+.pagination-links .link-title {
+  font-size: var(--sl-text-base);
+  font-weight: 650;
+}

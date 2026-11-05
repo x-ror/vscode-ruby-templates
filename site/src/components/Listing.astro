@@ -1,0 +1,59 @@
+---
+import "../styles/listing.css";
+import { backtickParts } from "../lib/backticks.mjs";
+import { tokenLines } from "../lib/highlight.mjs";
+
+export interface Fault {
+  line: number;
+  column: number;
+  message: string;
+  code: string;
+}
+
+interface Props {
+  /** Prefix for line and fault anchors, unique on the page. */
+  id: string;
+  file: string;
+  lang: string;
+  code: string;
+  faults?: Fault[];
+  /** Set the problems beside the code on wide screens instead of under it. */
+  notesBeside?: boolean;
+}
+
+const { id, file, lang, code, faults = [], notesBeside = false } = Astro.props;
+const lines = await tokenLines(code.replace(/\n$/, ""), lang);
+const faultsByLine = Map.groupBy(
+  faults.map((fault, i) => ({ ...fault, n: i + 1 })),
+  (fault) => fault.line,
+);
+const styleOf = (style: Record<string, string> | undefined) =>
+  Object.entries(style ?? {})
+    .map(([key, value]) => `${key}:${value}`)
+    .join(";");
+---
+
+<figure class:list={["listing", { "listing--notes-beside": notesBeside && faults.length }]}>
+  <figcaption class="listing__file">{file}</figcaption>
+  <pre class="listing__code" tabindex="0"><code>{lines.map((tokens, i) => {
+    const line = i + 1;
+    const marks = faultsByLine.get(line) ?? [];
+    return (
+      <span class:list={["listing__line", { "listing__line--fault": marks.length }]} id={`${id}-L${line}`}><span class="listing__number" aria-hidden="true">{line}</span><span class="listing__gutter">{marks.map((m) => (
+        <a class="fault-mark" href={`#${id}-fault-${m.n}`} aria-label={`Problem ${m.n} on line ${line}`}><span class="fault-mark__number">{m.n}</span></a>
+      ))}</span><span class="listing__text">{tokens.map((t) => <span style={styleOf(t.htmlStyle)}>{t.content}</span>)}</span>{"\n"}</span>
+    );
+  })}</code></pre>
+  {faults.length > 0 && (
+    <ol class="fault-list" aria-label={`Problems in ${file}`}>
+      {faults.map((fault, i) => (
+        <li class="fault-list__item" id={`${id}-fault-${i + 1}`}>
+          <span class="fault-mark" aria-hidden="true"><span class="fault-mark__number">{i + 1}</span></span>
+          <a class="fault-list__location" href={`#${id}-L${fault.line}`}>Line {fault.line}, column {fault.column}</a>
+          <span class="fault-list__message">{backtickParts(fault.message).map(({ text, code }) => (code ? <code>{text}</code> : text))}</span>
+          <code class="fault-list__code">{fault.code}</code>
+        </li>
+      ))}
+    </ol>
+  )}
+</figure>

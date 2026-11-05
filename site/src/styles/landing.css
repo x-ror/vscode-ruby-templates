@@ -1,0 +1,451 @@
+/* The landing page: one omakase menu card, its courses ruled like a printed menu. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 1.5rem;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--rt-focus);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ---- page ---- */
+
+.page {
+  min-height: 100vh;
+  background: var(--rt-card);
+  color: var(--rt-ink);
+  font-family: var(--rt-font);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  font-optical-sizing: auto;
+}
+
+.page__footer {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 1.5rem clamp(1.25rem, 5vw, 4.5rem) 3rem;
+  font-size: 0.9375rem;
+  color: var(--rt-ink-muted);
+  border-top: 1px solid var(--rt-hairline);
+}
+
+.page__link {
+  color: var(--rt-link);
+  text-underline-offset: 0.2em;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 10;
+  padding: 0.75rem 1rem;
+  background: var(--rt-card);
+  color: var(--rt-ink);
+  font-weight: 650;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* ---- site header ---- */
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 2rem;
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 1rem clamp(1.25rem, 5vw, 4.5rem);
+  border-bottom: 1px solid var(--rt-hairline);
+}
+
+.site-header__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--rt-ink);
+  font-weight: 750;
+  font-size: 1.125rem;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.site-header__icon {
+  border-radius: 6px;
+}
+
+.site-header__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-header__link {
+  display: inline-block;
+  padding-block: 0.375rem;
+  color: var(--rt-ink-muted);
+  font-weight: 550;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 150ms var(--rt-ease-out),
+    border-color 150ms var(--rt-ease-out);
+}
+
+.site-header__link:hover {
+  color: var(--rt-ink);
+  border-bottom-color: currentColor;
+}
+
+/* ---- menu card ---- */
+
+.menu-card {
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: clamp(1.75rem, 4vw, 3rem) clamp(1.25rem, 5vw, 4.5rem)
+    clamp(2rem, 4vw, 3rem);
+}
+
+.menu-card__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+}
+
+@media (min-width: 56rem) {
+  .menu-card__head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 4rem;
+  }
+}
+
+.menu-card__title {
+  margin: 0;
+  font-size: clamp(2.75rem, 1.6rem + 4vw, 4.5rem);
+  font-weight: 820;
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.menu-card__lede {
+  max-width: 62ch;
+  margin: 1rem 0 0;
+  font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.1875rem);
+  color: var(--rt-ink-muted);
+  text-wrap: pretty;
+}
+
+.menu-card__order {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+@media (min-width: 56rem) {
+  .menu-card__order {
+    align-items: center;
+    padding-top: 0.5rem;
+  }
+}
+
+.menu-card__also {
+  display: flex;
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+}
+
+.menu-card__link {
+  color: var(--rt-link);
+  font-weight: 600;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+.menu-card__link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.menu-card__index {
+  grid-column: 1 / -1;
+}
+
+/* ---- course index: the card's list of courses ---- */
+
+.course-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rt-hairline);
+  border-bottom: 1px solid var(--rt-hairline);
+}
+
+.course-index__item + .course-index__item {
+  border-left: 1px solid var(--rt-hairline);
+}
+
+.course-index__link {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  height: 100%;
+  padding: 0.75rem 1rem;
+  color: var(--rt-ink);
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 150ms var(--rt-ease-out);
+}
+
+.course-index__link:hover {
+  background: var(--rt-code-bg);
+}
+
+.course-index__numeral {
+  color: var(--rt-ink-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+@media (max-width: 40rem) {
+  .course-index__item + .course-index__item {
+    border-left: 0;
+    border-top: 1px solid var(--rt-hairline);
+  }
+}
+
+/* ---- seal: the install action, pressed like the chef's stamp ---- */
+
+.seal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.75rem 1.375rem 0.75rem 0.75rem;
+  background: var(--rt-seal);
+  color: var(--rt-seal-ink);
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 1.0625rem;
+  text-decoration: none;
+  box-shadow: 0 6px 14px -4px var(--rt-seal-shadow);
+}
+
+.seal__glyph {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 2px solid rgb(255 255 255 / 0.85);
+  border-radius: 7px;
+  font-family: var(--rt-font-mono);
+  font-weight: 800;
+  font-size: 0.9375rem;
+  letter-spacing: -0.04em;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .seal {
+    transition:
+      transform 180ms var(--rt-ease-out),
+      box-shadow 180ms var(--rt-ease-out);
+  }
+
+  .seal:hover {
+    transform: translateY(1px);
+    box-shadow: 0 3px 8px -3px var(--rt-seal-shadow);
+  }
+
+  .seal:active {
+    transform: translateY(2px) scale(0.985);
+    box-shadow: 0 1px 2px -1px var(--rt-seal-shadow);
+  }
+}
+
+.seal:focus-visible {
+  outline-offset: 4px;
+}
+
+/* ---- course: one section of the card ---- */
+
+.course {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem 2.5rem;
+  padding-block: 2.25rem 2.5rem;
+}
+
+.course + .course {
+  border-top: 3px double var(--rt-hairline);
+}
+
+@media (min-width: 56rem) {
+  .course {
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+  }
+}
+
+.course__numeral {
+  margin: 0;
+  font-size: clamp(2rem, 1.5rem + 2vw, 3.25rem);
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--rt-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.course__body {
+  min-width: 0;
+}
+
+.course__title {
+  max-width: 28ch;
+  margin: 0 0 0.75rem;
+  font-size: clamp(1.625rem, 1.25rem + 1.4vw, 2.375rem);
+  font-weight: 760;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+}
+
+.course--wide .course__title {
+  max-width: none;
+}
+
+.course__anchor {
+  color: inherit;
+  text-decoration: none;
+}
+
+.course__anchor:hover {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.15em;
+}
+
+.course__text {
+  max-width: 68ch;
+  margin: 0 0 1.75rem;
+  color: var(--rt-ink-muted);
+  text-wrap: pretty;
+}
+
+.course__text code,
+.pairing code {
+  font-family: var(--rt-font-mono);
+  font-size: 0.9em;
+  color: var(--rt-ink);
+}
+
+.course__more {
+  margin: 1.5rem 0 0;
+  font-weight: 600;
+}
+
+.course__more a {
+  color: var(--rt-link);
+  text-underline-offset: 0.2em;
+}
+
+.course__more a:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* ---- tasting: three listings side by side ---- */
+
+.tasting,
+.before-after {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 64rem) {
+  .tasting {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .tasting > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .before-after {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---- pairing: what each Rails construct gets ---- */
+
+.pairing {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 1rem;
+}
+
+.pairing__caption {
+  margin-bottom: 0.75rem;
+  text-align: left;
+  font-size: 0.9375rem;
+  color: var(--rt-ink-muted);
+}
+
+.pairing__head {
+  padding: 0 1rem 0.5rem 0;
+  text-align: left;
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--rt-ink-muted);
+  border-bottom: 1px solid var(--rt-ink);
+}
+
+.pairing__where,
+.pairing__what {
+  padding: 0.75rem 1rem 0.75rem 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rt-hairline);
+}
+
+.pairing__where {
+  width: 34%;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .pairing__where {
+    white-space: normal;
+  }
+}

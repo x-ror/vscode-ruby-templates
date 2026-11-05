@@ -1,0 +1,146 @@
+---
+title: Slim examples
+description: Rails views in Slim as the extension highlights them, with what the language server checks and finds in each one.
+sidebar:
+  order: 3
+---
+
+Each example is a file from a Rails app, highlighted here with the extension's own Slim grammar. Every one passes `ruby-templates check` without a message and is already formatted (`ruby-templates format --check`). The server parses Slim as Slim 5.2 does, reports the first error Slim's parser would raise with its message, line and column, and checks the Ruby in code lines, attributes and `#{}` with Prism. The same views are on the [ERB examples](/vscode-ruby-templates/examples/erb/) and [Haml examples](/vscode-ruby-templates/examples/haml/) pages.
+
+## Layout with `content_for` and `yield`
+
+### The layout
+
+<kbd>F12</kbd> on `render "shared/header"` opens the partial; a partial that
+doesn't exist gets an `unresolved-render` warning with a quick fix that creates
+it.
+
+```slim title="app/views/layouts/projects.html.slim"
+doctype html
+html lang=I18n.locale
+  head
+    title = content_for?(:title) ? yield(:title) : "Projects"
+    = csrf_meta_tags
+    = stylesheet_link_tag "application", "data-turbo-track": "reload"
+    = javascript_importmap_tags
+  body
+    = render "shared/header"
+    main#main
+      = yield
+    = yield :footer
+```
+
+### A view that fills it
+
+`@project` completes after `@`, and hover lists where the `show` action and its `before_action` callbacks assign it. `t(".summary")` completes the keys from `config/locales`, and hover shows the value in each locale.
+
+```slim title="app/views/projects/show.html.slim"
+- content_for :title, @project.name
+- content_for :footer do
+  footer.project-footer
+    = render "projects/members", members: @project.members
+
+h1 = @project.name
+p.lead = t(".summary", count: @project.tasks.size, due: l(@project.due_on))
+```
+
+## Partial with strict locals
+
+Slim has no comment of its own for strict locals; Rails finds `# locals: (…)` in a `/` code comment. The server reads it the same way: a `render` that misses `members:` or passes an unknown local gets Rails' message (`strict-locals`), hover on `limit` shows its default, and <kbd>F2</kbd> on `members` renames it here and in every `render` that passes it.
+
+```slim title="app/views/projects/_members.html.slim"
+/# locals: (members:, limit: 5)
+ul.members
+  - members.first(limit).each do |member|
+    li = member.name
+```
+
+## Attribute wrappers and string interpolation
+
+Attributes may stand bare or sit in `()`, `[]` or `{}`; all are highlighted and parsed, and the Ruby in each value is checked. `#{}` in text and in quoted attribute values is highlighted as Ruby and checked like any other code.
+
+```slim title="app/views/tasks/_task.html.slim"
+/# locals: (task:)
+li id=dom_id(task) class=["task", ("done" if task.done?)]
+  a(href=task_path(task) title="Open #{task.title}") = task.title
+  span.due[data-due=task.due_on.iso8601] Due #{l(task.due_on, format: :short)}
+  span{class="owner"} = task.assignee&.name || t(".unassigned")
+```
+
+## Rendering partials, collections and components
+
+`render "projects/members"` goes to the partial and, after the comma, completes the locals it declares. `render @tasks` resolves to `app/views/tasks/_task.html.slim`. `render CardComponent.new` goes to the component's class and template, and `card.with_` completes its slots.
+
+```slim title="app/views/projects/index.html.slim"
+h1 = t(".title")
+
+= render "projects/members", members: @team, limit: 3
+
+ul#tasks
+  = render @tasks
+
+= render CardComponent.new(title: t(".archive")) do |card|
+  - card.with_header { t(".archive_header") }
+  - card.with_item { link_to t(".archived"), projects_path(archived: true) }
+```
+
+## Form with a form builder
+
+After `form.` completion lists the form builder methods; after `form.text_field :` it lists the columns of the `tasks` table from `db/schema.rb`.
+
+```slim title="app/views/tasks/_form.html.slim"
+/# locals: (task:)
+= form_with model: task do |form|
+  - if task.errors.any?
+    ul.errors
+      - task.errors.full_messages.each do |message|
+        li = message
+  .field
+    = form.label :title
+    = form.text_field :title, required: true
+  .field
+    = form.label :due_on
+    = form.date_field :due_on
+  .field
+    = form.check_box :done
+    = form.label :done
+  = form.submit
+```
+
+## Hotwire
+
+### Turbo Frame
+
+`turbo_frame_tag` and `link_to` complete with snippet arguments and show their API docs on hover. <kbd>F12</kbd> on `render "form"` opens `app/views/tasks/_form.html.slim`, the partial Rails finds from the view's folder.
+
+```slim title="app/views/tasks/edit.html.slim"
+= turbo_frame_tag dom_id(@task) do
+  h1 = t(".title", name: @task.title)
+  = render "form", task: @task
+  = link_to t(".cancel"), @task, data: { turbo_frame: "_top" }
+```
+
+### Stimulus controller
+
+Completion offers the app's Stimulus controller names in `data-controller` and `data-action`, the actions after `clipboard#`, and on the controller's element its `-target`, `-value`, `-class` and `-outlet` attributes. Slim also completes the Turbo attributes, such as `data-turbo-method` and `data-turbo-confirm`.
+
+```slim title="app/views/projects/_invite.html.slim"
+/# locals: (project:)
+div data-controller="clipboard" data-clipboard-success-class="copied"
+  input type="text" value=project_invite_url(project) readonly=true data-clipboard-target="source"
+  button type="button" data-action="clipboard#copy" = t(".copy")
+```
+
+## Embedded CSS and JavaScript engines
+
+Engine bodies are highlighted in their own language, and `#{}` inside them as Ruby. The formatter moves an engine's body with its line. Other engines, such as `less:`, get Slim's error `Expected tag` (code `unknown-engine`) unless they are listed in `rubyTemplates.slim.extraEngines`.
+
+```slim title="app/views/projects/_progress.html.slim"
+/# locals: (project:)
+progress#progress max=100 value=project.percent_done
+css:
+  #progress { accent-color: #{project.color_hex}; }
+javascript:
+  const done = #{project.percent_done};
+  document.getElementById("progress").title = `${done}% done`;
+```

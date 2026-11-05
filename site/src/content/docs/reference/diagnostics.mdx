@@ -1,0 +1,26 @@
+---
+title: Diagnostics
+description: Every diagnostic code the Ruby Templates language server reports, with a template that triggers it, the exact message and how to turn it off.
+tableOfContents: false
+---
+
+import DiagnosticRoster from "../../../components/DiagnosticRoster.astro";
+
+Every check the language server runs reports its problems under a stable code. In VS Code the code appears next to the message in the Problems panel and in the hover over the underlined text, with the language as the source (`erb`, `haml`, `slim`, or `ruby` for Jbuilder and Builder views). The `ruby-templates check` command prints the same messages as `file:line:column: severity: message`, without the code, and exits with 1 when it finds an error or a warning.
+
+The messages are those of Erubi, Rails, Haml 7, Slim 5 and Prism, or quote the section of the HTML standard that is broken. Each entry below shows a template that triggers the code and the message `ruby-templates check` prints for it, at the same line and column.
+
+## Turning diagnostics off
+
+List the codes to turn off for a language in your `settings.json`:
+
+```json
+{
+  "rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt", "duplicate-id"],
+  "rubyTemplates.haml.disabledDiagnostics": ["unresolved-render"]
+}
+```
+
+`rubyTemplates.slim.disabledDiagnostics` also applies to Skim templates, and `rubyTemplates.jbuilder.disabledDiagnostics` to Jbuilder and Builder views. To silence a whole language, set `rubyTemplates.erb.diagnostics.enabled`, `rubyTemplates.haml.diagnostics.enabled` or `rubyTemplates.slim.diagnostics.enabled` to `false`. These settings apply in the editor; `ruby-templates check` always runs every check. Liquid templates and Thor templates (`*.tt`) get no diagnostics.
+
+<DiagnosticRoster />

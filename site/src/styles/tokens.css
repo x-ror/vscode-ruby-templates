@@ -1,0 +1,59 @@
+/* The menu card's materials, shared by the landing page and the docs. */
+:root,
+:root[data-theme="light"] {
+  --rt-card: #fcfcfa;
+  --rt-ink: #1a1a1f;
+  --rt-ink-muted: #55545c;
+  --rt-hairline: #dcdbe1;
+  --rt-seal: #c21f39;
+  --rt-seal-ink: #ffffff;
+  --rt-seal-shadow: rgb(70 6 18 / 0.45);
+  --rt-fault: #b3172f;
+  --rt-link: #34405f;
+  --rt-focus: #34405f;
+  --rt-code-bg: #f4f4f1;
+  --rt-selection: #d6dcf3;
+
+  --rt-font: "Schibsted Grotesk Variable", system-ui, sans-serif;
+  --rt-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --rt-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --rt-card: #1c1b20;
+  --rt-ink: #ecebef;
+  --rt-ink-muted: #a9a8b1;
+  --rt-hairline: #34333b;
+  --rt-seal: #c21f39;
+  --rt-seal-ink: #ffffff;
+  --rt-seal-shadow: rgb(0 0 0 / 0.6);
+  --rt-fault: #ff8696;
+  --rt-link: #b9c1dc;
+  --rt-focus: #b9c1dc;
+  --rt-code-bg: #22272e;
+  --rt-selection: #34407a;
+
+  color-scheme: dark;
+}
+
+/* Before the theme script runs, or without it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --rt-card: #1c1b20;
+    --rt-ink: #ecebef;
+    --rt-ink-muted: #a9a8b1;
+    --rt-hairline: #34333b;
+    --rt-fault: #ff8696;
+    --rt-link: #b9c1dc;
+    --rt-focus: #b9c1dc;
+    --rt-code-bg: #22272e;
+    color-scheme: dark;
+  }
+}
+
+::selection {
+  background: var(--rt-selection);
+  color: var(--rt-ink);
+}

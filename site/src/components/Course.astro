@@ -1,0 +1,19 @@
+---
+interface Props {
+  id: string;
+  numeral: string;
+  title: string;
+  wide?: boolean;
+}
+const { id, numeral, title, wide = false } = Astro.props;
+---
+
+<section class:list={["course", { "course--wide": wide }]} id={id} aria-labelledby={`${id}-title`}>
+  <p class="course__numeral" aria-hidden="true">{numeral}</p>
+  <div class="course__body">
+    <h2 class="course__title" id={`${id}-title`}>
+      <a class="course__anchor" href={`#${id}`}>{title}</a>
+    </h2>
+    <slot />
+  </div>
+</section>

@@ -1,0 +1,165 @@
+/* ---- listing: a template with its line numbers and fault marks ---- */
+
+.listing {
+  margin: 0;
+  min-width: 0;
+  background: var(--rt-code-bg);
+  border: 1px solid var(--rt-hairline);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.listing__file {
+  padding: 0.5rem 1rem;
+  font-family: var(--rt-font-mono);
+  font-size: 0.8125rem;
+  color: var(--rt-ink-muted);
+  border-bottom: 1px solid var(--rt-hairline);
+}
+
+.listing__code {
+  margin: 0;
+  padding: 0.75rem 0;
+  overflow-x: auto;
+  font-family: var(--rt-font-mono);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  tab-size: 2;
+}
+
+.listing__code:focus-visible {
+  outline-offset: -2px;
+}
+
+.listing__line {
+  display: grid;
+  grid-template-columns: 2.75rem 1.75rem max-content;
+  scroll-margin-block: 6rem;
+}
+
+.listing__line--fault {
+  background: color-mix(in srgb, var(--rt-fault) 9%, transparent);
+}
+
+.listing__line:target {
+  background: color-mix(in srgb, var(--rt-focus) 16%, transparent);
+}
+
+.listing__number {
+  padding-right: 0.75rem;
+  text-align: right;
+  color: var(--rt-ink-muted);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.listing__gutter {
+  display: flex;
+  align-items: center;
+  user-select: none;
+}
+
+.listing__text {
+  padding-right: 1.25rem;
+  white-space: pre;
+}
+
+.listing__text span {
+  color: var(--shiki-light);
+}
+
+:root[data-theme="dark"] .listing__text span {
+  color: var(--shiki-dark);
+}
+
+/* ---- fault mark: the one sign every diagnostic wears ---- */
+
+.fault-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  rotate: 45deg;
+  background: var(--rt-fault);
+  color: var(--rt-card);
+  border-radius: 3px;
+  font-family: var(--rt-font);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.fault-mark__number {
+  rotate: -45deg;
+}
+
+@media (min-width: 64rem) {
+  .listing--notes-beside {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  }
+
+  .listing--notes-beside .listing__file {
+    grid-column: 1 / -1;
+  }
+
+  .listing--notes-beside .fault-list {
+    border-top: 0;
+    border-left: 1px solid var(--rt-hairline);
+  }
+}
+
+.fault-list {
+  margin: 0;
+  padding: 0.25rem 1rem 0.75rem;
+  list-style: none;
+  border-top: 1px solid var(--rt-hairline);
+  background: var(--rt-card);
+}
+
+.fault-list__item {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  column-gap: 0.75rem;
+  align-items: start;
+  padding-block: 0.75rem;
+  scroll-margin-block: 6rem;
+}
+
+.fault-list__item + .fault-list__item {
+  border-top: 1px solid var(--rt-hairline);
+}
+
+.fault-list__item:target {
+  background: color-mix(in srgb, var(--rt-focus) 12%, transparent);
+}
+
+.fault-list__item > .fault-mark {
+  grid-row: span 3;
+  margin-top: 0.25rem;
+}
+
+.fault-list__location {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--rt-link);
+  text-underline-offset: 0.2em;
+}
+
+.fault-list__message {
+  font-size: 1rem;
+  color: var(--rt-ink);
+}
+
+.fault-list__message code {
+  font-family: var(--rt-font-mono);
+  font-size: 0.875em;
+}
+
+.fault-list__code {
+  justify-self: start;
+  font-family: var(--rt-font-mono);
+  font-size: 0.8125rem;
+  color: var(--rt-ink-muted);
+}
