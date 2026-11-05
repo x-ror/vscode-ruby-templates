@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::ivars::ControllerScan;
 use crate::rails_paths::{app_root, files_under, is_known_format};
+use crate::strict_locals::{self, Close, RubyContext};
 use crate::view_roots;
 use walkdir::WalkDir;
 
@@ -136,6 +137,31 @@ impl Project {
         let ruby =
             key.ruby_version.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
         Project { formats, prefixes_partial_paths, adds_view_paths, ruby: ruby.or(project.ruby), root: key.lock_dir.clone(), ..project }
+    }
+
+    /// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
+    pub fn supports_strict_locals(&self) -> bool {
+        self.framework == Framework::Rails && self.gem_version("actionview").is_some_and(|v| v.at_least(strict_locals::SINCE))
+    }
+
+    /// The latest `STRICT_LOCALS_REGEX` unless the lockfile names an older actionview.
+    pub fn strict_locals_close(&self) -> Close {
+        match self.gem_version("actionview") {
+            Some(version) if !version.at_least(strict_locals::LAZY_REGEXP_SINCE) => Close::LastOnLine,
+            _ => Close::BeforeTagOrLineEnd,
+        }
+    }
+
+    /// How Rails evals `template` of this project.
+    pub(crate) fn ruby_context(&self, template: &Path) -> RubyContext {
+        RubyContext {
+            grammar: self.prism_version(),
+            strict_locals: self
+                .supports_strict_locals()
+                .then(|| self.short_identifier(template))
+                .flatten()
+                .map(|identifier| strict_locals::Rails { close: self.strict_locals_close(), identifier }),
+        }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?

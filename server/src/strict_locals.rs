@@ -2,7 +2,6 @@
 //! into the parameters of the method it evals, whatever the handler.
 
 use crate::prism;
-use crate::project::Project;
 use crate::util::{error, line_text_range, offset_to_position};
 use regex::Regex;
 use std::collections::HashSet;
@@ -15,7 +14,10 @@ const RUBY_SPACE: [char; 6] = [' ', '\t', '\r', '\n', '\x0C', '\x0B'];
 /// `local_assigns` and `output_buffer`, which every template method takes before the locals.
 const WRAPPER_PARAMETERS: &str = "local_assigns, output_buffer, ";
 const WRAPPER_PARAMETER_COUNT: usize = 2;
-const LAZY_REGEXP_SINCE: &str = "8.1";
+/// The first actionview with strict locals; before, the `locals:` line is a plain comment.
+pub(crate) const SINCE: &str = "7.1";
+/// The first actionview whose `STRICT_LOCALS_REGEX` is `Close::BeforeTagOrLineEnd`'s.
+pub(crate) const LAZY_REGEXP_SINCE: &str = "8.1";
 /// The method Haml, Slim and Ruby views' comment is checked in: only its parameters come from the template.
 const SIGNATURE_DEF: &str = "def _template(";
 
@@ -32,20 +34,23 @@ pub enum Close {
     BeforeTagOrLineEnd,
 }
 
-impl Close {
-    /// The latest regexp unless the project's lockfile names an older actionview.
-    pub fn of(project: &Project) -> Self {
-        match project.gem_version("actionview") {
-            Some(version) if !version.at_least(LAZY_REGEXP_SINCE) => Close::LastOnLine,
-            _ => Close::BeforeTagOrLineEnd,
-        }
-    }
-}
-
 /// Strict locals as a project's Rails has them: where the comment ends, and the template's name in Rails' messages.
 pub struct Rails {
     pub close: Close,
     pub identifier: String,
+}
+
+/// How Rails evals a template: the Prism grammar of its project's Ruby, and strict locals where they exist (Rails 7.1
+/// or newer). Without them the `locals:` line is a plain comment.
+pub(crate) struct RubyContext {
+    pub grammar: ruby_prism::Version,
+    pub strict_locals: Option<Rails>,
+}
+
+impl RubyContext {
+    pub(crate) fn outside_project() -> Self {
+        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals: None }
+    }
 }
 
 /// The `locals: (…)` comment Rails cuts out of the source, and the parameters it holds.

@@ -7,7 +7,9 @@ use crate::{
     project::{Framework, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
-    slim_indent, strict_locals, tags, util,
+    slim_indent,
+    strict_locals::{self, RubyContext},
+    tags, util,
 };
 use std::cell::LazyCell;
 use std::collections::{HashMap, HashSet};
@@ -137,7 +139,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     }
     let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path));
-    let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
+    let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(
@@ -156,32 +158,9 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     out
 }
 
-/// How Rails evals a template: the Prism grammar of its project's Ruby, and strict locals where they exist (Rails 7.1
-/// or newer). Without them the `locals:` line is a plain comment.
-pub(crate) struct RubyContext {
-    pub grammar: ruby_prism::Version,
-    pub strict_locals: Option<strict_locals::Rails>,
-}
-
-impl RubyContext {
-    pub(crate) fn outside_project() -> Self {
-        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals: None }
-    }
-
-    fn of(path: &Path, project: &Project) -> Self {
-        RubyContext {
-            grammar: project.prism_version(),
-            strict_locals: supports_strict_locals(project)
-                .then(|| project.short_identifier(path))
-                .flatten()
-                .map(|identifier| strict_locals::Rails { close: strict_locals::Close::of(project), identifier }),
-        }
-    }
-}
-
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
 pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
-    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| RubyContext::of(&path, Project::memoized(projects, &path)))
+    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| Project::memoized(projects, &path).ruby_context(&path))
 }
 
 /// The template language's own checks, without the render checks that need app/views.
@@ -246,7 +225,6 @@ fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
 pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
 const RUBY_SYNTAX: &str = "ruby-syntax";
 pub(crate) const STRICT_LOCALS: &str = "strict-locals";
-const STRICT_LOCALS_SINCE: &str = "7.1";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 /// Line index, line, the call as read, and the render.
@@ -324,7 +302,7 @@ impl Partials<'_> {
     }
 
     fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
-        let (close, ruby) = (strict_locals::Close::of(self.project), self.project.prism_version());
+        let (close, ruby) = (self.project.strict_locals_close(), self.project.prism_version());
         self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close, ruby)).as_ref()
     }
 }
@@ -366,14 +344,9 @@ fn is_gem_view(project: &Project, name: &str) -> bool {
     top.is_some_and(|top| project.has_gem_family(top))
 }
 
-/// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
-fn supports_strict_locals(project: &Project) -> bool {
-    project.framework == Framework::Rails && project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_SINCE))
-}
-
 /// Literal renders whose locals don't fit the partial's `locals: (…)` signature.
 fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
-    if !supports_strict_locals(project) {
+    if !project.supports_strict_locals() {
         return vec![];
     }
     let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));

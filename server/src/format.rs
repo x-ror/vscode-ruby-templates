@@ -1,9 +1,10 @@
 //! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace and the final
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
-use crate::checks::{language_diagnostics, ruby_context, RubyContext};
+use crate::checks::{language_diagnostics, ruby_context};
 use crate::lang::{html_host, is_partial, TemplateLang};
 use crate::project::Projects;
+use crate::strict_locals::RubyContext;
 use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim_ruby, util};
 use std::fmt;
 use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Uri};

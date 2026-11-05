@@ -32,7 +32,7 @@ pub(crate) fn render_local_completions(
     passed: &[String],
     typed: &str,
 ) -> Vec<CompletionItem> {
-    let close = Close::of(project);
+    let close = project.strict_locals_close();
     let Some(sig) =
         partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close, project.prism_version()))
     else {
