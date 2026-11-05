@@ -1,3 +1,5 @@
+import { commonIndent } from "./text.js";
+
 // Erubi's tag syntax: openers <%, <%=, <%==, <%-, <%#, <%% (literal); closers %>, -%>, =%>.
 const ERB_RE = /<%(==|=|#|-|%)?([\s\S]*?)([-=]?)%>/g;
 
@@ -54,16 +56,6 @@ function erbTagBodyLines(text, lastLine) {
 }
 
 const COMMENT_RE = /^(\s*)#(?!\{)( ?)/;
-
-function commonIndent(lines) {
-  return lines
-    .map((l) => l.match(/^\s*/)[0])
-    .reduce((shared, indent) => {
-      let n = 0;
-      while (n < shared.length && shared[n] === indent[n]) n++;
-      return shared.slice(0, n);
-    });
-}
 
 /** Per group of lines: the edits (`{ index, start, end, text }` per non-blank line) that add Ruby `# `
  *  at the group's common indent, or remove it when every non-blank line has it. */

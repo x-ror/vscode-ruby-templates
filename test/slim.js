@@ -6,9 +6,9 @@ import {
   toggleSlimMarker,
   inVerbatimBlock,
   wrapSlim,
-  dedent,
   partialPath,
 } from "../src/slim.js";
+import { dedent } from "../src/text.js";
 
 for (const [line, next] of [
   ["- if x", "= if x"],

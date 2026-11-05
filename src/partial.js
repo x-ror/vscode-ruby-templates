@@ -1,6 +1,6 @@
 // Pure part of "Extract Selection to Partial" (no vscode dependency; tested in test/haml.js).
 
-const leadingWs = (line) => /^[ \t]*/.exec(line)[0];
+import { leadingWhitespace, lastSelectedLine } from "./text.js";
 
 /**
  * The block to move into a partial, given the document lines and a selection
@@ -10,8 +10,8 @@ const leadingWs = (line) => /^[ \t]*/.exec(line)[0];
  * Returns the range to replace, the dedented text and the indentation it had, or null if it is blank.
  */
 function extractBlock(lines, { start, end }, wholeLines) {
-  const endsAtLineStart = end.character === 0 && end.line > start.line;
-  const endLine = endsAtLineStart ? end.line - 1 : end.line;
+  const endLine = lastSelectedLine({ start, end });
+  const endsAtLineStart = endLine !== end.line;
   const onlyIndentBefore = !lines[start.line].slice(0, start.character).trim();
   const range = {
     start: {
@@ -27,12 +27,12 @@ function extractBlock(lines, { start, end }, wholeLines) {
   const picked = lines.slice(range.start.line, endLine + 1);
   picked[picked.length - 1] = picked.at(-1).slice(0, range.end.character);
   picked[0] = picked[0].slice(range.start.character);
-  const indents = picked.filter((l) => l.trim()).map(leadingWs);
+  const indents = picked.filter((l) => l.trim()).map(leadingWhitespace);
   if (!indents.length) return null;
   const width = Math.min(...indents.map((ws) => ws.length));
   const indent = indents.find((ws) => ws.length === width);
   const text = picked
-    .map((l) => l.slice(Math.min(width, leadingWs(l).length)))
+    .map((l) => l.slice(Math.min(width, leadingWhitespace(l).length)))
     .join("\n");
   return { range, indent, text: `${text}\n` };
 }

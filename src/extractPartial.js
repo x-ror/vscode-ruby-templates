@@ -3,11 +3,11 @@ import * as vscode from "vscode";
 import path from "path";
 
 import { extractBlock, partialFileName } from "./partial.js";
-import { dedent, partialPath } from "./slim.js";
+import { partialPath } from "./slim.js";
 import { engineOf } from "./languages.js";
 import { exists, confirmOverwrite } from "./workspace.js";
 import { documentLines } from "./editor.js";
-import { lastSelectedLine } from "./text.js";
+import { lastSelectedLine, dedent } from "./text.js";
 
 const PARTIAL_NAME_RE = /^\w+$/;
 const RENDER_CALL = {

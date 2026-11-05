@@ -1,11 +1,11 @@
 // Pure Haml text helpers (no vscode dependency, so test/haml.js can run them under plain node).
+import { leadingWhitespace } from "./text.js";
 
 const RUBY_PREFIX_RE = /^([ \t]*)(-#|[!&]?~|[!&]=(?!=)|=(?!=)|-)[ \t]?(.*)$/;
 // Same cycle as the ERB toggle: code → output → comment → code.
 const NEXT_PREFIX = { "-": "=", "=": "-#", "-#": "-" };
 // Lines nested under these aren't Haml structure: filter bodies and `-#` comment bodies.
 const VERBATIM_HEAD_RE = /^(:\w+\s*$|-#)/;
-const leadingWs = (line) => /^[ \t]*/.exec(line)[0];
 
 /** The line with its `-` / `=` / `-#` prefix moved one step along the cycle, or null if it has none. */
 function toggleHamlPrefix(line) {
@@ -26,14 +26,14 @@ function toggleHamlLines(lines, targets) {
   let bodyOf; // width of the verbatim head whose body we're in
   lines.forEach((line, i) => {
     if (!line.trim()) return;
-    const width = leadingWs(line).length;
+    const width = leadingWhitespace(line).length;
     if (bodyOf !== undefined && width > bodyOf) return;
     const body = line.slice(width);
     bodyOf = VERBATIM_HEAD_RE.test(body) ? width : undefined;
     if (!targets.has(i)) return;
     if (
       body.startsWith("-#") &&
-      leadingWs(nextBodyLine(i) ?? "").length > width
+      leadingWhitespace(nextBodyLine(i) ?? "").length > width
     )
       return;
     const next = toggleHamlPrefix(line);

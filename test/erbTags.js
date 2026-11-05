@@ -4,6 +4,7 @@ import {
   toggleErbTagAt,
   toggleRubyComment,
 } from "../src/erbTags.js";
+import { disjointLineGroups } from "../src/text.js";
 
 const toggle = (tag) => {
   const e = toggleErbTagAt(tag, 3);
@@ -80,4 +81,14 @@ assert.deepStrictEqual(toggleRubyComment([["\tfoo", "  bar"]]), [
 // `#{` is interpolation (heredoc), not a comment.
 assert.deepStrictEqual(toggleRubyComment([["#{a}"]]), [[edit(0, 0, 0, "# ")]]);
 
-console.log(`erbTags: ${cases.length + 17} ok`);
+// One group per selection: a line two selections share stays with the first, an emptied group goes.
+assert.deepStrictEqual(
+  disjointLineGroups([
+    [1, 2, 3],
+    [3, 4],
+    [2, 3],
+  ]),
+  [[1, 2, 3], [4]],
+);
+
+console.log(`erbTags: ${cases.length + 18} ok`);

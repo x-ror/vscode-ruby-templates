@@ -1,6 +1,8 @@
 // Pure Slim editing helpers; kept free of `vscode` so `test/slim.js` can run them under plain Node.
 import path from "path";
 
+import { leadingWhitespace } from "./text.js";
+
 // `/!` (HTML comment) and `/[` (conditional comment) are not code markers, nor is a `-#` Ruby comment.
 // Only output lines take `<`/`>` modifiers; a line-start `='x'` is Ruby `'x'` in Slim 5.
 const MARKER_RE = /^(\s*)(?:(==?)([<>]*)|(-(?!#)|\/(?![![])))\s?(.*)$/;
@@ -40,24 +42,6 @@ function wrapSlim(text, wholeLine) {
     : `#{${text}}`;
 }
 
-const leadingWhitespace = (line) => /^\s*/.exec(line)[0];
-
-/** Strip the leading whitespace the non-blank lines have in common (as a string, so tabs and spaces don't mix). */
-function dedent(lines) {
-  const indents = lines.filter((l) => l.trim()).map(leadingWhitespace);
-  const indent = indents.reduce((common, ws) => {
-    let i = 0;
-    while (i < common.length && common[i] === ws[i]) i++;
-    return common.slice(0, i);
-  }, indents[0] ?? "");
-  return {
-    indent,
-    lines: lines.map((l) =>
-      l.startsWith(indent) ? l.slice(indent.length) : l.trimStart(),
-    ),
-  };
-}
-
 /**
  * Where `render "name"` from `file` looks for the partial: next to `file` for a bare name,
  * under the `app/views` root for `dir/name`. Null when `dir/name` is used outside app/views.
@@ -73,4 +57,4 @@ function partialPath(file, name) {
   return views ? path.join(views[1], name.slice(0, slash), partial) : null;
 }
 
-export { toggleSlimMarker, inVerbatimBlock, wrapSlim, dedent, partialPath };
+export { toggleSlimMarker, inVerbatimBlock, wrapSlim, partialPath };

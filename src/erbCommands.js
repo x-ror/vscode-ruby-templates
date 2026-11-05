@@ -7,6 +7,7 @@ import {
   toggleRubyComment,
 } from "./erbTags.js";
 import { selectedLines } from "./editor.js";
+import { disjointLineGroups } from "./text.js";
 
 async function toggleErbTag() {
   const ed = vscode.window.activeTextEditor;
@@ -36,14 +37,7 @@ async function toggleErbLineComment() {
   const lastLine = Math.max(...ed.selections.map((sel) => sel.end.line));
   const body = erbTagBodyLines(doc.getText(), lastLine);
   // One group per selection, like the built-in: each decides add or remove on its own.
-  const claimed = new Set();
-  const groups = ed.selections
-    .map((sel) =>
-      selectedLines(sel).filter(
-        (line) => !claimed.has(line) && claimed.add(line),
-      ),
-    )
-    .filter((group) => group.length);
+  const groups = disjointLineGroups(ed.selections.map(selectedLines));
   if (!groups.length || !groups.flat().every((line) => body.has(line))) {
     return vscode.commands.executeCommand("editor.action.commentLine");
   }
