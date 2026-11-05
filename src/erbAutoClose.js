@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { settings } from "./workspace.js";
+import { log } from "./client.js";
 import { isErb } from "./languages.js";
 
 // Part of the user's typing, so undo takes it back together with the `>`.
@@ -56,7 +57,9 @@ async function afterTyping(e) {
  */
 function registerErbAutoClose(context) {
   context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument(afterTyping),
+    vscode.workspace.onDidChangeTextDocument((e) =>
+      afterTyping(e).catch((err) => log(`auto-close: ${err?.message ?? err}`)),
+    ),
   );
 }
 

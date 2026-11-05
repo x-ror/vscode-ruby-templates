@@ -155,7 +155,7 @@ async function doStart(context) {
       `Ruby Templates language server failed to start (${command}). ` +
       "Install the package built for your platform, build the server from the repository with `bun run build:server`, or set rubyTemplates.server.path.";
     log(`${msg}\n${e?.message || e}`);
-    void offerHelp(msg);
+    offerHelp(msg).catch((err) => log(`opening help: ${err?.message ?? err}`));
   }
 }
 
@@ -167,7 +167,7 @@ async function offerHelp(msg) {
     "Show log",
   );
   if (pick === "Open settings")
-    vscode.commands.executeCommand(
+    await vscode.commands.executeCommand(
       "workbench.action.openSettings",
       `${SECTION}.server`,
     );
@@ -306,6 +306,7 @@ function registerServer(context) {
 
 export {
   registerServer,
+  log,
   serverFormatEdits,
   stopClient,
   onServerStarted,

@@ -2,6 +2,7 @@
 import * as vscode from "vscode";
 import path from "path";
 
+import { log } from "./client.js";
 import {
   settings,
   commandPath,
@@ -120,7 +121,8 @@ async function openPreview() {
 function refreshPreviewOnSave(doc) {
   if (!previewPanel || !previewUri) return;
   if (!settings().get("preview.refreshOnSave", true)) return;
-  if (doc.uri.toString() === previewUri) renderPreview(doc);
+  if (doc.uri.toString() === previewUri)
+    renderPreview(doc).catch((e) => log(`preview: ${e?.message ?? e}`));
 }
 
 async function renderPreview(doc) {
