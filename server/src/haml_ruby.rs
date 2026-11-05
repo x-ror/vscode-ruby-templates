@@ -1,8 +1,9 @@
 //! Ruby syntax errors in a Haml template: the Ruby `Haml::Engine` generates for it as Rails compiles it, parsed by Prism.
 
 use crate::generated_ruby::Compiled;
-use crate::haml_parser::{Chunk, Parsed, Piece, BOM};
+use crate::haml_parser::{Chunk, Parsed, Piece};
 use crate::strict_locals::{self, Comment};
+use crate::util::BOM;
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// The method Rails compiles a template into, up to its parameters.

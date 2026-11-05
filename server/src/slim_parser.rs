@@ -6,7 +6,6 @@ use crate::ruby::comment_before;
 use std::borrow::Cow;
 use std::ops::Range;
 
-pub const BOM: &str = "\u{feff}";
 /// Slim::Parser default `tabsize`.
 const TABSIZE: usize = 4;
 const DEFAULT_TAG: &str = "div";
@@ -180,7 +179,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
     let mut starts = Vec::new();
     let mut lines = Vec::new();
     // Slim drops a byte order mark before parsing.
-    let mut start = if text.starts_with(BOM) { BOM.len() } else { 0 };
+    let mut start = if text.starts_with(crate::util::BOM) { crate::util::BOM.len_utf8() } else { 0 };
     for line in text[start..].split('\n') {
         starts.push(start);
         start += line.len() + 1;

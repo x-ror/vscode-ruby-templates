@@ -8,7 +8,6 @@ use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::LazyLock;
 
-pub const BOM: char = '\u{feff}';
 const AT_START: &str = "Indenting at the beginning of the document is illegal.";
 const UNBALANCED: &str = "Unbalanced brackets.";
 const ILLEGAL_ELEMENT: &str = "Illegal element: classes and ids must have values.";
@@ -265,7 +264,7 @@ pub fn parse_with_ruby(text: &str) -> Parsed {
 }
 
 fn parse_as(text: &str, ruby: bool) -> Parsed {
-    let mut parser = Parser::new(text.strip_prefix(BOM).unwrap_or(text), ruby);
+    let mut parser = Parser::new(text.strip_prefix(crate::util::BOM).unwrap_or(text), ruby);
     let error = match parser.run() {
         Err(Halt::Error(error)) => Some(error),
         Err(Halt::Done) => {

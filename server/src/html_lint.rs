@@ -90,7 +90,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let spans = erb::code_spans(text);
     let tags = start_tags(text, &regions);
     let index = LineIndex::new(text);
-    let range = |start: usize, end: usize| Range::new(index.position(start), index.position(end));
+    let range = |start: usize, end: usize| index.range(start, end);
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
         let tag_range = range(tag.start, tag.start + 4);

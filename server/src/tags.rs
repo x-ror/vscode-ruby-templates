@@ -535,7 +535,7 @@ fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec
 fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
     let Some(tokens) = tokens else { return };
     let index = LineIndex::new(text);
-    let range = |start, end| Range::new(index.position(start), index.position(end));
+    let range = |start, end| index.range(start, end);
     let mut stack: Vec<Tag> = Vec::new();
     // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
     let mut optional: Vec<Tag> = Vec::new();

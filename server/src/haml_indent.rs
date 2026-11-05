@@ -130,7 +130,7 @@ fn void_content_diagnostic(lines: &[&str], void: &haml_parser::VoidContent) -> D
 /// The first error Haml's parser raises: indentation errors are shown over the indentation, the others over the line.
 fn parse_error_diagnostic(lines: &[&str], parse_error: &haml_parser::Error) -> Diagnostic {
     let raw = lines.get(parse_error.line).copied().unwrap_or("");
-    let body = raw.strip_prefix(haml_parser::BOM).filter(|_| parse_error.line == 0).unwrap_or(raw);
+    let body = raw.strip_prefix(crate::util::BOM).filter(|_| parse_error.line == 0).unwrap_or(raw);
     let indent = leading_ws(body).len();
     let bom_len = raw.len() - body.len();
     let (code, start, end) = match parse_error.message.as_str() {

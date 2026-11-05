@@ -102,7 +102,7 @@ impl Compiled {
         // Runs are pushed in source order: the first that ends at or after `start` is the first that holds it.
         let run = self.verbatim.get(self.verbatim.partition_point(|&(_, to, _)| to < start)).filter(|&&(from, _, _)| from <= start);
         if let Some(&(from, to, at)) = run {
-            return Range::new(index.position(at + start - from), index.position(at + end.min(to) - from));
+            return index.range(at + start - from, at + end.min(to) - from);
         }
         let generated_line = generated.start.line as usize;
         let mut line = self.line_of.get(generated_line).copied().flatten();

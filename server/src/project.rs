@@ -281,7 +281,7 @@ const PRISM_GRAMMARS: [(&str, ruby_prism::Version); 4] = [
 
 /// The version a `.ruby-version` file names: `3.3.6` or `ruby-3.3.6`, on its first line that isn't blank or a comment.
 fn ruby_version_file_version(text: &str) -> Option<Version> {
-    let line = text.trim_start_matches('\u{feff}').lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with('#'))?;
+    let line = text.trim_start_matches(crate::util::BOM).lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with('#'))?;
     let name = line.split_whitespace().next()?;
     ruby_release(name.strip_prefix("ruby-").unwrap_or(name))
 }

@@ -5,6 +5,8 @@ use tower_lsp_server::ls_types::{
     Uri,
 };
 
+pub const BOM: char = '\u{feff}';
+
 /// `path` with `/` separators on every platform, the form render names and Rails paths take.
 pub fn slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
@@ -43,6 +45,11 @@ impl<'a> LineIndex<'a> {
         let offset = char_floor(self.text, offset);
         let line = self.starts.partition_point(|&s| s <= offset) - 1;
         column_position(self.text, line, self.starts[line], offset)
+    }
+
+    /// The LSP range of the byte span `start..end`.
+    pub fn range(&self, start: usize, end: usize) -> Range {
+        Range::new(self.position(start), self.position(end))
     }
 
     /// Line `n` as `str::lines` gives it; empty past the end.

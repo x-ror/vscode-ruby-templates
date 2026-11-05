@@ -23,7 +23,7 @@ pub(crate) fn errors_and_def_parameters(source: &str, version: ruby_prism::Versi
         .errors()
         .map(|error| {
             let location = error.location();
-            let range = Range::new(index.position(location.start() as usize), index.position(location.end() as usize));
+            let range = index.range(location.start() as usize, location.end() as usize);
             RubyError {
                 message: String::from_utf8_lossy(error.message()).into_owned(),
                 range,

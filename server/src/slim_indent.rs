@@ -1,7 +1,8 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::slim_parser::{self, Piece, BOM, VOID_ELEMENTS};
+use crate::slim_parser::{self, Piece, VOID_ELEMENTS};
 use crate::slim_ruby;
+use crate::util::BOM;
 use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
 use tower_lsp_server::ls_types::Diagnostic;
 
@@ -50,7 +51,7 @@ pub fn diagnostics(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     };
     // Slim drops the byte order mark, but the editor still counts it on the first line.
     let mut out = check_structure(body, extra_engines, ruby);
-    let bom_units = BOM.encode_utf16().count() as u32;
+    let bom_units = BOM.len_utf16() as u32;
     for position in out.iter_mut().flat_map(|d| [&mut d.range.start, &mut d.range.end]).filter(|p| p.line == 0) {
         position.character += bom_units;
     }

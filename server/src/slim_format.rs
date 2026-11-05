@@ -2,7 +2,8 @@
 //! `tab_size` spaces per nesting level, text and engine blocks and continuations move with their
 //! owner line, trailing whitespace goes where Slim ignores it, and blank lines at the end become one line ending.
 
-use crate::slim_parser::{indent_width, parse, Role, BOM};
+use crate::slim_parser::{indent_width, parse, Role};
+use crate::util::BOM;
 
 /// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0).
 pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<String> {

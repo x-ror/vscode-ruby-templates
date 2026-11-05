@@ -8,7 +8,7 @@ use crate::tags;
 use crate::util::{find_balanced, leading_ws, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;
-use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, Range, SymbolKind};
+use tower_lsp_server::ls_types::{DocumentSymbol, FoldingRange, FoldingRangeKind, SymbolKind};
 
 // `folding.markers` from language-configuration/erb.json; VS Code stops applying them once a provider answers.
 static REGION_START: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*<!--\s*#region\b.*-->|^\s*<%#\s*region\b").unwrap());
@@ -312,7 +312,7 @@ pub(crate) fn symbol(
     range: (usize, usize),
     selection: (usize, usize),
 ) -> DocumentSymbol {
-    let to_range = |(start, end)| Range::new(index.position(start), index.position(end));
+    let to_range = |(start, end)| index.range(start, end);
     #[allow(deprecated)]
     DocumentSymbol {
         name,
@@ -354,7 +354,7 @@ fn close_innermost(stack: &mut Vec<(usize, DocumentSymbol)>, roots: &mut Vec<Doc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tower_lsp_server::ls_types::Position;
+    use tower_lsp_server::ls_types::{Position, Range};
 
     fn folds(text: &str) -> Vec<(u32, u32, Option<FoldingRangeKind>)> {
         let mut f: Vec<_> = folding_ranges(text).into_iter().map(|r| (r.start_line, r.end_line, r.kind)).collect();

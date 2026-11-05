@@ -2,7 +2,8 @@
 //! level, filter and `-#` bodies move as a block, continuation lines move with their line, and trailing whitespace
 //! goes where Haml ignores it. Empty lines at the end become one line ending.
 
-use crate::haml_parser::{lines_with_endings, parse, Role, BOM};
+use crate::haml_parser::{lines_with_endings, parse, Role};
+use crate::util::BOM;
 
 const BLANK_SPACE: [char; 2] = [' ', '\t'];
 

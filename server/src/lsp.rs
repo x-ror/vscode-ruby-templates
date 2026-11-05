@@ -264,7 +264,7 @@ fn spacing_actions(uri: &Uri, text: &str, range: Range, only: Option<&[CodeActio
     };
     let edits = erb::spacing_edits(text);
     let index = util::LineIndex::new(text);
-    let to_edit = |(s, e, tag): &(usize, usize, String)| TextEdit::new(Range::new(index.position(*s), index.position(*e)), tag.clone());
+    let to_edit = |(s, e, tag): &(usize, usize, String)| TextEdit::new(index.range(*s, *e), tag.clone());
     let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
         CodeActionOrCommand::CodeAction(CodeAction {
             title: title.into(),
@@ -526,7 +526,7 @@ impl Backend {
         };
         let Some(found) = found.filter(|found| found.parameter || !strict_local()) else { return Ok(None) };
         let index = util::LineIndex::new(text);
-        Ok(Some(Range::new(index.position(found.start), index.position(found.end))))
+        Ok(Some(index.range(found.start, found.end)))
     }
 
     /// `local_passes` counted, from the `local_callers` cache.
@@ -620,14 +620,14 @@ impl Backend {
         uses.extend(code_context::local_uses(doc.lang, &doc.text, close, name, &self.options().extra_engines).spans);
         let &(start, end) = declaration.iter().chain(&uses).find(|&&(start, _)| start == at)?;
         let index = util::LineIndex::new(&doc.text);
-        Some(StrictLocal { name: name.to_string(), range: Range::new(index.position(start), index.position(end)), declaration, uses })
+        Some(StrictLocal { name: name.to_string(), range: index.range(start, end), declaration, uses })
     }
 
     /// Where the partial `path` (text `text`) declares and uses `local`, then the `render` calls passing it.
     async fn local_references(&self, path: &Path, text: &str, local: &StrictLocal, declaration: bool) -> Result<Vec<Location>> {
         let Some(uri) = crate::util::file_uri(path) else { return Ok(vec![]) };
         let index = util::LineIndex::new(text);
-        let span = |(start, end): (usize, usize)| Location::new(uri.clone(), Range::new(index.position(start), index.position(end)));
+        let span = |(start, end): (usize, usize)| Location::new(uri.clone(), index.range(start, end));
         let declared = local.declaration.filter(|_| declaration);
         let mut out: Vec<Location> = declared.into_iter().chain(local.uses.iter().copied()).map(span).collect();
         out.extend(self.local_passes(self.project_for(path), path, &local.name).await?);
@@ -1324,7 +1324,7 @@ impl LanguageServer for Backend {
             return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
         }
         let index = util::LineIndex::new(&doc.text);
-        let edit = |start: usize, end: usize, text: String| TextEdit::new(Range::new(index.position(start), index.position(end)), text);
+        let edit = |start: usize, end: usize, text: String| TextEdit::new(index.range(start, end), text);
         let name = &local.name;
         let mut here: Vec<TextEdit> = local.declaration.map(|(start, end)| edit(start, end, new.clone())).into_iter().collect();
         for &(start, end) in &local.uses {
@@ -1404,7 +1404,7 @@ impl LanguageServer for Backend {
         };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
         let index = util::LineIndex::new(&doc.text);
-        let to_range = |(s, e)| Range::new(index.position(s), index.position(e));
+        let to_range = |(s, e)| index.range(s, e);
         Ok(tags::linked_names(&doc.text, offset)
             .map(|names| LinkedEditingRanges { ranges: names.map(to_range).to_vec(), word_pattern: None }))
     }

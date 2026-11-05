@@ -18,7 +18,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use tower_lsp_server::ls_types::{Location, Range, TextEdit, Uri};
+use tower_lsp_server::ls_types::{Location, TextEdit, Uri};
 use walkdir::WalkDir;
 
 static PARTIAL_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"partial\s*(?::|=>)\s*["']$"#).unwrap());
@@ -215,7 +215,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
         .filter(|(_, _, r, _)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)))
         .map(|(start, end, ..)| (start, end));
         for (start, end) in named.chain(models) {
-            let range = Range::new(index.position(start), index.position(end));
+            let range = index.range(start, end);
             out.push(Location::new(uri.clone(), range));
         }
     }
@@ -229,7 +229,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
         .filter_map(|LocalKey { source, key, .. }| {
             let (start, end) = key?;
             let index = LineIndex::new(&source.text);
-            Some(Location::new(crate::util::file_uri(&source.path)?, Range::new(index.position(start), index.position(end))))
+            Some(Location::new(crate::util::file_uri(&source.path)?, index.range(start, end)))
         })
         .collect()
 }
@@ -249,14 +249,14 @@ pub fn local_key_edits(
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         let Some((start, end)) = key else {
-            unread.push(Location::new(uri, Range::new(index.position(call), index.position(call))));
+            unread.push(Location::new(uri, index.range(call, call)));
             continue;
         };
         let (end, text) = match ruby::omits_value(&source.text[end..]) {
             true => (end + 1, format!("{new}: {local}")),
             false => (end, new.to_string()),
         };
-        edits.push((uri, TextEdit::new(Range::new(index.position(start), index.position(end)), text)));
+        edits.push((uri, TextEdit::new(index.range(start, end), text)));
     }
     (edits, unread)
 }
@@ -310,7 +310,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
             .into_iter()
             .filter(|(_, _, r, _)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
-            let range = Range::new(index.position(start), index.position(end));
+            let range = index.range(start, end);
             out.push(Location::new(uri.clone(), range));
         }
     }
@@ -401,7 +401,7 @@ pub fn render_edits(
             let Some(name) = names.first().filter(|n| **n != r.name && names.iter().all(|m| m == *n)) else {
                 continue;
             };
-            let range = Range::new(index.position(start), index.position(end));
+            let range = index.range(start, end);
             edits.push(TextEdit::new(range, name.clone()));
         }
         if let (false, Some(uri)) = (edits.is_empty(), crate::util::file_uri(&source.path)) {
