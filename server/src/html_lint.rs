@@ -38,7 +38,7 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
             out.push((i, end));
             at = end;
         } else if rest.starts_with("<!--") {
-            let end = till("-->", i + 4);
+            let end = till("-->", i + "<!--".len());
             out.push((i, end));
             at = end;
         } else if let Some(name) = RAW_TEXT.iter().find(|n| rest.get(1..=n.len()).is_some_and(|r| r.eq_ignore_ascii_case(n))) {
