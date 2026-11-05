@@ -40,6 +40,9 @@ fs.writeFileSync(
   path.join(views, "strict", "_pick.json.erb"),
   "<%# locals: (json_key:) %>\n",
 );
+for (const name of ["_dual.html.erb", "_dual.html+phone.erb"]) {
+  fs.writeFileSync(path.join(views, "strict", name), "<%# locals: (u:) %>\n");
+}
 fs.writeFileSync(
   path.join(views, "strict", "list.html.erb"),
   '<%= render "strict/row", a: 1 %>\n',
@@ -942,8 +945,10 @@ const check = (label, actual, expected) => {
     return result
       .filter((a) => a.kind === "quickfix")
       .map((a) => {
-        const [[target, [e]]] = Object.entries(a.edit.changes);
-        return `${a.title} | ${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.line === e.range.start.line ? "" : `${e.range.end.line}:`}${e.range.end.character} "${e.newText}"`;
+        const edits = Object.entries(a.edit.changes).map(([target, [e]]) => {
+          return `${rel(target)} ${e.range.start.line}:${e.range.start.character}-${e.range.end.line === e.range.start.line ? "" : `${e.range.end.line}:`}${e.range.end.character} "${e.newText}"`;
+        });
+        return `${a.title} | ${edits.sort().join(" + ")}`;
       });
   };
   const extraUri = fileUri(path.join(views, "strict", "extra.html.erb"));
@@ -986,6 +991,24 @@ const check = (label, actual, expected) => {
       'Pass `a` to the render | /app/views/strict/continued.html.erb 0:43-43 ", a: nil"',
       'Remove `c` from the render | /app/views/strict/continued.html.erb 0:39-43 ""',
       'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+    ],
+  );
+  const dualUri = fileUri(path.join(views, "strict", "dual.html.erb"));
+  const dualFixes = await strictFixes(
+    dualUri,
+    '<%= render "strict/dual", z: 1 %>\n',
+  );
+  await new Promise((r) => setTimeout(r, 400));
+  check(
+    "strict locals of two variants",
+    [diagnostics(dualUri), dualFixes],
+    [
+      ["1: missing local: :u"],
+      [
+        'Pass `u` to the render | /app/views/strict/dual.html.erb 0:30-30 ", u: nil"',
+        'Remove `z` from the render | /app/views/strict/dual.html.erb 0:24-30 ""',
+        'Declare `z` in the locals of `_dual.html.erb` and 1 other | /app/views/strict/_dual.html%2Bphone.erb 0:15-15 ", z: nil" + /app/views/strict/_dual.html.erb 0:15-15 ", z: nil"',
+      ],
     ],
   );
   check(

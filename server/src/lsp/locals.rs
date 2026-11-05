@@ -11,7 +11,7 @@ use crate::ruby::strict_locals;
 use crate::util::line_location;
 use crate::{code_context, partial_rename, ruby, util};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
@@ -119,16 +119,21 @@ impl Backend {
             return vec![];
         };
         let Some(passed) = render_refs::passed_locals(&call, &r) else { return vec![] };
+        let Some(uri) = crate::util::file_uri(path) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
-        let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
-        let (Some(uri), Some(partial_uri)) = (crate::util::file_uri(path), crate::util::file_uri(&partial)) else { return vec![] };
-        let partial_text = util::open_or_read(self.docs.get(&partial_uri).map(|doc| doc.text.clone()), &partial).unwrap_or_default();
-        let sig = project.strict_locals(&partial_text);
-        let (Some(sig), Some(comment)) = (sig, strict_locals::find(&partial_text, project.strict_locals_close())) else {
-            return vec![];
-        };
-        let missing = sig.missing(&passed);
-        let unknown = sig.unknown(&passed);
+        let mut candidates = Vec::new();
+        for partial in partials::first_folder_only(partials::resolve(project, path, &r)) {
+            let Some(partial_uri) = crate::util::file_uri(&partial) else { return vec![] };
+            let text = util::open_or_read(self.docs.get(&partial_uri).map(|doc| doc.text.clone()), &partial).unwrap_or_default();
+            let (Some(sig), Some(comment)) = (project.strict_locals(&text), strict_locals::find(&text, project.strict_locals_close()))
+            else {
+                return vec![];
+            };
+            candidates.push((partial, partial_uri, text, sig, comment));
+        }
+        let sigs: Vec<&strict_locals::Signature> = candidates.iter().map(|(.., sig, _)| sig).collect();
+        let missing = strict_locals::missing_in_all(&sigs, &passed);
+        let unknown = strict_locals::unknown_to_all(&sigs, &passed);
         let base = call.base(line_start);
         let at = |text: &str, offset: usize| util::offset_to_position(text, offset);
         let here = |(range, new): render_refs::ByteEdit| {
@@ -149,15 +154,21 @@ impl Backend {
             // Not preferred: `nil` silences the warning without passing what the partial needs.
             out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), false));
         }
-        let shown = partial.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
         for name in unknown {
             if let Some(edit) = render_refs::remove_local_edit(&call, &r, name) {
                 out.push(action(format!("Remove `{name}` from the render"), here(edit), false));
             }
-            let (range, new) = comment.declare(name, render_refs::NEW_LOCAL_VALUE);
-            let range = Range::new(at(&partial_text, range.start), at(&partial_text, range.end));
-            let changes = HashMap::from([(partial_uri.clone(), vec![TextEdit::new(range, new)])]);
-            out.push(action(format!("Declare `{name}` in the locals of `{shown}`"), changes, false));
+            // Every candidate, or the variant left alone still raises the warning.
+            let mut changes = HashMap::new();
+            for (_, partial_uri, partial_text, _, comment) in &candidates {
+                let (range, new) = comment.declare(name, render_refs::NEW_LOCAL_VALUE);
+                let range = Range::new(at(partial_text, range.start), at(partial_text, range.end));
+                changes.insert(partial_uri.clone(), vec![TextEdit::new(range, new)]);
+            }
+            let first = &candidates[0].0;
+            let shown = first.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+            let others = partials::and_others(candidates.len() - 1);
+            out.push(action(format!("Declare `{name}` in the locals of `{shown}`{others}"), changes, false));
         }
         out
     }

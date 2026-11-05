@@ -197,12 +197,18 @@ struct Partials<'a> {
 impl Partials<'_> {
     fn resolve(&mut self, r: &render_refs::RenderRef) -> &[PathBuf] {
         let (project, path) = (self.project, self.path);
-        self.resolved.entry((r.kind, r.name.clone(), r.lookup.clone())).or_insert_with(|| partials::resolve(project, path, r))
+        self.resolved
+            .entry((r.kind, r.name.clone(), r.lookup.clone()))
+            .or_insert_with(|| partials::first_folder_only(partials::resolve(project, path, r)))
     }
 
-    fn signature(&mut self, file: &Path) -> Option<&strict_locals::Signature> {
+    /// The signatures of `files`; none when a file has no `locals:` comment, so takes any local.
+    fn signatures(&mut self, files: &[PathBuf]) -> Option<Vec<&strict_locals::Signature>> {
         let project = self.project;
-        self.signatures.entry(file.to_path_buf()).or_insert_with(|| project.file_strict_locals(file)).as_ref()
+        for file in files {
+            self.signatures.entry(file.clone()).or_insert_with(|| project.file_strict_locals(file));
+        }
+        files.iter().map(|file| self.signatures[file].as_ref()).collect()
     }
 }
 
@@ -253,16 +259,19 @@ fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partia
     // A partial's layout gets the partial's locals, which this check can't see.
     for (i, line, call, r) in renders.iter().filter(|(.., r)| !r.from_layout) {
         let Some(passed) = render_refs::passed_locals(call, r) else { continue };
-        // Several variants/formats: which one Rails picks depends on the request.
-        let [file] = partials.resolve(r) else { continue };
-        let file = file.clone();
-        let Some(sig) = partials.signature(&file) else { continue };
-        let Some(mut message) = strict_locals_message(&sig.missing(&passed), &sig.unknown(&passed), sig.takes_no_locals()) else {
+        // Several variants/formats: which one Rails picks depends on the request, so only what fails in all of them counts.
+        let files = partials.resolve(r).to_vec();
+        let Some(first) = files.first() else { continue };
+        let Some(sigs) = partials.signatures(&files) else { continue };
+        let no_locals = sigs.iter().all(|sig| sig.takes_no_locals());
+        let missing = strict_locals::missing_in_all(&sigs, &passed);
+        let Some(mut message) = strict_locals_message(&missing, &strict_locals::unknown_to_all(&sigs, &passed), no_locals) else {
             continue;
         };
         if suffix_with_template {
             // Rails prints the absolute path; relative to the app folder is stable and readable.
-            message.push_str(&format!(" for {}", paths::rails_relative(&file, &file)));
+            message.push_str(&format!(" for {}", paths::rails_relative(first, first)));
+            message.push_str(&partials::and_others(files.len() - 1));
         }
         out.push(util::coded(util::warning(util::span_range(*i, line, r.start, r.end), message), STRICT_LOCALS));
     }
@@ -1225,6 +1234,76 @@ mod tests {
         // `formats:` passes no locals; `object:` passes the partial's own, which the check can't see.
         let options_missing = ("missing local: :user".to_string(), at(9, 21, 31));
         assert_eq!(got, vec![missing(1), missing(7), options_missing]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_of_several_candidates_flag_what_fails_in_all() {
+        let root = std::env::temp_dir().join(format!("rt-locals-variants-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        let write = |name: &str, locals: &str| std::fs::write(users.join(name), locals).unwrap();
+        write("_both.html.erb", "<%# locals: (user:) -%>");
+        write("_both.html+phone.erb", "<%# locals: (user:) -%>");
+        write("_default.html.erb", "<%# locals: (user:) -%>");
+        write("_default.html+phone.erb", "<%# locals: (user: nil) -%>");
+        write("_bare.html.erb", "<%# locals: (user:) -%>");
+        write("_bare.html+phone.erb", "<p>any</p>");
+        write("_rest.html.erb", "<%# locals: (a:) -%>");
+        write("_rest.html+phone.erb", "<%# locals: (b:, **rest) -%>");
+        write("_two.html.erb", "<%# locals: (a:) -%>");
+        write("_two.html.haml", "-# locals: (b: 1)\n");
+        write("_three.html.erb", "<%# locals: (user:) -%>");
+        write("_three.html+phone.erb", "<%# locals: (user:) -%>");
+        write("_three.html+tablet.erb", "<%# locals: (user:) -%>");
+        let file = users.join("index.html.erb");
+        let messages = |actionview: &str, render: &str| -> Vec<String> {
+            let text = format!("<%= {render} %>\n");
+            let found = render_checks(TemplateLang::Erb, &file, &lock_with(actionview), &text, STRICT_LOCALS);
+            found.into_iter().map(|d| d.message).collect()
+        };
+        assert_eq!(messages("8.0.1", r#"render "users/both""#), ["missing local: :user for app/views/users/_both.html.erb and 1 other"]);
+        assert_eq!(messages("7.1.5", r#"render "users/both""#), ["missing local: :user"]);
+        assert_eq!(messages("8.0.1", r#"render "users/three""#), ["missing local: :user for app/views/users/_three.html.erb and 2 others"]);
+        assert!(messages("8.0.1", r#"render "users/default""#).is_empty(), "optional in one");
+        assert!(messages("8.0.1", r#"render "users/bare""#).is_empty(), "one takes any local");
+        assert_eq!(messages("7.1.5", r#"render "users/two", z: 1, a: 1"#), ["unknown local: :z"]);
+        assert!(messages("7.1.5", r#"render "users/two", a: 1, b: 2"#).is_empty(), "each key known to one");
+        assert!(messages("7.1.5", r#"render "users/rest", a: 1, b: 2, c: 3"#).is_empty(), "one takes the rest");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn strict_locals_candidates_stop_at_the_first_folder_and_mix_no_locals_with_locals() {
+        let root = std::env::temp_dir().join(format!("rt-locals-shadow-{}", std::process::id()));
+        let views = root.join("app/views");
+        std::fs::create_dir_all(views.join("users")).unwrap();
+        std::fs::create_dir_all(views.join("application")).unwrap();
+        std::fs::create_dir_all(root.join("app/controllers")).unwrap();
+        std::fs::write(
+            root.join("app/controllers/application_controller.rb"),
+            "class ApplicationController < ActionController::Base\nend\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("app/controllers/users_controller.rb"), "class UsersController < ApplicationController\nend\n").unwrap();
+        std::fs::write(views.join("users/_card.html.erb"), "<%# locals: (user:) -%>").unwrap();
+        std::fs::write(views.join("application/_card.html.erb"), "<%# locals: (title: nil) -%>").unwrap();
+        std::fs::write(views.join("users/_mixed.html.erb"), "<%# locals: () -%>").unwrap();
+        std::fs::write(views.join("users/_mixed.html+phone.erb"), "<%# locals: (a:) -%>").unwrap();
+        std::fs::write(views.join("users/_none.html.erb"), "<%# locals: () -%>").unwrap();
+        std::fs::write(views.join("users/_none.html+phone.erb"), "<%# locals: () -%>").unwrap();
+        let file = views.join("users/index.html.erb");
+        let messages = |render: &str| -> Vec<String> {
+            let text = format!("<%= {render} %>\n");
+            let found = render_checks(TemplateLang::Erb, &file, &lock_with("8.0.1"), &text, STRICT_LOCALS);
+            found.into_iter().map(|d| d.message).collect()
+        };
+        assert_eq!(messages(r#"render "card""#), ["missing local: :user for app/views/users/_card.html.erb"]);
+        let missing_user = ["missing local: :user for app/views/users/_card.html.erb"];
+        assert_eq!(messages(r#"render "card", title: 1"#), missing_user, "missing wins; :title is unknown to users/_card");
+        assert_eq!(messages(r#"render "card", user: 1, title: 1"#), ["unknown local: :title for app/views/users/_card.html.erb"]);
+        assert_eq!(messages(r#"render "users/mixed", x: 1"#), ["unknown local: :x for app/views/users/_mixed.html.erb and 1 other"]);
+        assert_eq!(messages(r#"render "users/none", x: 1"#), ["no locals accepted for app/views/users/_none.html.erb and 1 other"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

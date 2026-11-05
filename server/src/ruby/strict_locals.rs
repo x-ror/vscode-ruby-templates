@@ -134,6 +134,22 @@ impl Signature {
     }
 }
 
+/// The required locals `passed` leaves out of every one of `candidates`, the templates a render may pick from.
+pub fn missing_in_all<'a>(candidates: &[&'a Signature], passed: &[&str]) -> Vec<&'a str> {
+    let Some((first, others)) = candidates.split_first() else { return vec![] };
+    let mut missing = first.missing(passed);
+    missing.retain(|name| others.iter().all(|sig| sig.missing(passed).contains(name)));
+    missing
+}
+
+/// The locals in `passed` that none of `candidates` takes.
+pub fn unknown_to_all<'a>(candidates: &[&Signature], passed: &[&'a str]) -> Vec<&'a str> {
+    let Some((first, others)) = candidates.split_first() else { return vec![] };
+    let mut unknown = first.unknown(passed);
+    unknown.retain(|name| others.iter().all(|sig| !sig.rest && !sig.declares(name)));
+    unknown
+}
+
 /// The signature of `text`'s `locals:` comment, if it has one Prism parses.
 pub fn signature(text: &str, close: Close, ruby: ruby_prism::Version) -> Option<Signature> {
     let comment = find(text, close)?;
