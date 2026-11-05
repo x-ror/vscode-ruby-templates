@@ -631,7 +631,7 @@ impl LanguageServer for Backend {
             locations.extend(declarations);
             return Ok(Some(locations));
         }
-        let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         if let Some(local) = self.strict_local_at(&uri, &doc, pos) {
             return Ok(Some(self.local_references(&path, &doc.text, &local, declaration).await?));
         }
