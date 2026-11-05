@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - Bare-name render checks (`render "post"`) are also skipped when a module the controller includes (found by Zeitwerk naming in `app/*`, `app/*/concerns` or `lib`, and the modules it includes) mentions `prepend_view_path`, `_prefixes` or another lookup change, or when an installed gem has `app/views/<controller folder>` (or its gems aren't installed), so they no longer warn where Rails finds the view elsewhere.
 - `.editorconfig` sections follow the EditorConfig core tests: a glob without `/` matches in any folder, `/**/` also matches one `/` (`[app/**/*.erb]` applies to `app/x.erb`), unmatched or escaped brackets and braces are literal instead of disabling the section, and numeric ranges don't match leading zeros. A range inside an untaken brace branch no longer crashes the formatter.
