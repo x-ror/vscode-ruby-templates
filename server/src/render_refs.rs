@@ -1076,9 +1076,9 @@ mod tests {
     #[test]
     fn pathological_lines_cost_a_bounded_number_of_parses() {
         let parses = |line: &str| {
-            render_call::PARSES.with(|count| count.set(0));
+            crate::prism::PARSES.with(|count| count.set(0));
             let refs = refs_without_lookups(line).len();
-            (refs, render_call::PARSES.with(|count| count.get()))
+            (refs, crate::prism::PARSES.with(|count| count.get()))
         };
         let nested = format!("render k0: 1{}", (1..500).map(|i| format!(", k{i}: 1, layout: \"x{i}\"")).collect::<String>());
         assert!(parses(&nested).1 <= MAX_KEY_CANDIDATES, "keys of one call");
@@ -1090,12 +1090,12 @@ mod tests {
 
     #[test]
     fn nested_keys_cost_one_parse_however_many() {
-        render_call::PARSES.with(|count| count.set(0));
+        crate::prism::PARSES.with(|count| count.set(0));
         let nested = (0..5000).map(|i| format!(", layout: \"n{i}\"")).collect::<String>();
         let line = format!(r#"render formats: [:json], locals: {{ a: 1{nested} }}, layout: "box" do"#);
         let names: Vec<_> = refs_without_lookups(&line).into_iter().map(|r| r.name).collect();
         assert_eq!(names, ["box"]);
-        assert!(render_call::PARSES.with(|count| count.get()) <= 2);
+        assert!(crate::prism::PARSES.with(|count| count.get()) <= 2);
     }
 
     #[test]
@@ -2054,9 +2054,9 @@ mod tests {
         let text = format!("{markup}= render \"a\", x: \"open, |\n{}", "  y: 2,\n".repeat(25));
         let offset = text.find('|').unwrap();
         let text = text.replace('|', "");
-        let before = render_call::PARSES.with(|parses| parses.get());
+        let before = crate::prism::PARSES.with(|parses| parses.get());
         local_key_before(&text, offset, TemplateLang::Erb, || LATEST);
-        let parses = render_call::PARSES.with(|parses| parses.get()) - before;
+        let parses = crate::prism::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 100, "{parses} parses for one keystroke");
     }
 
@@ -2067,9 +2067,9 @@ mod tests {
             let text = format!("<%= render \"card\", a: 1, |{after_cursor}{}", "\n".repeat(1000));
             let offset = text.find('|').unwrap();
             let text = text.replace('|', "");
-            let before = render_call::PARSES.with(|parses| parses.get());
+            let before = crate::prism::PARSES.with(|parses| parses.get());
             let (_, names, _) = local_key_before(&text, offset, TemplateLang::Erb, || LATEST).unwrap();
-            (names, render_call::PARSES.with(|parses| parses.get()) - before)
+            (names, crate::prism::PARSES.with(|parses| parses.get()) - before)
         };
         let blank_lines = "\n".repeat(19);
         let (names, parses) = names_and_parses(&format!("{blank_lines}last: 2\n, past: 3"));
@@ -2083,18 +2083,18 @@ mod tests {
     #[test]
     fn half_typed_local_key_costs_few_parses() {
         let line = r#"<%= render "card", a: 1, b: 2, c , d: 3 %>"#;
-        let before = render_call::PARSES.with(|parses| parses.get());
+        let before = crate::prism::PARSES.with(|parses| parses.get());
         local_key_before(line, line.find(" ,").unwrap(), TemplateLang::Erb, || LATEST).unwrap();
-        let parses = render_call::PARSES.with(|parses| parses.get()) - before;
+        let parses = crate::prism::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 6, "{parses} parses for one keystroke");
     }
 
     #[test]
     fn plain_renders_and_invalid_calls_cost_few_parses() {
         let parses = |run: &dyn Fn()| {
-            render_call::PARSES.with(|count| count.set(0));
+            crate::prism::PARSES.with(|count| count.set(0));
             run();
-            render_call::PARSES.with(|count| count.get())
+            crate::prism::PARSES.with(|count| count.get())
         };
         assert_eq!(parses(&|| drop(render_refs(r#"<%= render "card", user: u %>"#))), 0, "no lookup options to read");
         let invalid = format!("= render \"card\", a: (1,), b: 2\n{}", "%p x\n".repeat(19));
@@ -2105,27 +2105,27 @@ mod tests {
     #[test]
     fn locals_and_edits_reuse_the_call_read_with_the_refs() {
         let text = "<%= render \"card\", a: 1, b: 2 %>\n";
-        let before = render_call::PARSES.with(|parses| parses.get());
+        let before = crate::prism::PARSES.with(|parses| parses.get());
         let (r, call) =
             render_calls_in(text, 0, text.lines().next().unwrap(), &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert!(add_locals_edit(&call, &r, &["c"]).is_some());
         assert!(remove_local_edit(&call, &r, "a").is_some());
         assert!(local_key_span(&call, "b").is_some());
-        assert_eq!(render_call::PARSES.with(|parses| parses.get()) - before, 1, "one Prism read for the render");
+        assert_eq!(crate::prism::PARSES.with(|parses| parses.get()) - before, 1, "one Prism read for the render");
     }
 
     #[test]
     fn checking_a_long_file_of_unclosed_renders_stays_fast() {
         let text = "<%= render \"card\", a: (\n".repeat(2000);
         let lines = text.lines().count();
-        let before = render_call::PARSES.with(|parses| parses.get());
+        let before = crate::prism::PARSES.with(|parses| parses.get());
         let mut line_start = 0;
         for line in text.lines() {
             render_calls_in(&text, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true);
             line_start += line.len() + 1;
         }
-        let parses = render_call::PARSES.with(|parses| parses.get()) - before;
+        let parses = crate::prism::PARSES.with(|parses| parses.get()) - before;
         // A call is read from at most MAX_CALL_LINES lines; each is parsed, then with each of two closers (and the call alone).
         assert!(parses <= lines * MAX_CALL_LINES * 4, "{parses} parses for {lines} lines");
     }

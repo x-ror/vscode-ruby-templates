@@ -409,7 +409,6 @@ pub fn render_edits(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render_call;
     use tower_lsp_server::ls_types::Position;
 
     struct Tree(PathBuf);
@@ -836,10 +835,10 @@ mod tests {
         let text = "<%= render \"card\", user: u %>\n".repeat(renders);
         let sources = [t.source("app/views/users/index.html.erb", ERB, &text)];
         let card = t.path("app/views/users/_card.html.erb");
-        render_call::PARSES.with(|parses| parses.set(0));
+        crate::prism::PARSES.with(|parses| parses.set(0));
         let (edits, _) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
         assert_eq!(edits.len(), renders);
-        assert_eq!(render_call::PARSES.with(|parses| parses.get()), renders);
+        assert_eq!(crate::prism::PARSES.with(|parses| parses.get()), renders);
     }
 
     #[test]

@@ -130,10 +130,16 @@ pub(crate) fn keyword_parameters(parameters: &str, version: ruby_prism::Version)
     Some((locals, rest))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has run Prism, for tests that bound the work.
+    pub static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether `arguments`, the text of a call's arguments, is balanced and stays inside one statement (no top-level `;`).
 pub(crate) fn is_one_statement(arguments: &str) -> bool {
     #[cfg(test)]
-    crate::render_call::PARSES.with(|parses| parses.set(parses.get() + 1));
+    PARSES.with(|parses| parses.set(parses.get() + 1));
     syntax_errors(&format!("[{arguments}\n]"), ruby_prism::Version::Latest).is_empty()
 }
 

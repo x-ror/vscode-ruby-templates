@@ -224,12 +224,6 @@ fn is_method_chain(line: &str) -> bool {
     line.starts_with("&.") || (line.starts_with('.') && !line.starts_with(".."))
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How many times this thread has run Prism, for tests that bound the work.
-    pub static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
 /// A block whose closer lies in a later template tag is closed here so the call parses.
 const BLOCK_CLOSERS: [&str; 2] = ["\nend", "\n}"];
 
@@ -262,7 +256,7 @@ enum Failure {
 
 fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str, ruby: Version) -> Result<Found<'a>, Failure> {
     #[cfg(test)]
-    PARSES.with(|parses| parses.set(parses.get() + 1));
+    crate::prism::PARSES.with(|parses| parses.set(parses.get() + 1));
     let options = Options::default().version(ruby).build();
     let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
     // An error in the last token (`x ?`, `a +`) is Prism's complaint about a missing operand, not about the code before it;
@@ -289,7 +283,7 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str, ruby: 
     }
     // The code around the call (`f(render("x"), 1)`) is its own business: the call alone must be valid Ruby.
     #[cfg(test)]
-    PARSES.with(|parses| parses.set(parses.get() + 1));
+    crate::prism::PARSES.with(|parses| parses.set(parses.get() + 1));
     let alone = ruby_prism::parse_with_options(&source.as_bytes()[..found.node_end], &options);
     if alone.errors().next().is_some() {
         return Err(Failure::Invalid);
