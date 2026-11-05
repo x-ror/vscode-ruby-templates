@@ -240,7 +240,7 @@ pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 /// Byte index in `line` of UTF-16 column `character`, clamped to the line's end.
-pub fn byte_col(line: &str, character: u32) -> usize {
+fn byte_col(line: &str, character: u32) -> usize {
     let mut units = 0u32;
     for (idx, ch) in line.char_indices() {
         if units >= character {

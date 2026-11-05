@@ -47,7 +47,7 @@ pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)>
 }
 
 /// `users/_form.html.erb` → `users.form`, like ActionView's `@virtual_path.gsub(%r{/_?}, ".")`.
-pub fn lazy_scope(project: &Project, current: &Path) -> Option<String> {
+fn lazy_scope(project: &Project, current: &Path) -> Option<String> {
     let rel = view_relative(current)?;
     let stem = template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?);
     let virtual_path = slash_path(&rel.with_file_name(stem));
