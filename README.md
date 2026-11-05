@@ -161,14 +161,85 @@ Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, In
 | `rubyTemplates.commands.*`                                        |                            | Paths of the Ruby tools used by preview and converters             |
 | `rubyTemplates.server.enabled` / `server.path`                    | `true` / bundled           | Run the language server, or use your own build                     |
 
+## Supported syntax
+
+What the grammars highlight and what the server parses (the server follows Erubi as Rails configures it, Haml 7.5 and Slim 5.2).
+
+### ERB
+
+| Syntax                   | Highlighting                          | Server                                    |
+| ------------------------ | ------------------------------------- | ----------------------------------------- |
+| `<% %>`                  | Ruby                                  | Code, no output                           |
+| `<%- %>`                 | Ruby                                  | Same as `<%`                              |
+| `<%= %>`                 | Ruby                                  | Escaped output                            |
+| `<%== %>`                | Ruby                                  | Unescaped output                          |
+| `<%# %>`                 | Comment                               | Comment                                   |
+| `<%# locals: (user:) %>` | Strict locals, as Ruby                | Strict locals checks, renames, completion |
+| `-%>`, `=%>`             | Tag end                               | Tag end (`=%>` as `-%>`, as in Erubi)     |
+| `<%%`, `%%>`             | Literal `<%` / `%>`                   | Text, not a tag                           |
+| `<%_`, `_%>`             | Not special: `_` starts the Ruby code | Not special, as in Erubi (code `_ x _`)   |
+| `%` lines                | Only in `erb-percent`                 | Only in `erb-percent` (`trim_mode: "%"`)  |
+
+Trim modes: Erubi's `trim: true`, the Rails default, is what the server models, so `-` before `%>` changes nothing in the checks. `trim_mode: "%"` is the opt-in `erb-percent` language id (see [File types](#file-types)); other stdlib modes (`<>`, `>`) are not modelled.
+
+### Haml
+
+| Syntax                                                                      | Highlighting      | Server                                                          |
+| --------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| `%tag`, `.class`, `#id`, `!!!`, `/`, `-#`, `=`, `-`, `~`, `&=`, `!=`, `#{}` | yes               | Parsed as Haml 7.5.1 does, with its error messages              |
+| Attributes `{…}`, `(…)`, `[…]`                                              | yes               | Parsed; Ruby inside is checked                                  |
+| Filters `:plain` `:escaped` `:preserve` `:cdata`                            | Text              | Accepted                                                        |
+| Filters `:javascript` `:css` `:sass` `:scss` `:less` `:markdown` `:erb`     | Embedded language | Accepted                                                        |
+| Filters `:coffee` `:coffeescript`                                           | CoffeeScript      | Accepted                                                        |
+| Filter `:ruby`                                                              | Ruby              | Accepted, body checked as Ruby                                  |
+| Any other filter (Haml 5's `:maruku`, `:textile`, …)                        | Text              | `unknown-filter`                                                |
+| `succeed`, `precede`, `surround`, `preserve`, `find_and_preserve`           | Ruby              | Completion and hover (Haml 6/7 `RailsHelpers`), Haml files only |
+
+Haml 6 and 7 are targeted (Haml 7.5.1 is the reference); Haml 5 is not. Whether a filter's gem (`sass`, `coffee-script`, …) is installed isn't checked.
+
+### Slim and Skim
+
+| Syntax                                                                                                    | Highlighting                            | Server                                                              |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------- |
+| Tags, `.class`/`#id` shortcuts, `=`, `==`, `-`, `/`, `\|`, `'`, `doctype`, `#{}`                          | yes                                     | Parsed as Slim 5.2 does, with its error messages                    |
+| Attribute wrappers `(…)`, `[…]`, `{…}`, or none                                                           | yes                                     | Parsed; Ruby inside is checked                                      |
+| Engines `ruby:` `javascript:` `css:` `sass:` `scss:` `coffee:` `markdown:` `textile:` `rdoc:` `asciidoc:` | Embedded language where VS Code has one | Accepted                                                            |
+| Other engines: `erb:`, `less:`, `stylus:`, …                                                              | Highlighted                             | `unknown-engine` unless listed in `rubyTemplates.slim.extraEngines` |
+| Engines your app registers (`mjml:`)                                                                      | Text                                    | Accepted once added to `rubyTemplates.slim.extraEngines`            |
+
+`.skim` files use the Slim syntax and the `slim` settings. Slim options set per app (custom shortcuts, attribute delimiters, smart text, logic-less mode) are not read.
+
 ## Compatibility
 
 - **Ruby LSP** and this extension both register the `erb` language id and work side by side: Ruby LSP for `.rb` files, this extension for templates.
-- **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises. To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
+- **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises (see [Troubleshooting](#troubleshooting)). To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
 - **Emmet** works in ERB out of the box (`"emmet.includeLanguages": { "erb": "html" }` is a default); VS Code's Emmet expands to Slim syntax in Slim and Skim.
 - **Partials and formats**: a `dir/name` render missing from `app/views` is looked up in the app's engines, packs and components (`*/app/views`), then in the installed gems' views, for links, definition, hover and the missing-partial check; gem files are read-only (no diagnostics or rename edits); partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`, and a folder that exists nowhere (`uesrs/card`) is flagged only once every view root, gems included, is known. Gems are found in `vendor/bundle`, `BUNDLE_PATH` (env, `.bundle/config`, `~/.bundle/config`) or `GEM_HOME`/`GEM_PATH`; with Ruby elsewhere (rbenv, asdf) the check stays off.
 - **Generator templates** (`lib/templates/**/*.tt`, `lib/generators/**/templates/**`) open in their template language, without diagnostics or formatting, since the generator's own ERB is mixed in.
 - **Slim options set per app** aren't reflected in highlighting: custom shortcuts and attribute delimiters, smart text's implicit text lines, logic-less mode.
+
+## Troubleshooting
+
+### Other extensions for the same languages
+
+| Extension                                                                | Overlap                                                                    |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Ruby LSP (`Shopify.ruby-lsp`)                                            | Registers `erb`; may add its own ERB diagnostics, completion or formatting |
+| ERB formatters (e.g. `aliariff.vscode-erb-beautify`)                     | Formatter for `erb`                                                        |
+| Other ERB grammars                                                       | Grammar for `erb`                                                          |
+| Other Haml or Slim extensions (e.g. `karunamurti.haml`, `sianglim.slim`) | Grammar, snippets and often a formatter for `haml` / `slim`                |
+
+Symptoms are doubled diagnostics or completions, a formatter that asks which one to use, or different colours than the screenshots.
+
+- **Formatter**: choose ours per language with `"[erb]": { "editor.defaultFormatter": "x-ror.ruby-templates" }` (also `[haml]`, `[slim]`). To keep the other one, set `rubyTemplates.<erb|haml|slim>.format.enabled` to `false`.
+- **Grammar**: VS Code uses one grammar per language id, so only one extension's grammar applies. Disable the other extension for the workspace, or move our files to another id with `"files.associations": { "*.html.erb": "erb" }`.
+- **Diagnostics and completion**: turn off the duplicates in the other extension's settings. Ours: `rubyTemplates.<erb|haml|slim>.diagnostics.enabled` and `rubyTemplates.<erb|haml|slim|jbuilder>.disabledDiagnostics`.
+
+### Check what is active
+
+- **Language mode**: the language shown in the status bar (click it to change). This extension adds a `$(preview)` item with the template language (`ERB`, `HAML`, `SLIM`, `ERB-JS`, …) while a template is open; if it is missing, the file isn't one of ours.
+- **Grammar**: _Developer: Inspect Editor Tokens and Scopes_ on a token. Scopes ending in `.erb`, `.haml` or `.slim` (`text.html.erb`, `text.haml`, `text.slim`) are ours.
+- **Server**: the _Ruby Templates_ channel in the Output panel logs the language server, including why a format was skipped. _Ruby Templates: Restart Language Server_ restarts it. _Developer: Show Running Extensions_ lists every extension active for the window.
 
 ## Learn more
 
