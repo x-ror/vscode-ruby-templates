@@ -1506,121 +1506,152 @@ impl BraceScanner {
 
     /// The offset just past the closing `}` when this line holds it.
     fn feed(&mut self, line: &str) -> Option<usize> {
-        let chars: Vec<(usize, char)> = line.char_indices().collect();
         // A line break ends a statement, so what follows starts a value.
         if matches!(self.modes.last(), Some(Mode::Code { .. })) && self.previous.is_some_and(|ch| is_word(ch) || ")]}\"".contains(ch)) {
             self.previous = Some(';');
         }
-        let mut i = 0;
-        if let Some(&Mode::Heredoc { id, .. }) = self.modes.last() {
-            if line == self.heredoc_ids[id] {
-                self.modes.pop();
-                self.previous = Some('"');
-                return None;
-            }
-        }
-        if matches!(self.modes.last(), Some(Mode::Text { closer: '\n', .. })) {
-            self.modes.pop();
+        if self.closes_at_line_start(line) {
             self.previous = Some('"');
             return None;
         }
+        let chars: Vec<(usize, char)> = line.char_indices().collect();
+        let mut i = 0;
         let mut spaced = false;
         while i < chars.len() {
             let (at, ch) = chars[i];
             let next = chars.get(i + 1).map(|&(_, next)| next);
-            match *self.modes.last()? {
+            let mode = *self.modes.last()?;
+            i = match mode {
                 Mode::Text { closer, opener, nested, interpolates } => {
-                    i += 1;
-                    if ch == '\\' {
-                        i += 1;
-                    } else if interpolates && ch == '#' && next == Some('{') {
-                        self.modes.push(Mode::Code { braces: 0 });
-                        self.previous = Some('{');
-                        i += 1;
-                    } else if ch == closer && nested == 0 {
-                        self.modes.pop();
-                        self.previous = Some('"');
-                    } else if ch == closer {
-                        self.set_nested(nested - 1);
-                    } else if Some(ch) == opener {
-                        self.set_nested(nested + 1);
+                    if self.escape_or_interpolation(ch, next, interpolates) {
+                        i + 2
+                    } else {
+                        self.text_char(ch, closer, opener, nested);
+                        i + 1
                     }
                 }
-                Mode::Heredoc { interpolates, .. } => {
-                    i += 1;
-                    if ch == '\\' {
-                        i += 1;
-                    } else if interpolates && ch == '#' && next == Some('{') {
-                        self.modes.push(Mode::Code { braces: 0 });
-                        self.previous = Some('{');
-                        i += 1;
-                    }
-                }
+                Mode::Heredoc { interpolates, .. } => i + if self.escape_or_interpolation(ch, next, interpolates) { 2 } else { 1 },
                 Mode::Code { braces } => {
-                    i += 1;
-                    // `puts /x/` and `link_to %w(a)`: after a word and a space, a `/` or `%` that isn't followed by a space starts a literal.
-                    let after_word_and_space = spaced
-                        && self.previous.is_some_and(is_word)
-                        && !self.word.starts_with(|digit: char| digit.is_ascii_digit())
-                        && next.is_some_and(|following| !following.is_whitespace() && following != '=');
-                    let expected = self.value_expected();
-                    let literal_expected = expected || after_word_and_space;
-                    match ch {
-                        ' ' | '\t' => {}
-                        '#' => break,
-                        '"' | '`' | '\'' => {
-                            self.modes.push(Mode::Text { closer: ch, opener: None, nested: 0, interpolates: ch != '\'' });
+                    let Some(after) = self.code_char(&chars, i, braces, spaced) else {
+                        if self.modes.is_empty() {
+                            return Some(at + 1);
                         }
-                        '/' if literal_expected => {
-                            self.modes.push(Mode::Text { closer: '/', opener: None, nested: 0, interpolates: true });
-                        }
-                        '%' if literal_expected => i = self.percent_literal(&chars, i - 1),
-                        '<' if next == Some('<') => match heredoc_start(&chars, i - 1) {
-                            Some((id, interpolates, end))
-                                if literal_expected || chars[i + 1..end].iter().any(|&(_, c)| c == '~' || c == '-') =>
-                            {
-                                self.heredoc_ids.push(id);
-                                self.pending_heredocs.push(Mode::Heredoc { id: self.heredoc_ids.len() - 1, interpolates });
-                                self.previous = Some('"');
-                                i = end;
-                            }
-                            _ => self.previous = Some(ch),
-                        },
-                        '?' if expected && next.is_some_and(|c| !c.is_whitespace()) => {
-                            i += if next == Some('\\') { 2 } else { 1 };
-                            self.previous = Some('"');
-                        }
-                        '{' => {
-                            self.set_braces(braces + 1);
-                            self.previous = Some(ch);
-                        }
-                        '}' if braces > 0 => {
-                            self.set_braces(braces - 1);
-                            self.previous = Some(ch);
-                        }
-                        '}' => {
-                            self.modes.pop();
-                            if self.modes.is_empty() {
-                                return Some(at + 1);
-                            }
-                        }
-                        _ => {
-                            self.previous = Some(ch);
-                            if is_word(ch) && !self.in_word {
-                                self.word.clear();
-                            }
-                            if is_word(ch) {
-                                self.word.push(ch);
-                            }
-                        }
-                    }
-                    self.in_word = is_word(ch);
+                        break;
+                    };
                     spaced = ch == ' ' || ch == '\t';
+                    after
                 }
-            }
+            };
         }
         self.modes.extend(self.pending_heredocs.drain(..).rev());
         None
+    }
+
+    /// Pops a heredoc at its terminator line, or a `%` literal whose delimiter is the line break and so takes the
+    /// whole line; true when it did.
+    fn closes_at_line_start(&mut self, line: &str) -> bool {
+        let closes = match self.modes.last() {
+            Some(&Mode::Heredoc { id, .. }) => line == self.heredoc_ids[id],
+            Some(Mode::Text { closer: '\n', .. }) => true,
+            _ => false,
+        };
+        if closes {
+            self.modes.pop();
+        }
+        closes
+    }
+
+    /// Inside a string: `\` skips the next character and `#{` enters code. True when `ch` and `next` were both read.
+    fn escape_or_interpolation(&mut self, ch: char, next: Option<char>, interpolates: bool) -> bool {
+        if ch == '\\' {
+            return true;
+        }
+        if !(interpolates && ch == '#' && next == Some('{')) {
+            return false;
+        }
+        self.modes.push(Mode::Code { braces: 0 });
+        self.previous = Some('{');
+        true
+    }
+
+    /// The closer ends the string unless it matches a nested opener, as in `%w(a (b))`.
+    fn text_char(&mut self, ch: char, closer: char, opener: Option<char>, nested: usize) {
+        if ch == closer && nested == 0 {
+            self.modes.pop();
+            self.previous = Some('"');
+        } else if ch == closer {
+            self.set_nested(nested - 1);
+        } else if Some(ch) == opener {
+            self.set_nested(nested + 1);
+        }
+    }
+
+    /// Reads the code at `chars[i]`: the index of the next character to read, `None` at a comment or at a `}` that
+    /// leaves no code to return to.
+    fn code_char(&mut self, chars: &[(usize, char)], i: usize, braces: usize, spaced: bool) -> Option<usize> {
+        let ch = chars[i].1;
+        let next = chars.get(i + 1).map(|&(_, next)| next);
+        // `puts /x/` and `link_to %w(a)`: after a word and a space, a `/` or `%` that isn't followed by a space starts a literal.
+        let after_word_and_space = spaced
+            && self.previous.is_some_and(is_word)
+            && !self.word.starts_with(|digit: char| digit.is_ascii_digit())
+            && next.is_some_and(|following| !following.is_whitespace() && following != '=');
+        let expected = self.value_expected();
+        let literal_expected = expected || after_word_and_space;
+        let mut after = i + 1;
+        match ch {
+            ' ' | '\t' => {}
+            '#' => return None,
+            '"' | '`' | '\'' => self.modes.push(Mode::Text { closer: ch, opener: None, nested: 0, interpolates: ch != '\'' }),
+            '/' if literal_expected => self.modes.push(Mode::Text { closer: '/', opener: None, nested: 0, interpolates: true }),
+            '%' if literal_expected => after = self.percent_literal(chars, i),
+            '<' if next == Some('<') => after = self.heredoc_or_operator(chars, i, literal_expected),
+            '?' if expected && next.is_some_and(|c| !c.is_whitespace()) => {
+                after += if next == Some('\\') { 2 } else { 1 };
+                self.previous = Some('"');
+            }
+            '{' => {
+                self.set_braces(braces + 1);
+                self.previous = Some(ch);
+            }
+            '}' if braces > 0 => {
+                self.set_braces(braces - 1);
+                self.previous = Some(ch);
+            }
+            '}' => {
+                self.modes.pop();
+                if self.modes.is_empty() {
+                    return None;
+                }
+            }
+            _ => {
+                self.previous = Some(ch);
+                if is_word(ch) {
+                    if !self.in_word {
+                        self.word.clear();
+                    }
+                    self.word.push(ch);
+                }
+            }
+        }
+        self.in_word = is_word(ch);
+        Some(after)
+    }
+
+    /// `<<` at `chars[at]`: a heredoc, whose body starts on the next line, or the operator. Returns the index after it.
+    fn heredoc_or_operator(&mut self, chars: &[(usize, char)], at: usize, literal_expected: bool) -> usize {
+        match heredoc_start(chars, at) {
+            Some((id, interpolates, end)) if literal_expected || chars[at + 2..end].iter().any(|&(_, c)| c == '~' || c == '-') => {
+                self.heredoc_ids.push(id);
+                self.pending_heredocs.push(Mode::Heredoc { id: self.heredoc_ids.len() - 1, interpolates });
+                self.previous = Some('"');
+                end
+            }
+            _ => {
+                self.previous = Some('<');
+                at + 1
+            }
+        }
     }
 
     /// `%w(`, `%(`, `%q|`: pushes the literal and returns the index after its delimiter; a lone `%` is an operator.
