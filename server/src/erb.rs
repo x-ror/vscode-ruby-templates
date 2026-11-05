@@ -27,8 +27,11 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
     out
 }
 
-pub fn diagnostics(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
-    erb_ruby::diagnostics(text, ruby.grammar, ruby.strict_locals.as_ref()).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)).collect()
+pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<Diagnostic> {
+    erb_ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref())
+        .into_iter()
+        .map(|d| coded(d, code::RUBY_SYNTAX))
+        .collect()
 }
 
 /// Elements whose content the tokenizer reads as raw text or RCDATA, up to their end tag (`noscript` with scripting on).
@@ -309,7 +312,7 @@ mod tests {
     use super::*;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, &RubyContext::outside_project())
+        super::diagnostics(text, &RubyContext::outside_project(), false)
     }
 
     fn span(line: u32, start: u32, end: u32) -> Range {

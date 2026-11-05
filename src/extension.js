@@ -640,7 +640,7 @@ async function renderToHtml(doc) {
   if (lang === "erb")
     return run(
       cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("render"),
+      erbRubyArgs("render", doc.languageId === "erb-percent"),
       { cwd },
       src,
     );
@@ -707,7 +707,7 @@ async function compileToRuby(doc) {
   if (lang === "erb")
     return run(
       cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("compile"),
+      erbRubyArgs("compile", doc.languageId === "erb-percent"),
       { cwd },
       src,
     );

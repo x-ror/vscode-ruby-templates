@@ -517,6 +517,50 @@ const check = (label, actual, expected) => {
     await new Promise((r) => setTimeout(r, 50));
   }
   check("untitled erb-js gets no HTML diagnostics", jsCodes(), ["ruby-syntax"]);
+  // The latest diagnostics as `line:code` for a document opened with `languageId`; empty when none are published.
+  const diagnosticsFor = async (uri, languageId, text) => {
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri, languageId, version: 1, text } },
+      true,
+    );
+    const published = () =>
+      notes.filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" &&
+          n.params.uri === uri,
+      );
+    for (let waited = 0; waited < 2000 && !published().length; waited += 50) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return (published().at(-1)?.params.diagnostics ?? []).map(
+      (d) => `${d.range.start.line}:${d.code}`,
+    );
+  };
+  const mixed = "% if x\n  a\n<% else %>\n  b\n% end\n";
+  check(
+    "erb-percent: % lines and <% else %> form one block",
+    await diagnosticsFor("file:///v/mixed.html.erb", "erb-percent", mixed),
+    [],
+  );
+  check(
+    "erb: the same text has a stray else",
+    (await diagnosticsFor("file:///v/plain.html.erb", "erb", mixed)).length > 0,
+    true,
+  );
+  check(
+    "erb-percent: a syntax error in a % line is reported on it",
+    [
+      ...new Set(
+        await diagnosticsFor(
+          "file:///v/bad.html.erb",
+          "erb-percent",
+          "a\n% x = = 1\nb\n",
+        ),
+      ),
+    ],
+    ["1:ruby-syntax"],
+  );
   const stimulusAttributes = {};
   for (const [lang, text] of Object.entries({
     erb: '<div class="x"\n     data-controller="hello" data-hel',

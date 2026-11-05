@@ -234,6 +234,16 @@ if (spawnSync("ruby", ["-rerubi", "-e", ""]).status === 0) {
   assert.strictEqual(ascii.stdout, "é ünil");
 }
 
+// erbRubyArgs in percent mode: stdlib ERB, `%` lines are Ruby.
+{
+  const percent = spawnSync("ruby", erbRubyArgs("render", true), {
+    input: "% [1, 2].each do |n|\n<li><%= n %></li>\n% end\n%% literal\n",
+    encoding: "utf8",
+  });
+  assert.strictEqual(percent.stdout, "<li>1</li>\n<li>2</li>\n% literal\n");
+  assert.deepStrictEqual(erbRubyArgs("compile").length, 2);
+}
+
 // actionSource / actionLine
 assert.deepStrictEqual(actionSource("/r/app/views/admin/users/show.html.erb"), {
   file: "/r/app/controllers/admin/users_controller.rb",

@@ -211,7 +211,7 @@ fn check_file(path: &Path, fail_at: DiagnosticSeverity, bad_file: i32, projects:
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
-    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, version: 0 }, &Options::default(), projects) {
+    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &Options::default(), projects) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
         let name = match severity {
             DiagnosticSeverity::ERROR => "error",

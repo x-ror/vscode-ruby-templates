@@ -19,8 +19,17 @@ pub(crate) struct Doc {
     pub lang: TemplateLang,
     /// Opened with the plain `erb` language id, not a host-specific one such as `erb-js`.
     pub plain_erb: bool,
+    /// Opened with the `erb-percent` language id: a line starting with `%` is Ruby.
+    pub percent_lines: bool,
     pub text: String,
     pub version: i32,
+}
+
+impl Doc {
+    /// HTML ERB; a `%`-lines document is never HTML, since its `%` lines would read as text.
+    pub fn html_host(&self, uri: &Uri) -> bool {
+        !self.percent_lines && html_host(uri, self.plain_erb, &self.text)
+    }
 }
 
 /// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml,jbuilder}.*` settings.
@@ -124,7 +133,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
-    let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, &doc.text, &options.extra_engines, &ruby);
+    let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(
             path,
@@ -175,12 +184,13 @@ pub(crate) fn language_diagnostics(
     uri: &Uri,
     lang: TemplateLang,
     plain_erb: bool,
+    percent_lines: bool,
     text: &str,
     extra_engines: &[String],
     ruby: &RubyContext,
 ) -> Vec<Diagnostic> {
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text, ruby),
+        TemplateLang::Erb => erb::diagnostics(text, ruby, percent_lines),
         TemplateLang::Haml => {
             let parsed = haml_parser::parse_with_ruby(text);
             let mut out = haml_indent::diagnostics(text, &parsed);
@@ -214,7 +224,7 @@ pub(crate) fn language_diagnostics(
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
         out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
-    if lang == TemplateLang::Erb && html_host(uri, plain_erb, text) {
+    if lang == TemplateLang::Erb && !percent_lines && html_host(uri, plain_erb, text) {
         out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));
@@ -411,9 +421,13 @@ mod tests {
         let text = "img\n  | x\n";
         let has_void = |path: &str| {
             let uri = path.parse::<Uri>().unwrap();
-            diagnostics(&uri, &Doc { lang: TemplateLang::Slim, text: text.into(), plain_erb: false, version: 0 }, &Options::default())
-                .iter()
-                .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
+            diagnostics(
+                &uri,
+                &Doc { lang: TemplateLang::Slim, text: text.into(), plain_erb: false, percent_lines: false, version: 0 },
+                &Options::default(),
+            )
+            .iter()
+            .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
         };
         for (path, html) in [
             ("file:///v/show.html.slim", true),
@@ -462,7 +476,7 @@ mod tests {
         assert_eq!(align(serde_json::json!("yes")).1.len(), 1);
         let count = |lang, text: &str, options: &Options| {
             let uri = "file:///v/show.html.erb".parse::<Uri>().unwrap();
-            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, options).len()
+            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 }, options).len()
         };
         assert_eq!(count(TemplateLang::Erb, "<% end %>\n", &Options::default()), 1);
         assert_eq!(count(TemplateLang::Erb, "<% end %>\n", &options), 0);
@@ -482,7 +496,7 @@ mod tests {
     fn disabled_diagnostics_per_language() {
         let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
             let uri = path.parse::<Uri>().unwrap();
-            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, options)
+            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 }, options)
                 .into_iter()
                 .map(|d| match d.code {
                     Some(NumberOrString::String(c)) => c,
@@ -577,14 +591,18 @@ mod tests {
         ];
         for (name, lang, text, source) in cases {
             let uri = crate::util::file_uri(views.join(name)).unwrap();
-            let found = diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, &Options::default());
+            let found = diagnostics(
+                &uri,
+                &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 },
+                &Options::default(),
+            );
             assert!(!found.is_empty(), "{name}");
             for d in found {
                 assert_eq!(d.source.as_deref(), Some(source), "{name}: {}", d.message);
             }
         }
         let uri = crate::util::file_uri(views.join("g.html.erb")).unwrap();
-        let html = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb: false, version: 0 };
+        let html = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb: false, percent_lines: false, version: 0 };
         let found = diagnostics(&uri, &html, &Options::default());
         assert_eq!(found.iter().filter_map(util::code).collect::<Vec<_>>(), [tags::code::UNCLOSED_ELEMENT]);
         assert_eq!(found[0].source.as_deref(), Some("erb"));
@@ -594,7 +612,7 @@ mod tests {
     #[test]
     fn untitled_erb_gets_html_diagnostics() {
         let codes = |uri: &str, plain_erb| {
-            let doc = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb, version: 0 };
+            let doc = Doc { lang: TemplateLang::Erb, text: "<div>\n".into(), plain_erb, percent_lines: false, version: 0 };
             let found = diagnostics(&uri.parse::<Uri>().unwrap(), &doc, &Options::default());
             found.iter().filter_map(util::code).map(str::to_owned).collect::<Vec<_>>()
         };
@@ -606,7 +624,7 @@ mod tests {
     #[test]
     fn bare_erb_view_that_starts_with_markup_gets_html_diagnostics() {
         let codes = |uri: &str, text: &str| {
-            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, version: 0 };
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
             let found = diagnostics(&uri.parse::<Uri>().unwrap(), &doc, &Options::default());
             found.iter().filter_map(util::code).map(str::to_owned).collect::<Vec<_>>()
         };
@@ -641,7 +659,7 @@ mod tests {
         let explicit_end = "- end = start + 10\n";
         let dedent = "  p\n    a\n   span\n";
         let codes = |lang, text: &str| -> Vec<String> {
-            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, version: 0 }, &Options::default())
+            diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 }, &Options::default())
                 .into_iter()
                 .filter_map(|d| match d.code {
                     Some(NumberOrString::String(c)) => Some(c),
@@ -674,7 +692,7 @@ mod tests {
     #[test]
     fn thor_templates_skip_structure_checks() {
         let text = "%table\n  %tr\n<% attributes.each do |attribute| -%>\n    %th <%= attribute.human_name %>\n<% end -%>\n";
-        let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), plain_erb: false, version: 0 };
+        let doc = || Doc { lang: TemplateLang::Haml, text: text.to_string(), plain_erb: false, percent_lines: false, version: 0 };
         let uri = |name: &str| format!("file:///app/lib/templates/haml/scaffold/{name}").parse::<Uri>().unwrap();
         assert!(diagnostics(&uri("index.html.haml.tt"), &doc(), &Options::default()).is_empty());
         assert!(!diagnostics(&uri("index.html.haml"), &doc(), &Options::default()).is_empty());
@@ -682,6 +700,7 @@ mod tests {
             lang: TemplateLang::Erb,
             text: "<%% if x %>\n<% attributes.each do |a| -%>\n<div>\n".into(),
             plain_erb: false,
+            percent_lines: false,
             version: 0,
         };
         assert!(diagnostics(&uri("_form.html.erb.tt"), &erb, &Options::default()).is_empty());
@@ -1184,6 +1203,7 @@ mod tests {
             lang: TemplateLang::Erb,
             text: "<%= render \"users/card\" %><%= render \"users/gone\" %>".into(),
             plain_erb: false,
+            percent_lines: false,
             version: 0,
         };
         let uri = crate::util::file_uri(&file).unwrap();
@@ -1213,7 +1233,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rt-locals-keywords-{}", std::process::id()));
         let file = root.join("app/views/users/_card.html.erb");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let doc = Doc { lang: TemplateLang::Erb, text: "<%# locals: (user, size:) -%>\n".into(), plain_erb: false, version: 0 };
+        let doc = Doc {
+            lang: TemplateLang::Erb,
+            text: "<%# locals: (user, size:) -%>\n".into(),
+            plain_erb: false,
+            percent_lines: false,
+            version: 0,
+        };
         let uri = crate::util::file_uri(&file).unwrap();
         let messages = || diagnostics(&uri, &doc, &Options::default()).into_iter().map(|d| d.message).collect::<Vec<_>>();
         let lock = |actionview: &str| {
@@ -1226,7 +1252,8 @@ mod tests {
         let expected =
             "`user` set as non-keyword argument for app/views/users/_card.html.erb. Locals can only be set as keyword arguments.";
         assert_eq!(messages(), [expected]);
-        let broken = Doc { lang: TemplateLang::Erb, text: "<%# locals: (a: ] ) %>\n".into(), plain_erb: false, version: 0 };
+        let broken =
+            Doc { lang: TemplateLang::Erb, text: "<%# locals: (a: ] ) %>\n".into(), plain_erb: false, percent_lines: false, version: 0 };
         let broken_messages = || diagnostics(&uri, &broken, &Options::default()).len();
         assert!(broken_messages() > 0, "Rails 7.1");
         lock("7.0.8");
@@ -1239,7 +1266,13 @@ mod tests {
         ];
         for (lang, ext, comment, body) in others {
             let file = root.join(format!("app/views/users/_card.{ext}"));
-            let doc = Doc { lang, text: format!("{comment} locals: (user, size:)\n{body} x\n"), plain_erb: false, version: 0 };
+            let doc = Doc {
+                lang,
+                text: format!("{comment} locals: (user, size:)\n{body} x\n"),
+                plain_erb: false,
+                percent_lines: false,
+                version: 0,
+            };
             let found: Vec<_> = diagnostics(&crate::util::file_uri(&file).unwrap(), &doc, &Options::default())
                 .into_iter()
                 .map(|d| (d.range.start.line, util::code(&d).map(String::from), d.message))

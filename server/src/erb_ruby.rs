@@ -27,11 +27,27 @@ struct Match<'a> {
 }
 
 /// The regex's matches, scanned by hand: the lazy `(.*?)` with captures made the `regex` crate's slow engines run per tag.
-fn erubi_tags(text: &str) -> impl Iterator<Item = Match<'_>> {
+///
+/// With `percent_lines` (ERB's `trim_mode: "%"`), a line starting with a single `%` is a code tag as well.
+fn erubi_tags(text: &str, percent_lines: bool) -> impl Iterator<Item = Match<'_>> {
     let bytes = text.as_bytes();
     let mut pos = 0;
+    // The next `<%` at or after `pos`, searched again only once `pos` passes it (`%` lines can be many).
+    let mut next_open: Option<usize> = None;
+    let mut searched = false;
     std::iter::from_fn(move || {
-        let open = pos + text.get(pos..)?.find("<%")?;
+        if !searched || next_open.is_some_and(|at| at < pos) {
+            next_open = text.get(pos..)?.find("<%").map(|at| pos + at);
+            searched = true;
+        }
+        let tag_open = next_open;
+        if percent_lines {
+            if let Some(line) = percent_line(text, pos, tag_open.unwrap_or(text.len())) {
+                pos = line.whole.end;
+                return Some(line);
+            }
+        }
+        let open = tag_open?;
         let longest = match &bytes[open + 2..] {
             [b'=', b'=', ..] => 2,
             [b'=' | b'-' | b'#' | b'%', ..] => 1,
@@ -61,6 +77,26 @@ fn erubi_tags(text: &str) -> impl Iterator<Item = Match<'_>> {
             rspace,
         })
     })
+}
+/// The first line in `from..until` that starts with a single `%`, as a code tag with its newline.
+fn percent_line(text: &str, from: usize, until: usize) -> Option<Match<'_>> {
+    let at_line_start = |at: usize| at == 0 || text.as_bytes()[at - 1] == b'\n';
+    let mut start = if at_line_start(from) { from } else { from + text[from..].find('\n')? + 1 };
+    while start < until {
+        let line = &text[start..];
+        let line_end = line.find('\n').map_or(text.len(), |at| start + at);
+        if line.starts_with('%') && !line.starts_with("%%") {
+            let newline = &text[line_end..];
+            let rspace = newline.starts_with('\n').then(|| &text[line_end..line_end + 1]);
+            let code_end = if text[..line_end].ends_with('\r') { line_end - 1 } else { line_end };
+            let whole_end = line_end + rspace.map_or(0, str::len);
+            // A CRLF line keeps its `\r` with the newline, as the regexp's `\r?\n` does.
+            let rspace = if code_end < line_end { rspace.map(|_| &text[code_end..whole_end]) } else { rspace };
+            return Some(Match { whole: start..whole_end, indicator: None, code: start + 1..code_end, tail: None, rspace });
+        }
+        start = line_end + 1;
+    }
+    None
 }
 // `ActionView::Template::Handlers::ERB::ENCODING_TAG`.
 static ENCODING_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A<%#.*coding[:=][ \t\r\n\x0C\x0B]*\S+[ \t]*-?%>[ \t]*").unwrap());
@@ -157,10 +193,10 @@ impl Erubi {
     }
 
     /// Erubi's scan of `template`, `Erubi::Engine#initialize`.
-    fn compile(&mut self, template: &str) {
+    fn compile(&mut self, template: &str, percent_lines: bool) {
         let mut pos = 0;
         let mut is_bol = true;
-        for tag in erubi_tags(template) {
+        for tag in erubi_tags(template, percent_lines) {
             let indicator = tag.indicator;
             let (code_text, code_at) = (&template[tag.code.clone()], tag.code.start);
             let tail = tag.tail;
@@ -261,7 +297,7 @@ impl ErbTag<'_> {
 
 /// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
 pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
-    erubi_tags(text)
+    erubi_tags(text, false)
         .map(|tag| {
             let trimmed = tag.rspace.map_or(0, str::len);
             ErbTag { start: tag.whole.start, end: tag.whole.end - trimmed, indicator: tag.indicator, code: tag.code }
@@ -270,16 +306,16 @@ pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
 }
 
 /// Erubi's read of `template` after the encoding tag Rails cuts, and that tag's length.
-fn read_after_encoding_tag(template: &str) -> (Erubi, usize) {
+fn read_after_encoding_tag(template: &str, percent_lines: bool) -> (Erubi, usize) {
     let encoding_tag = ENCODING_TAG.find(template).map_or(0, |m| m.end());
     let mut erubi = Erubi::default();
-    erubi.compile(&template[encoding_tag..]);
+    erubi.compile(&template[encoding_tag..], percent_lines);
     (erubi, encoding_tag)
 }
 
 /// The texts Erubi renders for `text` before the text after its last tag, and where in `text` that text starts.
 pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
-    let (erubi, encoding_tag) = read_after_encoding_tag(text);
+    let (erubi, encoding_tag) = read_after_encoding_tag(text, false);
     (erubi.texts, encoding_tag + erubi.tail_at)
 }
 
@@ -314,13 +350,13 @@ impl Cut {
 }
 
 /// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
-fn compile(text: &str, close: Option<Close>) -> Compiled {
+fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Compiled {
     let strict = close.and_then(|close| strict_locals::find(text, close));
     let mut template = text.to_string();
     if let Some(strict) = &strict {
         template.replace_range(strict.range.clone(), "");
     }
-    let (erubi, encoding_tag) = read_after_encoding_tag(&template);
+    let (erubi, encoding_tag) = read_after_encoding_tag(&template, percent_lines);
 
     let parameters = strict_locals::method_parameters(strict.as_ref());
     let head = format!("{WRAPPER_DEF}{parameters})\n            @virtual_path = \"template\";;");
@@ -335,8 +371,8 @@ fn compile(text: &str, close: Option<Close>) -> Compiled {
 
 /// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
 /// `locals:` parameters are keywords. `rails` is given only where strict locals exist.
-pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>) -> Vec<Diagnostic> {
-    let compiled = compile(text, rails.map(|r| r.close));
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version, percent_lines: bool, rails: Option<&Rails>) -> Vec<Diagnostic> {
+    let compiled = compile(text, rails.map(|r| r.close), percent_lines);
     let index = LineIndex::new(text);
     let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
     let found: Vec<Diagnostic> =
@@ -351,14 +387,14 @@ pub fn diagnostics(text: &str, ruby: ruby_prism::Version, rails: Option<&Rails>)
 
 /// The block variables in scope at `offset` of the template.
 pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
-    let compiled = compile(text, None);
+    let compiled = compile(text, None, false);
     let Some(read_at) = offset.checked_sub(compiled.cut.encoding_tag) else { return Vec::new() };
     generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
 }
 
 /// Where the template declares the local variable at `offset`: its block parameter or first assignment.
 pub fn local_definition(text: &str, offset: usize) -> Option<prism::LocalDefinition> {
-    let compiled = compile(text, None);
+    let compiled = compile(text, None, false);
     let at = generated_offset(&compiled.verbatim, offset.checked_sub(compiled.cut.encoding_tag)?)?;
     let found = prism::local_definition(&compiled.source, at)?;
     let (start, end) = template_span(&compiled.verbatim, found.start, found.end)?;
@@ -368,7 +404,7 @@ pub fn local_definition(text: &str, offset: usize) -> Option<prism::LocalDefinit
 /// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
 /// method's parameters.
 pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
-    let compiled = compile(text, Some(close));
+    let compiled = compile(text, Some(close), false);
     let original = |(start, end): (usize, usize)| (compiled.cut.original(start), compiled.cut.original(end));
     let uses = prism::local_uses(&compiled.source, name);
     let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original)).collect();
@@ -377,7 +413,7 @@ pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
 
 /// The template's local variables; `close` finds the `locals:` comment, whose parameters are the strict locals.
 pub fn local_tokens(text: &str, close: Close) -> Vec<prism::LocalToken> {
-    let compiled = compile(text, Some(close));
+    let compiled = compile(text, Some(close), false);
     let tokens = prism::local_tokens(&compiled.source);
     let mapped = tokens.into_iter().filter_map(|t| Some((template_span(&compiled.verbatim, t.start, t.end)?, t)));
     mapped
@@ -424,6 +460,37 @@ fn verbatim_range(index: &LineIndex, compiled: &Compiled, start: usize, end: usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn line_errors(text: &str, percent_lines: bool) -> Vec<(u32, String)> {
+        super::diagnostics(text, ruby_prism::Version::Latest, percent_lines, None)
+            .into_iter()
+            .map(|d| (d.range.start.line, d.message))
+            .collect()
+    }
+
+    #[test]
+    fn percent_lines_are_ruby_only_when_asked() {
+        let text = "% if x\n  a\n<% else %>\n  b\n% end\n";
+        assert_eq!(line_errors(text, true), Vec::new());
+        assert!(!line_errors(text, false).is_empty());
+    }
+
+    #[test]
+    fn percent_line_errors_land_on_the_line() {
+        let found = line_errors("text\n% x = = 1\n<%= item %>\n", true);
+        assert!(!found.is_empty() && found.iter().all(|(line, _)| *line == 1), "{found:?}");
+        let crlf = line_errors("a\r\n% x = = 1\r\nb\r\n", true);
+        assert!(!crlf.is_empty() && crlf.iter().all(|(line, _)| *line == 1), "{crlf:?}");
+    }
+
+    #[test]
+    fn doubled_and_indented_percent_stay_text() {
+        let text = "%% if x\n % end\n100 % <%= a %>\n";
+        assert_eq!(line_errors(text, true), Vec::new());
+        let tags: Vec<_> = erubi_tags(text, true).collect();
+        assert_eq!(tags.len(), 1);
+    }
+
     use tower_lsp_server::ls_types::Position;
 
     const IDENTIFIER: &str = "template.html.erb";
@@ -438,7 +505,7 @@ mod tests {
             "<% é = 1 %>\u{00a0}\n<%= \"%\" %>%>",
         ];
         for text in texts {
-            let ours: Vec<_> = erubi_tags(text).map(|m| (m.whole, m.indicator, &text[m.code], m.tail, m.rspace)).collect();
+            let ours: Vec<_> = erubi_tags(text, false).map(|m| (m.whole, m.indicator, &text[m.code], m.tail, m.rspace)).collect();
             let regex: Vec<_> = erubi
                 .captures_iter(text)
                 .map(|c| {
@@ -455,7 +522,7 @@ mod tests {
     }
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, ruby_prism::Version::Latest, Some(&rails()))
+        super::diagnostics(text, ruby_prism::Version::Latest, false, Some(&rails()))
     }
 
     /// (0-based line, message) of each error.
@@ -464,7 +531,7 @@ mod tests {
     }
 
     fn errors_in(text: &str, ruby: ruby_prism::Version) -> Vec<(u32, String)> {
-        super::diagnostics(text, ruby, Some(&rails())).into_iter().map(|d| (d.range.start.line, d.message)).collect()
+        super::diagnostics(text, ruby, false, Some(&rails())).into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
     fn messages(text: &str) -> Vec<String> {
@@ -498,7 +565,7 @@ mod tests {
         ("<%# locals: (a:, &block) -%>\n<%= a %>", "          def _template(local_assigns, output_buffer, a:, &block)\n            @virtual_path = \"template\";; \n @output_buffer.append=( a );\n@output_buffer\n          end\n"),
         ];
         for (template, rails) in cases {
-            assert_eq!(compile(template, Some(Close::default())).source, rails, "{template:?}");
+            assert_eq!(compile(template, Some(Close::default()), false).source, rails, "{template:?}");
         }
     }
 
@@ -612,7 +679,7 @@ mod tests {
     fn locals_messages(signature: &str) -> Vec<(u32, String)> {
         let text = format!("<p>\n<%# locals: {signature} -%>\nx\n");
         let rails = Rails { close: Close::default(), identifier: "app/views/a.html.erb".into() };
-        let found = super::diagnostics(&text, ruby_prism::Version::Latest, Some(&rails));
+        let found = super::diagnostics(&text, ruby_prism::Version::Latest, false, Some(&rails));
         found.into_iter().map(|d| (d.range.start.line, d.message)).collect()
     }
 
@@ -649,7 +716,7 @@ mod tests {
     #[test]
     fn strict_locals_check_needs_a_project_and_no_syntax_error() {
         let text = "<%# locals: (a) -%>\nx";
-        assert!(super::diagnostics(text, ruby_prism::Version::Latest, None).is_empty());
+        assert!(super::diagnostics(text, ruby_prism::Version::Latest, false, None).is_empty());
         let syntax = messages("<%# locals: (a, b: ] ) -%>\nx");
         assert!(!syntax.is_empty());
         assert!(syntax.iter().all(|message| !message.contains("non-keyword")), "{syntax:?}");
@@ -658,8 +725,8 @@ mod tests {
     #[test]
     fn locals_line_is_a_plain_comment_without_strict_locals() {
         let text = "<%# locals: (a: ] ) %>\n<p>\n";
-        assert!(super::diagnostics(text, ruby_prism::Version::Latest, None).is_empty());
-        assert!(compile(text, None).source.contains("(local_assigns, output_buffer, &_)"));
+        assert!(super::diagnostics(text, ruby_prism::Version::Latest, false, None).is_empty());
+        assert!(compile(text, None, false).source.contains("(local_assigns, output_buffer, &_)"));
         assert_eq!(errors(text)[0].1, "unexpected ']'; expected a `)` to close the parameters");
     }
 
@@ -687,7 +754,7 @@ mod tests {
     fn blank_signature_is_nil_keywords() {
         for blank in ["", " ", "\u{a0}"] {
             let template = format!("<%# locals: ({blank}) -%>\n<p>x</p>");
-            assert!(compile(&template, Some(Close::default())).source.contains("output_buffer, **nil, &_)"), "{template:?}");
+            assert!(compile(&template, Some(Close::default()), false).source.contains("output_buffer, **nil, &_)"), "{template:?}");
             assert!(errors(&template).is_empty());
         }
     }
