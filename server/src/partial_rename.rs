@@ -12,7 +12,7 @@ use crate::partials::{
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
 use crate::render_call::HamlPipes;
-use crate::util::{lines_with_offsets, LineIndex};
+use crate::util::{lines_with_offsets, slash_path, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ pub struct Source {
 /// `app/views/users/_card.html.slim` → `users/card`, and `app/views/_card.html.slim` → `/card`, the name Rails looks up
 /// with no folder prefix; `None` for non-partials and files outside a views dir.
 fn qualified_name(project: &Project, views: &Path, file: &Path) -> Option<String> {
-    let dir = file.parent()?.strip_prefix(views).ok()?.to_string_lossy().replace('\\', "/");
+    let dir = slash_path(file.parent()?.strip_prefix(views).ok()?);
     let name = template_stem(|f| project.is_format(f), file.file_name()?.to_str()?.strip_prefix('_')?);
     (!name.is_empty()).then(|| format!("{dir}/{name}"))
 }
@@ -364,7 +364,7 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
         .filter_map(|path| {
             let lang = match path.extension() {
                 Some(ext) if ext == "rb" => None,
-                _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None)?),
+                _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None).filter(|&lang| lang != TemplateLang::Liquid)?),
             };
             let text = match open.get(&path) {
                 Some(text) => text.clone(),
@@ -434,7 +434,7 @@ mod tests {
         }
         /// `path` relative to the tree, with `/` on every platform.
         fn rel(&self, path: &Path) -> String {
-            path.strip_prefix(&self.0).unwrap().to_string_lossy().replace('\\', "/")
+            slash_path(path.strip_prefix(&self.0).unwrap())
         }
         fn source(&self, rel: &str, lang: Option<TemplateLang>, text: &str) -> Source {
             Source { path: self.path(rel), lang, text: text.into() }
@@ -675,6 +675,16 @@ mod tests {
                 ("app/views/users/index.html.slim".into(), 1, 10, "people/card".into()),
             ]
         );
+    }
+
+    #[test]
+    fn nested_folder_rename_gives_slash_separated_names() {
+        let t = Tree::new("nested", &["app/views/users/admin/_card.html.slim"]);
+        let sources = [t.source("app/views/home/show.html.erb", ERB, "<%= render \"users/admin/card\" %>\n")];
+        let renamed = t.edits(&[("app/views/users", "app/views/people")], &sources);
+        assert_eq!(renamed, [("app/views/home/show.html.erb".into(), 0, 12, "people/admin/card".into())]);
+        let moved = t.edits(&[("app/views/users/admin/_card.html.slim", "app/views/shared/ui/_card.html.slim")], &sources);
+        assert_eq!(moved, [("app/views/home/show.html.erb".into(), 0, 12, "shared/ui/card".into())]);
     }
 
     #[test]

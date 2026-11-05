@@ -53,6 +53,11 @@ fs.writeFileSync(
   path.join(views, "shared", "_footer.html.erb"),
   "<footer></footer>\n",
 );
+fs.mkdirSync(path.join(root, "app", "controllers"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "app", "controllers", "application_controller.rb"),
+  "class ApplicationController < ActionController::Base\n  before_action :set_current_user\n  before_action :set_admin, only: :show\n\n  def set_current_user\n    @current_user = User.first\n  end\n\n  def set_admin\n    @admin = true\n  end\nend\n",
+);
 fs.writeFileSync(
   path.join(root, "app", "components", "badge_component.rb"),
   "class BadgeComponent\n  renders_one :icon\n  renders_many :links\nend\n",
@@ -172,6 +177,19 @@ fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
 const phoneText = '= render "card"\n';
 const phoneUri = fileUri(phoneFile).replace("+", "%2B");
 
+const enginePartial = path.join(
+  root,
+  "engines",
+  "blog",
+  "app",
+  "views",
+  "blog",
+  "_post.html.erb",
+);
+fs.mkdirSync(path.dirname(enginePartial), { recursive: true });
+fs.writeFileSync(enginePartial, "<article></article>\n");
+const engineUri = fileUri(path.join(views, "users", "engine.html.erb"));
+
 const startServer = () => {
   const proc = cp.spawn(bin);
   let id = 0,
@@ -257,6 +275,73 @@ const check = (label, actual, expected) => {
     "definition component",
     targets(await req("textDocument/definition", uri, 2, 14)),
     component,
+  );
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: engineUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= render "blog/post" %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "definition: render in an in-repo engine",
+    targets(await req("textDocument/definition", engineUri, 0, 14)),
+    ["/engines/blog/app/views/blog/_post.html.erb"],
+  );
+  const liquidUri = fileUri(path.join(views, "users", "card.liquid"));
+  const liquidHelperUri = fileUri(path.join(views, "users", "helper.liquid"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: liquidUri,
+        languageId: "liquid",
+        version: 1,
+        text: '{% render "card" %}\n',
+      },
+    },
+    true,
+  );
+  check(
+    "definition: liquid render is not a partial",
+    targets(await req("textDocument/definition", liquidUri, 0, 14)),
+    [],
+  );
+  check(
+    "document links: none in liquid",
+    (
+      await send("textDocument/documentLink", {
+        textDocument: { uri: liquidUri },
+      })
+    ).result ?? null,
+    null,
+  );
+  check(
+    "hover: none on a liquid render",
+    (await req("textDocument/hover", liquidUri, 0, 14)).result ?? null,
+    null,
+  );
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: liquidHelperUri,
+        languageId: "liquid",
+        version: 1,
+        text: "{{ link_to }}\n",
+      },
+    },
+    true,
+  );
+  check(
+    "hover: none on a helper in liquid",
+    (await req("textDocument/hover", liquidHelperUri, 0, 5)).result ?? null,
+    null,
   );
   check(
     "hover",
@@ -512,6 +597,50 @@ const check = (label, actual, expected) => {
     await new Promise((r) => setTimeout(r, 50));
   }
   check("untitled erb-js gets no HTML diagnostics", jsCodes(), ["ruby-syntax"]);
+  // The latest diagnostics as `line:code` for a document opened with `languageId`; empty when none are published.
+  const diagnosticsFor = async (uri, languageId, text) => {
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri, languageId, version: 1, text } },
+      true,
+    );
+    const published = () =>
+      notes.filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" &&
+          n.params.uri === uri,
+      );
+    for (let waited = 0; waited < 2000 && !published().length; waited += 50) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return (published().at(-1)?.params.diagnostics ?? []).map(
+      (d) => `${d.range.start.line}:${d.code}`,
+    );
+  };
+  const mixed = "% if x\n  a\n<% else %>\n  b\n% end\n";
+  check(
+    "erb-percent: % lines and <% else %> form one block",
+    await diagnosticsFor("file:///v/mixed.html.erb", "erb-percent", mixed),
+    [],
+  );
+  check(
+    "erb: the same text has a stray else",
+    (await diagnosticsFor("file:///v/plain.html.erb", "erb", mixed)).length > 0,
+    true,
+  );
+  check(
+    "erb-percent: a syntax error in a % line is reported on it",
+    [
+      ...new Set(
+        await diagnosticsFor(
+          "file:///v/bad.html.erb",
+          "erb-percent",
+          "a\n% x = = 1\nb\n",
+        ),
+      ),
+    ],
+    ["1:ruby-syntax"],
+  );
   const stimulusAttributes = {};
   for (const [lang, text] of Object.entries({
     erb: '<div class="x"\n     data-controller="hello" data-hel',
@@ -555,7 +684,7 @@ const check = (label, actual, expected) => {
       slim_lines: ["data-hello-target", "data-hello-greeting-text-value"],
     },
   );
-  const columnChecks = { hover: {}, definition: {} };
+  const columnChecks = { hover: {}, definition: {}, tokens: {} };
   for (const [lang, text] of Object.entries({
     erb: "<% @reports.each do |report| %>\n  <p><%= report.title %></p>\n<% end %>\n",
     haml: "- @reports.each do |report|\n  %p= report.title\n",
@@ -573,6 +702,11 @@ const check = (label, actual, expected) => {
     columnChecks.hover[lang] = (
       await req("textDocument/hover", columnUri, 1, title)
     ).result?.contents.value;
+    columnChecks.tokens[lang] = (
+      await send("textDocument/semanticTokens/full", {
+        textDocument: { uri: columnUri },
+      })
+    ).result?.data;
     const found = (await req("textDocument/definition", columnUri, 1, title))
       .result;
     columnChecks.definition[lang] = found
@@ -584,6 +718,12 @@ const check = (label, actual, expected) => {
     erb: reportsHover,
     haml: reportsHover,
     slim: reportsHover,
+  });
+  // [line, column, length, type, modifiers] deltas: `report` twice, as a variable (type 1).
+  check("semantic tokens for block variables", columnChecks.tokens, {
+    erb: [0, 21, 6, 1, 0, 1, 9, 6, 1, 0],
+    haml: [0, 20, 6, 1, 0, 1, 6, 6, 1, 0],
+    slim: [0, 20, 6, 1, 0, 1, 6, 6, 1, 0],
   });
   const schemaTarget = "/db/schema.rb:7";
   check("definition on a model column", columnChecks.definition, {
@@ -1351,6 +1491,42 @@ const check = (label, actual, expected) => {
     ],
     [["/app/helpers/users_helper.rb:1"], null],
   );
+  check(
+    "helper hover",
+    [
+      rel(
+        (await req("textDocument/hover", helperUri, 0, 6)).result?.contents
+          .value ?? "",
+      ),
+      (await req("textDocument/hover", helperUri, 0, 26)).result,
+    ],
+    [
+      "```ruby\ndef format_price(x)\n```\n\n[app/helpers/users_helper.rb:2](/app/helpers/users_helper.rb#L2)",
+      null,
+    ],
+  );
+  const shadowUri = fileUri(path.join(views, "users", "shadow.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: shadowUri,
+        languageId: "erb",
+        version: 1,
+        text: '<% [1].each do |format_price| %>\n<%= format_price %>\n<% end %>\n<%= "format_price" %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "no helper hover on a block parameter, its use or in a string",
+    [
+      (await req("textDocument/hover", shadowUri, 0, 22)).result,
+      (await req("textDocument/hover", shadowUri, 1, 6)).result,
+      (await req("textDocument/hover", shadowUri, 3, 8)).result,
+    ],
+    [null, null, null],
+  );
   const tagsUri = fileUri(path.join(views, "users", "tags.html.erb"));
   await send(
     "textDocument/didOpen",
@@ -1415,6 +1591,27 @@ const check = (label, actual, expected) => {
       "`@menu`\n\n- [app/controllers/users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
       null,
     ],
+  );
+  const navUri = fileUri(path.join(views, "shared", "_nav.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: navUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= @current_user %>\n<%= @admin %>\n",
+      },
+    },
+    true,
+  );
+  check(
+    "ivars of ApplicationController in a folder without a controller",
+    [
+      at(await req("textDocument/definition", navUri, 0, 6)),
+      (await req("textDocument/hover", navUri, 1, 6)).result,
+    ],
+    [["/app/controllers/application_controller.rb:5:0"], null],
   );
   await send(
     "textDocument/didChange",
@@ -2042,6 +2239,118 @@ const check = (label, actual, expected) => {
     ],
     [4, false],
   );
+  // Two apps in one workspace: every lookup resolves against the app the file belongs to.
+  const multiRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "rt-multi-")),
+  );
+  const multi = startServer();
+  const apps = ["a", "b"].map((name) => {
+    const dir = path.join(multiRoot, `app_${name}`);
+    const route = name === "a" ? "users" : "posts";
+    fs.mkdirSync(path.join(dir, "app/views/shared"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "app/views/pages"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "config/locales"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "Gemfile.lock"),
+      "GEM\n  specs:\n    actionview (7.1.3)\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "app/views/shared/_card.html.erb"),
+      `<p>${name}</p>\n`,
+    );
+    fs.writeFileSync(
+      path.join(dir, "config/locales/en.yml"),
+      `en:\n  greet:\n    hello: "Hi ${name}"\n    only_${name}: "x"\n`,
+    );
+    const page = fileUri(path.join(dir, "app/views/pages/show.html.erb"));
+    const text = `<%= render "shared/card" %>\n<%= t("greet.hello") %>\n<%= ${route}_p %>\n<%= ${route}_path %>\n<%= t("greet.on") %>\n`;
+    return { name, dir, route, page, text };
+  });
+  await multi.send("initialize", {
+    processId: null,
+    rootUri: fileUri(apps[0].dir),
+    workspaceFolders: apps.map(({ name, dir }) => ({
+      name,
+      uri: fileUri(dir),
+    })),
+    capabilities: {},
+  });
+  await multi.send("initialized", {}, true);
+  for (const { dir, route, page, text } of apps) {
+    const routes = [
+      {
+        name: route,
+        verb: "GET",
+        path: `/${route}(.:format)`,
+        action: `${route}#index`,
+        source: "config/routes.rb:2",
+      },
+    ];
+    await multi.send("rubyTemplates/routes", { root: dir, routes }, true);
+    await multi.send(
+      "textDocument/didOpen",
+      { textDocument: { uri: page, languageId: "erb", version: 1, text } },
+      true,
+    );
+  }
+  const ask = (method, u, line, character) =>
+    multi.send(method, {
+      textDocument: { uri: u },
+      position: { line, character },
+    });
+  const where = (r) =>
+    (r.result || []).map(
+      (l) =>
+        `${path.relative(multiRoot, fileURLToPath(l.uri)).replaceAll(path.sep, "/")}:${l.range.start.line}`,
+    );
+  const lookups = [];
+  for (const { name, route, page, text } of apps) {
+    lookups.push([
+      where(await ask("textDocument/definition", page, 0, 14)),
+      where(await ask("textDocument/definition", page, 1, 10)),
+      (
+        await ask("textDocument/hover", page, 1, 10)
+      ).result?.contents.value.includes(`Hi ${name}`),
+      (
+        await ask(
+          "textDocument/completion",
+          page,
+          2,
+          text.split("\n")[2].length - 3,
+        )
+      ).result?.map((i) => i.label),
+      (
+        await ask("textDocument/hover", page, 3, 6)
+      ).result?.contents.value.split("\n")[0],
+      where(await ask("textDocument/definition", page, 3, 6)),
+      (await ask("textDocument/completion", page, 4, 15)).result?.map(
+        (i) => i.label,
+      ),
+    ]);
+  }
+  check("two apps in one workspace", lookups, [
+    [
+      ["app_a/app/views/shared/_card.html.erb:0"],
+      ["app_a/config/locales/en.yml:2"],
+      true,
+      ["users_path"],
+      "`users_path` → `/users`",
+      ["app_a/config/routes.rb:1"],
+      ["greet.only_a"],
+    ],
+    [
+      ["app_b/app/views/shared/_card.html.erb:0"],
+      ["app_b/config/locales/en.yml:2"],
+      true,
+      ["posts_path"],
+      "`posts_path` → `/posts`",
+      ["app_b/config/routes.rb:1"],
+      ["greet.only_b"],
+    ],
+  ]);
+  await multi.send("shutdown", {});
+  await multi.send("exit", {}, true);
+  fs.rmSync(multiRoot, { recursive: true, force: true });
   // Per-language switches from the client's initializationOptions: no diagnostics, no formatting edits.
   const off = startServer();
   await off.send("initialize", {

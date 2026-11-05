@@ -1,0 +1,474 @@
+"{% comment %} A {{ commented }} block {% endcomment %}"
+   "{% comment %}"             comment.block.liquid > punctuation.definition.comment.begin.liquid
+   " A {{ commented }} block " comment.block.liquid
+   "{% endcomment %}"          comment.block.liquid > punctuation.definition.comment.end.liquid
+"{% # inline note %}"
+   "{% #"                      comment.block.liquid > punctuation.definition.comment.begin.liquid
+   " inline note "             comment.block.liquid
+   "%}"                        comment.block.liquid > punctuation.definition.comment.end.liquid
+"{%- # trimmed note -%}"
+   "{%- #"                     comment.block.liquid > punctuation.definition.comment.begin.liquid
+   " trimmed note "            comment.block.liquid
+   "-%}"                       comment.block.liquid > punctuation.definition.comment.end.liquid
+"{% raw %}{{ not_liquid }} {% if x %}{% endraw %}"
+   "{%"                        meta.raw.liquid > punctuation.section.embedded.begin.liquid
+   "raw"                       meta.raw.liquid > keyword.control.liquid
+   "%}"                        meta.raw.liquid > punctuation.section.embedded.end.liquid
+   "{{ not_liquid }} {% if x %}"meta.raw.liquid
+   "{%"                        meta.raw.liquid > punctuation.section.embedded.begin.liquid
+   "endraw"                    meta.raw.liquid > keyword.control.liquid
+   "%}"                        meta.raw.liquid > punctuation.section.embedded.end.liquid
+"{%- raw -%}{{ trimmed_raw }}{%- endraw -%}"
+   "{%-"                       meta.raw.liquid > punctuation.section.embedded.begin.liquid
+   "raw"                       meta.raw.liquid > keyword.control.liquid
+   "-%}"                       meta.raw.liquid > punctuation.section.embedded.end.liquid
+   "{{ trimmed_raw }}"         meta.raw.liquid
+   "{%-"                       meta.raw.liquid > punctuation.section.embedded.begin.liquid
+   "endraw"                    meta.raw.liquid > keyword.control.liquid
+   "-%}"                       meta.raw.liquid > punctuation.section.embedded.end.liquid
+"{%- comment -%} trimmed {%- endcomment -%}"
+   "{%- comment -%}"           comment.block.liquid > punctuation.definition.comment.begin.liquid
+   " trimmed "                 comment.block.liquid
+   "{%- endcomment -%}"        comment.block.liquid > punctuation.definition.comment.end.liquid
+"{% comment %}{% comment %}inner{% endcomment %} still comment {% endcomment %}"
+   "{% comment %}"             comment.block.liquid > punctuation.definition.comment.begin.liquid
+   "{% comment %}"             comment.block.liquid > comment.block.liquid > punctuation.definition.comment.begin.liquid
+   "inner"                     comment.block.liquid > comment.block.liquid
+   "{% endcomment %}"          comment.block.liquid > comment.block.liquid > punctuation.definition.comment.end.liquid
+   " still comment "           comment.block.liquid
+   "{% endcomment %}"          comment.block.liquid > punctuation.definition.comment.end.liquid
+"<b>after nested</b>"
+   "<"                         meta.tag.inline.b.start.html > punctuation.definition.tag.begin.html
+   "b"                         meta.tag.inline.b.start.html > entity.name.tag.html
+   ">"                         meta.tag.inline.b.start.html > punctuation.definition.tag.end.html
+   "after nested"              
+   "</"                        meta.tag.inline.b.end.html > punctuation.definition.tag.begin.html
+   "b"                         meta.tag.inline.b.end.html > entity.name.tag.html
+   ">"                         meta.tag.inline.b.end.html > punctuation.definition.tag.end.html
+"{{ \"a }} b\" }}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "a "                        meta.embedded.line.liquid > string.quoted.double.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   " b\" }}"                   
+"{{ \"unterminated }}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "unterminated "             meta.embedded.line.liquid > string.quoted.double.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"<i>string ended at the tag</i>"
+   "<"                         meta.tag.inline.i.start.html > punctuation.definition.tag.begin.html
+   "i"                         meta.tag.inline.i.start.html > entity.name.tag.html
+   ">"                         meta.tag.inline.i.start.html > punctuation.definition.tag.end.html
+   "string ended at the tag"   
+   "</"                        meta.tag.inline.i.end.html > punctuation.definition.tag.begin.html
+   "i"                         meta.tag.inline.i.end.html > entity.name.tag.html
+   ">"                         meta.tag.inline.i.end.html > punctuation.definition.tag.end.html
+"{{ x-}}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "x"                         meta.embedded.line.liquid > variable.other.liquid
+   "-}}"                       meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"{% liquid assign y = 2"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "liquid"                    meta.embedded.block.liquid > keyword.control.liquid
+   "assign"                    meta.embedded.block.liquid > support.function.tag.liquid
+   "y"                         meta.embedded.block.liquid > variable.other.liquid
+   "="                         meta.embedded.block.liquid > keyword.operator.assignment.liquid
+   "2"                         meta.embedded.block.liquid > constant.numeric.liquid
+"  echo y"
+   "echo"                      meta.embedded.block.liquid > support.function.tag.liquid
+   "y"                         meta.embedded.block.liquid > variable.other.liquid
+"%}"
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"<h1>{{ page.title | escape }}</h1>"
+   "<"                         meta.tag.structure.h1.start.html > punctuation.definition.tag.begin.html
+   "h1"                        meta.tag.structure.h1.start.html > entity.name.tag.html
+   ">"                         meta.tag.structure.h1.start.html > punctuation.definition.tag.end.html
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "page"                      meta.embedded.line.liquid > variable.other.liquid
+   "."                         meta.embedded.line.liquid > punctuation.accessor.liquid
+   "title"                     meta.embedded.line.liquid > variable.other.property.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "escape"                    meta.embedded.line.liquid > support.function.filter.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "</"                        meta.tag.structure.h1.end.html > punctuation.definition.tag.begin.html
+   "h1"                        meta.tag.structure.h1.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.h1.end.html > punctuation.definition.tag.end.html
+"{{- product.title | upcase | truncate: 20, \"...\" -}}"
+   "{{-"                       meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "product"                   meta.embedded.line.liquid > variable.other.liquid
+   "."                         meta.embedded.line.liquid > punctuation.accessor.liquid
+   "title"                     meta.embedded.line.liquid > variable.other.property.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "upcase"                    meta.embedded.line.liquid > support.function.filter.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "truncate"                  meta.embedded.line.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.line.liquid > punctuation.separator.key-value.liquid
+   "20"                        meta.embedded.line.liquid > constant.numeric.liquid
+   ","                         meta.embedded.line.liquid > punctuation.separator.comma.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "..."                       meta.embedded.line.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "-}}"                       meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"{{ 'a' | append: \"b\" | default: nil }}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "'"                         meta.embedded.line.liquid > string.quoted.single.liquid > punctuation.definition.string.begin.liquid
+   "a"                         meta.embedded.line.liquid > string.quoted.single.liquid
+   "'"                         meta.embedded.line.liquid > string.quoted.single.liquid > punctuation.definition.string.end.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "append"                    meta.embedded.line.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.line.liquid > punctuation.separator.key-value.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "b"                         meta.embedded.line.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.line.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "default"                   meta.embedded.line.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.line.liquid > punctuation.separator.key-value.liquid
+   "nil"                       meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"{{ price | times: 1.5 | round: 2 }}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "price"                     meta.embedded.line.liquid > variable.other.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "times"                     meta.embedded.line.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.line.liquid > punctuation.separator.key-value.liquid
+   "1.5"                       meta.embedded.line.liquid > constant.numeric.liquid
+   "|"                         meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "round"                     meta.embedded.line.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.line.liquid > punctuation.separator.key-value.liquid
+   "2"                         meta.embedded.line.liquid > constant.numeric.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"{% assign total = cart.total_price | divided_by: 100 %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "assign"                    meta.embedded.block.liquid > support.function.tag.liquid
+   "total"                     meta.embedded.block.liquid > variable.other.liquid
+   "="                         meta.embedded.block.liquid > keyword.operator.assignment.liquid
+   "cart"                      meta.embedded.block.liquid > variable.other.liquid
+   "."                         meta.embedded.block.liquid > punctuation.accessor.liquid
+   "total_price"               meta.embedded.block.liquid > variable.other.property.liquid
+   "|"                         meta.embedded.block.liquid > punctuation.separator.filter.liquid
+   "divided_by"                meta.embedded.block.liquid > support.function.filter.liquid
+   ":"                         meta.embedded.block.liquid > punctuation.separator.key-value.liquid
+   "100"                       meta.embedded.block.liquid > constant.numeric.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{%- if user.name == \"Ann\" and count >= 3 or tags contains 'new' -%}"
+   "{%-"                       meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "if"                        meta.embedded.block.liquid > keyword.control.liquid
+   "user"                      meta.embedded.block.liquid > variable.other.liquid
+   "."                         meta.embedded.block.liquid > punctuation.accessor.liquid
+   "name"                      meta.embedded.block.liquid > variable.other.property.liquid
+   "=="                        meta.embedded.block.liquid > keyword.operator.comparison.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "Ann"                       meta.embedded.block.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "and"                       meta.embedded.block.liquid > keyword.operator.logical.liquid
+   "count"                     meta.embedded.block.liquid > variable.other.liquid
+   ">="                        meta.embedded.block.liquid > keyword.operator.comparison.liquid
+   "3"                         meta.embedded.block.liquid > constant.numeric.liquid
+   "or"                        meta.embedded.block.liquid > keyword.operator.logical.liquid
+   "tags"                      meta.embedded.block.liquid > variable.other.liquid
+   "contains"                  meta.embedded.block.liquid > keyword.operator.logical.liquid
+   "'"                         meta.embedded.block.liquid > string.quoted.single.liquid > punctuation.definition.string.begin.liquid
+   "new"                       meta.embedded.block.liquid > string.quoted.single.liquid
+   "'"                         meta.embedded.block.liquid > string.quoted.single.liquid > punctuation.definition.string.end.liquid
+   "-%}"                       meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"  <p class=\"{{ klass }}\">{{ user.name }}</p>"
+   "<"                         meta.tag.structure.p.start.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.start.html > entity.name.tag.html
+   "class"                     meta.tag.structure.p.start.html > meta.attribute.class.html > entity.other.attribute-name.html
+   "="                         meta.tag.structure.p.start.html > meta.attribute.class.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.structure.p.start.html > meta.attribute.class.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "{{"                        meta.tag.structure.p.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "klass"                     meta.tag.structure.p.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.tag.structure.p.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "\""                        meta.tag.structure.p.start.html > meta.attribute.class.html > string.quoted.double.html > punctuation.definition.string.end.html
+   ">"                         meta.tag.structure.p.start.html > punctuation.definition.tag.end.html
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "user"                      meta.embedded.line.liquid > variable.other.liquid
+   "."                         meta.embedded.line.liquid > punctuation.accessor.liquid
+   "name"                      meta.embedded.line.liquid > variable.other.property.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "</"                        meta.tag.structure.p.end.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
+"{% elsif user.role != \"admin\" %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "elsif"                     meta.embedded.block.liquid > keyword.control.liquid
+   "user"                      meta.embedded.block.liquid > variable.other.liquid
+   "."                         meta.embedded.block.liquid > punctuation.accessor.liquid
+   "role"                      meta.embedded.block.liquid > variable.other.property.liquid
+   "!="                        meta.embedded.block.liquid > keyword.operator.comparison.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "admin"                     meta.embedded.block.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"  <p>other</p>"
+   "<"                         meta.tag.structure.p.start.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.start.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.start.html > punctuation.definition.tag.end.html
+   "other"                     
+   "</"                        meta.tag.structure.p.end.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
+"{% else %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "else"                      meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"  <p>{{ empty }} {{ blank }} {{ true }} {{ false }} {{ nil }}</p>"
+   "<"                         meta.tag.structure.p.start.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.start.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.start.html > punctuation.definition.tag.end.html
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "empty"                     meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "blank"                     meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "true"                      meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "false"                     meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "nil"                       meta.embedded.line.liquid > constant.language.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "</"                        meta.tag.structure.p.end.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
+"{% endif %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endif"                     meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% unless items == empty %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "unless"                    meta.embedded.block.liquid > keyword.control.liquid
+   "items"                     meta.embedded.block.liquid > variable.other.liquid
+   "=="                        meta.embedded.block.liquid > keyword.operator.comparison.liquid
+   "empty"                     meta.embedded.block.liquid > constant.language.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"  {% for i in (1..5) %}{{ i }}{% endfor %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "for"                       meta.embedded.block.liquid > keyword.control.liquid
+   "i"                         meta.embedded.block.liquid > variable.other.liquid
+   "in"                        meta.embedded.block.liquid > keyword.operator.logical.liquid
+   "("                         meta.embedded.block.liquid > punctuation.definition.range.begin.liquid
+   "1"                         meta.embedded.block.liquid > constant.numeric.liquid
+   ".."                        meta.embedded.block.liquid > keyword.operator.range.liquid
+   "5"                         meta.embedded.block.liquid > constant.numeric.liquid
+   ")"                         meta.embedded.block.liquid > punctuation.definition.range.end.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "i"                         meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endfor"                    meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"  {% for item in items limit: 2 reversed %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "for"                       meta.embedded.block.liquid > keyword.control.liquid
+   "item"                      meta.embedded.block.liquid > variable.other.liquid
+   "in"                        meta.embedded.block.liquid > keyword.operator.logical.liquid
+   "items"                     meta.embedded.block.liquid > variable.other.liquid
+   "limit"                     meta.embedded.block.liquid > variable.parameter.liquid
+   ":"                         meta.embedded.block.liquid > punctuation.separator.key-value.liquid
+   "2"                         meta.embedded.block.liquid > constant.numeric.liquid
+   "reversed"                  meta.embedded.block.liquid > variable.other.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"    {{ forloop.index }} {{ item.title }}"
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "forloop"                   meta.embedded.line.liquid > variable.other.liquid
+   "."                         meta.embedded.line.liquid > punctuation.accessor.liquid
+   "index"                     meta.embedded.line.liquid > variable.other.property.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "item"                      meta.embedded.line.liquid > variable.other.liquid
+   "."                         meta.embedded.line.liquid > punctuation.accessor.liquid
+   "title"                     meta.embedded.line.liquid > variable.other.property.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+"  {% endfor %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endfor"                    meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% endunless %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endunless"                 meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% case type %}{% when \"a\" %}A{% else %}B{% endcase %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "case"                      meta.embedded.block.liquid > keyword.control.liquid
+   "type"                      meta.embedded.block.liquid > variable.other.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "when"                      meta.embedded.block.liquid > keyword.control.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "a"                         meta.embedded.block.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "A"                         
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "else"                      meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "B"                         
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endcase"                   meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% capture note %}hello {{ name }}{% endcapture %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "capture"                   meta.embedded.block.liquid > keyword.control.liquid
+   "note"                      meta.embedded.block.liquid > variable.other.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "hello "                    
+   "{{"                        meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "name"                      meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endcapture"                meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% render \"card\", product: product, show: true %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "render"                    meta.embedded.block.liquid > support.function.tag.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "card"                      meta.embedded.block.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   ","                         meta.embedded.block.liquid > punctuation.separator.comma.liquid
+   "product"                   meta.embedded.block.liquid > variable.parameter.liquid
+   ":"                         meta.embedded.block.liquid > punctuation.separator.key-value.liquid
+   "product"                   meta.embedded.block.liquid > variable.other.liquid
+   ","                         meta.embedded.block.liquid > punctuation.separator.comma.liquid
+   "show"                      meta.embedded.block.liquid > variable.parameter.liquid
+   ":"                         meta.embedded.block.liquid > punctuation.separator.key-value.liquid
+   "true"                      meta.embedded.block.liquid > constant.language.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% include 'snippet' %}"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "include"                   meta.embedded.block.liquid > support.function.tag.liquid
+   "'"                         meta.embedded.block.liquid > string.quoted.single.liquid > punctuation.definition.string.begin.liquid
+   "snippet"                   meta.embedded.block.liquid > string.quoted.single.liquid
+   "'"                         meta.embedded.block.liquid > string.quoted.single.liquid > punctuation.definition.string.end.liquid
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"{% liquid"
+   "{%"                        meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "liquid"                    meta.embedded.block.liquid > keyword.control.liquid
+"  # statement comment"
+   "  # statement comment"     meta.embedded.block.liquid > comment.line.number-sign.liquid
+"  assign x = 1"
+   "assign"                    meta.embedded.block.liquid > support.function.tag.liquid
+   "x"                         meta.embedded.block.liquid > variable.other.liquid
+   "="                         meta.embedded.block.liquid > keyword.operator.assignment.liquid
+   "1"                         meta.embedded.block.liquid > constant.numeric.liquid
+"  if x < 2"
+   "if"                        meta.embedded.block.liquid > keyword.control.liquid
+   "x"                         meta.embedded.block.liquid > variable.other.liquid
+   "<"                         meta.embedded.block.liquid > keyword.operator.comparison.liquid
+   "2"                         meta.embedded.block.liquid > constant.numeric.liquid
+"    echo \"small\" | upcase"
+   "echo"                      meta.embedded.block.liquid > support.function.tag.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.begin.liquid
+   "small"                     meta.embedded.block.liquid > string.quoted.double.liquid
+   "\""                        meta.embedded.block.liquid > string.quoted.double.liquid > punctuation.definition.string.end.liquid
+   "|"                         meta.embedded.block.liquid > punctuation.separator.filter.liquid
+   "upcase"                    meta.embedded.block.liquid > support.function.filter.liquid
+"  endif"
+   "endif"                     meta.embedded.block.liquid > keyword.control.liquid
+"%}"
+   "%}"                        meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+"<a class=\"btn {{ active }}\" href=\"{{ url }}\" data-x='{% if y %}y{% endif %}'>x</a>"
+   "<"                         meta.tag.inline.a.start.html > punctuation.definition.tag.begin.html
+   "a"                         meta.tag.inline.a.start.html > entity.name.tag.html
+   "class"                     meta.tag.inline.a.start.html > meta.attribute.class.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.class.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "btn "                      meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html
+   "{{"                        meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "active"                    meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.class.html > string.quoted.double.html > punctuation.definition.string.end.html
+   "href"                      meta.tag.inline.a.start.html > meta.attribute.href.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.href.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.href.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "{{"                        meta.tag.inline.a.start.html > meta.attribute.href.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "url"                       meta.tag.inline.a.start.html > meta.attribute.href.html > string.quoted.double.html > meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.tag.inline.a.start.html > meta.attribute.href.html > string.quoted.double.html > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "\""                        meta.tag.inline.a.start.html > meta.attribute.href.html > string.quoted.double.html > punctuation.definition.string.end.html
+   "data-x"                    meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > entity.other.attribute-name.html
+   "="                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > punctuation.separator.key-value.html
+   "'"                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > punctuation.definition.string.begin.html
+   "{%"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "if"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > keyword.control.liquid
+   "y"                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > variable.other.liquid
+   "%}"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "y"                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html
+   "{%"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endif"                     meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "'"                         meta.tag.inline.a.start.html > meta.attribute.data-x.data-x.html > string.quoted.single.html > punctuation.definition.string.end.html
+   ">"                         meta.tag.inline.a.start.html > punctuation.definition.tag.end.html
+   "x"                         
+   "</"                        meta.tag.inline.a.end.html > punctuation.definition.tag.begin.html
+   "a"                         meta.tag.inline.a.end.html > entity.name.tag.html
+   ">"                         meta.tag.inline.a.end.html > punctuation.definition.tag.end.html
+"<div {{ attrs }} id=\"d\"></div>"
+   "<"                         meta.tag.structure.div.start.html > punctuation.definition.tag.begin.html
+   "div"                       meta.tag.structure.div.start.html > entity.name.tag.html
+   "{{"                        meta.tag.structure.div.start.html > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "attrs"                     meta.tag.structure.div.start.html > meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.tag.structure.div.start.html > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   "id"                        meta.tag.structure.div.start.html > meta.attribute.id.html > entity.other.attribute-name.html
+   "="                         meta.tag.structure.div.start.html > meta.attribute.id.html > punctuation.separator.key-value.html
+   "\""                        meta.tag.structure.div.start.html > meta.attribute.id.html > string.quoted.double.html > punctuation.definition.string.begin.html
+   "d"                         meta.tag.structure.div.start.html > meta.attribute.id.html > string.quoted.double.html
+   "\""                        meta.tag.structure.div.start.html > meta.attribute.id.html > string.quoted.double.html > punctuation.definition.string.end.html
+   ">"                         meta.tag.structure.div.start.html > punctuation.definition.tag.end.html
+   "</"                        meta.tag.structure.div.end.html > punctuation.definition.tag.begin.html
+   "div"                       meta.tag.structure.div.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.div.end.html > punctuation.definition.tag.end.html
+"<script>const n = {{ count | json }}; {% if debug %}console.log(n);{% endif %}</script>"
+   "<"                         meta.embedded.block.html > meta.tag.metadata.script.start.html > punctuation.definition.tag.begin.html
+   "script"                    meta.embedded.block.html > meta.tag.metadata.script.start.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.script.start.html > punctuation.definition.tag.end.html
+   "const"                     meta.embedded.block.html > source.js > meta.var.expr.js > storage.type.js
+   "n"                         meta.embedded.block.html > source.js > meta.var.expr.js > meta.var-single-variable.expr.js > meta.definition.variable.js > variable.other.constant.js
+   "="                         meta.embedded.block.html > source.js > meta.var.expr.js > keyword.operator.assignment.js
+   "{{"                        meta.embedded.block.html > source.js > meta.var.expr.js > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "count"                     meta.embedded.block.html > source.js > meta.var.expr.js > meta.embedded.line.liquid > variable.other.liquid
+   "|"                         meta.embedded.block.html > source.js > meta.var.expr.js > meta.embedded.line.liquid > punctuation.separator.filter.liquid
+   "json"                      meta.embedded.block.html > source.js > meta.var.expr.js > meta.embedded.line.liquid > support.function.filter.liquid
+   "}}"                        meta.embedded.block.html > source.js > meta.var.expr.js > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   ";"                         meta.embedded.block.html > source.js > punctuation.terminator.statement.js
+   "{%"                        meta.embedded.block.html > source.js > meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "if"                        meta.embedded.block.html > source.js > meta.embedded.block.liquid > keyword.control.liquid
+   "debug"                     meta.embedded.block.html > source.js > meta.embedded.block.liquid > variable.other.liquid
+   "%}"                        meta.embedded.block.html > source.js > meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "console"                   meta.embedded.block.html > source.js > meta.function-call.js > variable.other.object.js
+   "."                         meta.embedded.block.html > source.js > meta.function-call.js > punctuation.accessor.js
+   "log"                       meta.embedded.block.html > source.js > meta.function-call.js > entity.name.function.js
+   "("                         meta.embedded.block.html > source.js > meta.brace.round.js
+   "n"                         meta.embedded.block.html > source.js > variable.other.readwrite.js
+   ")"                         meta.embedded.block.html > source.js > meta.brace.round.js
+   ";"                         meta.embedded.block.html > source.js > punctuation.terminator.statement.js
+   "{%"                        meta.embedded.block.html > source.js > meta.embedded.block.liquid > punctuation.section.embedded.begin.liquid
+   "endif"                     meta.embedded.block.html > source.js > meta.embedded.block.liquid > keyword.control.liquid
+   "%}"                        meta.embedded.block.html > source.js > meta.embedded.block.liquid > punctuation.section.embedded.end.liquid
+   "<"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.begin.html > source.js-ignored-vscode
+   "/"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.begin.html
+   "script"                    meta.embedded.block.html > meta.tag.metadata.script.end.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.script.end.html > punctuation.definition.tag.end.html
+"<style>.a { color: {{ color }}; }</style>"
+   "<"                         meta.embedded.block.html > meta.tag.metadata.style.start.html > punctuation.definition.tag.begin.html
+   "style"                     meta.embedded.block.html > meta.tag.metadata.style.start.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.style.start.html > punctuation.definition.tag.end.html
+   ".a "                       meta.embedded.block.html > source.css
+   "{"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.section.property-list.begin.bracket.curly.css
+   "color"                     meta.embedded.block.html > source.css > meta.property-list.css > meta.property-name.css > support.type.property-name.css
+   ":"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.separator.key-value.css
+   "{{"                        meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line.liquid > punctuation.section.embedded.begin.liquid
+   "color"                     meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line.liquid > variable.other.liquid
+   "}}"                        meta.embedded.block.html > source.css > meta.property-list.css > meta.property-value.css > meta.embedded.line.liquid > punctuation.section.embedded.end.liquid
+   ";"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.terminator.rule.css
+   "}"                         meta.embedded.block.html > source.css > meta.property-list.css > punctuation.section.property-list.end.bracket.curly.css
+   "<"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.begin.html > source.css-ignored-vscode
+   "/"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.begin.html
+   "style"                     meta.embedded.block.html > meta.tag.metadata.style.end.html > entity.name.tag.html
+   ">"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.end.html
+""

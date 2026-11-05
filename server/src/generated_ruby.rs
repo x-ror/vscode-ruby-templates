@@ -66,6 +66,15 @@ impl Compiled {
         prism::LocalUses { spans, ..uses }
     }
 
+    /// The template's local variables, among the code the template wrote.
+    pub fn local_tokens(&self) -> Vec<prism::LocalToken> {
+        let tokens = prism::local_tokens(&self.source);
+        tokens
+            .into_iter()
+            .filter_map(|t| template_span(&self.verbatim, t.start, t.end).map(|(start, end)| prism::LocalToken { start, end, ..t }))
+            .collect()
+    }
+
     /// Where the template declares the local variable at `template_offset`, within the code the template wrote.
     pub fn local_definition(&self, template_offset: usize) -> Option<prism::LocalDefinition> {
         let found = prism::local_definition(&self.source, generated_offset(&self.verbatim, template_offset)?)?;

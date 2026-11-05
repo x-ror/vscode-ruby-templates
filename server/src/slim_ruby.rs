@@ -70,6 +70,11 @@ pub fn block_locals(parsed: &Parsed, offset: usize) -> Vec<String> {
     compile(&parsed.pieces).block_locals(offset)
 }
 
+/// The template's local variables.
+pub fn local_tokens(parsed: &Parsed) -> Vec<crate::prism::LocalToken> {
+    compile(&parsed.pieces).local_tokens()
+}
+
 fn compile(pieces: &[Piece]) -> Compiled {
     let mut generator = Generator {
         pieces,

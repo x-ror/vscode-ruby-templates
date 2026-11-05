@@ -1,0 +1,26 @@
+"% items.each do |item|"
+   "%"                         meta.embedded.line > punctuation.section.embedded.begin
+   " items"                    meta.embedded.line > source.ruby
+   "."                         meta.embedded.line > source.ruby > punctuation.separator.method.ruby
+   "each"                      meta.embedded.line > source.ruby > meta.function-call.ruby > entity.name.function.ruby
+   "do"                        meta.embedded.line > source.ruby > keyword.control.start-block.ruby
+   "|"                         meta.embedded.line > source.ruby > meta.block.parameters.ruby > punctuation.separator.variable.ruby
+   "item"                      meta.embedded.line > source.ruby > meta.block.parameters.ruby > variable.other.block.ruby
+   "|"                         meta.embedded.line > source.ruby > meta.block.parameters.ruby > punctuation.separator.variable.ruby
+"  <li><%= item %></li>"
+   "  <li>"                    
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   " item "                    meta.embedded.line > source.ruby
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+   "</li>"                     
+"% end"
+   "%"                         meta.embedded.line > punctuation.section.embedded.begin
+   "end"                       meta.embedded.line > source.ruby > keyword.control.ruby
+"%% not code"
+   "%%"                        constant.character.escape
+   " not code"                 
+" % indented stays text"
+   " % indented stays text"    
+"100 % complete"
+   "100 % complete"            
+""

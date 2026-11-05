@@ -40,7 +40,7 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 
 ### Highlighting and editing
 
-- Full syntax highlighting for ERB (`.html.erb`, `.erubi`, `.js.erb`, `.css.erb`, `.json.erb`, `.yml.erb`, …), Haml, Slim and Skim, including embedded JavaScript, CSS, SCSS, CoffeeScript and Markdown blocks.
+- Full syntax highlighting for ERB (`.html.erb`, `.erubi`, `.js.erb`, `.css.erb`, `.json.erb`, `.yml.erb`, …), Haml, Slim, Skim and Liquid, including embedded JavaScript, CSS, SCSS, CoffeeScript and Markdown blocks.
 - Comment toggling, bracket matching, auto-closing `<% %>`, smart indentation and folding.
 - Typing `>` in ERB closes the HTML tag; renaming `<div>` renames its `</div>` (linked editing).
 - 50+ snippets per language for Rails, Hotwire and ViewComponent: `link_to`, `render`, `form_with`, `ff`, `turbo_frame`, `ts-append`, `stimulus`, `locals`, `flash`, …
@@ -55,22 +55,50 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 
 ### Navigation and completion that know Rails
 
-| Where                                 | What you get                                                                                          |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `render "users/card"`, `render @user` | Go to the partial, hover shows the file, completion of partial names, find all renders                |
-| `render ButtonComponent.new`          | Completion of ViewComponents, go to class and template, `with_*` slot completion                      |
-| `@user`                               | Completion, hover and go to definition from the action and its `before_action`s                       |
-| `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`                      |
-| `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references                    |
-| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`                                          |
-| `f.text_field :`                      | Form builder methods and model columns from `db/schema.rb`                                            |
-| `data-controller`, `data-action`      | Stimulus controller names, actions, targets, and the element's `-target`/`-value`/`-class` attributes |
-| `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                                   |
-| `def show` in a controller            | Go to the action's templates                                                                          |
-| `user` in `@users.each do \|user\|`   | Go to the block parameter or the assignment that declares it                                          |
-| `report.title`                        | Column type, `null:` and `default:` on hover, go to `db/schema.rb`                                    |
+| Where                                 | What you get                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `render "users/card"`, `render @user` | Go to the partial, hover shows the file, completion of partial names, find all renders                       |
+| `render ButtonComponent.new`          | Completion of ViewComponents, go to class and template, `with_*` slot completion                             |
+| `@user`                               | Completion, hover and go to definition from the action and its `before_action`s                              |
+| `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`                             |
+| `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references                           |
+| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`, hover with its signature and comment           |
+| `f.text_field :`                      | Form builder methods and model columns from `db/schema.rb`                                                   |
+| `data-controller`, `data-action`      | Stimulus controller names, actions, targets, and the element's `-target`/`-value`/`-class` attributes        |
+| `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                                          |
+| `def show` in a controller            | Go to the action's templates                                                                                 |
+| `user` in `@users.each do \|user\|`   | Go to the block parameter or the assignment that declares it                                                 |
+| `user`, `item` (locals)               | Semantic colours for uses of strict locals (`parameter`) and block variables (`variable`) over the grammar's |
+| `report.title`                        | Column type, `null:` and `default:` on hover, go to `db/schema.rb`                                           |
 
 Plus: rename or move a partial in the Explorer and every `render` that points to it is updated; <kbd>F2</kbd> on a partial's strict local renames it in the partial and in every `render` that passes it; <kbd>Ctrl+T</kbd> finds templates by render name (`uscard` → `users/card`); outline and breadcrumbs for every template; Jbuilder and Builder views get partial navigation too.
+
+### File types
+
+The file name picks the language id, which decides the comment syntax and the `[erb-js]`-style editor settings; the server picks the checks by the same name.
+
+| Files                                                                                                                                               | Language id                      | Comment toggle  | Highlighting      | Extra checks     | Formatting |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------- | ----------------- | ---------------- | ---------- |
+| `.html.erb`, `.html+phone.erb`, `.turbo_stream.erb`, `.rhtml`, `.html.erubi`, `.html.erubis`, bare `.erb` under `app/views` with a locale or markup | `erb` (also `.erubi`, `.erubis`) | `<%# %>`        | HTML + Ruby       | HTML tags, links | yes        |
+| `.js.erb`                                                                                                                                           | `erb-js`                         | `//`, `/* */`   | JavaScript + Ruby | none             | no         |
+| `.scss.erb`                                                                                                                                         | `erb-scss`                       | `//`, `/* */`   | SCSS + Ruby       | none             | no         |
+| `.css.erb`                                                                                                                                          | `erb-css`                        | `/* */`         | CSS + Ruby        | none             | no         |
+| `.json.erb`                                                                                                                                         | `erb-json`                       | `<%# %>`        | JSON + Ruby       | none             | no         |
+| `.text.erb`, `.txt.erb`                                                                                                                             | `erb-text`                       | `<%# %>`        | Text + Ruby       | none             | no         |
+| Any file you assign to `erb-percent` (see below)                                                                                                    | `erb-percent`                    | `<%# %>`        | Text + Ruby       | none             | no         |
+| `.xml.erb`, `.rss.erb`, `.atom.erb`, `.svg.erb`                                                                                                     | `erb-xml`                        | `<!-- -->`      | XML + Ruby        | none             | no         |
+| `.md.erb`                                                                                                                                           | `erb-markdown`                   | `<!-- -->`      | Markdown + Ruby   | none             | no         |
+| `.rb.erb`                                                                                                                                           | `erb-ruby`                       | `#`             | Ruby              | none             | no         |
+| `.yml.erb`, `.yaml.erb`                                                                                                                             | `erb-yaml`                       | `#`             | YAML + Ruby       | none             | no         |
+| `.liquid`, `.html.liquid`                                                                                                                           | `liquid`                         | `{% comment %}` | HTML + Liquid     | none             | no         |
+
+Every row gets the ERB and Ruby checks and, under `app/views`, the `render` checks (`unresolved-render`, `strict-locals`). Only HTML hosts add the HTML ones (unclosed or unbalanced tags, missing `alt`, duplicate `id`), linked tag renaming and attribute completion. Any other bare `.erb` (`nginx.conf.erb`) gets the ERB and Ruby checks only.
+
+`erb-percent` is for plain-Ruby ERB with `trim_mode: "%"` (RDoc-style templates, some gems): a line starting with `%` is Ruby and `%%` is a literal `%`. Rails' Erubi has no such lines (`% complete` in a view is text), so no file gets it by default; opt in with `"files.associations": { "lib/**/*.erb": "erb-percent" }`. It gets the ERB and Ruby checks with every `%` line compiled as Ruby, so `% if x` … `<% else %>` … `% end` is one block and a syntax error in a `%` line is reported on it. `%` lines get diagnostics and the preview (stdlib ERB, `trim_mode: "%-"`) only: no completion or definition inside them, no formatting, no HTML checks.
+
+The comment column applies to a line that starts outside a tag. On lines strictly inside a multi-line `<% %>` or `<%= %>` tag (not its `<%` or `%>` line), <kbd>Ctrl+/</kbd> toggles a Ruby `# ` instead; on the `<%` line it comments as usual, and _Toggle ERB Tag_ comments a whole tag.
+
+`liquid` (Shopify themes, Jekyll) is highlighting, comment toggling, bracket and `{{ }}` / `{% %}` auto-closing and indentation only: none of the Rails lookups or checks apply to it. Plain `.html` files are not claimed, so Jekyll includes need `"files.associations": { "**/_includes/**/*.html": "liquid" }`. If Shopify's Liquid extension also contributes `liquid`, disable one of the two for the workspace: VS Code uses one grammar per language id.
 
 ### Formatting
 
@@ -117,6 +145,8 @@ Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O error
 2. Open a Rails project and any view. That's it: highlighting, checks, navigation and formatting work immediately.
 3. Optional: turn on format on save, e.g. `"[erb]": { "editor.formatOnSave": true }` (also `[haml]`, `[slim]`).
 
+Several Rails apps in one window (multi-root workspaces, monorepos) work side by side: each file resolves partials, routes, translations and gems against the app it belongs to.
+
 Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, Intel) or Windows (x64).
 
 ## Settings
@@ -134,14 +164,85 @@ Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, In
 | `rubyTemplates.commands.*`                                        |                            | Paths of the Ruby tools used by preview and converters             |
 | `rubyTemplates.server.enabled` / `server.path`                    | `true` / bundled           | Run the language server, or use your own build                     |
 
+## Supported syntax
+
+What the grammars highlight and what the server parses (the server follows Erubi as Rails configures it, Haml 7.5 and Slim 5.2).
+
+### ERB
+
+| Syntax                   | Highlighting                          | Server                                    |
+| ------------------------ | ------------------------------------- | ----------------------------------------- |
+| `<% %>`                  | Ruby                                  | Code, no output                           |
+| `<%- %>`                 | Ruby                                  | Same as `<%`                              |
+| `<%= %>`                 | Ruby                                  | Escaped output                            |
+| `<%== %>`                | Ruby                                  | Unescaped output                          |
+| `<%# %>`                 | Comment                               | Comment                                   |
+| `<%# locals: (user:) %>` | Strict locals, as Ruby                | Strict locals checks, renames, completion |
+| `-%>`, `=%>`             | Tag end                               | Tag end (`=%>` as `-%>`, as in Erubi)     |
+| `<%%`, `%%>`             | Literal `<%` / `%>`                   | Text, not a tag                           |
+| `<%_`, `_%>`             | Not special: `_` starts the Ruby code | Not special, as in Erubi (code `_ x _`)   |
+| `%` lines                | Only in `erb-percent`                 | Only in `erb-percent` (`trim_mode: "%"`)  |
+
+Trim modes: Erubi's `trim: true`, the Rails default, is what the server models, so `-` before `%>` changes nothing in the checks. `trim_mode: "%"` is the opt-in `erb-percent` language id (see [File types](#file-types)); other stdlib modes (`<>`, `>`) are not modelled.
+
+### Haml
+
+| Syntax                                                                      | Highlighting      | Server                                                          |
+| --------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------- |
+| `%tag`, `.class`, `#id`, `!!!`, `/`, `-#`, `=`, `-`, `~`, `&=`, `!=`, `#{}` | yes               | Parsed as Haml 7.5.1 does, with its error messages              |
+| Attributes `{…}`, `(…)`, `[…]`                                              | yes               | Parsed; Ruby inside is checked                                  |
+| Filters `:plain` `:escaped` `:preserve` `:cdata`                            | Text              | Accepted                                                        |
+| Filters `:javascript` `:css` `:sass` `:scss` `:less` `:markdown` `:erb`     | Embedded language | Accepted                                                        |
+| Filters `:coffee` `:coffeescript`                                           | CoffeeScript      | Accepted                                                        |
+| Filter `:ruby`                                                              | Ruby              | Accepted, body checked as Ruby                                  |
+| Any other filter (Haml 5's `:maruku`, `:textile`, …)                        | Text              | `unknown-filter`                                                |
+| `succeed`, `precede`, `surround`, `preserve`, `find_and_preserve`           | Ruby              | Completion and hover (Haml 6/7 `RailsHelpers`), Haml files only |
+
+Haml 6 and 7 are targeted (Haml 7.5.1 is the reference); Haml 5 is not. Whether a filter's gem (`sass`, `coffee-script`, …) is installed isn't checked.
+
+### Slim and Skim
+
+| Syntax                                                                                                    | Highlighting                            | Server                                                              |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------- |
+| Tags, `.class`/`#id` shortcuts, `=`, `==`, `-`, `/`, `\|`, `'`, `doctype`, `#{}`                          | yes                                     | Parsed as Slim 5.2 does, with its error messages                    |
+| Attribute wrappers `(…)`, `[…]`, `{…}`, or none                                                           | yes                                     | Parsed; Ruby inside is checked                                      |
+| Engines `ruby:` `javascript:` `css:` `sass:` `scss:` `coffee:` `markdown:` `textile:` `rdoc:` `asciidoc:` | Embedded language where VS Code has one | Accepted                                                            |
+| Other engines: `erb:`, `less:`, `stylus:`, …                                                              | Highlighted                             | `unknown-engine` unless listed in `rubyTemplates.slim.extraEngines` |
+| Engines your app registers (`mjml:`)                                                                      | Text                                    | Accepted once added to `rubyTemplates.slim.extraEngines`            |
+
+`.skim` files use the Slim syntax and the `slim` settings. Slim options set per app (custom shortcuts, attribute delimiters, smart text, logic-less mode) are not read.
+
 ## Compatibility
 
 - **Ruby LSP** and this extension both register the `erb` language id and work side by side: Ruby LSP for `.rb` files, this extension for templates.
-- **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises. To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
+- **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises (see [Troubleshooting](#troubleshooting)). To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
 - **Emmet** works in ERB out of the box (`"emmet.includeLanguages": { "erb": "html" }` is a default); VS Code's Emmet expands to Slim syntax in Slim and Skim.
-- **Partials and formats**: partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`, and a folder that exists nowhere (`uesrs/card`) is flagged only once every view root, gems included, is known. Gems are found in `vendor/bundle`, `BUNDLE_PATH` (env, `.bundle/config`, `~/.bundle/config`) or `GEM_HOME`/`GEM_PATH`; with Ruby elsewhere (rbenv, asdf) the check stays off.
+- **Partials and formats**: a `dir/name` render missing from `app/views` is looked up in the app's engines, packs and components (`*/app/views`), then in the installed gems' views, for links, definition, hover and the missing-partial check; gem files are read-only (no diagnostics or rename edits); partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`, and a folder that exists nowhere (`uesrs/card`) is flagged only once every view root, gems included, is known. Gems are found in `vendor/bundle`, `BUNDLE_PATH` (env, `.bundle/config`, `~/.bundle/config`) or `GEM_HOME`/`GEM_PATH`; with Ruby elsewhere (rbenv, asdf) the check stays off.
 - **Generator templates** (`lib/templates/**/*.tt`, `lib/generators/**/templates/**`) open in their template language, without diagnostics or formatting, since the generator's own ERB is mixed in.
 - **Slim options set per app** aren't reflected in highlighting: custom shortcuts and attribute delimiters, smart text's implicit text lines, logic-less mode.
+
+## Troubleshooting
+
+### Other extensions for the same languages
+
+| Extension                                                                | Overlap                                                                    |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Ruby LSP (`Shopify.ruby-lsp`)                                            | Registers `erb`; may add its own ERB diagnostics, completion or formatting |
+| ERB formatters (e.g. `aliariff.vscode-erb-beautify`)                     | Formatter for `erb`                                                        |
+| Other ERB grammars                                                       | Grammar for `erb`                                                          |
+| Other Haml or Slim extensions (e.g. `karunamurti.haml`, `sianglim.slim`) | Grammar, snippets and often a formatter for `haml` / `slim`                |
+
+Symptoms are doubled diagnostics or completions, a formatter that asks which one to use, or different colours than the screenshots.
+
+- **Formatter**: choose ours per language with `"[erb]": { "editor.defaultFormatter": "x-ror.ruby-templates" }` (also `[haml]`, `[slim]`). To keep the other one, set `rubyTemplates.<erb|haml|slim>.format.enabled` to `false`.
+- **Grammar**: VS Code uses one grammar per language id, so only one extension's grammar applies. Disable the other extension for the workspace, or move our files to another id with `"files.associations": { "*.html.erb": "erb" }`.
+- **Diagnostics and completion**: turn off the duplicates in the other extension's settings. Ours: `rubyTemplates.<erb|haml|slim>.diagnostics.enabled` and `rubyTemplates.<erb|haml|slim|jbuilder>.disabledDiagnostics`.
+
+### Check what is active
+
+- **Language mode**: the language shown in the status bar (click it to change). This extension adds a `$(preview)` item with the template language (`ERB`, `HAML`, `SLIM`, `ERB-JS`, …) while a template is open; if it is missing, the file isn't one of ours.
+- **Grammar**: _Developer: Inspect Editor Tokens and Scopes_ on a token. Scopes ending in `.erb`, `.haml` or `.slim` (`text.html.erb`, `text.haml`, `text.slim`) are ours.
+- **Server**: the _Ruby Templates_ channel in the Output panel logs the language server, including why a format was skipped. _Ruby Templates: Restart Language Server_ restarts it. _Developer: Show Running Extensions_ lists every extension active for the window.
 
 ## Learn more
 

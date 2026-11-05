@@ -137,6 +137,71 @@ const checks = {
     await vscode.commands.executeCommand("workbench.action.files.revert");
   },
 
+  async "Ctrl+/ comments lines inside a multi-line ERB tag with #"() {
+    const editor = await open("app/views/users/toggle.html.erb");
+    const text =
+      "<div>\n<%\n  x = 1\ny = 2\n  z = 3\n%>\n<%=\n  # w\n  v\n%>\n</div>\n";
+    await editor.edit((b) =>
+      b.replace(new vscode.Range(0, 0, editor.document.lineCount, 0), text),
+    );
+    const ctrlSlash = () =>
+      vscode.commands.executeCommand("rubyTemplates.toggleErbLineComment");
+    const lines = (...numbers) =>
+      numbers.map((n) => editor.document.lineAt(n).text);
+    const select = (...ranges) => {
+      editor.selections = ranges.map(
+        ([a, b, c = a, d = b]) => new vscode.Selection(a, b, c, d),
+      );
+    };
+
+    select([2, 4]);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(2), ["  # x = 1"]);
+    assert.strictEqual(editor.selection.active.character, 6);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(2), ["  x = 1"]);
+
+    select([2, 1, 4, 2]);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(2, 3, 4), [
+      "#   x = 1",
+      "# y = 2",
+      "#   z = 3",
+    ]);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(2, 3, 4), ["  x = 1", "y = 2", "  z = 3"]);
+
+    // A selection ending at column 0 of the next line leaves that line alone.
+    select([3, 0, 4, 0]);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(3, 4), ["# y = 2", "  z = 3"]);
+    await ctrlSlash();
+
+    // Two cursors in different tags, one line already commented.
+    select([3, 1], [7, 3]);
+    await ctrlSlash();
+    assert.deepStrictEqual(lines(3, 7), ["# y = 2", "  w"]);
+
+    // Opening line and HTML fall back to the built-in.
+    select([1, 1]);
+    await ctrlSlash();
+    assert.strictEqual(lines(1)[0], "<%# <% %>");
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+  },
+
+  async "Ctrl+/ in a .js.erb tag body uses # and outside uses //"() {
+    const editor = await open("app/views/users/script.js.erb");
+    const ctrlSlash = () =>
+      vscode.commands.executeCommand("rubyTemplates.toggleErbLineComment");
+    editor.selection = new vscode.Selection(1, 3, 1, 3);
+    await ctrlSlash();
+    assert.strictEqual(editor.document.lineAt(1).text, "  # x = 1");
+    editor.selection = new vscode.Selection(3, 0, 3, 0);
+    await ctrlSlash();
+    assert.strictEqual(editor.document.lineAt(3).text, "// foo();");
+    await vscode.commands.executeCommand("workbench.action.files.revert");
+  },
+
   async "language server diagnostics"() {
     const editor = await open("app/views/users/index.html.erb");
     const messages = await until("diagnostics", () => {

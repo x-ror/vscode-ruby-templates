@@ -67,4 +67,117 @@ for (const line of [
 ])
   assert(decrease.test(line), line);
 
-console.log(`langconfig: ${cases.length + inside.length + 9} ok`);
+// Each erb-* host comments in its own syntax; only markup hosts keep the HTML pairs, indent rules and `<!--` folding.
+const readJson = (file) =>
+  JSON.parse(fs.readFileSync(new URL(file, import.meta.url), "utf8"));
+const { contributes } = readJson("../package.json");
+const erbConfig = readJson("../language-configuration/erb.json");
+const comments = {
+  "erb-js": { lineComment: "//", blockComment: ["/*", "*/"] },
+  "erb-scss": { lineComment: "//", blockComment: ["/*", "*/"] },
+  "erb-css": { blockComment: ["/*", "*/"] },
+  "erb-ruby": { lineComment: "#" },
+  "erb-yaml": { lineComment: "#" },
+  "erb-xml": { blockComment: ["<!--", "-->"] },
+  "erb-markdown": { blockComment: ["<!--", "-->"] },
+  "erb-json": erbConfig.comments,
+  "erb-text": erbConfig.comments,
+  "erb-percent": erbConfig.comments,
+};
+const regionLine = {
+  "erb-js": "// #region",
+  "erb-scss": "// #region",
+  "erb-css": "/* #region */",
+  "erb-ruby": "# region",
+  "erb-yaml": "#region",
+};
+const hasAngle = (config) =>
+  config.brackets.some(([open]) => open === "<") ||
+  config.surroundingPairs.some(([open]) => open === "<") ||
+  config.autoClosingPairs.some(({ open }) => open === "<!--");
+for (const { id, configuration } of contributes.languages) {
+  if (!id.startsWith("erb-")) continue;
+  const config = readJson(`../${configuration}`);
+  assert.deepStrictEqual(config.comments, comments[id], id);
+  assert(
+    config.autoClosingPairs.some(({ open }) => open === "<%"),
+    `${id} closes <%`,
+  );
+  assert(
+    config.brackets.some(([open]) => open === "<%"),
+    id,
+  );
+  assert.deepStrictEqual(config.onEnterRules, erbConfig.onEnterRules, id);
+  assert.strictEqual(config.wordPattern, erbConfig.wordPattern, id);
+  const start = new RegExp(config.folding.markers.start);
+  assert(start.test("<%# region"), `${id} folds <%# region`);
+  if (regionLine[id]) {
+    assert(start.test(regionLine[id]), `${id} folds ${regionLine[id]}`);
+    assert(!hasAngle(config), `${id} has HTML pairs`);
+    assert(
+      !new RegExp(config.indentationRules.increaseIndentPattern).test("<div>"),
+      `${id} indents <div>`,
+    );
+  } else {
+    assert.deepStrictEqual(config.folding, erbConfig.folding, id);
+    assert.deepStrictEqual(
+      config.indentationRules,
+      erbConfig.indentationRules,
+      id,
+    );
+    assert(hasAngle(config), `${id} keeps HTML pairs`);
+  }
+}
+
+const liquid = readJson("../language-configuration/liquid.json");
+const liquidIncrease = new RegExp(
+  liquid.indentationRules.increaseIndentPattern,
+);
+const liquidDecrease = new RegExp(
+  liquid.indentationRules.decreaseIndentPattern,
+);
+const liquidIndent = [
+  ["{% if user %}", true],
+  ["  {%- unless x -%}", true],
+  ["{% for i in (1..3) %}", true],
+  ["{% case a %}", true],
+  ["{% capture note %}", true],
+  ["{% tablerow p in ps %}", true],
+  ["{% form 'cart' %}", true],
+  ["{% paginate items by 5 %}", true],
+  ["{% else %}", true],
+  ['<div class="a">', true],
+  ["{% if a %}b{% endif %}", false],
+  ["{% assign x = 1 %}", false],
+  ["{{ if }}", false],
+  ["<div>x</div>", false],
+];
+for (const [line, expected] of liquidIndent)
+  assert.strictEqual(liquidIncrease.test(line), expected, line);
+const liquidOutdent = [
+  ["{% endif %}", true],
+  ["  {%- endfor -%}", true],
+  ["{% else %}", true],
+  ["{% elsif x %}", true],
+  ["{% when 1 %}", true],
+  ["</div>", true],
+  ["{% if x %}", false],
+];
+for (const [line, expected] of liquidOutdent)
+  assert.strictEqual(liquidDecrease.test(line), expected, line);
+assert.deepStrictEqual(liquid.comments.blockComment, [
+  "{% comment %}",
+  "{% endcomment %}",
+]);
+for (const open of ["{{", "{%"])
+  assert(
+    liquid.autoClosingPairs.some((pair) => pair.open === open),
+    `liquid closes ${open}`,
+  );
+const liquidFold = liquid.folding.markers;
+assert(new RegExp(liquidFold.start).test("{% comment %}"));
+assert(new RegExp(liquidFold.end).test("{%- endcomment -%}"));
+
+console.log(
+  `langconfig: ${cases.length + inside.length + 9 + Object.keys(comments).length * 5 + liquidIndent.length + liquidOutdent.length + 5} ok`,
+);

@@ -30,7 +30,7 @@ pub struct ProjectKey {
 }
 
 impl ProjectKey {
-    fn of(template: &Path) -> Self {
+    pub(crate) fn of(template: &Path) -> Self {
         ProjectKey {
             lock_dir: template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file()).map(Path::to_path_buf),
             template_app: app_root(template).and_then(|app| Some(app.parent()?.to_path_buf())),
@@ -60,8 +60,12 @@ pub struct Project {
     pub adds_view_paths: bool,
     /// Gems from the lockfile that could ship views (`view_roots::view_capable_gems`).
     view_capable_gems: Vec<(String, String)>,
-    /// Every view root (`None`: a gem's install wasn't found), searched on first use.
-    view_roots: OnceLock<Option<view_roots::ViewRoots>>,
+    /// Every view root, searched on first use.
+    view_roots: OnceLock<Arc<view_roots::ViewRoots>>,
+    /// Where the language server keeps view roots between requests; without it they are searched per `Project`.
+    view_cache: Option<Arc<view_roots::Cache>>,
+    /// Does the app's code add view paths? Read on first use, and not kept beyond this `Project`: no watcher sees it change.
+    code_adds_view_paths: OnceLock<bool>,
 }
 
 impl Project {
@@ -79,6 +83,8 @@ impl Project {
             adds_view_paths: false,
             view_capable_gems: Vec::new(),
             view_roots: OnceLock::new(),
+            view_cache: None,
+            code_adds_view_paths: OnceLock::new(),
         }
     }
 
@@ -174,6 +180,8 @@ impl Project {
             adds_view_paths: false,
             view_capable_gems: view_roots::view_capable_gems(lock),
             view_roots: OnceLock::new(),
+            view_cache: None,
+            code_adds_view_paths: OnceLock::new(),
         }
     }
 
@@ -198,12 +206,63 @@ impl Project {
     pub fn lacks_view_folder(&self, dir: &str) -> bool {
         let top = dir.split('/').next().unwrap_or(dir);
         let possible = !self.adds_view_paths && !view_roots::FRAMEWORK_VIEW_FOLDERS.contains(&top) && !self.has_gem_family(top);
-        let Some(root) = self.root.as_deref().filter(|_| possible) else {
+        if !possible {
             return false;
-        };
-        let roots = self.view_roots.get_or_init(|| view_roots::find(root, &self.view_capable_gems, &view_roots::GemEnv::from_process()));
+        }
         // Reading the app's code is costly; a folder found in some root settles it first.
-        roots.as_ref().is_some_and(|roots| !roots.has_folder(dir) && !roots.app_code_adds_view_paths())
+        let adds_paths =
+            || *self.code_adds_view_paths.get_or_init(|| self.view_roots().is_some_and(|roots| roots.app_code_adds_view_paths()));
+        self.view_roots().is_some_and(|roots| roots.gems_known && !roots.has_folder(dir) && !adds_paths())
+    }
+
+    /// The view folders of the app and of the gems that ship views; `None` outside a Rails root. Searches on first use.
+    pub fn view_roots(&self) -> Option<&view_roots::ViewRoots> {
+        Some(self.loaded_view_roots()?.as_ref())
+    }
+
+    fn loaded_view_roots(&self) -> Option<&Arc<view_roots::ViewRoots>> {
+        let root = self.root.as_deref()?;
+        Some(self.view_roots.get_or_init(|| match &self.view_cache {
+            Some(cache) => cache.get(root, &self.view_capable_gems),
+            None => Arc::new(view_roots::find(root, &self.view_capable_gems, &view_roots::GemEnv::from_process())),
+        }))
+    }
+
+    /// Searches for the view roots, the app's included, and returns them.
+    pub fn load_view_roots(&self) -> Option<Arc<view_roots::ViewRoots>> {
+        let roots = self.loaded_view_roots()?;
+        roots.load_app_roots();
+        Some(Arc::clone(roots))
+    }
+
+    /// The view roots in the cache, loaded, without searching.
+    pub fn cached_view_roots(&self) -> Option<Arc<view_roots::ViewRoots>> {
+        self.view_cache.as_ref()?.peek(self.root.as_deref()?, &self.view_capable_gems)
+    }
+
+    /// Use `roots` as this project's view roots, so later calls don't reach for the cache again.
+    pub fn use_view_roots(&self, roots: Arc<view_roots::ViewRoots>) {
+        let _ = self.view_roots.set(roots);
+    }
+
+    /// Keep and reuse the view roots in `cache`.
+    pub fn with_view_cache(self, cache: Arc<view_roots::Cache>) -> Self {
+        Project { view_cache: Some(cache), ..self }
+    }
+
+    /// The Rails root's `app/views` when the views folder `own` is part of that app (the app's own, an engine's or a
+    /// pack's), which Rails searches before the others. `None` for another Rails app inside the root (`test/dummy`,
+    /// a second app of a monorepo).
+    pub fn app_views_of(&self, own: &Path) -> Option<PathBuf> {
+        let root = self.root.as_deref()?;
+        let app_dir = own.parent()?.parent()?;
+        let own_app = || app_dir.ancestors().take_while(|dir| *dir != root).any(|dir| dir.join("config/application.rb").is_file());
+        (app_dir.starts_with(root) && !own_app()).then(|| root.join("app/views"))
+    }
+
+    /// Is `file` in a gem's install folder? Those are read-only.
+    pub fn is_gem_file(&self, file: &Path) -> bool {
+        view_roots::is_gem_file(self.root.as_deref(), file, &view_roots::GemEnv::from_process())
     }
 
     /// Does a gem named `name` or `name_*` / `name-*` exist (a gem's own view folder, `spree/` from `spree_core`)?
@@ -613,5 +672,40 @@ mod tests {
         assert!(v("8.0.2").at_least("8.0.2"));
         assert!(!v("8.0.2.rc1").at_least("8.0.2"));
         assert!(v("8.1.0").at_least("8.0.2"));
+    }
+
+    fn rails_app(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("rt-project-{name}-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        crate::util::write_files(&root, &[("Gemfile.lock", "GEM\n  specs:\n    actionview (7.1.0)\n")]);
+        crate::util::write_files(&root, files);
+        root
+    }
+
+    #[test]
+    fn view_paths_added_by_code_are_read_per_project_not_kept_in_the_cache() {
+        let root = rails_app("adds-paths", &[("app/views/users/show.html.erb", "")]);
+        let (cache, view) = (Arc::new(view_roots::Cache::default()), root.join("app/views/users/show.html.erb"));
+        let project = || Project::for_template(&view).with_view_cache(Arc::clone(&cache));
+        assert!(project().lacks_view_folder("ghost"));
+        crate::util::write_files(&root, &[("app/controllers/application_controller.rb", "prepend_view_path \"app/views/themes\"\n")]);
+        assert!(!project().lacks_view_folder("ghost"), "found without the cache being cleared");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_project_keeps_the_view_roots_it_was_given() {
+        let root = rails_app("given-roots", &[("app/views/users/show.html.erb", "")]);
+        let (cache, view) = (Arc::new(view_roots::Cache::default()), root.join("app/views/users/show.html.erb"));
+        let project = Project::for_template(&view).with_view_cache(Arc::clone(&cache));
+        assert!(project.cached_view_roots().is_none());
+        let found = project.load_view_roots().unwrap();
+        let cached = project.cached_view_roots().unwrap();
+        assert!(Arc::ptr_eq(&found, &cached));
+        let fresh = Project::for_template(&view).with_view_cache(Arc::clone(&cache));
+        fresh.use_view_roots(cached);
+        cache.clear();
+        assert!(Arc::ptr_eq(&found, fresh.loaded_view_roots().unwrap()), "a cleared cache doesn't make it search again");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

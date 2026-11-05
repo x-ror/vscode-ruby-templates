@@ -37,6 +37,7 @@ mod render_call;
 mod routes;
 mod ruby;
 mod schema;
+mod semantic_tokens;
 mod slim_complete;
 mod slim_format;
 mod slim_hover;

@@ -7,6 +7,7 @@ use crate::rails_paths::{app_root, template_format, template_stem, template_suff
 use crate::render_call::{self, Call, HamlPipes, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
 use crate::strict_locals::{self, Close};
+use crate::util::slash_path;
 use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::ops::Range;
@@ -690,8 +691,16 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
         RenderKind::Template => base.to_string(),
     };
     let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut searched: Vec<PathBuf> = Vec::new();
+    let mut in_app = false;
     match (&dir, &views, r.kind) {
-        (Some(d), Some(v), _) => dirs.push(v.join(d)),
+        // Rails searches the app's root before an engine's, so the app can override an engine's view.
+        (Some(_), Some(v), _) => {
+            let app = project.app_views_of(v);
+            in_app = app.is_some();
+            searched.extend(app.into_iter().filter(|app| app != v));
+            searched.push(v.clone());
+        }
         (Some(d), None, _) => {
             if let Some(p) = current.parent() {
                 dirs.push(p.join(d));
@@ -712,14 +721,21 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
             }
         }
     }
-    let mut out = Vec::new();
-    for d in dirs {
+    let found_in = |d: &Path| {
         let mut found: Vec<PathBuf> =
-            matching_templates(project, &d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
+            matching_templates(project, d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
         sort_like_action_view(project, current, &r.lookup, &mut found);
-        out.extend(found);
-    }
-    out
+        found
+    };
+    let Some(d) = dir.filter(|_| !searched.is_empty()) else { return dirs.iter().flat_map(|d| found_in(d)).collect() };
+    // Rails takes the first root with a match; a qualified name missing from these may be another engine's or a gem's.
+    let mut in_roots = searched.iter().map(|root| found_in(&root.join(d))).filter(|found| !found.is_empty());
+    let found = in_roots.next().or_else(|| {
+        // Another Rails app (`test/dummy`) renders from its own roots, not from the sibling apps'.
+        let others = project.view_roots().filter(|_| in_app)?.roots_after(&searched);
+        others.into_iter().map(|root| found_in(&root.join(d))).find(|found| !found.is_empty())
+    });
+    found.unwrap_or_default()
 }
 
 /// Orders candidates like ActionView's `TemplateDetails#sort_key_for`: by format, variant, then handler (the locale,
@@ -799,7 +815,7 @@ pub fn component_classes(current: &Path) -> Vec<(String, PathBuf)> {
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
-            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let rel = slash_path(e.path().strip_prefix(&dir).ok()?);
             let name = rel.strip_suffix("_component.rb")?;
             let constant: Vec<String> = format!("{name}_component").split('/').map(camel_case).collect();
             Some((constant.join("::"), e.into_path()))
@@ -841,8 +857,15 @@ pub fn snake_case(s: &str) -> String {
 }
 
 /// Names `render` can complete for `kind`: partials (same-dir bare names, then `dir/name` under app/views)
-/// or non-partial templates as `dir/name`. `files` lists app/views, or the current directory outside one.
-pub fn render_candidates(project: &Project, current: &Path, kind: RenderKind, files: &[PathBuf]) -> Vec<(String, PathBuf)> {
+/// or non-partial templates as `dir/name`. `files` lists app/views, or the current directory outside one; `other_roots`
+/// are the app's other view roots (an engine's) with their files, after it.
+pub fn render_candidates(
+    project: &Project,
+    current: &Path,
+    kind: RenderKind,
+    files: &[PathBuf],
+    other_roots: &[(&Path, &[PathBuf])],
+) -> Vec<(String, PathBuf)> {
     let views = views_root(current);
     let partial = kind == RenderKind::Partial;
     let same_dir = current
@@ -851,7 +874,11 @@ pub fn render_candidates(project: &Project, current: &Path, kind: RenderKind, fi
         .into_iter()
         .flat_map(|d| templates_in(project, d, files, true))
         .filter(|(name, _)| !name.contains('/'));
-    let nested = views.iter().flat_map(|v| templates_in(project, v, files, partial)).filter(|(name, _)| name.contains('/'));
+    let own = views.iter().map(|v| (v.as_path(), files));
+    let nested = own
+        .chain(other_roots.iter().copied())
+        .flat_map(|(root, files)| templates_in(project, root, files, partial))
+        .filter(|(name, _)| name.contains('/'));
     // Same filter as `resolve`: a name it would not find isn't worth offering.
     let mut out: Vec<_> = same_dir.chain(nested).filter(|(_, p)| renders_format(project, current, p)).collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -875,7 +902,7 @@ fn templates_in<'a>(
 ) -> impl Iterator<Item = (String, PathBuf)> + 'a {
     files.iter().filter_map(move |p| {
         let name = template_name(project, p, partial)?;
-        let rel_dir = p.parent()?.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
+        let rel_dir = slash_path(p.parent()?.strip_prefix(root).ok()?);
         let full = if rel_dir.is_empty() { name } else { format!("{rel_dir}/{name}") };
         Some((full, p.clone()))
     })
@@ -1838,6 +1865,36 @@ mod tests {
     }
 
     #[test]
+    fn bare_names_resolve_when_only_the_checks_are_unsure_of_the_lookup() {
+        let root = std::env::temp_dir().join(format!("rt-bare-prefixes-unsure-{}", std::process::id()));
+        crate::util::write_files(
+            &root,
+            &[
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (7.1.0)\n    theme (1.0)\n      railties\n    railties (7.1.0)\n"),
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                (
+                    "app/controllers/admin/users_controller.rb",
+                    "class Admin::UsersController < Admin::BaseController\n  include Themeable\nend\n",
+                ),
+                ("lib/themeable.rb", "module Themeable\n  included { prepend_view_path \"x\" }\nend\n"),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/admin/base/_nav.html.erb", ""),
+            ],
+        );
+        let views = root.join("app/views");
+        let current = views.join("admin/users/index.html.erb");
+        let project = Project::for_template(&current);
+        assert_eq!(
+            ivars::view_prefixes(&project, &current),
+            Some(vec!["admin/users".to_string(), "admin/base".to_string(), "application".to_string()])
+        );
+        assert!(!ivars::bare_lookup_is_certain(&project, &current));
+        assert_eq!(resolve(&project, &current, &render_refs("render \"nav\"").remove(0)), [views.join("admin/base/_nav.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn resolve_leading_slash_folder_from_views_root() {
         let root = std::env::temp_dir().join(format!("rt-slash-{}", std::process::id()));
         let users = root.join("app/views/users");
@@ -1846,6 +1903,79 @@ mod tests {
         let card = render_refs(r#"render "/users/card""#).remove(0);
         let found = resolve(&Project::unknown(), &root.join("app/views/home/index.html.erb"), &card);
         assert_eq!(found, [users.join("_card.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn qualified_names_fall_back_to_engine_then_gem_roots() {
+        let root = std::env::temp_dir().join(format!("rt-other-roots-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        let lock = "GEM\n  specs:\n    actionview (7.1.0)\n    devise (4.9.4)\n      railties (>= 4.1)\n    railties (7.1.0)\n";
+        let gem_views = "vendor/bundle/ruby/3.3.0/gems/devise-4.9.4/app/views";
+        crate::util::write_files(
+            &root,
+            &[
+                ("Gemfile.lock", lock),
+                ("app/views/home/index.html.erb", ""),
+                ("app/views/blog/_post.html.erb", "app"),
+                ("engines/blog/app/views/blog/_post.html.erb", "engine"),
+                ("engines/blog/app/views/blog/_comment.html.erb", ""),
+                (&format!("{gem_views}/devise/shared/_links.html.erb"), ""),
+                (&format!("{gem_views}/blog/_comment.html.erb"), "gem"),
+                ("vendor/bundle/ruby/3.3.0/gems/devise-4.9.4/lib/devise/engine.rb", "class Engine < ::Rails::Engine; end"),
+                ("test/dummy/app/views/ghost/_only_in_dummy.html.erb", ""),
+            ],
+        );
+        let current = root.join("app/views/home/index.html.erb");
+        let project = Project::for_template(&current);
+        let engine_comment = root.join("engines/blog/app/views/blog/_comment.html.erb");
+        let found = |name: &str| resolve(&project, &current, &render_refs(&format!("render \"{name}\"")).remove(0));
+        assert_eq!(found("blog/post"), [root.join("app/views/blog/_post.html.erb")], "the app's own root wins");
+        assert_eq!(found("blog/comment"), [root.join("engines/blog/app/views/blog/_comment.html.erb")], "an engine before a gem");
+        let links = root.join(gem_views).join("devise/shared/_links.html.erb");
+        assert_eq!(found("devise/shared/links"), std::slice::from_ref(&links));
+        assert!(found("devise/shared/nope").is_empty());
+        assert!(found("ghost/only_in_dummy").is_empty(), "a dummy app's views are fixtures");
+        let engine_view = root.join("engines/blog/app/views/blog/_post.html.erb");
+        let from_engine = |name: &str| resolve(&project, &engine_view, &render_refs(&format!("render \"{name}\"")).remove(0));
+        assert!(from_engine("home/missing").is_empty());
+        assert_eq!(from_engine("blog/post"), [root.join("app/views/blog/_post.html.erb")], "the app overrides an engine's view");
+        assert_eq!(from_engine("blog/comment"), [engine_comment], "the engine's own view before other roots");
+        assert!(project.is_gem_file(&links));
+        assert!(!project.is_gem_file(&engine_view));
+        let candidates = render_candidates(
+            &project,
+            &current,
+            RenderKind::Partial,
+            &[root.join("app/views/home/index.html.erb")],
+            &[(&root.join("engines/blog/app/views"), std::slice::from_ref(&engine_view))],
+        );
+        assert_eq!(candidates, [("blog/post".to_string(), engine_view)]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn another_rails_app_in_the_root_renders_from_its_own_views() {
+        let root = std::env::temp_dir().join(format!("rt-other-apps-{}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        crate::util::write_files(
+            &root,
+            &[
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (7.1.0)\n"),
+                ("app/views/blog/_post.html.erb", "root"),
+                ("test/dummy/config/application.rb", ""),
+                ("test/dummy/app/views/blog/_post.html.erb", "dummy"),
+                ("test/dummy/app/views/home/index.html.erb", ""),
+                ("apps/b/config/application.rb", ""),
+                ("apps/b/app/views/x/index.html.erb", ""),
+            ],
+        );
+        let ask = |from: &str, name: &str| {
+            let current = root.join(from);
+            resolve(&Project::for_template(&current), &current, &render_refs(&format!("render \"{name}\"")).remove(0))
+        };
+        assert_eq!(ask("test/dummy/app/views/home/index.html.erb", "blog/post"), [root.join("test/dummy/app/views/blog/_post.html.erb")]);
+        assert!(ask("apps/b/app/views/x/index.html.erb", "blog/post").is_empty(), "no falling into the root app or a sibling");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1974,7 +2104,8 @@ mod tests {
         }
         let current = views.join("users/show.html.erb");
         let files = files_under(&views, usize::MAX);
-        let names = |kind| render_candidates(&Project::unknown(), &current, kind, &files).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        let names =
+            |kind| render_candidates(&Project::unknown(), &current, kind, &files, &[]).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names(RenderKind::Partial), ["card", "layouts/nav", "users/card"]);
         assert_eq!(names(RenderKind::Template), ["layouts/admin/base", "layouts/application", "users/index"]);
         std::fs::remove_dir_all(&root).unwrap();
@@ -2258,6 +2389,24 @@ mod tests {
     fn resolved_names(project: &Project, views: &Path, view: &str, render: &str) -> Vec<String> {
         let r = render_refs(render).remove(0);
         resolve(project, &views.join(view), &r).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn nested_partial_names_use_forward_slashes() {
+        let (root, views) =
+            partial_tree("nested-names", &["users/admin/_card.html.erb", "users/admin/show.html.erb", "users/_row.html.erb"]);
+        let project = Project::unknown();
+        assert_eq!(resolved_names(&project, &views, "users/index.html.erb", "render \"users/admin/card\""), ["_card.html.erb"]);
+        let found = resolve(&project, &views.join("home/show.html.erb"), &render_refs("render \"users/admin/card\"").remove(0));
+        assert_eq!(found, [views.join("users/admin/_card.html.erb")]);
+        let files = crate::rails_paths::files_under(&views, usize::MAX);
+        let current = views.join("users/index.html.erb");
+        let names = |kind| render_candidates(&project, &current, kind, &files, &[]).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(RenderKind::Partial), ["row", "users/admin/card", "users/row"]);
+        assert_eq!(names(RenderKind::Template), ["users/admin/show"]);
+        let named: Vec<String> = named_templates(&project, &views, &files).into_iter().map(|(name, ..)| name).collect();
+        assert!(named.contains(&"users/admin/card".to_string()) && named.iter().all(|name| !name.contains('\\')), "{named:?}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2705,7 +2854,8 @@ mod tests {
         );
         let current = views.join("users/show.html.erb");
         let files = files_under(&views, usize::MAX);
-        let names = |kind| render_candidates(&Project::unknown(), &current, kind, &files).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
+        let names =
+            |kind| render_candidates(&Project::unknown(), &current, kind, &files, &[]).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names(RenderKind::Partial), ["card", "row", "user.v2", "users/card", "users/row", "users/user.v2"]);
         assert_eq!(names(RenderKind::Template), ["users/index"]);
         std::fs::remove_dir_all(&root).unwrap();
@@ -3122,6 +3272,26 @@ mod tests {
         local_key_before(&text, offset, false, || LATEST);
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 100, "{parses} parses for one keystroke");
+    }
+
+    #[test]
+    fn local_keys_after_the_cursor_stop_at_the_call_line_cap() {
+        // Written for a cap of 20 lines on purpose: the test must fail when the cap changes.
+        let names_and_parses = |after_cursor: &str| {
+            let text = format!("<%= render \"card\", a: 1, |{after_cursor}{}", "\n".repeat(1000));
+            let offset = text.find('|').unwrap();
+            let text = text.replace('|', "");
+            let before = render_call::PARSES.with(|parses| parses.get());
+            let (_, names, _) = local_key_before(&text, offset, false, || LATEST).unwrap();
+            (names, render_call::PARSES.with(|parses| parses.get()) - before)
+        };
+        let blank_lines = "\n".repeat(19);
+        let (names, parses) = names_and_parses(&format!("{blank_lines}last: 2\n, past: 3"));
+        assert_eq!(names, ["a", "last"], "the 20th line is within the cap");
+        assert!(parses <= 70, "{parses} parses for one keystroke");
+        let (names, parses) = names_and_parses(&format!("{blank_lines}last: 2,\npast: 3"));
+        assert!(!names.contains(&"past".to_string()), "the 21st line is past the cap: {names:?}");
+        assert!(parses <= 70, "{parses} parses for one keystroke");
     }
 
     #[test]

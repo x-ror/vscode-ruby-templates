@@ -1,7 +1,7 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
-use crate::prism::{LocalDefinition, LocalUses};
+use crate::prism::{LocalDefinition, LocalToken, LocalUses};
 use crate::strict_locals::{self, Close};
 use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
@@ -20,7 +20,7 @@ pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_
         TemplateLang::Erb => erb_ruby::block_locals(text, offset),
         TemplateLang::Slim => slim_ruby::block_locals(&slim_parser::parse(text, extra_engines), offset),
         TemplateLang::Haml => haml_ruby::block_locals(text, &haml_parser::parse_with_ruby(text), offset),
-        TemplateLang::Skim | TemplateLang::Ruby => Vec::new(),
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => Vec::new(),
     }
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn local_definition(lang: TemplateLang, text: &str, offset: usize, ex
         TemplateLang::Erb => erb_ruby::local_definition(text, offset),
         TemplateLang::Slim => slim_ruby::local_definition(&slim_parser::parse(text, extra_engines), offset),
         TemplateLang::Haml => haml_ruby::local_definition(text, &haml_parser::parse_with_ruby(text), offset),
-        TemplateLang::Skim | TemplateLang::Ruby => None,
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => None,
     }
 }
 
@@ -43,7 +43,17 @@ pub(crate) fn local_uses(lang: TemplateLang, text: &str, close: Close, name: &st
         TemplateLang::Haml => {
             haml_ruby::local_uses(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref(), name)
         }
-        TemplateLang::Skim | TemplateLang::Ruby => LocalUses::default(),
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => LocalUses::default(),
+    }
+}
+
+/// The local variables the template declares or uses, from the Ruby it compiles to; a strict local is a parameter.
+pub(crate) fn local_tokens(lang: TemplateLang, text: &str, close: Close, extra_engines: &[String]) -> Vec<LocalToken> {
+    match lang {
+        TemplateLang::Erb => erb_ruby::local_tokens(text, close),
+        TemplateLang::Slim => slim_ruby::local_tokens(&slim_parser::parse(text, extra_engines)),
+        TemplateLang::Haml => haml_ruby::local_tokens(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref()),
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => Vec::new(),
     }
 }
 
@@ -81,7 +91,7 @@ fn render_in_code(
                 |p: &str| ws + p.len() + line[ws + p.len()..].len() - line[ws + p.len()..].trim_start_matches(['=', '<', '>', '\'']).len();
             prefix.filter(|_| in_ruby()).map(marker_end)
         }
-        (TemplateLang::Skim, _) => None,
+        (TemplateLang::Skim | TemplateLang::Liquid, _) => None,
         (TemplateLang::Ruby, _) => in_ruby().then_some(0),
     };
     code_start.is_some_and(|code| code <= r.call && ruby::code_end(&line[code..r.call]) == ruby::CodeEnd::Code)
@@ -116,7 +126,7 @@ pub(crate) fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, u
             haml::in_ruby(line, offset - line_start)
         }
         // Skim code is CoffeeScript: no Rails helpers, renders or form builders.
-        TemplateLang::Skim => false,
+        TemplateLang::Skim | TemplateLang::Liquid => false,
         TemplateLang::Ruby => !ruby::comment_before(&text[line_start..offset]),
         TemplateLang::Slim => {
             let before = &text[line_start..offset];
@@ -136,6 +146,30 @@ pub(crate) fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::Project;
+    use crate::render_call::HamlPipes;
+
+    #[test]
+    fn liquid_render_is_not_a_partial_reference() {
+        let root = std::env::temp_dir().join(format!("rt-liquid-{}", std::process::id()));
+        let views = root.join("app/views/pages");
+        std::fs::create_dir_all(&views).unwrap();
+        std::fs::write(views.join("_card.html.slim"), "").unwrap();
+        let current = views.join("show.liquid");
+        let text = "{% render \"card\" %}\n";
+        let refs = |keep: bool| {
+            let in_code = render_filter(TemplateLang::Liquid, text, &[]);
+            partials::render_refs_in(text, 0, text.trim_end(), &HamlPipes::new(false), ruby_prism::Version::Latest, |r| {
+                !keep || in_code(0, 0, r)
+            })
+        };
+        let resolved: Vec<_> = refs(false).iter().flat_map(|r| partials::resolve(&Project::unknown(), &current, r)).collect();
+        let filtered = refs(true);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(resolved, [views.join("_card.html.slim")]);
+        assert!(filtered.is_empty());
+        assert!(!in_ruby_context(TemplateLang::Liquid, text, &[], 4));
+    }
 
     #[test]
     fn local_uses_in_every_language() {

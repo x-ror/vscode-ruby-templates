@@ -1,15 +1,19 @@
-use crate::checks::{diagnostics, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
+use crate::checks::{diagnostics_in, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
 use crate::code_context::{self, block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, has_arguments, helper_item, helpers_for, i18n_completions,
     ivar_completions, local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions,
     stimulus_completions,
 };
-use crate::lang::{file_name, html_host, is_partial, TemplateLang};
+use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns, outline,
-    partial_rename, partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, slim_complete, slim_hover,
-    slim_outline, slim_parser, slots, stimulus, strict_locals, tags, util,
+    partial_rename, partials,
+    project::{Project, ProjectKey, Projects},
+    rails_paths,
+    render_call::HamlPipes,
+    routes, ruby, schema, semantic_tokens, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus, strict_locals, tags,
+    util, view_roots,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
@@ -40,6 +44,8 @@ struct Backend {
     cache_generation: Arc<AtomicU64>,
     /// The cache roots a background fill is reading, so documents opened together start one fill each.
     warming: Arc<DashSet<PathBuf>>,
+    /// Each app's view roots, found off the server task and dropped when a watched file may have changed them.
+    view_roots: Arc<view_roots::Cache>,
     /// Routes per Rails root, as the client last sent them.
     routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
@@ -200,6 +206,11 @@ fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, rea
     }
 }
 
+/// A created or deleted file may add or remove a view root; a changed one only when it is the lockfile that names the gems.
+fn may_change_view_roots(events: &[(PathBuf, FileChangeType)]) -> bool {
+    events.iter().any(|(path, kind)| *kind != FileChangeType::CHANGED || path.ends_with("Gemfile.lock"))
+}
+
 /// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
 async fn off_server_task<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Result<T> {
     tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp_server::jsonrpc::Error::internal_error())
@@ -278,7 +289,8 @@ impl Backend {
     /// and, unlogged, when formatting is switched off for its language.
     /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
     async fn formatted(&self, uri: &Uri, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
-        let (lang, plain_erb, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
+        let (lang, plain_erb, text) =
+            self.docs.get(uri).filter(|doc| !doc.percent_lines).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
         if !self.options().format_enabled(lang) {
             return None;
         }
@@ -309,6 +321,11 @@ impl Backend {
         }
     }
 
+    /// Liquid is highlighted only: every Rails lookup would misfire on it.
+    fn is_liquid(&self, uri: &Uri) -> bool {
+        self.docs.get(uri).is_some_and(|doc| doc.lang == TemplateLang::Liquid)
+    }
+
     fn options(&self) -> &Options {
         self.options.get_or_init(Options::default)
     }
@@ -320,20 +337,68 @@ impl Backend {
         // Unique across closes and reopens, which may restart a document's versions.
         let run = self.next_publish.fetch_add(1, Ordering::Relaxed);
         self.publishes.insert(uri.clone(), run);
-        let (client, docs, publishes, options) =
-            (self.client.clone(), Arc::clone(&self.docs), Arc::clone(&self.publishes), Arc::clone(&self.options));
+        let (client, docs, publishes, options, view_roots) = (
+            self.client.clone(),
+            Arc::clone(&self.docs),
+            Arc::clone(&self.publishes),
+            Arc::clone(&self.options),
+            Arc::clone(&self.view_roots),
+        );
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             let latest = || publishes.get(&uri).is_some_and(|latest| *latest == run);
             let Some(doc) = docs.get(&uri).filter(|_| latest()).map(|doc| doc.clone()) else { return };
             let (checked, version) = (uri.clone(), doc.version);
-            let Ok(diags) = off_server_task(move || diagnostics(&checked, &doc, options.get_or_init(Options::default))).await else {
+            let Ok(diags) = off_server_task(move || {
+                let mut projects = Projects::new();
+                if let Some(path) = util::file_path(&checked) {
+                    projects.insert(ProjectKey::of(&path), Project::for_template(&path).with_view_cache(view_roots));
+                }
+                diagnostics_in(&checked, &doc, options.get_or_init(Options::default), &mut projects)
+            })
+            .await
+            else {
                 return;
             };
             if latest() {
                 client.publish_diagnostics(uri, diags, Some(version)).await;
             }
         });
+    }
+
+    /// The project of `path` sharing the view roots kept in the cache.
+    fn project_for(&self, path: &Path) -> Project {
+        Project::for_template(path).with_view_cache(Arc::clone(&self.view_roots))
+    }
+
+    /// `project_for`, with the view roots found off the server task first when this app's aren't cached yet, and kept in
+    /// the project so a cache refresh meanwhile doesn't search on the server task.
+    async fn project_of(&self, path: &Path) -> Result<Project> {
+        let project = self.project_for(path);
+        let roots = match project.cached_view_roots() {
+            Some(roots) => Some(roots),
+            None => {
+                let searching = project.clone();
+                off_server_task(move || searching.load_view_roots()).await?
+            }
+        };
+        if let Some(roots) = roots {
+            project.use_view_roots(roots);
+        }
+        Ok(project)
+    }
+
+    /// `views_files`, reading a listing that isn't cached off the server task.
+    async fn views_files_off_task(&self, views: PathBuf) -> Result<Arc<Vec<PathBuf>>> {
+        if let Some(files) = self.templates.get(&views) {
+            return Ok(Arc::clone(&files));
+        }
+        let templates = Arc::clone(&self.templates);
+        off_server_task(move || {
+            let files = rails_paths::files_under(&views, usize::MAX);
+            Arc::clone(&*templates.entry(views).or_insert_with(|| Arc::new(files)))
+        })
+        .await
     }
 
     fn template_files(&self, current: &Path) -> Arc<Vec<PathBuf>> {
@@ -388,7 +453,7 @@ impl Backend {
     /// `render` calls passing the local (else the strict-locals comment declaring it).
     async fn variable_definitions(&self, text: &str, path: &Path, line: &str, col: usize) -> Result<Vec<Location>> {
         if let Some(name) = ivars::name_at(line, col) {
-            return Ok(ivars::for_view(&Project::for_template(path), path)
+            return Ok(ivars::for_view(&self.project_for(path), path)
                 .into_iter()
                 .filter(|a| a.name == name)
                 .filter_map(|a| line_location(&a.file, a.line))
@@ -397,7 +462,7 @@ impl Backend {
         let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
         // `link_to` or `t` is never a local; the scan below reads every view.
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !is_builtin_helper(name)) else { return Ok(vec![]) };
-        let project = Project::for_template(path);
+        let project = self.project_for(path);
         let close = strict_locals::Close::of(&project);
         let ruby = project.prism_version();
         let passes = self.local_passes(project, path, name).await?;
@@ -487,7 +552,7 @@ impl Backend {
         if !is_partial(uri) {
             return None;
         }
-        let project = Project::for_template(&util::file_path(uri)?);
+        let project = self.project_for(&util::file_path(uri)?);
         let (close, ruby) = (strict_locals::Close::of(&project), project.prism_version());
         let comment = strict_locals::find(&doc.text, close)?;
         let (line_start, line, col) = util::line_at(&doc.text, pos);
@@ -511,7 +576,7 @@ impl Backend {
         let span = |(start, end): (usize, usize)| Location::new(uri.clone(), Range::new(index.position(start), index.position(end)));
         let declared = local.declaration.filter(|_| declaration);
         let mut out: Vec<Location> = declared.into_iter().chain(local.uses.iter().copied()).map(span).collect();
-        out.extend(self.local_passes(Project::for_template(path), path, &local.name).await?);
+        out.extend(self.local_passes(self.project_for(path), path, &local.name).await?);
         Ok(out)
     }
 
@@ -574,6 +639,11 @@ impl LanguageServer for Backend {
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
+                    legend: semantic_tokens::legend(),
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    ..Default::default()
+                })),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 // Only a partial's strict locals rename; Ruby LSP renames Ruby.
@@ -631,7 +701,13 @@ impl LanguageServer for Backend {
         };
         self.docs.insert(
             p.text_document.uri.clone(),
-            Doc { lang, plain_erb: p.text_document.language_id == "erb", text: p.text_document.text, version: p.text_document.version },
+            Doc {
+                lang,
+                plain_erb: p.text_document.language_id == "erb",
+                percent_lines: p.text_document.language_id == "erb-percent",
+                text: p.text_document.text,
+                version: p.text_document.version,
+            },
         );
         self.local_callers.clear();
         self.warm_caches(&p.text_document.uri);
@@ -662,6 +738,9 @@ impl LanguageServer for Backend {
             p.changes.into_iter().filter_map(|e| Some((util::file_path(&e.uri)?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
         self.local_callers.clear();
+        if may_change_view_roots(&events) {
+            self.view_roots.clear();
+        }
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
@@ -685,8 +764,11 @@ impl LanguageServer for Backend {
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
-        let project = Project::for_template(&path);
+        let project = self.project_of(&path).await?;
         if let Some(text) = self.controllers.get(&uri) {
             let (_, line, col) = util::line_at(&text, pos);
             let found =
@@ -763,8 +845,11 @@ impl LanguageServer for Backend {
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
-        let project = Project::for_template(&path);
+        let project = self.project_of(&path).await?;
         if let Some(text) = self.controllers.get(&uri) {
             let links = util::lines_with_offsets(&text)
                 .enumerate()
@@ -792,6 +877,13 @@ impl LanguageServer for Backend {
     async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
+        let file = match util::file_path(&uri) {
+            Some(path) => Some((self.project_of(&path).await?, path)),
+            None => None,
+        };
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         if doc.lang == TemplateLang::Slim {
             let parsed = slim_parser::parse(&doc.text, &self.options().extra_engines);
@@ -806,7 +898,6 @@ impl LanguageServer for Backend {
                 return Ok(markdown_hover(md.to_string()));
             }
         }
-        let file = util::file_path(&uri).map(|path| (Project::for_template(&path), path));
         if let Some((project, path)) = &file {
             if let Some(r) =
                 partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col)
@@ -869,38 +960,80 @@ impl LanguageServer for Backend {
             return Ok(markdown_hover(helper_hover(h)));
         }
         let routes = file.as_ref().map(|(_, path)| self.routes_for(path)).unwrap_or_default();
-        Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))
+        if let Some(md) = routes::hover(&routes, word).filter(|_| code_here) {
+            return Ok(markdown_hover(md));
+        }
+        // Ctrl+hover asks on every word: the cheap checks come first.
+        let name = helper_defs::name_at(line, col)
+            .filter(|name| code_here && !is_key(line, col) && !is_builtin_helper(name) && !ruby::KEYWORDS.contains(name));
+        // A quote opened earlier in the code makes the word text, as in `<%= "page_title" %>`.
+        let code_before = line[..col].rfind("<%").map_or(&line[..col], |tag| &line[tag + 2..col]);
+        let (Some(name), Some((_, path))) = (name.filter(|_| ruby::code_end(code_before) == ruby::CodeEnd::Code), file) else {
+            return Ok(None);
+        };
+        let (name, lang, text, offset, engines) =
+            (name.to_string(), doc.lang, doc.text.clone(), line_start + col, self.options().extra_engines.clone());
+        drop(doc);
+        off_server_task(move || {
+            // A block variable (also where it is declared) or a local the template assigns hides a helper of the same name.
+            let local = code_context::local_definition(lang, &text, offset, &engines).is_some()
+                || code_context::block_locals(lang, &text, offset, &engines).contains(&name);
+            if local {
+                return None;
+            }
+            helper_defs::hover(&path, &name)
+        })
+        .await
+        .map(|md| md.and_then(markdown_hover))
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let Some((lang, plain_erb, text)) = self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))
+        let Some((lang, html, text)) =
+            self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.html_host(&p.text_document.uri), doc.text.clone()))
         else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&p.text_document.uri, plain_erb, &text), self.options().extra_engines.clone());
+        let extra_engines = self.options().extra_engines.clone();
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
             TemplateLang::Haml => Some(outline::haml_folding_ranges(&text)),
             TemplateLang::Slim | TemplateLang::Skim => Some(slim_outline::folding_ranges(&text, &extra_engines)),
             TemplateLang::Erb if html => Some(outline::folding_ranges(&text)),
-            TemplateLang::Erb | TemplateLang::Ruby => None,
+            TemplateLang::Erb | TemplateLang::Ruby | TemplateLang::Liquid => None,
         })
         .await
     }
 
+    async fn semantic_tokens_full(&self, p: SemanticTokensParams) -> Result<Option<SemanticTokensResult>> {
+        let uri = p.text_document.uri;
+        let Some((lang, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
+        // Ruby LSP colours Jbuilder and Builder views; an empty answer here would blank them.
+        if !semantic_tokens::supports(lang) {
+            return Ok(None);
+        }
+        let path = util::file_path(&uri);
+        let extra_engines = self.options().extra_engines.clone();
+        let data = off_server_task(move || {
+            let close = path.map_or_else(Default::default, |path| strict_locals::Close::of(&Project::for_template(&path)));
+            semantic_tokens::tokens(lang, &text, close, &extra_engines)
+        })
+        .await?;
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data })))
+    }
+
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
-        let Some((lang, plain_erb, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone())) else {
+        let Some((lang, html, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.html_host(&uri), doc.text.clone())) else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&uri, plain_erb, &text), self.options().extra_engines.clone());
+        let extra_engines = self.options().extra_engines.clone();
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
                 TemplateLang::Haml => outline::haml_document_symbols(&text),
                 TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&text, &extra_engines),
-                TemplateLang::Ruby => return None,
+                TemplateLang::Ruby | TemplateLang::Liquid => return None,
             };
             Some(DocumentSymbolResponse::Nested(symbols))
         })
@@ -909,11 +1042,16 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = p.text_document.uri;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         // A copy, so no guard is held while the fixes below read the partial from the same map.
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         // Asked on every cursor move; the project is only needed for a missing partial's quick fix.
-        let project = LazyCell::new(|| Project::for_template(&path));
+        let strict_fix = p.context.diagnostics.iter().any(|d| util::code(d) == Some(STRICT_LOCALS));
+        let with_roots = if strict_fix { Some(self.project_of(&path).await?) } else { None };
+        let project = LazyCell::new(|| with_roots.unwrap_or_else(|| self.project_for(&path)));
         let mut actions: Vec<CodeActionOrCommand> = Vec::new();
         if doc.lang == TemplateLang::Erb {
             actions.extend(spacing_actions(&uri, &doc.text, p.range, p.context.only.as_deref()));
@@ -932,7 +1070,7 @@ impl LanguageServer for Backend {
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
                 annotation_id: None,
             };
-            let shown = target.strip_prefix(rails_paths::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+            let shown = util::slash_path(target.strip_prefix(rails_paths::views_root(&path)?).ok()?);
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
                 kind: Some(CodeActionKind::QUICKFIX),
@@ -950,8 +1088,15 @@ impl LanguageServer for Backend {
     }
 
     async fn prepare_rename(&self, p: TextDocumentPositionParams) -> Result<Option<PrepareRenameResponse>> {
+        if self.is_liquid(&p.text_document.uri) {
+            return Ok(None);
+        }
         // A copy, so no guard is held while the template compiles.
         let Some(doc) = self.docs.get(&p.text_document.uri).map(|doc| doc.clone()) else { return Ok(None) };
+        let Some(path) = util::file_path(&p.text_document.uri) else { return Ok(None) };
+        if Project::for_template(&path).is_gem_file(&path) {
+            return Ok(None);
+        }
         Ok(self.strict_local_at(&p.text_document.uri, &doc, p.position).map(|local| PrepareRenameResponse::Range(local.range)))
     }
 
@@ -960,10 +1105,16 @@ impl LanguageServer for Backend {
     async fn rename(&self, p: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = p.text_document_position.text_document.uri;
         let new = p.new_name;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(local) = self.strict_local_at(&uri, &doc, p.text_document_position.position) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
-        let project = Project::for_template(&path);
+        let project = self.project_for(&path);
+        if project.is_gem_file(&path) {
+            return Ok(None);
+        }
         let extra_engines = self.options().extra_engines.clone();
         if !self.free_local_name(&doc, &project, &new) {
             return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
@@ -1002,8 +1153,11 @@ impl LanguageServer for Backend {
     async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
-        let project = Project::for_template(&path);
+        let project = self.project_of(&path).await?;
         let extra_engines = self.options().extra_engines.clone();
         let i18n_key = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
@@ -1056,7 +1210,7 @@ impl LanguageServer for Backend {
 
     async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
         let uri = p.text_document_position_params.text_document.uri;
-        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri, d.plain_erb, &d.text)) else {
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && d.html_host(&uri)) else {
             return Ok(None);
         };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
@@ -1076,9 +1230,12 @@ impl LanguageServer for Backend {
         roots.dedup();
         let mut out = Vec::new();
         for views in roots {
-            let is_template = |f: &&PathBuf| crate::util::file_uri(f).is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
+            let is_template = |f: &&PathBuf| {
+                crate::util::file_uri(f)
+                    .is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some_and(|lang| lang != TemplateLang::Liquid))
+            };
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
-            let project = Project::for_template(&views.join("_"));
+            let project = self.project_for(&views.join("_"));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
                 if !util::fuzzy_match(&name.to_lowercase(), &query) {
                     continue;
@@ -1101,16 +1258,19 @@ impl LanguageServer for Backend {
     async fn will_rename_files(&self, p: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
         let to_path = |uri: &str| util::file_path(&uri.parse::<Uri>().ok()?);
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
+        // A gem's files are read-only: renaming one rewrites nothing.
+        let renames: Vec<_> = renames.into_iter().filter(|(old, _)| !Project::for_template(old).is_gem_file(old)).collect();
         let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| rails_paths::views_root(old)).collect();
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
         let extra_engines = self.options().extra_engines.clone();
+        let view_roots = Arc::clone(&self.view_roots);
         let changes = off_server_task(move || {
             let mut changes = HashMap::new();
             for views in roots {
                 let sources = partial_rename::sources(&views, &open);
-                let project = Project::for_template(&views.join("_"));
+                let project = Project::for_template(&views.join("_")).with_view_cache(Arc::clone(&view_roots));
                 changes.extend(partial_rename::render_edits(&project, &renames, &sources, &extra_engines));
             }
             changes
@@ -1138,6 +1298,9 @@ impl LanguageServer for Backend {
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
+        if self.is_liquid(&uri) {
+            return Ok(None);
+        }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];
@@ -1146,11 +1309,25 @@ impl LanguageServer for Backend {
         let items = |items| Ok(Some(CompletionResponse::Array(items)));
         // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
         let project_cell = OnceCell::new();
-        let project = |path: &Path| project_cell.get_or_init(|| Project::for_template(path));
+        let project = |path: &Path| project_cell.get_or_init(|| self.project_for(path));
 
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path.as_deref() else { return Ok(None) };
-            return items(render_completions(project(path), path, kind, &prefix, &self.template_files(path)));
+            // The guard would block the next `did_change` while the work below waits.
+            drop(doc);
+            let project = self.project_of(path).await?;
+            // Gem roots are left out: their listing can be large, and the app's own roots are what it edits.
+            let engine_roots: Vec<PathBuf> = rails_paths::views_root(path)
+                .zip(project.view_roots())
+                .map(|(own, roots)| roots.other_app_roots(&own).into_iter().map(Path::to_path_buf).collect())
+                .unwrap_or_default();
+            let mut engines: Vec<(PathBuf, Arc<Vec<PathBuf>>)> = Vec::new();
+            for root in engine_roots {
+                let files = self.views_files_off_task(root.clone()).await?;
+                engines.push((root, files));
+            }
+            let other_roots: Vec<(&Path, &[PathBuf])> = engines.iter().map(|(root, files)| (root.as_path(), files.as_slice())).collect();
+            return items(render_completions(&project, path, kind, &prefix, &self.template_files(path), &other_roots));
         }
         let engines = &self.options().extra_engines;
         let ruby = || path.as_deref().map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
@@ -1181,7 +1358,7 @@ impl LanguageServer for Backend {
         // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
         let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
         let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
-        if doc.lang == TemplateLang::Erb && html_host(&uri, doc.plain_erb, &doc.text) && !code_here() {
+        if doc.lang == TemplateLang::Erb && doc.html_host(&uri) && !code_here() {
             let offset = line_start + col;
             if let Some(context) = erb_complete::context(&doc.text, offset) {
                 let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
@@ -1292,6 +1469,7 @@ pub async fn serve() {
         cache_generation: Arc::default(),
         local_callers: DashMap::new(),
         warming: Arc::default(),
+        view_roots: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),
         roots: OnceLock::new(),
@@ -1314,6 +1492,15 @@ mod tests {
         for name in ["class", "end", "self", "User", "ok?", "a-b", ""] {
             assert!(!is_local_name(name), "{name}");
         }
+    }
+
+    #[test]
+    fn view_roots_are_dropped_when_files_come_or_go_or_the_lockfile_changes() {
+        let event = |path: &str, kind| vec![(PathBuf::from(path), kind)];
+        assert!(may_change_view_roots(&event("/r/engines/blog/app/views/blog/_post.erb", FileChangeType::CREATED)));
+        assert!(may_change_view_roots(&event("/r/engines/blog", FileChangeType::DELETED)));
+        assert!(may_change_view_roots(&event("/r/Gemfile.lock", FileChangeType::CHANGED)));
+        assert!(!may_change_view_roots(&event("/r/app/views/users/_card.erb", FileChangeType::CHANGED)));
     }
 
     #[test]
