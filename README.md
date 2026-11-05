@@ -142,6 +142,8 @@ Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O error
 2. Open a Rails project and any view. That's it: highlighting, checks, navigation and formatting work immediately.
 3. Optional: turn on format on save, e.g. `"[erb]": { "editor.formatOnSave": true }` (also `[haml]`, `[slim]`).
 
+Several Rails apps in one window (multi-root workspaces, monorepos) work side by side: each file resolves partials, routes, translations and gems against the app it belongs to.
+
 Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, Intel) or Windows (x64).
 
 ## Settings
