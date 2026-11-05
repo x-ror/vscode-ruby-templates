@@ -1,9 +1,10 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::slim_parser::{self, Piece, VOID_ELEMENTS};
+use crate::html::VOID_ELEMENTS;
+use crate::slim_parser::{self, indent_width, Piece};
 use crate::slim_ruby;
 use crate::util::BOM;
-use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
+use crate::util::{balanced_across_lines, coded, error, leading_ws, span_range, warning};
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
@@ -20,9 +21,6 @@ pub mod code {
     /// Checks that parse the `-`/`=` code as Ruby.
     pub const RUBY: &[&str] = &[RUBY_SYNTAX, EXPLICIT_END];
 }
-
-/// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
-const SLIM_TABSIZE: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
@@ -83,7 +81,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
     if filters_pass && invalid_doctype.is_none() {
-        out.extend(slim_ruby::diagnostics(text, &parsed, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+        out.extend(slim_ruby::compiled(&parsed).diagnostics(text, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
@@ -98,7 +96,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             continue;
         }
         let ws = leading_ws(raw);
-        // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
+        // Tabs expand (see `slim_parser::indent_width`), so mixing them with spaces is fine.
         let indent = indent_width(ws);
 
         // Inside a verbatim block? Everything deeper is skipped.
@@ -117,7 +115,6 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             out.push(coded(error(span_range(line_no, raw, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
         }
 
-        // Pop to the parent level.
         while stack.last().is_some_and(|top| top.indent >= indent) {
             stack.pop();
         }
@@ -148,8 +145,12 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             }
         }
 
-        // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(&lines, i, &mut out);
+        let (kind, consumed) = classify(&lines, i);
+        // Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
+        if content.strip_prefix('-').is_some_and(is_explicit_end) {
+            let range = span_range(line_no, raw, ws.len(), raw.len());
+            out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
+        }
         stack.push(Frame { indent, kind, line: line_no, has_child: false });
         i += consumed.max(1);
     }
@@ -175,29 +176,20 @@ fn syntax_diagnostic(lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagn
     coded(error(span_range(syntax.line, raw, start, raw.len()), syntax.message.clone()), code)
 }
 
-fn indent_width(ws: &str) -> usize {
-    ws.chars().fold(0, |col, c| if c == '\t' { (col / SLIM_TABSIZE + 1) * SLIM_TABSIZE } else { col + 1 })
-}
-
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let raw = lines[i];
-    let ws_len = leading_ws(raw).len();
-    let content_range = span_range(i, raw, ws_len, raw.len());
     let c = raw.trim_start();
 
-    // Doctype
     if c.starts_with("doctype") {
         return (LineKind::Doctype, 1);
     }
-    // Comments
     if is_conditional_comment(c) {
         return (LineKind::Tag { void: false, closed: false }, 1);
     }
     if c.starts_with('/') {
         return (LineKind::Verbatim, 1);
     }
-    // Embedded engines
     if let Some(name) = c.strip_suffix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
             return (LineKind::Verbatim, 1);
@@ -206,17 +198,9 @@ fn classify(lines: &[&str], i: usize, out: &mut Vec<Diagnostic>) -> (LineKind, u
     if c.starts_with('|') || c.starts_with('\'') {
         return (LineKind::Verbatim, 1);
     }
-    // Ruby lines
-    let ruby_prefix: Option<(&str, bool)> =
-        if let Some(rest) = c.strip_prefix('-') { Some((rest, true)) } else { strip_output_prefix(c).map(|rest| (rest, false)) };
-    if let Some((code, is_control)) = ruby_prefix {
-        let (_, consumed) = join_continuation(lines, i, code);
-        if is_control {
-            check_explicit_end(code, content_range, out);
-        }
-        return (LineKind::Other, consumed);
+    if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
+        return (LineKind::Other, continuation_lines(lines, i, code));
     }
-    // Tags
     let is_tag = c.starts_with('.') || c.starts_with('#') || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic());
     if is_tag {
         let (rest, consumed) = skip_tag_head(lines, i);
@@ -249,35 +233,24 @@ fn strip_output_prefix(s: &str) -> Option<&str> {
     Some(t.trim_start_matches(['<', '>', '\'']))
 }
 
-/// Join Ruby continuation lines (`,` or `\` at end).
-fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
-    let mut code = first.to_string();
+/// Physical lines of the Ruby line `first` at line `i` and the lines that continue it (`,` or `\` at the end).
+fn continuation_lines(lines: &[&str], i: usize, first: &str) -> usize {
+    let mut code = first.trim_end().to_string();
     let mut consumed = 1;
-    loop {
-        let t = code.trim_end();
-        if !(t.ends_with(',') || t.ends_with('\\')) {
-            break;
-        }
-        let Some(next) = lines.get(i + consumed) else {
-            break;
-        };
-        let next_t = next.trim();
-        code = format!("{} {}", t.trim_end_matches('\\'), next_t);
+    while code.ends_with(',') || code.ends_with('\\') {
+        let Some(next) = lines.get(i + consumed) else { break };
         consumed += 1;
+        code.truncate(code.trim_end_matches('\\').len());
+        code.push(' ');
+        code.push_str(next.trim());
+        code.truncate(code.trim_end().len());
     }
-    (code, consumed)
+    consumed
 }
 
 /// Slim::EndInserter's `/\Aend\b/` on a `-` line.
 fn is_explicit_end(code: &str) -> bool {
     code.trim_start().strip_prefix("end").is_some_and(|after| after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_')))
-}
-
-/// Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
-fn check_explicit_end(code: &str, range: tower_lsp_server::ls_types::Range, out: &mut Vec<Diagnostic>) {
-    if is_explicit_end(code) {
-        out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
-    }
 }
 
 /// Skip over `tag.class#id attr=val (...)`, validating bracket balance (possibly across lines).
@@ -287,7 +260,6 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
-    // tag name / classes / ids
     let b = s.as_bytes();
     while pos < b.len() {
         let ch = b[pos] as char;
@@ -337,27 +309,7 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
             }
             continue;
         }
-        let close = match ch {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
-        };
-        if let Some(len) = find_balanced(&s[pos..], ch, close) {
-            pos += len;
-            continue;
-        }
-        // Try to extend across following lines (multiline attributes).
-        let mut balanced = None;
-        while let Some(next) = lines.get(i + consumed) {
-            consumed += 1;
-            s.push('\n');
-            s.push_str(next);
-            balanced = find_balanced(&s[pos..], ch, close);
-            if balanced.is_some() || consumed > 20 {
-                break;
-            }
-        }
-        let Some(len) = balanced else {
+        let Some(len) = balanced_across_lines(&mut s, pos, &lines[i..], &mut consumed) else {
             return (String::new(), consumed);
         };
         pos += len;

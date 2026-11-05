@@ -1,10 +1,8 @@
 //! HTML completion in ERB template text: element names after `<`, the open element after `</`, attribute names
 //! inside a start tag.
 
-use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
-use crate::html::BOOLEAN_ATTRIBUTES;
+use crate::html::{self, BOOLEAN_ATTRIBUTES, NO_END_TAG, TAGS};
 use crate::html_lint::{inside, non_markup};
-use crate::tags::VOID;
 use crate::util::completion_item;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -91,7 +89,7 @@ fn open_element(before: &str) -> Option<String> {
             if let Some(at) = stack.iter().rposition(|open| *open == name) {
                 stack.truncate(at);
             }
-        } else if !VOID.contains(&name.as_str()) && !self_closing {
+        } else if !NO_END_TAG.contains(&name.as_str()) && !self_closing {
             stack.push(name);
         }
     }
@@ -101,7 +99,7 @@ fn open_element(before: &str) -> Option<String> {
 /// `stimulus` gives the attributes the element's Stimulus controllers read, asked only for attribute names.
 pub fn items(context: Context, text: &str, offset: usize, stimulus: impl FnOnce() -> Vec<String>) -> Vec<CompletionItem> {
     match context {
-        Context::Element(typed) => HTML_TAGS
+        Context::Element(typed) => TAGS
             .iter()
             .filter(|t| t.starts_with(typed))
             .map(|t| completion_item(*t, CompletionItemKind::PROPERTY, "HTML element"))
@@ -114,26 +112,17 @@ pub fn items(context: Context, text: &str, offset: usize, stimulus: impl FnOnce(
             })
             .into_iter()
             .collect(),
-        Context::Attribute(typed) => {
-            let data = DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-")));
-            let aria = ARIA_KEYS.iter().map(|k| format!("aria-{k}"));
-            HTML_ATTRIBUTES
-                .iter()
-                .map(|a| a.to_string())
-                .chain(data)
-                .chain(aria)
-                .chain(stimulus())
-                .filter(|a| a.starts_with(typed))
-                .map(|name| {
-                    let snippet = if BOOLEAN_ATTRIBUTES.contains(&name.as_str()) { name.clone() } else { format!("{name}=\"$1\"") };
-                    CompletionItem {
-                        insert_text: Some(snippet),
-                        insert_text_format: Some(InsertTextFormat::SNIPPET),
-                        ..completion_item(name, CompletionItemKind::PROPERTY, "HTML attribute")
-                    }
-                })
-                .collect()
-        }
+        Context::Attribute(typed) => html::attribute_names(stimulus())
+            .filter(|a| a.starts_with(typed))
+            .map(|name| {
+                let snippet = if BOOLEAN_ATTRIBUTES.contains(&name.as_str()) { name.clone() } else { format!("{name}=\"$1\"") };
+                CompletionItem {
+                    insert_text: Some(snippet),
+                    insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    ..completion_item(name, CompletionItemKind::PROPERTY, "HTML attribute")
+                }
+            })
+            .collect(),
     }
 }
 

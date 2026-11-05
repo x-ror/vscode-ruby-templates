@@ -3,7 +3,7 @@
 //! owner line, trailing whitespace goes where Slim ignores it, and blank lines at the end become one line ending.
 
 use crate::slim_parser::{indent_width, parse, Role};
-use crate::util::BOM;
+use crate::util::{leading_ws, raw_lines, BOM};
 
 /// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0).
 pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<String> {
@@ -17,15 +17,15 @@ pub fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<S
     let body = text.strip_prefix(BOM).unwrap_or(text);
     let mut out = String::with_capacity(text.len());
     out.push_str(&text[..text.len() - body.len()]);
-    let lines: Vec<&str> = body.split('\n').collect();
-    let end = lines.iter().rposition(|l| !l.trim().is_empty()).map_or(0, |i| i + 1);
+    let lines: Vec<(usize, &str, &str)> = raw_lines(body).collect();
+    let end = lines.iter().rposition(|(_, l, _)| !l.trim().is_empty()).map_or(0, |i| i + 1);
     let mut shift = vec![0isize; parsed.lines.len()];
-    for (i, (&raw, info)) in lines.iter().zip(&parsed.lines).take(end).enumerate() {
+    for (i, (&(_, line, cr), info)) in lines.iter().zip(&parsed.lines).take(end).enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        let (line, cr) = raw.strip_suffix('\r').map_or((raw, ""), |l| (l, "\r"));
-        let (ws, content) = line.split_at(line.len() - line.trim_start_matches([' ', '\t']).len());
+        let ws = leading_ws(line);
+        let content = &line[ws.len()..];
         let width = indent_width(ws) as isize;
         let new_width = match info.role {
             Role::Blank => 0,

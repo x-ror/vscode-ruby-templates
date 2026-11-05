@@ -1,7 +1,7 @@
 //! Ruby syntax errors in an ERB template: the method source Rails 8.1.4 evals for it (Erubi 1.13.1 with the
 //! ActionView handler's options and method wrapper), parsed by Prism.
 
-use crate::generated_ruby::{generated_offset, template_span};
+use crate::generated_ruby::Compiled;
 use crate::prism;
 use crate::strict_locals::{self, Close, Comment, Rails};
 use crate::util::{error, LineIndex};
@@ -17,92 +17,138 @@ const WRAPPER_DEF: &str = "          def _template(";
 const UNCLOSED_DEF: &str = "expected an `end` to close the `def` statement";
 const UNEXPECTED_END: &str = "unexpected 'end', ignoring it";
 
-/// One match of `Erubi::Engine::DEFAULT_REGEXP`, `<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?`, by its groups.
-struct Match<'a> {
-    whole: ByteRange<usize>,
-    indicator: Option<&'a str>,
-    code: ByteRange<usize>,
-    tail: Option<&'a str>,
-    rspace: Option<&'a str>,
-}
-
-/// The regex's matches, scanned by hand: the lazy `(.*?)` with captures made the `regex` crate's slow engines run per tag.
-///
-/// With `percent_lines` (ERB's `trim_mode: "%"`), a line starting with a single `%` is a code tag as well.
-fn erubi_tags(text: &str, percent_lines: bool) -> impl Iterator<Item = Match<'_>> {
-    let bytes = text.as_bytes();
-    let mut pos = 0;
-    // The next `<%` at or after `pos`, searched again only once `pos` passes it (`%` lines can be many).
-    let mut next_open: Option<usize> = None;
-    let mut searched = false;
-    std::iter::from_fn(move || {
-        if !searched || next_open.is_some_and(|at| at < pos) {
-            next_open = text.get(pos..)?.find("<%").map(|at| pos + at);
-            searched = true;
-        }
-        let tag_open = next_open;
-        if percent_lines {
-            if let Some(line) = percent_line(text, pos, tag_open.unwrap_or(text.len())) {
-                pos = line.whole.end;
-                return Some(line);
-            }
-        }
-        let open = tag_open?;
-        let longest = match &bytes[open + 2..] {
-            [b'=', b'=', ..] => 2,
-            [b'=' | b'-' | b'#' | b'%', ..] => 1,
-            _ => 0,
-        };
-        // The regex tries the longest indicator first; only `<%%>` matches without the one it has.
-        let (indicator_len, code_start, close) = (0..=longest).rev().find_map(|len| {
-            let code_start = open + 2 + len;
-            text[code_start..].find("%>").map(|at| (len, code_start, code_start + at))
-        })?;
-        let tail = close > code_start && matches!(bytes[close - 1], b'-' | b'=');
-        let code_end = close - usize::from(tail);
-        let end = close + 2;
-        let spaces = bytes[end..].iter().take_while(|&&b| b == b' ' || b == b'\t').count();
-        let newline = match &bytes[end + spaces..] {
-            [b'\r', b'\n', ..] => 2,
-            [b'\n', ..] => 1,
-            _ => 0,
-        };
-        let rspace = (newline > 0).then(|| &text[end..end + spaces + newline]);
-        pos = end + rspace.map_or(0, str::len);
-        Some(Match {
-            whole: open..pos,
-            indicator: (indicator_len > 0).then(|| &text[open + 2..code_start]),
-            code: code_start..code_end,
-            tail: tail.then(|| &text[code_end..close]),
-            rspace,
-        })
-    })
-}
-/// The first line in `from..until` that starts with a single `%`, as a code tag with its newline.
-fn percent_line(text: &str, from: usize, until: usize) -> Option<Match<'_>> {
-    let at_line_start = |at: usize| at == 0 || text.as_bytes()[at - 1] == b'\n';
-    let mut start = if at_line_start(from) { from } else { from + text[from..].find('\n')? + 1 };
-    while start < until {
-        let line = &text[start..];
-        let line_end = line.find('\n').map_or(text.len(), |at| start + at);
-        if line.starts_with('%') && !line.starts_with("%%") {
-            let newline = &text[line_end..];
-            let rspace = newline.starts_with('\n').then(|| &text[line_end..line_end + 1]);
-            let code_end = if text[..line_end].ends_with('\r') { line_end - 1 } else { line_end };
-            let whole_end = line_end + rspace.map_or(0, str::len);
-            // A CRLF line keeps its `\r` with the newline, as the regexp's `\r?\n` does.
-            let rspace = if code_end < line_end { rspace.map(|_| &text[code_end..whole_end]) } else { rspace };
-            return Some(Match { whole: start..whole_end, indicator: None, code: start + 1..code_end, tail: None, rspace });
-        }
-        start = line_end + 1;
-    }
-    None
-}
 // `ActionView::Template::Handlers::ERB::ENCODING_TAG`.
 static ENCODING_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A<%#.*coding[:=][ \t\r\n\x0C\x0B]*\S+[ \t]*-?%>[ \t]*").unwrap());
 // `ActionView::Template::Handlers::ERB::Erubi::BLOCK_EXPR`.
 static BLOCK_EXPR: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?:(?:[ \t\r\n\x0C\x0B]|\))do|\{)(?:[ \t\r\n\x0C\x0B]*\|[^|]*\|)?[ \t\r\n\x0C\x0B]*\z").unwrap());
+
+/// The value is unknown; one plain character keeps a tag or an unquoted value open as the output would.
+const OUTPUT_PLACEHOLDER: &str = "x";
+
+/// A tag as Erubi's scan finds it.
+pub struct ErbTag<'a> {
+    /// From `<%` to just past `%>`, without the newline Erubi may trim after it.
+    pub start: usize,
+    pub end: usize,
+    pub indicator: Option<&'a str>,
+    /// Between the indicator and the `-`/`=` before `%>`.
+    pub code: ByteRange<usize>,
+}
+
+impl ErbTag<'_> {
+    pub fn is_comment(&self) -> bool {
+        self.indicator == Some("#")
+    }
+
+    /// `<%% … %>`, which renders as the text `<% … %>`.
+    pub fn is_literal(&self) -> bool {
+        self.indicator == Some("%")
+    }
+}
+
+/// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
+pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
+    erubi_tags(text, false)
+        .map(|tag| {
+            let trimmed = tag.rspace.map_or(0, str::len);
+            ErbTag { start: tag.whole.start, end: tag.whole.end - trimmed, indicator: tag.indicator, code: tag.code }
+        })
+        .collect()
+}
+
+/// The texts Erubi renders for `text` before the text after its last tag, and where in `text` that text starts.
+pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
+    let (erubi, encoding_tag) = read_after_encoding_tag(text, false);
+    (erubi.texts, encoding_tag + erubi.tail_at)
+}
+
+/// The Ruby Rails compiles `text` to; with `close`, the `locals:` comment it finds makes the method's parameters.
+pub fn compiled(text: &str, close: Option<Close>) -> Compiled {
+    compile(text, close, false).ruby
+}
+
+/// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
+/// `locals:` parameters are keywords. `rails` is given only where strict locals exist.
+pub fn diagnostics(text: &str, ruby: ruby_prism::Version, percent_lines: bool, rails: Option<&Rails>) -> Vec<Diagnostic> {
+    let compiled = compile(text, rails.map(|r| r.close), percent_lines);
+    let index = LineIndex::new(text);
+    let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.ruby.source, ruby);
+    let found: Vec<Diagnostic> =
+        errors.into_iter().filter_map(|e| Some(error(template_range(text, &index, &compiled, &e)?, e.message))).collect();
+    if !found.is_empty() {
+        return found;
+    }
+    let (Some(comment), Some(rails)) = (&compiled.strict_locals, rails) else { return Vec::new() };
+    let range = index.text_range(comment.line(text));
+    strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
+}
+
+/// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
+fn template_range(text: &str, index: &LineIndex, compiled: &Method, e: &prism::RubyError) -> Option<Range> {
+    if let Some(range) = compiled.ruby.verbatim_range(index, e.start, e.end) {
+        return Some(range);
+    }
+    // The wrapper's own `end` is the unexpected one when a stray `end` in the template closed the method first.
+    let stray = (e.message == UNEXPECTED_END).then(|| prism::wrapper_end(&compiled.ruby.source)).flatten();
+    if let Some(range) = stray.and_then(|(start, end)| compiled.ruby.verbatim_range(index, start, end)) {
+        return Some(range);
+    }
+    let generated_line = e.range.start.line as usize;
+    let line = if generated_line < compiled.code_line {
+        if e.message == UNCLOSED_DEF {
+            return None;
+        }
+        let comment = compiled.strict_locals.as_ref()?;
+        if let Some(range) = comment.error_range(text, WRAPPER_DEF.len(), e.start, e.end) {
+            return Some(range);
+        }
+        comment.line(text)
+    } else {
+        // Past the template are the lines Erubi and the wrapper add after it.
+        (generated_line - compiled.code_line).min(index.line_count().saturating_sub(1))
+    };
+    Some(index.text_range(line))
+}
+
+/// The method source Rails evals for a template, and where the template's text went in it.
+struct Method {
+    ruby: Compiled,
+    /// The line the template's first line is on.
+    code_line: usize,
+    /// The `locals:` comment, which the wrapper's `def` line holds the parameters of.
+    strict_locals: Option<Comment>,
+}
+
+/// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
+fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Method {
+    let strict = close.and_then(|close| strict_locals::find(text, close));
+    let mut template = text.to_string();
+    if let Some(strict) = &strict {
+        template.replace_range(strict.range.clone(), "");
+    }
+    let (erubi, encoding_tag) = read_after_encoding_tag(&template, percent_lines);
+
+    let parameters = strict_locals::method_parameters(strict.as_ref());
+    let head = format!("{WRAPPER_DEF}{parameters})\n            @virtual_path = \"template\";;");
+    let verbatim = erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect();
+    // Rails cuts the `locals:` comment first, then the encoding tag.
+    let cuts = std::iter::once((0, encoding_tag)).chain(strict.as_ref().map(|s| (s.range.start, s.range.len()))).collect();
+    Method {
+        code_line: head.matches('\n').count(),
+        ruby: Compiled::from_verbatim(format!("{head}{}\n          end\n", erubi.src), verbatim, cuts),
+        strict_locals: strict,
+    }
+}
+
+/// Erubi's read of `template` after the encoding tag Rails cuts, and that tag's length.
+fn read_after_encoding_tag(template: &str, percent_lines: bool) -> (Erubi, usize) {
+    let encoding_tag = ENCODING_TAG.find(template).map_or(0, |m| m.end());
+    let mut erubi = Erubi::default();
+    erubi.compile(&template[encoding_tag..], percent_lines);
+    (erubi, encoding_tag)
+}
+
 /// `Erubi::Engine` as `ActionView::Template::Handlers::ERB::Erubi` configures it (`trim: true`, `@output_buffer`).
 #[derive(Default)]
 struct Erubi {
@@ -116,9 +162,6 @@ struct Erubi {
     /// Where the text after the last tag starts in the template Erubi read.
     tail_at: usize,
 }
-
-/// The value is unknown; one plain character keeps a tag or an unquoted value open as the output would.
-const OUTPUT_PLACEHOLDER: &str = "x";
 
 impl Erubi {
     fn add_text(&mut self, text: &str) {
@@ -201,28 +244,10 @@ impl Erubi {
             let (code_text, code_at) = (&template[tag.code.clone()], tag.code.start);
             let tail = tag.tail;
             let mut rspace = tag.rspace;
-            let mut text = &template[pos..tag.whole.start];
+            let text = &template[pos..tag.whole.start];
             pos = tag.whole.end;
             let kind = indicator.and_then(|i| i.chars().next());
-
-            let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
-            let mut lspace = None;
-            if kind != Some('=') {
-                if text.is_empty() {
-                    lspace = is_bol.then_some("");
-                } else if text.ends_with('\n') {
-                    lspace = Some("");
-                } else if let Some(newline) = text.rfind('\n') {
-                    let line = &text[newline + 1..];
-                    if blank(line) {
-                        lspace = Some(line);
-                        text = &text[..=newline];
-                    }
-                } else if is_bol && blank(text) {
-                    lspace = Some(text);
-                    text = "";
-                }
-            }
+            let (lspace, text) = if kind == Some('=') { (None, text) } else { leading_space(text, is_bol) };
 
             is_bol = rspace.is_some();
             self.add_rendered_text(text);
@@ -274,187 +299,105 @@ impl Erubi {
     }
 }
 
-/// A tag as Erubi's scan finds it.
-pub struct ErbTag<'a> {
-    /// From `<%` to just past `%>`, without the newline Erubi may trim after it.
-    pub start: usize,
-    pub end: usize,
-    pub indicator: Option<&'a str>,
-    /// Between the indicator and the `-`/`=` before `%>`.
-    pub code: ByteRange<usize>,
-}
-
-impl ErbTag<'_> {
-    pub fn is_comment(&self) -> bool {
-        self.indicator == Some("#")
+/// Erubi's `lspace` for a tag that isn't output: the blanks the tag's line starts with when nothing else comes before
+/// the tag on it, and `text`, the text before the tag, without them.
+fn leading_space(text: &str, is_bol: bool) -> (Option<&str>, &str) {
+    let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
+    if text.is_empty() {
+        return (is_bol.then_some(""), text);
     }
-
-    /// `<%% … %>`, which renders as the text `<% … %>`.
-    pub fn is_literal(&self) -> bool {
-        self.indicator == Some("%")
+    if text.ends_with('\n') {
+        return (Some(""), text);
+    }
+    match text.rfind('\n') {
+        Some(newline) if blank(&text[newline + 1..]) => (Some(&text[newline + 1..]), &text[..=newline]),
+        Some(_) => (None, text),
+        None if is_bol && blank(text) => (Some(text), ""),
+        None => (None, text),
     }
 }
 
-/// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
-pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
-    erubi_tags(text, false)
-        .map(|tag| {
-            let trimmed = tag.rspace.map_or(0, str::len);
-            ErbTag { start: tag.whole.start, end: tag.whole.end - trimmed, indicator: tag.indicator, code: tag.code }
+/// One match of `Erubi::Engine::DEFAULT_REGEXP`, `<%(={1,2}|-|#|%)?(.*?)([-=])?%>([ \t]*\r?\n)?`, by its groups.
+struct Match<'a> {
+    whole: ByteRange<usize>,
+    indicator: Option<&'a str>,
+    code: ByteRange<usize>,
+    tail: Option<&'a str>,
+    rspace: Option<&'a str>,
+}
+
+/// The regex's matches, scanned by hand: the lazy `(.*?)` with captures made the `regex` crate's slow engines run per tag.
+///
+/// With `percent_lines` (ERB's `trim_mode: "%"`), a line starting with a single `%` is a code tag as well.
+fn erubi_tags(text: &str, percent_lines: bool) -> impl Iterator<Item = Match<'_>> {
+    let bytes = text.as_bytes();
+    let mut pos = 0;
+    // The next `<%` at or after `pos`, searched again only once `pos` passes it (`%` lines can be many).
+    let mut next_open: Option<usize> = None;
+    let mut searched = false;
+    std::iter::from_fn(move || {
+        if !searched || next_open.is_some_and(|at| at < pos) {
+            next_open = text.get(pos..)?.find("<%").map(|at| pos + at);
+            searched = true;
+        }
+        let tag_open = next_open;
+        if percent_lines {
+            if let Some(line) = percent_line(text, pos, tag_open.unwrap_or(text.len())) {
+                pos = line.whole.end;
+                return Some(line);
+            }
+        }
+        let open = tag_open?;
+        let longest = match &bytes[open + 2..] {
+            [b'=', b'=', ..] => 2,
+            [b'=' | b'-' | b'#' | b'%', ..] => 1,
+            _ => 0,
+        };
+        // The regex tries the longest indicator first; only `<%%>` matches without the one it has.
+        let (indicator_len, code_start, close) = (0..=longest).rev().find_map(|len| {
+            let code_start = open + 2 + len;
+            text[code_start..].find("%>").map(|at| (len, code_start, code_start + at))
+        })?;
+        let tail = close > code_start && matches!(bytes[close - 1], b'-' | b'=');
+        let code_end = close - usize::from(tail);
+        let end = close + 2;
+        let spaces = bytes[end..].iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+        let newline = match &bytes[end + spaces..] {
+            [b'\r', b'\n', ..] => 2,
+            [b'\n', ..] => 1,
+            _ => 0,
+        };
+        let rspace = (newline > 0).then(|| &text[end..end + spaces + newline]);
+        pos = end + rspace.map_or(0, str::len);
+        Some(Match {
+            whole: open..pos,
+            indicator: (indicator_len > 0).then(|| &text[open + 2..code_start]),
+            code: code_start..code_end,
+            tail: tail.then(|| &text[code_end..close]),
+            rspace,
         })
-        .collect()
+    })
 }
 
-/// Erubi's read of `template` after the encoding tag Rails cuts, and that tag's length.
-fn read_after_encoding_tag(template: &str, percent_lines: bool) -> (Erubi, usize) {
-    let encoding_tag = ENCODING_TAG.find(template).map_or(0, |m| m.end());
-    let mut erubi = Erubi::default();
-    erubi.compile(&template[encoding_tag..], percent_lines);
-    (erubi, encoding_tag)
-}
-
-/// The texts Erubi renders for `text` before the text after its last tag, and where in `text` that text starts.
-pub fn rendered_texts(text: &str) -> (Vec<String>, usize) {
-    let (erubi, encoding_tag) = read_after_encoding_tag(text, false);
-    (erubi.texts, encoding_tag + erubi.tail_at)
-}
-
-/// The method source Rails evals for a template, and where the template's text went in it.
-struct Compiled {
-    source: String,
-    /// The line the template's first line is on.
-    code_line: usize,
-    /// Code copied as it is: its byte range in `source` and the offset of its first byte in the template.
-    verbatim: Vec<(usize, usize, usize)>,
-    /// The `locals:` comment, which the wrapper's `def` line holds the parameters of.
-    strict_locals: Option<Comment>,
-    /// What Rails cut out of the template before Erubi saw it.
-    cut: Cut,
-}
-
-#[derive(Default)]
-struct Cut {
-    encoding_tag: usize,
-    strict_locals: Option<ByteRange<usize>>,
-}
-
-impl Cut {
-    /// The offset in the original template of `offset` in the text Erubi read.
-    fn original(&self, offset: usize) -> usize {
-        let offset = offset + self.encoding_tag;
-        match &self.strict_locals {
-            Some(comment) if offset >= comment.start => offset + comment.len(),
-            _ => offset,
+/// The first line in `from..until` that starts with a single `%`, as a code tag with its newline.
+fn percent_line(text: &str, from: usize, until: usize) -> Option<Match<'_>> {
+    let at_line_start = |at: usize| at == 0 || text.as_bytes()[at - 1] == b'\n';
+    let mut start = if at_line_start(from) { from } else { from + text[from..].find('\n')? + 1 };
+    while start < until {
+        let line = &text[start..];
+        let line_end = line.find('\n').map_or(text.len(), |at| start + at);
+        if line.starts_with('%') && !line.starts_with("%%") {
+            let newline = &text[line_end..];
+            let rspace = newline.starts_with('\n').then(|| &text[line_end..line_end + 1]);
+            let code_end = if text[..line_end].ends_with('\r') { line_end - 1 } else { line_end };
+            let whole_end = line_end + rspace.map_or(0, str::len);
+            // A CRLF line keeps its `\r` with the newline, as the regexp's `\r?\n` does.
+            let rspace = if code_end < line_end { rspace.map(|_| &text[code_end..whole_end]) } else { rspace };
+            return Some(Match { whole: start..whole_end, indicator: None, code: start + 1..code_end, tail: None, rspace });
         }
+        start = line_end + 1;
     }
-}
-
-/// `Template#compiled_source` for `text`; without strict locals (Rails before 7.1) the `locals:` line is a plain comment.
-fn compile(text: &str, close: Option<Close>, percent_lines: bool) -> Compiled {
-    let strict = close.and_then(|close| strict_locals::find(text, close));
-    let mut template = text.to_string();
-    if let Some(strict) = &strict {
-        template.replace_range(strict.range.clone(), "");
-    }
-    let (erubi, encoding_tag) = read_after_encoding_tag(&template, percent_lines);
-
-    let parameters = strict_locals::method_parameters(strict.as_ref());
-    let head = format!("{WRAPPER_DEF}{parameters})\n            @virtual_path = \"template\";;");
-    Compiled {
-        code_line: head.matches('\n').count(),
-        verbatim: erubi.verbatim.into_iter().map(|(from, to, at)| (from + head.len(), to + head.len(), at)).collect(),
-        source: format!("{head}{}\n          end\n", erubi.src),
-        cut: Cut { encoding_tag, strict_locals: strict.as_ref().map(|s| s.range.clone()) },
-        strict_locals: strict,
-    }
-}
-
-/// Prism's errors for the method source of `text`, at the template lines they come from; with none, Rails' check that the
-/// `locals:` parameters are keywords. `rails` is given only where strict locals exist.
-pub fn diagnostics(text: &str, ruby: ruby_prism::Version, percent_lines: bool, rails: Option<&Rails>) -> Vec<Diagnostic> {
-    let compiled = compile(text, rails.map(|r| r.close), percent_lines);
-    let index = LineIndex::new(text);
-    let (errors, (positional, block)) = prism::errors_and_def_parameters(&compiled.source, ruby);
-    let found: Vec<Diagnostic> =
-        errors.into_iter().filter_map(|e| Some(error(template_range(text, &index, &compiled, &e)?, e.message))).collect();
-    if !found.is_empty() {
-        return found;
-    }
-    let (Some(comment), Some(rails)) = (&compiled.strict_locals, rails) else { return Vec::new() };
-    let range = index.text_range(comment.line(text));
-    strict_locals::non_keyword_message(positional, block, &rails.identifier).map(|message| error(range, message)).into_iter().collect()
-}
-
-/// The block variables in scope at `offset` of the template.
-pub fn block_locals(text: &str, offset: usize) -> Vec<String> {
-    let compiled = compile(text, None, false);
-    let Some(read_at) = offset.checked_sub(compiled.cut.encoding_tag) else { return Vec::new() };
-    generated_offset(&compiled.verbatim, read_at).map_or_else(Vec::new, |at| prism::block_locals(&compiled.source, at))
-}
-
-/// Where the template declares the local variable at `offset`: its block parameter or first assignment.
-pub fn local_definition(text: &str, offset: usize) -> Option<prism::LocalDefinition> {
-    let compiled = compile(text, None, false);
-    let at = generated_offset(&compiled.verbatim, offset.checked_sub(compiled.cut.encoding_tag)?)?;
-    let found = prism::local_definition(&compiled.source, at)?;
-    let (start, end) = template_span(&compiled.verbatim, found.start, found.end)?;
-    Some(prism::LocalDefinition { start: compiled.cut.original(start), end: compiled.cut.original(end), ..found })
-}
-
-/// The template byte ranges where the strict local `name` is read or assigned; the `locals:` comment, which Rails cuts out, makes the
-/// method's parameters.
-pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
-    let compiled = compile(text, Some(close), false);
-    let original = |(start, end): (usize, usize)| (compiled.cut.original(start), compiled.cut.original(end));
-    let uses = prism::local_uses(&compiled.source, name);
-    let spans = uses.spans.into_iter().filter_map(|(start, end)| template_span(&compiled.verbatim, start, end).map(original)).collect();
-    prism::LocalUses { spans, ..uses }
-}
-
-/// The template's local variables; `close` finds the `locals:` comment, whose parameters are the strict locals.
-pub fn local_tokens(text: &str, close: Close) -> Vec<prism::LocalToken> {
-    let compiled = compile(text, Some(close), false);
-    let tokens = prism::local_tokens(&compiled.source);
-    let mapped = tokens.into_iter().filter_map(|t| Some((template_span(&compiled.verbatim, t.start, t.end)?, t)));
-    mapped
-        .map(|((start, end), t)| prism::LocalToken { start: compiled.cut.original(start), end: compiled.cut.original(end), ..t })
-        .collect()
-}
-
-/// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
-fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
-    if let Some(range) = verbatim_range(index, compiled, e.start, e.end) {
-        return Some(range);
-    }
-    // The wrapper's own `end` is the unexpected one when a stray `end` in the template closed the method first.
-    let stray = (e.message == UNEXPECTED_END).then(|| prism::wrapper_end(&compiled.source)).flatten();
-    if let Some(range) = stray.and_then(|(start, end)| verbatim_range(index, compiled, start, end)) {
-        return Some(range);
-    }
-    let generated_line = e.range.start.line as usize;
-    let line = if generated_line < compiled.code_line {
-        if e.message == UNCLOSED_DEF {
-            return None;
-        }
-        let comment = compiled.strict_locals.as_ref()?;
-        if let Some(range) = comment.error_range(text, WRAPPER_DEF.len(), e.start, e.end) {
-            return Some(range);
-        }
-        comment.line(text)
-    } else {
-        // Past the template are the lines Erubi and the wrapper add after it.
-        (generated_line - compiled.code_line).min(index.line_count().saturating_sub(1))
-    };
-    Some(index.text_range(line))
-}
-
-/// The template range of generated bytes `start..end` that are code the template wrote.
-fn verbatim_range(index: &LineIndex, compiled: &Compiled, start: usize, end: usize) -> Option<Range> {
-    // Erubi records the runs in source order: the first that ends after `start` is the only one that may hold it.
-    let run = compiled.verbatim.get(compiled.verbatim.partition_point(|&(_, to, _)| to <= start));
-    let &(from, to, at) = run.filter(|&&(from, _, _)| from <= start)?;
-    let position = |offset: usize| index.position(compiled.cut.original(at + offset - from));
-    Some(Range::new(position(start), position(end.min(to))))
+    None
 }
 
 #[cfg(test)]
@@ -565,7 +508,7 @@ mod tests {
         ("<%# locals: (a:, &block) -%>\n<%= a %>", "          def _template(local_assigns, output_buffer, a:, &block)\n            @virtual_path = \"template\";; \n @output_buffer.append=( a );\n@output_buffer\n          end\n"),
         ];
         for (template, rails) in cases {
-            assert_eq!(compile(template, Some(Close::default()), false).source, rails, "{template:?}");
+            assert_eq!(compile(template, Some(Close::default()), false).ruby.source, rails, "{template:?}");
         }
     }
 
@@ -726,7 +669,7 @@ mod tests {
     fn locals_line_is_a_plain_comment_without_strict_locals() {
         let text = "<%# locals: (a: ] ) %>\n<p>\n";
         assert!(super::diagnostics(text, ruby_prism::Version::Latest, false, None).is_empty());
-        assert!(compile(text, None, false).source.contains("(local_assigns, output_buffer, &_)"));
+        assert!(compile(text, None, false).ruby.source.contains("(local_assigns, output_buffer, &_)"));
         assert_eq!(errors(text)[0].1, "unexpected ']'; expected a `)` to close the parameters");
     }
 
@@ -754,7 +697,7 @@ mod tests {
     fn blank_signature_is_nil_keywords() {
         for blank in ["", " ", "\u{a0}"] {
             let template = format!("<%# locals: ({blank}) -%>\n<p>x</p>");
-            assert!(compile(&template, Some(Close::default()), false).source.contains("output_buffer, **nil, &_)"), "{template:?}");
+            assert!(compile(&template, Some(Close::default()), false).ruby.source.contains("output_buffer, **nil, &_)"), "{template:?}");
             assert!(errors(&template).is_empty());
         }
     }
@@ -784,11 +727,17 @@ mod tests {
     }
 
     #[test]
+    fn error_at_the_end_of_the_code_is_exact() {
+        assert_eq!(diagnostics("<% :%>")[0].range, Range::new(Position::new(0, 4), Position::new(0, 4)));
+    }
+
+    #[test]
     fn block_locals_after_an_encoding_tag_and_before_the_end() {
         let text = "<%# encoding: utf-8 %>\n<% @users.each do |user| %>\n<%= us %>\n<% end %>\n<%= us %>\n";
         let first = text.find("us %>").unwrap() + 2;
-        assert_eq!(block_locals(text, first), ["user"]);
-        assert!(block_locals(text, text.rfind("us").unwrap() + 2).is_empty());
-        assert!(block_locals(text, 5).is_empty());
+        let compiled = compiled(text, None);
+        assert_eq!(compiled.block_locals(first), ["user"]);
+        assert!(compiled.block_locals(text.rfind("us").unwrap() + 2).is_empty());
+        assert!(compiled.block_locals(5).is_empty());
     }
 }

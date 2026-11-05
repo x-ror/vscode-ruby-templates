@@ -1,7 +1,8 @@
 //! Reads a `render` call's arguments with Prism, from the call's text in a template.
 
 use crate::haml_indent::haml_structure;
-use crate::haml_parser::{is_haml_multiline, RUBY_WHITESPACE};
+use crate::haml_parser::is_haml_multiline;
+use crate::ruby::RUBY_WHITESPACE;
 use ruby_prism::{ArgumentsNode, AssocNode, CallNode, InterpolatedStringNode, Location, Options, StringNode, Version, Visit};
 use std::borrow::Cow;
 use std::cell::OnceCell;

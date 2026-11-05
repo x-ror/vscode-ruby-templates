@@ -71,6 +71,16 @@ impl<'a> LineIndex<'a> {
         // A final line ending opens no line of its own.
         self.starts.len() - usize::from(self.text.is_empty() || self.text.ends_with('\n'))
     }
+
+    /// The line `offset` is on.
+    pub fn line_of(&self, offset: usize) -> usize {
+        self.starts.partition_point(|&s| s <= offset) - 1
+    }
+
+    /// The offset line `n` starts at.
+    pub fn line_start(&self, n: usize) -> usize {
+        self.starts[n]
+    }
 }
 
 /// A line as `str::lines` yields it: without its `\n` or `\r\n`; a lone `\r` at the very end stays.
@@ -282,6 +292,52 @@ pub fn write_files(root: &Path, files: &[(&str, &str)]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
+}
+
+/// The bracket that closes `open`: `(`, `[` or `{`.
+pub fn closing_bracket(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
+    }
+}
+
+/// How many lines a Haml or Slim tag head's bracketed attributes may run over before they count as unclosed.
+pub const MAX_ATTRIBUTE_LINES: usize = 20;
+
+/// `find_balanced` for the bracket at `head[at..]`, appending the next of `lines` to `head` while it is open;
+/// `consumed` counts the lines `head` holds, and the first of `lines` is the first of them.
+pub fn balanced_across_lines(head: &mut String, at: usize, lines: &[&str], consumed: &mut usize) -> Option<usize> {
+    let open = head[at..].chars().next()?;
+    let close = closing_bracket(open)?;
+    if let Some(len) = find_balanced(&head[at..], open, close) {
+        return Some(len);
+    }
+    for next in lines.iter().skip(*consumed) {
+        *consumed += 1;
+        head.push('\n');
+        head.push_str(next);
+        if let Some(len) = find_balanced(&head[at..], open, close) {
+            return Some(len);
+        }
+        if *consumed > MAX_ATTRIBUTE_LINES {
+            break;
+        }
+    }
+    None
+}
+
+/// The lines of `text` split at `\n`, a final empty one included: where each starts, its content less a `\r` before
+/// the break, and that `\r` (or "").
+pub fn raw_lines(text: &str) -> impl Iterator<Item = (usize, &str, &str)> {
+    text.split('\n').scan(0, |start, raw| {
+        let at = *start;
+        *start += raw.len() + 1;
+        let (line, cr) = raw.strip_suffix('\r').map_or((raw, ""), |line| (line, "\r"));
+        Some((at, line, cr))
+    })
 }
 
 #[cfg(test)]

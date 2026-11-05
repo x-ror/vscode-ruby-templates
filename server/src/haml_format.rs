@@ -3,7 +3,7 @@
 //! goes where Haml ignores it. Empty lines at the end become one line ending.
 
 use crate::haml_parser::{lines_with_endings, parse, Role};
-use crate::util::BOM;
+use crate::util::{leading_ws, BOM};
 
 const BLANK_SPACE: [char; 2] = [' ', '\t'];
 
@@ -25,8 +25,8 @@ pub(crate) fn format(text: &str, width: usize) -> Option<String> {
     // Haml takes its indentation unit from the first indented line it reads, a continuation line included.
     let mut unit_known = false;
     for (i, (&role, &(line, ending))) in parsed.roles.iter().zip(&lines).enumerate() {
-        let content = line.trim_start_matches(BLANK_SPACE);
-        let old = line.len() - content.len();
+        let old = leading_ws(line).len();
+        let content = &line[old..];
         match role {
             Role::Blank => {}
             Role::Structural { depth } => {

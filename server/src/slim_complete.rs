@@ -1,9 +1,9 @@
 //! Slim markup completion: tag and embedded engine names where a tag starts, attribute names
 //! where an attribute may start.
 
-use crate::helpers::DATA_KEYS;
-use crate::html::{ATTRIBUTES, BOOLEAN_ATTRIBUTES, TAGS};
+use crate::html::{attribute_names, BOOLEAN_ATTRIBUTES, TAGS};
 use crate::slim_parser::{Parsed, SLIM_ENGINES};
+use crate::util::completion_item;
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name. `stimulus` gives the
@@ -19,39 +19,25 @@ pub fn items(
     let tag = word_start(before, |c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':'));
     if parsed.tag_slots.contains(&(offset - tag.len())) && may_start(before, tag) {
         let engines = SLIM_ENGINES.iter().copied().chain(extra_engines.iter().map(String::as_str));
-        let engines = engines.map(|name| CompletionItem {
-            label: format!("{name}:"),
-            kind: Some(CompletionItemKind::MODULE),
-            detail: Some("Slim embedded engine".into()),
-            ..Default::default()
-        });
-        let tags = TAGS.iter().map(|name| CompletionItem {
-            label: name.to_string(),
-            kind: Some(CompletionItemKind::PROPERTY),
-            detail: Some("HTML element".into()),
-            ..Default::default()
-        });
+        let engines = engines.map(|name| completion_item(format!("{name}:"), CompletionItemKind::MODULE, "Slim embedded engine"));
+        let tags = TAGS.iter().map(|&name| completion_item(name, CompletionItemKind::PROPERTY, "HTML element"));
         return Some(tags.chain(engines).collect());
     }
     let attr = word_start(before, |c| !c.is_whitespace() && !"\"'<>/=()[]{}".contains(c));
     if !parsed.attr_slots.contains(&(offset - attr.len())) || !may_start(before, attr) {
         return None;
     }
-    let data = DATA_KEYS.iter().map(|key| format!("data-{}", key.replace('_', "-"))).filter(|name| !ATTRIBUTES.contains(&name.as_str()));
-    let names = ATTRIBUTES.iter().map(|name| name.to_string()).chain(data).chain(stimulus());
-    let valued = names.map(|name| CompletionItem {
-        label: name.clone(),
-        kind: Some(CompletionItemKind::FIELD),
-        insert_text: Some(format!("{name}=\"$1\"")),
-        insert_text_format: Some(InsertTextFormat::SNIPPET),
-        ..Default::default()
-    });
-    let boolean = BOOLEAN_ATTRIBUTES.iter().map(|name| CompletionItem {
-        label: name.to_string(),
-        kind: Some(CompletionItemKind::FIELD),
-        ..Default::default()
-    });
-    Some(valued.chain(boolean).collect())
+    let item = |name: String| {
+        let snippet = (!BOOLEAN_ATTRIBUTES.contains(&name.as_str())).then(|| format!("{name}=\"$1\""));
+        CompletionItem {
+            label: name,
+            kind: Some(CompletionItemKind::FIELD),
+            insert_text_format: snippet.is_some().then_some(InsertTextFormat::SNIPPET),
+            insert_text: snippet,
+            ..Default::default()
+        }
+    };
+    Some(attribute_names(stimulus()).map(item).collect())
 }
 
 /// The trailing run of `before` made of `is_word` characters.
@@ -102,5 +88,16 @@ mod tests {
         let parsed = parse("div data-controller=\"x\" da", &[]);
         let stimulus = items("div data-controller=\"x\" da", 26, &parsed, &[], || vec!["data-x-target".into()]).unwrap();
         assert!(stimulus.iter().any(|i| i.label == "data-x-target"));
+    }
+
+    #[test]
+    fn same_html_names_as_erb_and_haml() {
+        let tags = labels("p\n  k|").unwrap();
+        assert!(tags.contains(&"kbd".into()) && tags.contains(&"wbr".into()), "{tags:?}");
+        let attributes = labels("a |").unwrap();
+        for name in ["aria-describedby", "popover", "data-target"] {
+            assert!(attributes.contains(&name.into()), "{name}");
+        }
+        assert_eq!(attributes.iter().filter(|name| *name == "disabled").count(), 1);
     }
 }

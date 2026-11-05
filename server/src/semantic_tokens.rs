@@ -15,10 +15,11 @@ pub fn legend() -> SemanticTokensLegend {
 }
 
 fn type_index(kind: LocalKind) -> u32 {
-    match kind {
-        LocalKind::Parameter => 0,
-        LocalKind::Variable => 1,
-    }
+    let token_type = match kind {
+        LocalKind::Parameter => SemanticTokenType::PARAMETER,
+        LocalKind::Variable => SemanticTokenType::VARIABLE,
+    };
+    TOKEN_TYPES.iter().position(|t| *t == token_type).expect("TOKEN_TYPES holds every local's type") as u32
 }
 
 /// Whether the language compiles to Ruby this module reads; others are left to other servers.

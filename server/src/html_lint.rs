@@ -2,6 +2,7 @@
 //! (`html-img-require-alt`, `html-no-duplicate-ids`).
 
 use crate::erb;
+use crate::html::TEXT_ELEMENTS;
 use crate::ruby::{analyze, BlockEffect};
 use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
@@ -19,8 +20,6 @@ const ALT_RULE: &str = "the alt attribute must be specified (HTML 4.8.4.4.1)";
 /// Set by a markup generator that couldn't get alt text; conformance checkers ignore the missing `alt` then (4.8.4.4).
 const NO_ALT_AVAILABLE: &str = "generator-unable-to-provide-required-alt";
 
-/// Elements whose body is text, not markup.
-pub const RAW_TEXT: &[&str] = &["script", "style", "textarea"];
 static START_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<([a-zA-Z][\w:-]*)").unwrap());
 static IMAGE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bimage_tag\b").unwrap());
 static ALT_OPTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\balt:|:alt\s*=>|["']alt["']\s*=>|\*\*"#).unwrap());
@@ -38,10 +37,10 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
             out.push((i, end));
             at = end;
         } else if rest.starts_with("<!--") {
-            let end = till("-->", i + 4);
+            let end = till("-->", i + "<!--".len());
             out.push((i, end));
             at = end;
-        } else if let Some(name) = RAW_TEXT.iter().find(|n| rest.get(1..=n.len()).is_some_and(|r| r.eq_ignore_ascii_case(n))) {
+        } else if let Some(name) = TEXT_ELEMENTS.iter().find(|n| rest.get(1..=n.len()).is_some_and(|r| r.eq_ignore_ascii_case(n))) {
             // The body starts after the start tag's `>`, skipping ERB in its attributes.
             let mut body = i + 1;
             while let Some(gt) = text[body..].find(['>', '<']).map(|e| body + e) {
@@ -93,7 +92,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let range = |start: usize, end: usize| index.range(start, end);
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
-        let tag_range = range(tag.start, tag.start + 4);
+        let tag_range = range(tag.start, tag.start + "<img".len());
         let has_alt = tag.attrs.iter().any(|a| a.name == "alt" || (a.name == NO_ALT_AVAILABLE && a.value.is_none_or(|(s, e)| s == e)));
         if !tag.dynamic && !has_alt {
             out.push(coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT));
@@ -256,7 +255,7 @@ fn branch_between(text: &str, spans: &[(usize, usize)], from: usize, to: usize) 
     let first = spans.partition_point(|&(s, _)| s <= from);
     spans[first..].iter().take_while(|&&(s, _)| s < to).any(|&(s, e)| {
         let code = &text[s..e.min(text.len())];
-        !matches!(analyze(code).0, BlockEffect::Neutral)
+        !matches!(analyze(code), BlockEffect::Neutral)
             || code.split_whitespace().next().is_some_and(|w| matches!(w, "else" | "elsif" | "when" | "in"))
     })
 }
@@ -277,6 +276,7 @@ mod tests {
         assert!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"\">").is_empty());
         assert!(codes("<%= image_tag \"a.png\", alt: \"A\" %><%= image_tag(x, **opts) %>").is_empty());
         assert!(codes("<script>const s = '<img src=x>'</script>").is_empty());
+        assert!(codes("<title><img src=x></title>").is_empty(), "a title's content is text");
         assert!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt>").is_empty());
         assert_eq!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"x\">").len(), 1);
         // A no-break or ideographic space after the name is part of an attribute name, not a crash.

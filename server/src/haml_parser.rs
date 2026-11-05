@@ -2,7 +2,9 @@
 //! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
 use crate::generated_ruby::ruby_string_body;
-use crate::slim_parser::VOID_ELEMENTS;
+use crate::html::VOID_ELEMENTS;
+use crate::ruby::{CONTINUERS, REGEXP_SPACE, RUBY_WHITESPACE};
+use crate::util::leading_ws;
 use regex::Regex;
 use std::collections::VecDeque;
 use std::convert::Infallible;
@@ -18,10 +20,6 @@ const NESTING_SELF_CLOSING: &str = "Illegal nesting: nesting within a self-closi
 const NESTING_CONTENT: &str = "Illegal nesting: nesting within a tag that already has content is illegal.";
 const NESTING_HEADER: &str = "Illegal nesting: nesting within a header command is illegal.";
 const MIXED_INDENTATION: &str = "Indentation can't use both tabs and spaces.";
-/// Ruby's `\s` and `rstrip` characters.
-pub(crate) const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
-/// Ruby's regexp `\s`.
-const REGEXP_SPACE: [char; 6] = [' ', '\t', '\n', '\x0b', '\x0c', '\r'];
 /// The filters Haml 6 and 7 register (`Haml::Filters`).
 pub const HAML_FILTERS: &[&str] = &[
     "plain",
@@ -39,8 +37,6 @@ pub const HAML_FILTERS: &[&str] = &[
     "coffee",
     "coffeescript",
 ];
-/// Haml's `MID_BLOCK_KEYWORDS`: a `-` line starting with one continues the block above instead of closing it.
-const MID_BLOCK_KEYWORDS: &[&str] = &["else", "elsif", "rescue", "ensure", "end", "when", "in"];
 /// Haml's `BLOCK_KEYWORD_REGEX`, applied to the code after the `-`/`=` prefix.
 static BLOCK_KEYWORD: LazyLock<Regex> = LazyLock::new(|| {
     // ASCII `\w`/`\s` like Ruby's; Ruby's `\b` is Unicode-aware like this one.
@@ -323,7 +319,7 @@ fn split_lines(text: &str) -> Vec<Line<'_>> {
         .into_iter()
         .enumerate()
         .map(|(index, full)| {
-            let indent_len = full.len() - full.trim_start_matches([' ', '\t']).len();
+            let indent_len = leading_ws(full).len();
             Line {
                 whitespace: (indent_len > 0).then(|| &full[..indent_len]),
                 text: full[indent_len..].trim_end_matches(RUBY_WHITESPACE).into(),
@@ -628,9 +624,11 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Haml's `MID_BLOCK_KEYWORDS` (`end` and the continuers): a `-` line starting with one continues the block above
+    /// instead of closing it.
     fn is_continuation_script(&self) -> bool {
         let Some(code) = self.line.text.strip_prefix('-') else { return false };
-        block_keyword(code).is_some_and(|keyword| MID_BLOCK_KEYWORDS.contains(&keyword))
+        block_keyword(code).is_some_and(|keyword| keyword == "end" || CONTINUERS.contains(&keyword))
     }
 
     fn close(&mut self) {
@@ -1391,25 +1389,7 @@ fn attribute_value_len(value: &str) -> Result<(usize, bool), AttributeList> {
 
 /// What Haml prints for a string in an error: Ruby's `String#inspect`.
 fn ruby_inspect(text: &str) -> String {
-    let mut out = String::from("\"");
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '#' if matches!(chars.peek(), Some('{' | '$' | '@')) => out.push_str("\\#"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\x1b' => out.push_str("\\e"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04X}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    format!("\"{}\"", ruby_string_body(text))
 }
 
 /// Haml's `balance` over `(` and `)`: the text up to the parenthesis that closes the first one, stripped.

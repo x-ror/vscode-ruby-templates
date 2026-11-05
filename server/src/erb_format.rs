@@ -7,8 +7,10 @@
 use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
+use crate::html::NO_END_TAG;
 use crate::ruby::BlockEffect;
-use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END, VOID};
+use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END};
+use crate::util::{leading_ws, raw_lines};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -229,14 +231,10 @@ fn render(capacity: usize, lines: &[Line], roles: &[Role], keeps_end: &[bool], d
 }
 
 fn split(text: &str) -> Vec<Line<'_>> {
-    let mut start = 0;
-    text.split('\n')
-        .map(|raw| {
-            let (body, cr) = raw.strip_suffix('\r').map_or((raw, ""), |b| (b, "\r"));
-            let rest = body.trim_start_matches([' ', '\t']);
-            let line = Line { start, ws: &body[..body.len() - rest.len()], rest, cr };
-            start += raw.len() + 1;
-            line
+    raw_lines(text)
+        .map(|(start, body, cr)| {
+            let ws = leading_ws(body);
+            Line { start, ws, rest: &body[ws.len()..], cr }
         })
         .collect()
 }
@@ -333,7 +331,7 @@ impl<'t> Nesting<'t> {
 
     fn ignored_close(&self, i: usize, tag: &Tag) -> bool {
         let name = tag.name.as_str();
-        VOID.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
+        NO_END_TAG.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
     }
 
     /// `<% end %>` and `<% else %>` (token `i`) line up with their block's opening, under tags a branch left open.

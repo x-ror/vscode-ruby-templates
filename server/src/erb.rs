@@ -2,6 +2,7 @@
 
 use crate::checks::RubyContext;
 use crate::erb_ruby;
+use crate::html::TOKENIZED_AS_TEXT;
 use crate::util::{coded, warning, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
@@ -34,8 +35,31 @@ pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<D
         .collect()
 }
 
-/// Elements whose content the tokenizer reads as raw text or RCDATA, up to their end tag (`noscript` with scripting on).
-const TEXT_ELEMENTS: [&str; 9] = ["script", "style", "xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"];
+/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
+/// when the tokenizer is in the data state. Complete tags are invisible to it.
+pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
+    let (texts, tail_at) = erb_ruby::rendered_texts(text);
+    let mut html = Html::default();
+    for rendered in &texts {
+        html.feed(rendered);
+    }
+    let openers = html.feed(&text[tail_at..]);
+    if openers.is_empty() {
+        return vec![];
+    }
+    let index = LineIndex::new(text);
+    openers
+        .into_iter()
+        .map(|at| {
+            let start = index.position(tail_at + at);
+            let range = Range::new(start, Position::new(start.line, u32::MAX));
+            let message =
+                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
+            coded(warning(range, message), code::UNCLOSED_TAG)
+        })
+        .collect()
+}
+
 const FOREIGN_ROOTS: [&str; 2] = ["svg", "math"];
 
 /// The attribute sub-states of the tokenizer (13.2.5.32 to 13.2.5.40) that decide where a quote opens a value.
@@ -121,10 +145,10 @@ impl Html {
         if let Some(comment) = after.strip_prefix("!--") {
             // `<!-->` and `<!--->` are empty comments.
             let empty = if comment.starts_with("->") { 2 } else { usize::from(comment.starts_with('>')) };
-            return (4 + empty, if empty > 0 { State::Data } else { State::Comment });
+            return ("<!--".len() + empty, if empty > 0 { State::Data } else { State::Comment });
         }
         if self.foreign_depth > 0 && after.starts_with("![CDATA[") {
-            return (9, State::Cdata);
+            return ("<![CDATA[".len(), State::Cdata);
         }
         let (closing, name_text) = after.strip_prefix('/').map_or((false, after), |name| (true, name));
         if name_text.starts_with(|c: char| c.is_ascii_alphabetic()) {
@@ -182,7 +206,7 @@ impl Html {
         if tag.name == "plaintext" {
             return State::Plaintext;
         }
-        TEXT_ELEMENTS.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
+        TOKENIZED_AS_TEXT.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
     }
 }
 
@@ -216,31 +240,6 @@ fn raw_text(element: &'static str, rest: &str) -> (usize, State) {
         Some(i) => (i + close.len(), State::Tag(Tag::new(true, element.to_string()))),
         None => (rest.len(), State::RawText(element)),
     }
-}
-
-/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
-/// when the tokenizer is in the data state. Complete tags are invisible to it.
-pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
-    let (texts, tail_at) = erb_ruby::rendered_texts(text);
-    let mut html = Html::default();
-    for rendered in &texts {
-        html.feed(rendered);
-    }
-    let openers = html.feed(&text[tail_at..]);
-    if openers.is_empty() {
-        return vec![];
-    }
-    let index = LineIndex::new(text);
-    openers
-        .into_iter()
-        .map(|at| {
-            let start = index.position(tail_at + at);
-            let range = Range::new(start, Position::new(start.line, u32::MAX));
-            let message =
-                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
-            coded(warning(range, message), code::UNCLOSED_TAG)
-        })
-        .collect()
 }
 
 pub fn truncate(s: &str, n: usize) -> String {

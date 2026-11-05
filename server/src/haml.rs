@@ -2,7 +2,7 @@
 
 use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole};
 use crate::haml_parser::HAML_FILTERS;
-use crate::helpers::{ARIA_KEYS, DATA_KEYS, HTML_ATTRIBUTES, HTML_TAGS};
+use crate::html::{self, ARIA_KEYS, ATTRIBUTES, DATA_KEYS, TAGS};
 use crate::ruby;
 use crate::util::{completion_item, leading_ws};
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
@@ -109,7 +109,7 @@ pub fn completions(context: Completion, stimulus: impl FnOnce() -> Vec<String>) 
             .filter(|name| name.starts_with(typed))
             .map(|f| completion_item(*f, CompletionItemKind::MODULE, "Haml filter"))
             .collect(),
-        Completion::Tag(typed) => HTML_TAGS
+        Completion::Tag(typed) => TAGS
             .iter()
             .filter(|name| name.starts_with(typed))
             .map(|t| completion_item(*t, CompletionItemKind::PROPERTY, "HTML element"))
@@ -117,16 +117,10 @@ pub fn completions(context: Completion, stimulus: impl FnOnce() -> Vec<String>) 
         Completion::Attribute { typed, place, rocket } => {
             let stimulus = stimulus();
             let names: Vec<String> = match place {
-                AttrPlace::Hash => HTML_ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).chain(stimulus).collect(),
+                AttrPlace::Hash => ATTRIBUTES.iter().chain(&["data", "aria"]).map(|a| a.to_string()).chain(stimulus).collect(),
                 AttrPlace::DataHash => DATA_KEYS.iter().map(|k| k.to_string()).chain(stimulus.iter().map(|a| data_key(a))).collect(),
                 AttrPlace::AriaHash => ARIA_KEYS.iter().map(|k| k.to_string()).collect(),
-                AttrPlace::Html => HTML_ATTRIBUTES
-                    .iter()
-                    .map(|a| a.to_string())
-                    .chain(ARIA_KEYS.iter().map(|k| format!("aria-{k}")))
-                    .chain(DATA_KEYS.iter().map(|k| format!("data-{}", k.replace('_', "-"))))
-                    .chain(stimulus)
-                    .collect(),
+                AttrPlace::Html => html::attribute_names(stimulus).collect(),
             };
             names
                 .into_iter()

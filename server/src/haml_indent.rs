@@ -1,7 +1,7 @@
 //! Haml's diagnostics: the first error `haml_parser` finds, or the void elements that hold content.
 
 use crate::haml_parser::{self, is_haml_multiline, is_ruby_multiline, strip_output_prefix};
-use crate::util::{coded, error, find_balanced, leading_ws, span_range, warning};
+use crate::util::{balanced_across_lines, closing_bracket, coded, error, find_balanced, leading_ws, span_range, warning};
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
@@ -95,7 +95,7 @@ pub fn haml_line_roles(text: &str) -> Vec<LineRole> {
     let mut roles = vec![LineRole::Start; lines.len()];
     let visits = visit_lines(&lines);
     for (n, v) in visits.iter().enumerate() {
-        let content = lines[v.line].trim_start_matches([' ', '\t']);
+        let content = &lines[v.line][leading_ws(lines[v.line]).len()..];
         let continuation = match v.kind {
             LineKind::Ruby => LineRole::Ruby,
             LineKind::Tag if tag_head_len(content).is_none() || haml_code_start(lines[v.line]).is_some() => LineRole::Ruby,
@@ -164,24 +164,20 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let ws_len = leading_ws(raw).len();
     let c = &raw[ws_len..];
 
-    // Comments
     if c.starts_with("-#") {
         return (LineKind::Verbatim, 1);
     }
     if c.starts_with('/') {
         return (LineKind::Other, 1);
     }
-    // Filters
     if let Some(name) = c.strip_prefix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
             return (LineKind::Verbatim, 1);
         }
     }
-    // Ruby lines
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
-        return (LineKind::Ruby, continuation_len(lines, i, code));
+        return (LineKind::Ruby, continuation_lines(lines, i, code));
     }
-    // Tags
     if is_haml_tag(c) {
         let (rest, head_lines) = skip_tag_head(lines, i);
         if rest.trim_start_matches(['<', '>']).starts_with('/') {
@@ -190,7 +186,7 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
         let rest_t = rest.trim();
         let last_head_line = i + head_lines - 1;
         let tail_lines = match strip_output_prefix(rest_t) {
-            Some(code) => continuation_len(lines, last_head_line, code),
+            Some(code) => continuation_lines(lines, last_head_line, code),
             None => multiline_len(lines, last_head_line),
         };
         return (LineKind::Tag, head_lines - 1 + tail_lines);
@@ -234,12 +230,8 @@ pub struct AttrGroup {
 pub fn tag_attr_groups(s: &str) -> Vec<AttrGroup> {
     let mut pos = tag_name_len(s);
     let mut groups = Vec::new();
-    while let Some(open @ ('{' | '(' | '[')) = s[pos..].chars().next() {
-        let close = match open {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
-        };
+    while let Some(open) = s[pos..].chars().next() {
+        let Some(close) = closing_bracket(open) else { break };
         let end = find_balanced(&s[pos..], open, close).map(|len| pos + len);
         groups.push(AttrGroup { open, start: pos, end });
         let Some(end) = end else { break };
@@ -276,7 +268,7 @@ fn multiline_len(lines: &[&str], i: usize) -> usize {
 }
 
 /// Physical lines of a Ruby line with its continuations (`,` or `\` at end, Haml `|` multiline).
-fn continuation_len(lines: &[&str], i: usize, first: &str) -> usize {
+fn continuation_lines(lines: &[&str], i: usize, first: &str) -> usize {
     let group = multiline_len(lines, i);
     if group > 1 {
         return group;
@@ -285,7 +277,9 @@ fn continuation_len(lines: &[&str], i: usize, first: &str) -> usize {
     let mut code = first.trim_end().to_string();
     while is_ruby_multiline(&code) || code.ends_with('\\') {
         let Some(next) = lines.get(i + consumed) else { break };
-        code = format!("{} {}", code.trim_end_matches('\\'), next.trim());
+        code.truncate(code.trim_end_matches('\\').len());
+        code.push(' ');
+        code.push_str(next.trim());
         consumed += 1;
     }
     consumed
@@ -298,36 +292,11 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let mut consumed = 1;
     let mut s: String = raw[leading_ws(raw).len()..].to_string();
     let mut pos = tag_name_len(&s);
-    while let Some(ch @ ('{' | '(' | '[')) = s[pos..].chars().next() {
-        let close = match ch {
-            '{' => '}',
-            '(' => ')',
-            _ => ']',
+    while s[pos..].starts_with(['{', '(', '[']) {
+        let Some(len) = balanced_across_lines(&mut s, pos, &lines[i..], &mut consumed) else {
+            return (String::new(), consumed);
         };
-        match find_balanced(&s[pos..], ch, close) {
-            Some(len) => pos += len,
-            None => {
-                // Try to extend across following lines (multiline attributes).
-                let mut extended = false;
-                while let Some(next) = lines.get(i + consumed) {
-                    consumed += 1;
-                    s.push('\n');
-                    s.push_str(next);
-                    if find_balanced(&s[pos..], ch, close).is_some() {
-                        extended = true;
-                        break;
-                    }
-                    if consumed > 20 {
-                        break;
-                    }
-                }
-                if extended {
-                    pos += find_balanced(&s[pos..], ch, close).unwrap();
-                } else {
-                    return (String::new(), consumed);
-                }
-            }
-        }
+        pos += len;
     }
     (s[pos..].to_string(), consumed)
 }

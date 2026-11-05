@@ -203,7 +203,8 @@ pub(crate) fn language_diagnostics(
                 ruby.strict_locals.as_ref().and_then(|rails| strict_locals::find(text, rails.close).map(|comment| (comment, rails)));
             // Haml stops at its first error, so there is no Ruby to check.
             if parsed.error.is_none() {
-                let ruby_errors = haml_ruby::diagnostics(text, &parsed, ruby.grammar, comment.as_ref().map(|(comment, _)| comment));
+                let ruby_errors =
+                    haml_ruby::compiled(text, &parsed, comment.as_ref().map(|(comment, _)| comment)).diagnostics(text, ruby.grammar);
                 out.extend(ruby_errors.into_iter().map(|d| util::coded(d, RUBY_SYNTAX)));
             }
             if let Some((comment, rails)) = &comment {

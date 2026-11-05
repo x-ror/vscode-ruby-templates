@@ -2,7 +2,9 @@
 //! physical lines start a Slim line, which belong to another line's block or continuation, and
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
-use crate::ruby::comment_before;
+use crate::html::VOID_ELEMENTS;
+use crate::ruby::{comment_before, REGEXP_SPACE};
+use crate::util::closing_bracket;
 use std::borrow::Cow;
 use std::ops::Range;
 
@@ -12,7 +14,6 @@ const DEFAULT_TAG: &str = "div";
 // Slim 5 `Slim::Embedded` registrations; apps can register more (see `extra_engines`).
 pub(crate) const SLIM_ENGINES: &[&str] =
     &["ruby", "javascript", "css", "sass", "scss", "coffee", "markdown", "textile", "rdoc", "asciidoc"];
-pub const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Engines that run `#{}` through Slim's interpolation: TagEngine without a Tilt engine, and InterpolateTiltEngine.
 const INTERPOLATING_ENGINES: &[&str] = &["javascript", "css", "markdown", "textile", "rdoc", "asciidoc"];
 
@@ -226,9 +227,8 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
     p.out
 }
 
-/// Ruby's `\s`.
 fn is_space(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+    REGEXP_SPACE.contains(&c)
 }
 
 fn is_word(c: char) -> bool {
@@ -246,15 +246,6 @@ fn trim_start(s: &str) -> &str {
 /// `get_indent`: a tab advances to the next multiple of `TABSIZE`.
 pub fn indent_width(line: &str) -> usize {
     line.chars().take_while(|c| matches!(c, ' ' | '\t')).fold(0, |col, c| if c == '\t' { (col / TABSIZE + 1) * TABSIZE } else { col + 1 })
-}
-
-fn closer(open: char) -> Option<char> {
-    match open {
-        '(' => Some(')'),
-        '[' => Some(']'),
-        '{' => Some('}'),
-        _ => None,
-    }
 }
 
 /// Length of an attribute name: anything but whitespace, NUL, quotes, `<>/=` and brackets.
@@ -738,7 +729,7 @@ impl<'a> Parser<'a> {
     fn parse_attributes(&mut self, names: &mut Vec<&'a str>) {
         let mut close = None;
         let t = trim_start(self.rest());
-        if let Some(c) = t.chars().next().and_then(closer) {
+        if let Some(c) = t.chars().next().and_then(closing_bracket) {
             self.skip(self.rest().len() - t.len() + 1);
             close = Some(c);
         }
@@ -828,7 +819,7 @@ impl<'a> Parser<'a> {
                 } else if c == close {
                     depth -= 1;
                 }
-            } else if let Some(cl) = closer(c) {
+            } else if let Some(cl) = closing_bracket(c) {
                 depth = 1;
                 (open, close) = (c, cl);
             }

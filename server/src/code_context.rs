@@ -1,5 +1,6 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
+use crate::generated_ruby::Compiled;
 use crate::lang::TemplateLang;
 use crate::prism::{LocalDefinition, LocalToken, LocalUses};
 use crate::strict_locals::{self, Close};
@@ -14,47 +15,38 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
     }
 }
 
+/// The Ruby the template compiles to; with `close`, the strict locals comment makes the method's parameters.
+fn compiled(lang: TemplateLang, text: &str, close: Option<Close>, extra_engines: &[String]) -> Option<Compiled> {
+    match lang {
+        TemplateLang::Erb => Some(erb_ruby::compiled(text, close)),
+        TemplateLang::Slim => Some(slim_ruby::compiled(&slim_parser::parse(text, extra_engines))),
+        TemplateLang::Haml => {
+            let comment = close.and_then(|close| strict_locals::find(text, close));
+            Some(haml_ruby::compiled(text, &haml_parser::parse_with_ruby(text), comment.as_ref()))
+        }
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => None,
+    }
+}
+
 /// The block variables in scope at `offset`, from the Ruby the template compiles to.
 pub(crate) fn block_locals(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Vec<String> {
-    match lang {
-        TemplateLang::Erb => erb_ruby::block_locals(text, offset),
-        TemplateLang::Slim => slim_ruby::block_locals(&slim_parser::parse(text, extra_engines), offset),
-        TemplateLang::Haml => haml_ruby::block_locals(text, &haml_parser::parse_with_ruby(text), offset),
-        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => Vec::new(),
-    }
+    compiled(lang, text, None, extra_engines).map_or_else(Vec::new, |compiled| compiled.block_locals(offset))
 }
 
 /// Where the template declares the local variable at `offset` (a block parameter or an assignment), from the Ruby it
 /// compiles to.
 pub(crate) fn local_definition(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> Option<LocalDefinition> {
-    match lang {
-        TemplateLang::Erb => erb_ruby::local_definition(text, offset),
-        TemplateLang::Slim => slim_ruby::local_definition(&slim_parser::parse(text, extra_engines), offset),
-        TemplateLang::Haml => haml_ruby::local_definition(text, &haml_parser::parse_with_ruby(text), offset),
-        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => None,
-    }
+    compiled(lang, text, None, extra_engines)?.local_definition(offset)
 }
 
 /// Where the template reads or assigns the strict local `name`, from the Ruby it compiles to.
 pub(crate) fn local_uses(lang: TemplateLang, text: &str, close: Close, name: &str, extra_engines: &[String]) -> LocalUses {
-    match lang {
-        TemplateLang::Erb => erb_ruby::local_uses(text, close, name),
-        TemplateLang::Slim => slim_ruby::local_uses(&slim_parser::parse(text, extra_engines), name),
-        TemplateLang::Haml => {
-            haml_ruby::local_uses(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref(), name)
-        }
-        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => LocalUses::default(),
-    }
+    compiled(lang, text, Some(close), extra_engines).map_or_else(LocalUses::default, |compiled| compiled.local_uses(name))
 }
 
 /// The local variables the template declares or uses, from the Ruby it compiles to; a strict local is a parameter.
 pub(crate) fn local_tokens(lang: TemplateLang, text: &str, close: Close, extra_engines: &[String]) -> Vec<LocalToken> {
-    match lang {
-        TemplateLang::Erb => erb_ruby::local_tokens(text, close),
-        TemplateLang::Slim => slim_ruby::local_tokens(&slim_parser::parse(text, extra_engines)),
-        TemplateLang::Haml => haml_ruby::local_tokens(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref()),
-        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => Vec::new(),
-    }
+    compiled(lang, text, Some(close), extra_engines).map_or_else(Vec::new, |compiled| compiled.local_tokens())
 }
 
 /// Haml line roles; every other language's lines all start their own construct.
