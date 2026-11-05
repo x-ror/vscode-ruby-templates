@@ -1,6 +1,6 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::slim_parser::{self, Piece, VOID_ELEMENTS};
+use crate::slim_parser::{self, indent_width, Piece, VOID_ELEMENTS};
 use crate::slim_ruby;
 use crate::util::BOM;
 use crate::util::{balanced_across_lines, coded, error, leading_ws, span_range, warning};
@@ -20,9 +20,6 @@ pub mod code {
     /// Checks that parse the `-`/`=` code as Ruby.
     pub const RUBY: &[&str] = &[RUBY_SYNTAX, EXPLICIT_END];
 }
-
-/// Slim::Parser default `tabsize`: a tab advances to the next multiple of 4.
-const SLIM_TABSIZE: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
@@ -98,7 +95,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             continue;
         }
         let ws = leading_ws(raw);
-        // Tabs expand (see SLIM_TABSIZE), so mixing them with spaces is fine.
+        // Tabs expand (see `slim_parser::indent_width`), so mixing them with spaces is fine.
         let indent = indent_width(ws);
 
         // Inside a verbatim block? Everything deeper is skipped.
@@ -173,10 +170,6 @@ fn syntax_diagnostic(lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagn
         _ => code::SYNTAX_ERROR,
     };
     coded(error(span_range(syntax.line, raw, start, raw.len()), syntax.message.clone()), code)
-}
-
-fn indent_width(ws: &str) -> usize {
-    ws.chars().fold(0, |col, c| if c == '\t' { (col / SLIM_TABSIZE + 1) * SLIM_TABSIZE } else { col + 1 })
 }
 
 /// Returns the line kind and how many physical lines it spans.
