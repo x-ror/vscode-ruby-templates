@@ -20,6 +20,10 @@ static CALLBACK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:prepend_
 static FILTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:\b(only|except):|:(only|except)\s*=>)\s*(\[[^\]]*\]|%[iw][\[(][^\])]*[\])]|:\w+[?!]?|["']\w+["'])"#).unwrap()
 });
+static SKIP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*skip_before_action\s*\(?\s*(.*)").unwrap());
+static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s").unwrap());
+// Any condition on a callback: it may not run for the view.
+static CONDITION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:only|except|if|unless):|:(?:only|except|if|unless)\s*=>").unwrap());
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z_]\w*[?!]?").unwrap());
 static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[\w:]+\s*<\s*(?:::)?((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
 static MODULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*module\s+((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
@@ -35,12 +39,17 @@ pub struct Assignment {
     pub code: String,
 }
 
+/// The folder of `view` below `views/` and its template name without formats.
+fn folder_and_name(project: &Project, view: &Path) -> Option<(String, String)> {
+    let rel = view.strip_prefix(views_root(view)?).ok()?;
+    let dir = rel.parent()?.to_str()?.replace('\\', "/");
+    Some((dir, template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?).to_string()))
+}
+
 /// The controller (or mailer) of the view folder `views/<dir>`, and the action the view renders (`None` for a
 /// partial).
 fn source_of(project: &Project, view: &Path) -> Option<(PathBuf, Option<String>)> {
-    let rel = view.strip_prefix(views_root(view)?).ok()?;
-    let dir = rel.parent()?.to_str()?.replace('\\', "/");
-    let name = template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?);
+    let (dir, name) = folder_and_name(project, view)?;
     if dir.is_empty() || dir.starts_with("layouts") {
         return None;
     }
@@ -50,7 +59,22 @@ fn source_of(project: &Project, view: &Path) -> Option<(PathBuf, Option<String>)
     } else {
         app.join("controllers").join(format!("{dir}_controller.rb"))
     };
-    Some((file, (!name.starts_with('_')).then(|| name.to_string())))
+    Some((file, (!name.starts_with('_')).then_some(name)))
+}
+
+/// View folders of controllers Rails ships, which inherit from ActionController::Base and not ApplicationController.
+const RAILS_FOLDERS: [&str; 2] = ["pwa", "rails"];
+
+/// The base class whose unconditional callbacks reach a view of a folder without a controller: mailer layouts and
+/// mailer folders get `ApplicationMailer`, the rest `ApplicationController`.
+fn fallback_base(project: &Project, view: &Path) -> Option<PathBuf> {
+    let (dir, name) = folder_and_name(project, view)?;
+    if RAILS_FOLDERS.contains(&dir.split('/').next()?) {
+        return None;
+    }
+    let app = app_root(view)?;
+    let mailer = dir.ends_with("_mailer") || (dir.starts_with("layouts") && name.contains("mailer"));
+    Some(if mailer { app.join("mailers/application_mailer.rb") } else { app.join("controllers/application_controller.rb") })
 }
 
 /// The methods of a Ruby class: name and line range (`def` line up to its `end`, by indentation).
@@ -91,11 +115,40 @@ fn callbacks_for(text: &str, action: Option<&str>) -> Vec<String> {
         if !applies {
             continue;
         }
-        // The callback names come first; the first `key:` or `:key =>` ends them.
-        let names = args.split(',').map(str::trim).take_while(|a| a.starts_with(':') && !a.contains("=>") && !a[1..].contains(':'));
-        out.extend(names.filter_map(|a| NAME.find(a).map(|n| n.as_str().to_string())));
+        out.extend(callback_names(args));
     }
     out
+}
+
+/// Callback methods that run for every action: `before_action` calls in the class body with no `only:`, `except:`,
+/// `if:` or `unless:`. Calls nested deeper (`with_options only: … do`, `if …`) have a condition of their own.
+fn unconditional_callbacks(text: &str) -> Vec<String> {
+    let body = class_body_indent(text);
+    let calls = logical_lines(text).into_iter().filter(|call| indent_of(call) <= body);
+    let calls = calls.filter_map(|call| CALLBACK.captures(&call).map(|cap| cap[1].to_string()));
+    calls.filter(|args| !CONDITION.is_match(args)).flat_map(|args| callback_names(&args)).collect()
+}
+
+/// Callback methods a `skip_before_action` in `text` removes for some action.
+fn skipped_callbacks(text: &str) -> Vec<String> {
+    let calls = logical_lines(text).into_iter().filter_map(|call| SKIP.captures(&call).map(|cap| cap[1].to_string()));
+    calls.flat_map(|args| callback_names(&args)).collect()
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// The indentation of the first code line after the first `class` line.
+fn class_body_indent(text: &str) -> usize {
+    let mut lines = text.lines().skip_while(|l| !CLASS.is_match(l)).skip(1);
+    lines.find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#')).map_or(0, indent_of)
+}
+
+/// The callback names come first in the arguments; the first `key:` or `:key =>` ends them.
+fn callback_names(args: &str) -> Vec<String> {
+    let names = args.split(',').map(str::trim).take_while(|a| a.starts_with(':') && !a.contains("=>") && !a[1..].contains(':'));
+    names.filter_map(|a| NAME.find(a).map(|n| n.as_str().to_string())).collect()
 }
 
 /// The controller (or mailer) file and its parents in this app, by their `class X < Parent` lines.
@@ -158,6 +211,8 @@ pub struct ControllerScan {
     subclassed: HashSet<String>,
     /// Does a file in `controllers/concerns` change the lookup paths? Any controller may include it.
     concerns_change_lookup: bool,
+    /// Callbacks some controller skips with `skip_before_action`, whatever the options.
+    skipped: HashSet<String>,
 }
 
 fn scan_controllers(app: &Path) -> ControllerScan {
@@ -167,6 +222,7 @@ fn scan_controllers(app: &Path) -> ControllerScan {
     for file in files_under(&controllers, usize::MAX).into_iter().filter(|file| file.extension().is_some_and(|ext| ext == "rb")) {
         let Ok(text) = std::fs::read_to_string(&file) else { continue };
         scan.subclassed.extend(PARENT.captures_iter(&text).map(|cap| snake_case(cap[1].rsplit("::").next().unwrap_or(&cap[1]))));
+        scan.skipped.extend(skipped_callbacks(&text));
         scan.concerns_change_lookup |= file.starts_with(&concerns) && changes_lookup(&text);
     }
     scan
@@ -240,9 +296,14 @@ pub fn hover(assignments: &[Assignment], name: &str, view: &Path) -> Option<Stri
 }
 
 /// Assignments the view at `view` can see: from the action and the callbacks its controller and the controller's
-/// parents in the app run for it, wherever along that chain the methods are defined.
+/// parents in the app run for it, wherever along that chain the methods are defined. A view whose folder has no
+/// controller gets the unconditional callbacks of `ApplicationController` (`ApplicationMailer` for mailers).
 pub fn for_view(project: &Project, view: &Path) -> Vec<Assignment> {
-    let (Some((controller, action)), Some(app)) = (source_of(project, view), app_root(view)) else { return vec![] };
+    let Some(app) = app_root(view) else { return vec![] };
+    let own = source_of(project, view).filter(|(file, _)| file.is_file() && Some(file) != fallback_base(project, view).as_ref());
+    let Some((controller, action)) = own else {
+        return fallback_assignments(project, view, &app);
+    };
     let chain = ancestry(&app, controller);
     let Some((_, own_text)) = chain.first() else { return vec![] };
     let mut wanted: Vec<String> = chain.iter().flat_map(|(_, text)| callbacks_for(text, action.as_deref())).collect();
@@ -250,8 +311,13 @@ pub fn for_view(project: &Project, view: &Path) -> Vec<Assignment> {
         Some(action) => wanted.push(action.clone()),
         None => wanted.extend(methods(own_text).into_iter().map(|(name, _)| name)),
     }
+    assignments_of(&chain, &wanted)
+}
+
+/// Assignments in the methods of `chain` named in `wanted`.
+fn assignments_of(chain: &[(PathBuf, String)], wanted: &[String]) -> Vec<Assignment> {
     let mut out = Vec::new();
-    for (file, text) in &chain {
+    for (file, text) in chain {
         for (name, lines) in methods(text) {
             if wanted.contains(&name) {
                 out.extend(assignments_in(file, text, lines));
@@ -259,6 +325,15 @@ pub fn for_view(project: &Project, view: &Path) -> Vec<Assignment> {
         }
     }
     out
+}
+
+fn fallback_assignments(project: &Project, view: &Path, app: &Path) -> Vec<Assignment> {
+    let Some(base) = fallback_base(project, view) else { return vec![] };
+    let chain = ancestry(app, base);
+    let scan = project.controller_scan(app, || scan_controllers(app));
+    let skipped = |name: &String| scan.skipped.contains(name) || chain.iter().any(|(_, text)| skipped_callbacks(text).contains(name));
+    let wanted: Vec<String> = chain.iter().flat_map(|(_, text)| unconditional_callbacks(text)).filter(|name| !skipped(name)).collect();
+    assignments_of(&chain, &wanted)
 }
 
 #[cfg(test)]
@@ -341,12 +416,79 @@ end
         assert_eq!(names("app/views/users/show.html.erb"), ["locale", "menu", "tab", "user"]);
         assert_eq!(names("app/views/users/index.html.erb"), ["count", "locale", "users"]);
         assert_eq!(names("app/views/users/_card.html.erb"), ["count", "locale", "menu", "tab", "user", "users"]);
-        assert!(names("app/views/layouts/application.html.erb").is_empty());
+        assert_eq!(names("app/views/layouts/application.html.erb"), ["locale"], "no controller: ApplicationController's");
         assert_eq!(names("app/views/admin/users/show.html.erb"), ["admin", "locale", "user"]);
         assert_eq!(names("app/views/admin/reports/index.html.erb"), ["admin", "locale", "reports"], "a parent named inside its module");
         let user =
             for_view(&Project::unknown(), &root.join("app/views/users/show.html.erb")).into_iter().find(|a| a.name == "user").unwrap();
         assert_eq!((user.file.file_name().unwrap().to_str().unwrap(), user.line), ("users_controller.rb", 18));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn folders_without_a_controller_get_the_application_base_callbacks() {
+        let root = std::env::temp_dir().join(format!("rt-ivars-base-{}", std::process::id()));
+        let write = |rel: &str, text: &str| {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        write(
+            "app/controllers/application_controller.rb",
+            "class ApplicationController < ActionController::Base
+  before_action :set_current_user, :set_second
+  prepend_before_action :set_early
+  before_action :set_admin, only: :show
+  before_action :set_beta, if: :beta?
+  before_action :set_old, :if => :old?
+  before_action :set_flag,
+    unless: -> { false }
+  before_action :set_skipped
+  with_options only: :index do
+    before_action :set_nested
+  end
+
+  def set_current_user = @current_user = User.first
+  def set_second = @second = 1
+  def set_early = @early = 1
+  def set_admin = @admin = true
+  def set_beta = @beta = true
+  def set_old = @old = true
+  def set_flag = @flag = true
+  def set_skipped = @skipped = true
+  def set_nested = @nested = true
+  def unused = @unused = 1
+end
+",
+        );
+        write(
+            "app/controllers/users_controller.rb",
+            "class UsersController < ApplicationController\n  def show\n    @user = 1\n  end\nend\n",
+        );
+        write(
+            "app/controllers/health_controller.rb",
+            "class HealthController < ApplicationController\n  skip_before_action :set_skipped, only: :show\nend\n",
+        );
+        write(
+            "app/mailers/application_mailer.rb",
+            "class ApplicationMailer < ActionMailer::Base\n  before_action :set_brand\n\n  def set_brand\n    @brand = 1\n  end\nend\n",
+        );
+        let names = |view: &str| -> Vec<String> {
+            let mut names: Vec<String> = for_view(&Project::unknown(), &root.join(view)).into_iter().map(|a| a.name).collect();
+            names.sort();
+            names
+        };
+        let base = ["current_user", "early", "second"];
+        assert_eq!(names("app/views/shared/_nav.html.haml"), base);
+        assert_eq!(names("app/views/layouts/application.html.erb"), base);
+        assert_eq!(names("app/views/application/_x.html.erb"), base, "the base's own folder is a fallback too");
+        assert_eq!(names("app/views/layouts/mailer.html.erb"), ["brand"]);
+        assert!(names("app/views/pwa/manifest.json.erb").is_empty(), "Rails' own controllers don't inherit from it");
+        assert_eq!(
+            names("app/views/users/show.html.erb"),
+            ["admin", "beta", "current_user", "early", "flag", "nested", "old", "second", "skipped", "user"],
+            "a folder with a controller keeps its own lookup"
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

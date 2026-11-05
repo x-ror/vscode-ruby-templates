@@ -53,6 +53,11 @@ fs.writeFileSync(
   path.join(views, "shared", "_footer.html.erb"),
   "<footer></footer>\n",
 );
+fs.mkdirSync(path.join(root, "app", "controllers"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "app", "controllers", "application_controller.rb"),
+  "class ApplicationController < ActionController::Base\n  before_action :set_current_user\n  before_action :set_admin, only: :show\n\n  def set_current_user\n    @current_user = User.first\n  end\n\n  def set_admin\n    @admin = true\n  end\nend\n",
+);
 fs.writeFileSync(
   path.join(root, "app", "components", "badge_component.rb"),
   "class BadgeComponent\n  renders_one :icon\n  renders_many :links\nend\n",
@@ -1415,6 +1420,27 @@ const check = (label, actual, expected) => {
       "`@menu`\n\n- [app/controllers/users_controller.rb:10](/app/controllers/users_controller.rb#L10): `@menu = Menu.first`",
       null,
     ],
+  );
+  const navUri = fileUri(path.join(views, "shared", "_nav.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: navUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= @current_user %>\n<%= @admin %>\n",
+      },
+    },
+    true,
+  );
+  check(
+    "ivars of ApplicationController in a folder without a controller",
+    [
+      at(await req("textDocument/definition", navUri, 0, 6)),
+      (await req("textDocument/hover", navUri, 1, 6)).result,
+    ],
+    [["/app/controllers/application_controller.rb:5:0"], null],
   );
   await send(
     "textDocument/didChange",
