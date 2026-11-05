@@ -175,122 +175,155 @@ type Anchors = HashMap<String, (String, String, usize)>;
 // line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
 pub fn parse(text: &str) -> Vec<Translation> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut out: Vec<Translation> = Vec::new();
-    let mut path: Vec<(usize, String)> = Vec::new();
-    let mut anchors = Anchors::new();
+    let mut parser = LocaleParser::default();
+    for (n, raw) in text.lines().enumerate() {
+        parser.line(n, raw);
+    }
+    parser.without_shadowed_merges()
+}
+
+#[derive(Default)]
+struct LocaleParser {
+    out: Vec<Translation>,
+    path: Vec<(usize, String)>,
+    anchors: Anchors,
     // Entries a `<<` merge added, with the depth of the merging mapping: a key the mapping sets itself wins over them
     // and over what is below it.
-    let mut merged: HashMap<usize, usize> = HashMap::new();
+    merged: HashMap<usize, usize>,
     // The valueless key a `- item` line right below it would belong to.
-    let mut list_key: Option<usize> = None;
+    list_key: Option<usize>,
     // Indent of the last key with a value or sequence item: deeper lines continue it (`|`/`>` blocks, wrapped
     // scalars, item mappings), plus the quote of a quoted scalar still open.
-    let mut scalar: Option<(usize, Option<char>)> = None;
-    for (n, raw) in text.lines().enumerate() {
+    scalar: Option<(usize, Option<char>)>,
+}
+
+impl LocaleParser {
+    fn line(&mut self, n: usize, raw: &str) {
         let line = raw.trim_start();
         if line.is_empty() {
-            continue;
+            return;
         }
         let indent = raw.len() - line.len();
-        if let Some((i, quote)) = scalar.filter(|&(i, _)| indent > i) {
-            // A sequence's parent key is a mapping (no value), so item lines append nothing.
-            if let Some(value) = out.last_mut().and_then(|t| t.value.as_mut()) {
-                let (more, closed) = match quote {
-                    Some(q) => unquote(q, line.trim_end()),
-                    None => (line.trim_end().to_string(), Some(0)),
-                };
-                if !value.is_empty() {
-                    value.push(' ');
-                }
-                value.push_str(&more);
-                scalar = Some((i, quote.filter(|_| closed.is_none())));
-            }
-            continue;
+        if let Some((i, quote)) = self.scalar.filter(|&(i, _)| indent > i) {
+            self.continue_scalar(i, quote, line);
+            return;
         }
-        scalar = None;
+        self.scalar = None;
         if line.starts_with('#') || line.starts_with("---") {
-            continue;
+            return;
         }
         if let Some(item) = line.strip_prefix('-') {
-            let listed = list_key.is_some_and(|at| push_list_item(&mut out[at], item.trim()));
-            // A list with a non-scalar item is not indexed.
-            if !listed {
-                if let Some(at) = list_key.take() {
-                    out[at].value = None;
-                }
+            self.list_item(indent, item.trim());
+            return;
+        }
+        self.list_key = None;
+        self.key_line(n, indent, line);
+    }
+
+    /// Appends a line deeper than the scalar opened at `indent` to the last entry's value.
+    fn continue_scalar(&mut self, indent: usize, quote: Option<char>, line: &str) {
+        // A sequence's parent key is a mapping (no value), so item lines append nothing.
+        let Some(value) = self.out.last_mut().and_then(|t| t.value.as_mut()) else { return };
+        let (more, closed) = match quote {
+            Some(q) => unquote(q, line.trim_end()),
+            None => (line.trim_end().to_string(), Some(0)),
+        };
+        if !value.is_empty() {
+            value.push(' ');
+        }
+        value.push_str(&more);
+        self.scalar = Some((indent, quote.filter(|_| closed.is_none())));
+    }
+
+    fn list_item(&mut self, indent: usize, item: &str) {
+        let listed = self.list_key.is_some_and(|at| push_list_item(&mut self.out[at], item));
+        // A list with a non-scalar item is not indexed.
+        if !listed {
+            if let Some(at) = self.list_key.take() {
+                self.out[at].value = None;
             }
-            scalar = (!listed).then_some((indent, None));
-            continue;
         }
-        list_key = None;
-        let Some((key, rest)) = split_key(line) else { continue };
-        while path.last().is_some_and(|(i, _)| *i >= indent) {
-            path.pop();
+        self.scalar = (!listed).then_some((indent, None));
+    }
+
+    fn key_line(&mut self, n: usize, indent: usize, line: &str) {
+        let Some((key, rest)) = split_key(line) else { return };
+        while self.path.last().is_some_and(|(i, _)| *i >= indent) {
+            self.path.pop();
         }
-        path.push((indent, key.to_string()));
+        self.path.push((indent, key.to_string()));
         let (anchor, rest) = split_anchor(rest);
         let flow = flow_value(rest);
         let value = if flow.is_some() { None } else { scalar_value(rest) };
         if let Some((_, open)) = &value {
-            scalar = Some((indent, *open));
+            self.scalar = Some((indent, *open));
         }
         // `I18n.t` splits on `.`, so a key containing one can never be looked up.
-        if path.iter().any(|(_, k)| k.contains('.')) {
-            continue;
+        if self.path.iter().any(|(_, k)| k.contains('.')) {
+            return;
         }
-        let locale = path[0].1.clone();
-        if path.len() < 2 {
+        let locale = self.path[0].1.clone();
+        if self.path.len() < 2 {
             if let Some(name) = anchor {
-                anchors.insert(name.to_string(), (locale, String::new(), out.len()));
+                self.anchors.insert(name.to_string(), (locale, String::new(), self.out.len()));
             }
-            continue;
+            return;
         }
         if key == "<<" {
-            let target = joined(&path[1..path.len() - 1]);
-            for name in rest.split(|c: char| c.is_whitespace() || "[],".contains(c)).filter_map(|word| word.strip_prefix('*')) {
-                for (suffix, line, value) in aliased(&out, &anchors, name, &merged) {
-                    if let Some(suffix) = suffix.strip_prefix('.') {
-                        merged.insert(out.len(), path.len() - 2);
-                        let key = if target.is_empty() { suffix.to_string() } else { format!("{target}.{suffix}") };
-                        out.push(Translation { locale: locale.clone(), key, line, value });
-                    }
-                }
-            }
-            continue;
+            self.merge(&locale, rest);
+            return;
         }
-        let key = joined(&path[1..]);
+        let key = joined(&self.path[1..]);
         if let Some(name) = anchor {
-            anchors.insert(name.to_string(), (locale.clone(), key.clone(), out.len()));
+            self.anchors.insert(name.to_string(), (locale.clone(), key.clone(), self.out.len()));
         }
         let aliases = rest
             .strip_prefix('*')
-            .map(|name| aliased(&out, &anchors, name.split_whitespace().next().unwrap_or_default(), &merged))
+            .map(|name| aliased(&self.out, &self.anchors, name.split_whitespace().next().unwrap_or_default(), &self.merged))
             .filter(|found| !found.is_empty());
         if let Some(found) = aliases {
             for (suffix, line, value) in found {
                 let line = if suffix.is_empty() { n } else { line };
-                out.push(Translation { locale: locale.clone(), key: format!("{key}{suffix}"), line, value });
+                self.out.push(Translation { locale: locale.clone(), key: format!("{key}{suffix}"), line, value });
             }
         } else if let Some(flow) = flow {
-            push_flow(&mut out, &locale, key, n, flow);
+            push_flow(&mut self.out, &locale, key, n, flow);
         } else {
             let value = value.map(|(v, _)| v);
-            list_key = value.is_none().then_some(out.len());
-            out.push(Translation { locale, key, line: n, value });
+            self.list_key = value.is_none().then_some(self.out.len());
+            self.out.push(Translation { locale, key, line: n, value });
         }
     }
-    let explicit: HashSet<(&str, &str)> =
-        out.iter().enumerate().filter(|(i, _)| !merged.contains_key(i)).map(|(_, t)| (t.locale.as_str(), t.key.as_str())).collect();
-    let shadowed: HashSet<usize> = merged
-        .iter()
-        .filter(|&(&i, &depth)| {
-            let t = &out[i];
-            let ancestors = t.key.match_indices('.').map(|(at, _)| &t.key[..at]).chain([t.key.as_str()]);
-            ancestors.skip(depth).any(|key| explicit.contains(&(t.locale.as_str(), key)))
-        })
-        .map(|(&i, _)| i)
-        .collect();
-    out.into_iter().enumerate().filter(|(i, _)| !shadowed.contains(i)).map(|(_, t)| t).collect()
+
+    /// `<<: *a` or `<<: [*a, *b]`: copies the aliased entries into the mapping holding the `<<` key.
+    fn merge(&mut self, locale: &str, rest: &str) {
+        let target = joined(&self.path[1..self.path.len() - 1]);
+        let depth = self.path.len() - 2;
+        for name in rest.split(|c: char| c.is_whitespace() || "[],".contains(c)).filter_map(|word| word.strip_prefix('*')) {
+            for (suffix, line, value) in aliased(&self.out, &self.anchors, name, &self.merged) {
+                let Some(suffix) = suffix.strip_prefix('.') else { continue };
+                self.merged.insert(self.out.len(), depth);
+                let key = if target.is_empty() { suffix.to_string() } else { format!("{target}.{suffix}") };
+                self.out.push(Translation { locale: locale.to_string(), key, line, value });
+            }
+        }
+    }
+
+    fn without_shadowed_merges(self) -> Vec<Translation> {
+        let LocaleParser { out, merged, .. } = self;
+        let explicit: HashSet<(&str, &str)> =
+            out.iter().enumerate().filter(|(i, _)| !merged.contains_key(i)).map(|(_, t)| (t.locale.as_str(), t.key.as_str())).collect();
+        let shadowed: HashSet<usize> = merged
+            .iter()
+            .filter(|&(&i, &depth)| {
+                let t = &out[i];
+                let ancestors = t.key.match_indices('.').map(|(at, _)| &t.key[..at]).chain([t.key.as_str()]);
+                ancestors.skip(depth).any(|key| explicit.contains(&(t.locale.as_str(), key)))
+            })
+            .map(|(&i, _)| i)
+            .collect();
+        out.into_iter().enumerate().filter(|(i, _)| !shadowed.contains(i)).map(|(_, t)| t).collect()
+    }
 }
 
 fn joined(path: &[(usize, String)]) -> String {

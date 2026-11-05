@@ -138,6 +138,25 @@ fn convention_targets(
     models.chain(controllers).chain(assets).filter(|(_, _, found)| !found.is_empty()).collect()
 }
 
+/// The partials whose callers references at `pos` of the template at `path` look for: the ones the `render` under it names,
+/// else the partial itself; `None` on a component render or in a template that isn't a partial.
+fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position) -> Option<Vec<PathBuf>> {
+    let (line_start, line, col) = util::line_at(&doc.text, pos);
+    if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col) {
+        return Some(partials::first_folder_only(partials::resolve(project, path, &r)));
+    }
+    if let Some((_, _, name)) = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col)) {
+        return Some(partials::resolve_model(project, path, name));
+    }
+    // On a component render the question isn't about this partial.
+    if partials::component_ref_at(line, col).is_some()
+        || !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
+    {
+        return None;
+    }
+    Some(vec![path.to_path_buf()])
+}
+
 /// Full key of the `t("…")` literal under `col`, when the call is Ruby.
 fn i18n_key_at(
     project: &Project,
@@ -481,6 +500,41 @@ impl Backend {
         .await
     }
 
+    /// Where the template `uri` (`text`) defines the local `name` read at `offset`: a block variable or an assignment.
+    async fn local_definition_range(
+        &self,
+        uri: &Uri,
+        project: &Project,
+        text: &str,
+        lang: TemplateLang,
+        offset: usize,
+        name: &str,
+    ) -> Result<Option<Range>> {
+        let (source, engines) = (text.to_string(), self.options().extra_engines.clone());
+        let found = off_server_task(move || code_context::local_definition(lang, &source, offset, &engines)).await?;
+        // A partial's strict local that the template also assigns (`user ||= …`) is defined by its callers.
+        let strict_local = || {
+            let close = strict_locals::Close::of(project);
+            is_partial(uri)
+                && partials::strict_locals(text, close, project.prism_version())
+                    .is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name))
+        };
+        let Some(found) = found.filter(|found| found.parameter || !strict_local()) else { return Ok(None) };
+        let index = util::LineIndex::new(text);
+        Ok(Some(Range::new(index.position(found.start), index.position(found.end))))
+    }
+
+    /// `local_passes` counted, from the `local_callers` cache.
+    async fn local_caller_count(&self, project: Project, path: &Path, local: &str) -> Result<usize> {
+        let key = (path.to_path_buf(), local.to_string());
+        if let Some(count) = self.local_callers.get(&key).map(|count| *count) {
+            return Ok(count);
+        }
+        let count = self.local_passes(project, path, local).await?.len();
+        self.local_callers.insert(key, count);
+        Ok(count)
+    }
+
     /// Quick fixes for the strict-locals warning `d` on a render in `text`: pass the missing locals, or drop an unknown one
     /// from the call or declare it in the partial.
     fn strict_locals_fixes(&self, project: &Project, path: &Path, doc: &Doc, d: &Diagnostic) -> Vec<CodeAction> {
@@ -573,6 +627,175 @@ impl Backend {
         let mut out: Vec<Location> = declared.into_iter().chain(local.uses.iter().copied()).map(span).collect();
         out.extend(self.local_passes(self.project_for(path), path, &local.name).await?);
         Ok(out)
+    }
+
+    /// The partials and templates a `render` string in `path` can name, this app's and its engines'.
+    async fn render_path_completions(&self, path: &Path, kind: partials::RenderKind, prefix: &str) -> Result<Vec<CompletionItem>> {
+        let project = self.project_of(path).await?;
+        // Gem roots are left out: their listing can be large, and the app's own roots are what it edits.
+        let engine_roots: Vec<PathBuf> = rails_paths::views_root(path)
+            .zip(project.view_roots())
+            .map(|(own, roots)| roots.other_app_roots(&own).into_iter().map(Path::to_path_buf).collect())
+            .unwrap_or_default();
+        let mut engines: Vec<(PathBuf, Arc<Vec<PathBuf>>)> = Vec::new();
+        for root in engine_roots {
+            let files = self.views_files_off_task(root.clone()).await?;
+            engines.push((root, files));
+        }
+        let other_roots: Vec<(&Path, &[PathBuf])> = engines.iter().map(|(root, files)| (root.as_path(), files.as_slice())).collect();
+        Ok(render_completions(&project, path, kind, prefix, &self.template_files(path), &other_roots))
+    }
+
+    /// Completions at `pos` outside a `render` string: the first cursor context that applies answers, in this order.
+    /// `at` is `util::line_at(&doc.text, pos)`.
+    fn completions_at(
+        &self,
+        uri: &Uri,
+        doc: &Doc,
+        path: Option<&Path>,
+        pos: Position,
+        (line_start, line, col): (usize, &str, usize),
+    ) -> Option<Vec<CompletionItem>> {
+        let before = &line[..col.min(line.len())];
+        // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
+        let project_cell = OnceCell::new();
+        let project = |path: &Path| project_cell.get_or_init(|| self.project_for(path));
+
+        let engines = &self.options().extra_engines;
+        let ruby = || path.map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
+        let render_key = partials::local_key_before(&doc.text, line_start + col, doc.lang == TemplateLang::Haml, ruby)
+            .filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
+        if let (Some((r, passed, typed)), Some(path)) = (render_key, path) {
+            let found = render_local_completions(project(path), path, &r, &passed, typed);
+            if !found.is_empty() {
+                return Some(found);
+            }
+        }
+        let i18n_prefix =
+            i18n::completion_prefix(line, col).filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, engines));
+        if let Some((start, end, prefix)) = i18n_prefix {
+            let path = path?;
+            let range = util::span_range(pos.line as usize, line, start, end);
+            return Some(i18n_completions(project(path), &self.locale_files(path), path, prefix, range));
+        }
+        if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
+            let path = path?;
+            let range = util::span_range(pos.line as usize, line, start, col);
+            return Some(stimulus_completions(path, typed, slot, range));
+        }
+        // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
+        let roles = line_roles(doc.lang, &doc.text);
+        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
+        // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
+        let stimulus_attributes = |element: &str| path.map(|p| stimulus::attributes(p, element)).unwrap_or_default();
+        let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
+        if doc.lang == TemplateLang::Erb && doc.html_host(uri) && !code_here() {
+            let offset = line_start + col;
+            if let Some(context) = erb_complete::context(&doc.text, offset) {
+                let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
+                return Some(erb_complete::items(context, &doc.text, offset, || stimulus_attributes(tag)));
+            }
+        }
+        if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
+            let path = path?;
+            let table = schema::form_table(&doc.text[..line_start + col])?;
+            let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
+            return Some(
+                columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
+            );
+        }
+        if let Some(found) =
+            path.filter(|_| code_here()).and_then(|p| slot_setter_completions(project(p), p, &doc.text[..line_start + col]))
+        {
+            return Some(found);
+        }
+        if let Some(found) = receiver_completions(before, &line[col..]).filter(|_| code_here()) {
+            return Some(found);
+        }
+        if let Some(typed) = component_prefix(before).filter(|_| code_here()) {
+            let path = path?;
+            let range = util::span_range(pos.line as usize, line, col - typed.len(), col);
+            return Some(component_completions(path, typed, range));
+        }
+
+        // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
+        if doc.lang == TemplateLang::Haml {
+            if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
+                return Some(haml::completions(context, || stimulus_attributes(indented_element())));
+            }
+            let lines: Vec<&str> = doc.text.lines().collect();
+            let head = haml::continued_head(&lines, &roles, pos.line as usize, col).filter(|_| role == LineRole::Ruby);
+            if let Some((head, context)) = head.as_deref().and_then(|head| Some((head, haml::completion_context(head, head.len())?))) {
+                return Some(haml::completions(context, || stimulus_attributes(head)));
+            }
+        }
+
+        // Rails helpers, only when we're in a Ruby context.
+        let in_code = match (doc.lang, role) {
+            (TemplateLang::Slim, _) => {
+                let parsed = slim_parser::parse(&doc.text, engines);
+                let offset = util::position_to_offset(&doc.text, pos)?;
+                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element()))
+                {
+                    return Some(markup);
+                }
+                // An unclosed `#{` being typed is Ruby too, for completion only.
+                slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
+            }
+            // Ruby LSP completes Ruby files; offering view helpers on every identifier would duplicate it.
+            (TemplateLang::Ruby, _) => false,
+            (_, LineRole::Start) => in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col),
+            (_, LineRole::Ruby) => !ruby::comment_before(before),
+            (_, LineRole::Text) => false,
+        };
+        if !in_code {
+            return None;
+        }
+        let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
+        let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
+        if let (Some(_), Some(path)) = (ivar, path) {
+            let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
+            return Some(ivar_completions(project(path), path, typed, range));
+        }
+        if typed.is_empty() {
+            return None;
+        }
+        Some(self.identifier_completions(doc, path.map(|p| (p, project(p))), line_start + col, &line[col..], typed))
+    }
+
+    /// Block variables, strict locals, helpers, the template's own slots and route helpers that start with `typed`.
+    fn identifier_completions(
+        &self,
+        doc: &Doc,
+        file: Option<(&Path, &Project)>,
+        offset: usize,
+        after: &str,
+        typed: &str,
+    ) -> Vec<CompletionItem> {
+        let (close, ruby) = file
+            .map(|(_, project)| (strict_locals::Close::of(project), project.prism_version()))
+            .unwrap_or((Default::default(), ruby_prism::Version::Latest));
+        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, offset, &self.options().extra_engines), typed);
+        // A block variable shadows the strict local of the same name.
+        let locals: Vec<_> =
+            local_completions(&doc.text, typed, close, ruby).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
+        found.extend(locals);
+        let called = has_arguments(after);
+        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| helper_item(h, called)));
+        let own_slots =
+            file.and_then(|(path, project)| slots::class_of_template(project, path)).and_then(|class| std::fs::read_to_string(class).ok());
+        let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
+        found.extend(
+            readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
+        );
+        let routes = file.map(|(path, _)| self.routes_for(path)).unwrap_or_default();
+        found.extend(
+            routes::completions(&routes, typed)
+                .into_iter()
+                .map(|(helper, detail)| util::completion_item(helper, CompletionItemKind::FUNCTION, detail)),
+        );
+        found
     }
 
     /// Whether a partial's strict local can take the name `new`: a local's name nothing in the partial declares, reads or
@@ -805,18 +1028,7 @@ impl LanguageServer for Backend {
         drop(doc);
         // A block variable or a local the template assigns hides a helper of the same name.
         if let Some(name) = helper.as_deref().filter(|name| !is_builtin_helper(name)) {
-            let (source, offset, engines) = (text.clone(), line_start + col, self.options().extra_engines.clone());
-            let found = off_server_task(move || code_context::local_definition(lang, &source, offset, &engines)).await?;
-            // A partial's strict local that the template also assigns (`user ||= …`) is defined by its callers.
-            let strict_local = || {
-                let close = strict_locals::Close::of(&project);
-                is_partial(&uri)
-                    && partials::strict_locals(&text, close, project.prism_version())
-                        .is_some_and(|sig| sig.locals.iter().any(|(local, _)| local == name))
-            };
-            if let Some(found) = found.filter(|found| found.parameter || !strict_local()) {
-                let index = util::LineIndex::new(&text);
-                let range = Range::new(index.position(found.start), index.position(found.end));
+            if let Some(range) = self.local_definition_range(&uri, &project, &text, lang, line_start + col, name).await? {
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, range))));
             }
         }
@@ -931,15 +1143,7 @@ impl LanguageServer for Backend {
         if let (Some((name, default)), Some((project, path))) = (declared_local, &file) {
             // The guard would block the next `did_change` while the views are read.
             drop(doc);
-            let key = (path.clone(), name.clone());
-            let passes = match self.local_callers.get(&key).map(|count| *count) {
-                Some(count) => count,
-                None => {
-                    let count = self.local_passes(project.clone(), path, &name).await?.len();
-                    self.local_callers.insert(key, count);
-                    count
-                }
-            };
+            let passes = self.local_caller_count(project.clone(), path, &name).await?;
             return Ok(markdown_hover(local_hover(&name, default.as_deref(), passes)));
         }
         if let Some(h) = helpers_for(doc.lang).find(|h| h.name == word).filter(|_| code_here) {
@@ -1138,8 +1342,9 @@ impl LanguageServer for Backend {
             let (line_start, line, col) = util::line_at(&doc.text, pos);
             i18n_key_at(&project, &doc, &path, line_start, line, col, &extra_engines)
         };
+        let declaration = p.context.include_declaration;
         if let Some((key, app)) = i18n_key.zip(rails_paths::app_root(&path)) {
-            let declarations = if p.context.include_declaration { translation_locations(&self.locale_files(&path), &key) } else { vec![] };
+            let declarations = if declaration { translation_locations(&self.locale_files(&path), &key) } else { vec![] };
             let open = self.open_texts();
             let mut locations = off_server_task(move || {
                 let sources = partial_rename::i18n_sources(&app, &open);
@@ -1151,27 +1356,11 @@ impl LanguageServer for Backend {
         }
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         if let Some(local) = self.strict_local_at(&uri, &doc, pos) {
-            return Ok(Some(self.local_references(&path, &doc.text, &local, p.context.include_declaration).await?));
+            return Ok(Some(self.local_references(&path, &doc.text, &local, declaration).await?));
         }
         let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
-        let files = {
-            let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-            let (line_start, line, col) = util::line_at(&doc.text, pos);
-            let model = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col));
-            match (
-                partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col),
-                model,
-            ) {
-                (Some(r), _) => partials::first_folder_only(partials::resolve(&project, &path, &r)),
-                (None, Some((_, _, name))) => partials::resolve_model(&project, &path, name),
-                // On a component render the question isn't about this partial.
-                (None, None) if partials::component_ref_at(line, col).is_some() => return Ok(None),
-                (None, None) if file_name(&uri).starts_with('_') => vec![path],
-                (None, None) => return Ok(None),
-            }
-        };
-        let declarations: Vec<Location> =
-            if p.context.include_declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
+        let Some(files) = referenced_partials(&project, &path, &doc, pos) else { return Ok(None) };
+        let declarations: Vec<Location> = if declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
         let open = self.open_texts();
         let mut locations = off_server_task(move || {
             let sources = partial_rename::sources(&views, &open);
@@ -1270,157 +1459,15 @@ impl LanguageServer for Backend {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let (line_start, line, col) = util::line_at(&doc.text, pos);
-        let before = &line[..col.min(line.len())];
-
         let path = util::file_path(&uri);
-        let items = |items| Ok(Some(CompletionResponse::Array(items)));
-        // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
-        let project_cell = OnceCell::new();
-        let project = |path: &Path| project_cell.get_or_init(|| self.project_for(path));
-
+        let at @ (_, line, col) = util::line_at(&doc.text, pos);
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
-            let Some(path) = path.as_deref() else { return Ok(None) };
+            let Some(path) = path else { return Ok(None) };
             // The guard would block the next `did_change` while the work below waits.
             drop(doc);
-            let project = self.project_of(path).await?;
-            // Gem roots are left out: their listing can be large, and the app's own roots are what it edits.
-            let engine_roots: Vec<PathBuf> = rails_paths::views_root(path)
-                .zip(project.view_roots())
-                .map(|(own, roots)| roots.other_app_roots(&own).into_iter().map(Path::to_path_buf).collect())
-                .unwrap_or_default();
-            let mut engines: Vec<(PathBuf, Arc<Vec<PathBuf>>)> = Vec::new();
-            for root in engine_roots {
-                let files = self.views_files_off_task(root.clone()).await?;
-                engines.push((root, files));
-            }
-            let other_roots: Vec<(&Path, &[PathBuf])> = engines.iter().map(|(root, files)| (root.as_path(), files.as_slice())).collect();
-            return items(render_completions(&project, path, kind, &prefix, &self.template_files(path), &other_roots));
+            return Ok(Some(CompletionResponse::Array(self.render_path_completions(&path, kind, &prefix).await?)));
         }
-        let engines = &self.options().extra_engines;
-        let ruby = || path.as_deref().map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
-        let render_key = partials::local_key_before(&doc.text, line_start + col, doc.lang == TemplateLang::Haml, ruby)
-            .filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
-        if let (Some((r, passed, typed)), Some(path)) = (render_key, path.as_deref()) {
-            let found = render_local_completions(project(path), path, &r, &passed, typed);
-            if !found.is_empty() {
-                return items(found);
-            }
-        }
-        let i18n_prefix =
-            i18n::completion_prefix(line, col).filter(|&(start, ..)| code_at(doc.lang, &doc.text, line_start + start, engines));
-        if let Some((start, end, prefix)) = i18n_prefix {
-            let Some(path) = path.as_deref() else { return Ok(None) };
-            let range = util::span_range(pos.line as usize, line, start, end);
-            return items(i18n_completions(project(path), &self.locale_files(path), path, prefix, range));
-        }
-        if let Some((start, typed, slot)) = stimulus::completion_prefix(line, col) {
-            let Some(path) = path.as_deref() else { return Ok(None) };
-            let range = util::span_range(pos.line as usize, line, start, col);
-            return items(stimulus_completions(path, typed, slot, range));
-        }
-        // `form.` and `f.text_field :` in prose (`Please fill in the form.`) aren't Ruby.
-        let roles = line_roles(doc.lang, &doc.text);
-        let role = roles.get(pos.line as usize).copied().unwrap_or(LineRole::Start);
-        let code_here = || role == LineRole::Ruby || code_at(doc.lang, &doc.text, line_start + col, engines);
-        // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
-        let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
-        let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
-        if doc.lang == TemplateLang::Erb && doc.html_host(&uri) && !code_here() {
-            let offset = line_start + col;
-            if let Some(context) = erb_complete::context(&doc.text, offset) {
-                let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
-                return items(erb_complete::items(context, &doc.text, offset, || stimulus_attributes(tag)));
-            }
-        }
-        if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
-            let Some(path) = path.as_deref() else { return Ok(None) };
-            let Some(table) = schema::form_table(&doc.text[..line_start + col]) else { return Ok(None) };
-            let columns = schema::columns(path, &table).into_iter().filter(|(name, _)| name.starts_with(typed));
-            return items(
-                columns.map(|(name, kind)| util::completion_item(name, CompletionItemKind::FIELD, format!("{table}.{kind}"))).collect(),
-            );
-        }
-        if let Some(found) =
-            path.as_deref().filter(|_| code_here()).and_then(|p| slot_setter_completions(project(p), p, &doc.text[..line_start + col]))
-        {
-            return items(found);
-        }
-        if let Some(found) = receiver_completions(before, &line[col..]).filter(|_| code_here()) {
-            return items(found);
-        }
-        if let Some(typed) = component_prefix(before).filter(|_| code_here()) {
-            let Some(path) = path.as_deref() else { return Ok(None) };
-            let range = util::span_range(pos.line as usize, line, col - typed.len(), col);
-            return items(component_completions(path, typed, range));
-        }
-
-        // Haml tag, filter and attribute names; Slim tag, engine and attribute names.
-        if doc.lang == TemplateLang::Haml {
-            if let Some(context) = haml::completion_context(line, col).filter(|_| role == LineRole::Start) {
-                return items(haml::completions(context, || stimulus_attributes(indented_element())));
-            }
-            let lines: Vec<&str> = doc.text.lines().collect();
-            let head = haml::continued_head(&lines, &roles, pos.line as usize, col).filter(|_| role == LineRole::Ruby);
-            if let Some((head, context)) = head.as_deref().and_then(|head| Some((head, haml::completion_context(head, head.len())?))) {
-                return items(haml::completions(context, || stimulus_attributes(head)));
-            }
-        }
-
-        // Rails helpers, only when we're in a Ruby context.
-        let in_code = match (doc.lang, role) {
-            (TemplateLang::Slim, _) => {
-                let parsed = slim_parser::parse(&doc.text, engines);
-                let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
-                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element()))
-                {
-                    return items(markup);
-                }
-                // An unclosed `#{` being typed is Ruby too, for completion only.
-                slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
-            }
-            // Ruby LSP completes Ruby files; offering view helpers on every identifier would duplicate it.
-            (TemplateLang::Ruby, _) => false,
-            (_, LineRole::Start) => in_ruby_context(doc.lang, &doc.text, &erb::code_spans(&doc.text), line_start + col),
-            (_, LineRole::Ruby) => !ruby::comment_before(before),
-            (_, LineRole::Text) => false,
-        };
-        if !in_code {
-            return Ok(None);
-        }
-        let typed = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '?')).next().unwrap_or("");
-        let ivar = before[..before.len() - typed.len()].strip_suffix('@').filter(|b| !b.ends_with('@'));
-        if let (Some(_), Some(path)) = (ivar, path.as_deref()) {
-            let range = util::span_range(pos.line as usize, line, col - typed.len() - 1, col);
-            return items(ivar_completions(project(path), path, typed, range));
-        }
-        if typed.is_empty() {
-            return Ok(None);
-        }
-        let (close, ruby) = path
-            .as_deref()
-            .map(|p| (strict_locals::Close::of(project(p)), project(p).prism_version()))
-            .unwrap_or((Default::default(), ruby_prism::Version::Latest));
-        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, line_start + col, engines), typed);
-        // A block variable shadows the strict local of the same name.
-        let locals: Vec<_> =
-            local_completions(&doc.text, typed, close, ruby).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();
-        found.extend(locals);
-        let called = has_arguments(&line[col..]);
-        found.extend(helpers_for(doc.lang).filter(|h| h.name.starts_with(typed)).map(|h| helper_item(h, called)));
-        let own_slots =
-            path.as_deref().and_then(|p| slots::class_of_template(project(p), p)).and_then(|class| std::fs::read_to_string(class).ok());
-        let readers = own_slots.map(|class| slots::readers(&slots::slots(&class))).unwrap_or_default();
-        found.extend(
-            readers.into_iter().filter(|r| r.starts_with(typed)).map(|r| util::completion_item(r, CompletionItemKind::METHOD, "slot")),
-        );
-        let routes = path.as_deref().map(|p| self.routes_for(p)).unwrap_or_default();
-        found.extend(
-            routes::completions(&routes, typed)
-                .into_iter()
-                .map(|(helper, detail)| util::completion_item(helper, CompletionItemKind::FUNCTION, detail)),
-        );
-        items(found)
+        Ok(self.completions_at(&uri, &doc, path.as_deref(), pos, at).map(CompletionResponse::Array))
     }
 }
 
