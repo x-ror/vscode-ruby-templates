@@ -1391,25 +1391,7 @@ fn attribute_value_len(value: &str) -> Result<(usize, bool), AttributeList> {
 
 /// What Haml prints for a string in an error: Ruby's `String#inspect`.
 fn ruby_inspect(text: &str) -> String {
-    let mut out = String::from("\"");
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' | '\\' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '#' if matches!(chars.peek(), Some('{' | '$' | '@')) => out.push_str("\\#"),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            '\r' => out.push_str("\\r"),
-            '\x1b' => out.push_str("\\e"),
-            ch if ch.is_control() => out.push_str(&format!("\\u{:04X}", ch as u32)),
-            ch => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
+    format!("\"{}\"", ruby_string_body(text))
 }
 
 /// Haml's `balance` over `(` and `)`: the text up to the parenthesis that closes the first one, stripped.

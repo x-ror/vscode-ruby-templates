@@ -175,6 +175,8 @@ pub(crate) fn push_ruby_string_body(out: &mut String, text: &str) {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
+            '\x1b' => out.push_str("\\e"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
             c => out.push(c),
         }
     }
