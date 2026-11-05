@@ -13,4 +13,4 @@ const isTemplateLanguage = (languageId) =>
 
 const isErb = (languageId) => engineOf(languageId) === "erb";
 
-export { TEMPLATE_LANGS, ERB_PERCENT, engineOf, isTemplateLanguage, isErb };
+export { ERB_PERCENT, engineOf, isTemplateLanguage, isErb };

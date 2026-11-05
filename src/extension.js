@@ -34,8 +34,8 @@ const COMMANDS = {
 function activate(context) {
   for (const [id, handler] of Object.entries(COMMANDS))
     context.subscriptions.push(vscode.commands.registerCommand(id, handler));
-  const output = registerServer(context);
-  registerRoutes(context, output);
+  registerServer(context);
+  registerRoutes(context);
   registerErbAutoClose(context);
   registerPreview(context);
 }

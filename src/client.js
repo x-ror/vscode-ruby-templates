@@ -301,7 +301,6 @@ function registerServer(context) {
   );
   registerServerFormatting(context);
   void startClient(context);
-  return output;
 }
 
 export {

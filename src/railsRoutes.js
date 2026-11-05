@@ -2,7 +2,7 @@
 import * as vscode from "vscode";
 import path from "path";
 
-import { notifyServer, onServerStarted } from "./client.js";
+import { log, notifyServer, onServerStarted } from "./client.js";
 import { ROUTES_SCRIPT, routesFromRun } from "./routes.js";
 import { SECTION, settings, commandPath } from "./workspace.js";
 import { RAILS_BIN, findUp, railsRunner, firstLine } from "./run.js";
@@ -28,13 +28,11 @@ function trustedRailsRoot(state, file) {
     : undefined;
 }
 
-async function sendRoutes({ output }, root, routes) {
+async function sendRoutes(root, routes) {
   try {
     await notifyServer("rubyTemplates/routes", { root, routes });
   } catch (e) {
-    output.appendLine(
-      `[routes] sending routes for ${root}: ${e?.message ?? e}`,
-    );
+    log(`routes: sending routes for ${root}: ${e?.message ?? e}`);
   }
 }
 
@@ -46,15 +44,15 @@ async function loadRoutes(state, root) {
   if (!routesEnabled()) return;
   const routes = routesFromRun(r);
   if (!routes) {
-    state.output.appendLine(
-      `[routes] bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
+    log(
+      `routes: bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
     );
     state.failed.add(root);
     return;
   }
   state.failed.delete(root);
   state.cache.set(root, routes);
-  await sendRoutes(state, root, routes);
+  await sendRoutes(root, routes);
 }
 
 // A change while a load runs reloads once it finishes, so the last edit to routes.rb always counts.
@@ -101,7 +99,7 @@ function settingsChanged(state, e) {
   if (routesEnabled())
     vscode.workspace.textDocuments.forEach((doc) => viewOpened(state, doc));
   else {
-    for (const root of state.cache.keys()) void sendRoutes(state, root, []);
+    for (const root of state.cache.keys()) void sendRoutes(root, []);
     state.cache.clear();
   }
 }
@@ -110,9 +108,8 @@ function settingsChanged(state, e) {
  * Read each Rails app's routes with `bin/rails runner` once one of its views is open, again when its routes
  * files change, and hand them to the server.
  */
-function registerRoutes(context, output) {
+function registerRoutes(context) {
   const state = {
-    output,
     cache: new Map(), // Rails root → routes
     // Roots whose boot failed: retried on a routes file change or a settings change, not on every view opened.
     failed: new Set(),
@@ -140,8 +137,7 @@ function registerRoutes(context, output) {
       vscode.workspace.textDocuments.forEach(opened),
     ),
     onServerStarted(() => {
-      for (const [root, routes] of state.cache)
-        void sendRoutes(state, root, routes);
+      for (const [root, routes] of state.cache) void sendRoutes(root, routes);
     }),
     vscode.workspace.onDidChangeConfiguration((e) => settingsChanged(state, e)),
   );
