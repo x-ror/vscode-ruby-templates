@@ -5,6 +5,7 @@ import path from "path";
 import { CONVERTERS, convertedFileName } from "./convert.js";
 import {
   commandPath,
+  useBundler,
   confirmOverwrite,
   workspaceFolderFor,
 } from "./workspace.js";
@@ -13,7 +14,12 @@ import { run, firstLine } from "./run.js";
 /** The converted `src` of `doc`, or undefined after telling the user why the converter failed. */
 async function runConverter({ command, args, gem }, doc, src) {
   const bin = commandPath(command);
-  const r = await run(bin, args, { cwd: workspaceFolderFor(doc) }, src);
+  const r = await run(
+    bin,
+    args,
+    { cwd: workspaceFolderFor(doc), useBundler: useBundler() },
+    src,
+  );
   const missingGem = r.stderr.includes(`cannot load such file -- ${gem}`);
   if (r.err?.code === "ENOENT" || missingGem) {
     const what = missingGem ? `The ${gem} gem was` : `"${bin}" was`;

@@ -9,6 +9,8 @@ const settings = () => vscode.workspace.getConfiguration(SECTION);
 /** The executable set in `rubyTemplates.commands.<name>`, else `name` itself. */
 const commandPath = (name) => settings().get(`commands.${name}`, name);
 
+const useBundler = () => settings().get("preview.useBundler", false);
+
 async function exists(uri) {
   try {
     await vscode.workspace.fs.stat(uri);
@@ -42,6 +44,7 @@ export {
   SECTION,
   settings,
   commandPath,
+  useBundler,
   exists,
   confirmOverwrite,
   workspaceFolderFor,

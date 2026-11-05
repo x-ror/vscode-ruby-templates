@@ -2,12 +2,18 @@
 import * as vscode from "vscode";
 import path from "path";
 
-import { settings, commandPath, workspaceFolderFor } from "./workspace.js";
 import {
-  RAILS_RENDER_TIMEOUT_MS,
+  settings,
+  commandPath,
+  useBundler,
+  workspaceFolderFor,
+} from "./workspace.js";
+import {
+  RAILS_BIN,
   findUp,
   run,
   runHaml,
+  railsRunner,
   firstLine,
 } from "./run.js";
 import { erbRubyArgs } from "./erbEngine.js";
@@ -41,19 +47,19 @@ function slimArgs(mode) {
 /** Runs the template engine's CLI on the document, `mode` being "render" (HTML) or "compile" (Ruby source). */
 function runEngine(doc, mode) {
   const lang = engineOf(doc.languageId);
-  const cwd = workspaceFolderFor(doc);
+  const options = { cwd: workspaceFolderFor(doc), useBundler: useBundler() };
   const src = doc.getText();
   if (lang === "slim")
-    return run(commandPath("slimrb"), slimArgs(mode), { cwd }, src);
+    return run(commandPath("slimrb"), slimArgs(mode), options, src);
   if (lang === "haml") {
     const legacyArgs = mode === "compile" ? ["--debug"] : [];
-    return runHaml(commandPath("haml"), mode, legacyArgs, cwd, src);
+    return runHaml(commandPath("haml"), mode, legacyArgs, options, src);
   }
   if (lang === "erb")
     return run(
       commandPath("ruby"),
       erbRubyArgs(mode, doc.languageId === "erb-percent"),
-      { cwd },
+      options,
       src,
     );
   return Promise.resolve({
@@ -63,36 +69,22 @@ function runEngine(doc, mode) {
   });
 }
 
-/** Render a template document to HTML, inside the Rails app when the setting asks for it. */
+/** Render a template document to HTML, through the app's `bin/rails runner` when the setting asks for it. */
 async function renderToHtml(doc) {
   const railsRoot =
     settings().get("preview.useRails", false) && doc.uri.scheme === "file"
-      ? findUp(path.dirname(doc.uri.fsPath), path.join("bin", "rails"))
+      ? findUp(path.dirname(doc.uri.fsPath), RAILS_BIN)
       : undefined;
   if (!railsRoot) return runEngine(doc, "render");
-  return renderInRails(
-    railsRoot,
+  const script = railsRenderScript(
     viewDir(railsRoot, doc.uri.fsPath),
     engineOf(doc.languageId),
-    doc.getText(),
   );
-}
-
-/** Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. */
-async function renderInRails(root, dir, lang, src) {
-  const r = await run(
-    commandPath("ruby"),
-    [path.join("bin", "rails"), "runner", railsRenderScript(dir, lang)],
-    { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS },
-    src,
-  );
-  if (r.err?.killed)
-    return {
-      ...r,
-      code: 1,
-      stderr: `bin/rails runner timed out after ${RAILS_RENDER_TIMEOUT_MS / 1000}s.\n${r.stderr}`,
-    };
-  return r;
+  return railsRunner(railsRoot, script, {
+    ruby: commandPath("ruby"),
+    useBundler: useBundler(),
+    input: doc.getText(),
+  });
 }
 
 async function openPreview() {

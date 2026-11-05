@@ -5,7 +5,7 @@ import path from "path";
 import { notifyServer, onServerStarted } from "./client.js";
 import { ROUTES_SCRIPT, routesFromRun } from "./routes.js";
 import { SECTION, settings, commandPath } from "./workspace.js";
-import { RAILS_RENDER_TIMEOUT_MS, findUp, run, firstLine } from "./run.js";
+import { RAILS_BIN, findUp, railsRunner, firstLine } from "./run.js";
 import { TEMPLATE_LANGS, engineOf } from "./render.js";
 
 const routesEnabled = () => settings().get("routes.enabled", true);
@@ -14,7 +14,7 @@ const routesEnabled = () => settings().get("routes.enabled", true);
 // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
 function trustedRailsRoot(file) {
   if (!routesEnabled() || !vscode.workspace.isTrusted) return undefined;
-  const root = findUp(path.dirname(file), path.join("bin", "rails"));
+  const root = findUp(path.dirname(file), RAILS_BIN);
   const folder =
     root && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
   return folder && !path.relative(folder.uri.fsPath, root).startsWith("..")
@@ -33,11 +33,10 @@ async function sendRoutes({ output }, root, routes) {
 }
 
 async function loadRoutes(state, root) {
-  const r = await run(
-    commandPath("ruby"),
-    [path.join("bin", "rails"), "runner", ROUTES_SCRIPT],
-    { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS, useBundler: false },
-  );
+  const r = await railsRunner(root, ROUTES_SCRIPT, {
+    ruby: commandPath("ruby"),
+    useBundler: false,
+  });
   if (!routesEnabled()) return;
   const routes = routesFromRun(r);
   if (!routes) {
