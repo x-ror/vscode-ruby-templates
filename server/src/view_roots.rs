@@ -107,6 +107,11 @@ impl ViewRoots {
         self.app_roots().iter().chain(&self.gems).any(|views| views.join(dir).is_dir())
     }
 
+    /// Does an engine gem have the folder `dir` in its `app/views`?
+    pub fn gems_have_folder(&self, dir: &str) -> bool {
+        self.engine_gems.iter().any(|views| views.join(dir).is_dir())
+    }
+
     /// The app's and its engines' roots, by path; a dummy app of a test is none.
     fn rendering_app_roots(&self) -> impl Iterator<Item = &PathBuf> {
         self.app_roots().iter().filter(|views| {

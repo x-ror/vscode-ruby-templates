@@ -115,6 +115,7 @@ impl Options {
             TemplateLang::Erb => &self.disabled_erb,
             TemplateLang::Haml => &self.disabled_haml,
             TemplateLang::Ruby => &self.disabled_jbuilder,
+            TemplateLang::Liquid => &[],
         }
     }
 }
@@ -128,7 +129,10 @@ pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagno
 pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
-    if uri.path().as_str().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
+    if doc.lang == TemplateLang::Liquid
+        || uri.path().as_str().to_ascii_lowercase().ends_with(".tt")
+        || !options.diagnostics_enabled(doc.lang)
+    {
         return vec![];
     }
     let path = util::file_path(uri);
@@ -220,6 +224,7 @@ pub(crate) fn language_diagnostics(
             .collect(),
         // Syntax errors are Ruby LSP's job, but it doesn't know the `locals:` comment is code to Rails.
         TemplateLang::Ruby => locals_signature(text, ruby),
+        TemplateLang::Liquid => Vec::new(),
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
@@ -286,7 +291,7 @@ fn checked_renders<'a>(
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
     let bare_names_known = LazyCell::new(|| {
         let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
-        !*in_engine && !is_partial && ivars::view_prefixes(project, path).is_some()
+        !*in_engine && !is_partial && ivars::bare_lookup_is_certain(project, path)
     });
     let mut dirs: HashMap<String, bool> = HashMap::new();
     let mut checkable = |name: &str| {
@@ -927,12 +932,27 @@ mod tests {
         let path_gem = "PATH\n  remote: engines/theme\n  specs:\n    theme (0.1.0)\n\n";
         let themeable = "module Themeable\n  included { prepend_view_path \"themes\" }\nend\n";
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
-        let cases: [Case; 5] = [
+        let includes = |module: &str| format!("class UsersController < ApplicationController\n  include {module}\nend\n");
+        let users = "app/controllers/users_controller.rb";
+        let cases: [Case; 10] = [
             ("baseline", &[], ""),
             ("absolute-parent", &[("app/controllers/admin/users_controller.rb", "class Admin::UsersController < ::UsersController\n")], ""),
             ("concern", &[("app/controllers/concerns/themeable.rb", themeable)], ""),
             ("initializer", &[("config/initializers/views.rb", "ActionController::Base.prepend_view_path \"themes\"\n")], ""),
             ("path-gem", &[("engines/theme/app/views/x/.keep", "")], path_gem),
+            ("lib-concern", &[(users, &includes("Themeable")), ("lib/themeable.rb", themeable)], ""),
+            ("model-concern", &[(users, &includes("Themeable")), ("app/models/concerns/themeable.rb", themeable)], ""),
+            ("namespaced", &[(users, &includes("::Ui::Themeable")), ("app/models/ui/themeable.rb", themeable)], ""),
+            (
+                "nested-include",
+                &[
+                    (users, &includes("Ui::Outer")),
+                    ("lib/ui/outer.rb", "module Ui::Outer\n  include Themeable\nend\n"),
+                    ("lib/themeable.rb", themeable),
+                ],
+                "",
+            ),
+            ("benign-include", &[(users, &includes("Pagy::Backend, Plain")), ("lib/plain.rb", "module Plain\nend\n")], ""),
         ];
         for (name, extra, lock_head) in cases {
             let root = std::env::temp_dir().join(format!("rt-unresolved-lookup-{name}-{}", std::process::id()));
@@ -951,7 +971,42 @@ mod tests {
             let view = root.join("app/views/users/index.html.erb");
             let found =
                 render_checks(TemplateLang::Erb, &view, &Project::for_template(&view), "<%= render \"admin_bar\" %>", UNRESOLVED_RENDER);
-            assert_eq!(found.len(), usize::from(name == "baseline"), "{name}");
+            assert_eq!(found.len(), usize::from(name == "baseline" || name == "benign-include"), "{name}");
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn bare_names_are_unchecked_when_an_installed_gem_ships_the_controllers_views() {
+        let gem_views = "vendor/bundle/ruby/3.3.0/gems/theme-1.0/app/views";
+        let lock = format!("{GEM_LOCK}    theme (1.0)\n      railties\n    railties (7.1.0)\n    actionview (7.1.0)\n");
+        let cases = [
+            ("shipped", Some("users/_admin_bar.html.erb"), true, 0),
+            ("other-folder", Some("posts/_x.html.erb"), true, 1),
+            ("not-an-engine", Some("users/_admin_bar.html.erb"), false, 1),
+            ("missing", None, true, 0),
+        ];
+        for (name, gem_file, engine, expected) in cases {
+            let root = std::env::temp_dir().join(format!("rt-unresolved-gem-views-{name}-{}", std::process::id()));
+            write_files(
+                &root,
+                &[
+                    ("Gemfile.lock", &lock),
+                    ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                    ("app/controllers/users_controller.rb", "class UsersController < ApplicationController\nend\n"),
+                    ("app/views/users/index.html.erb", ""),
+                ],
+            );
+            if let Some(file) = gem_file {
+                write_files(&root, &[(&format!("{gem_views}/{file}"), "")]);
+                if engine {
+                    write_files(&root, &[("vendor/bundle/ruby/3.3.0/gems/theme-1.0/lib/theme/engine.rb", "")]);
+                }
+            }
+            let view = root.join("app/views/users/index.html.erb");
+            let found =
+                render_checks(TemplateLang::Erb, &view, &Project::for_template(&view), "<%= render \"admin_bar\" %>", UNRESOLVED_RENDER);
+            assert_eq!(found.len(), expected, "{name}");
             std::fs::remove_dir_all(&root).unwrap();
         }
     }

@@ -1865,6 +1865,36 @@ mod tests {
     }
 
     #[test]
+    fn bare_names_resolve_when_only_the_checks_are_unsure_of_the_lookup() {
+        let root = std::env::temp_dir().join(format!("rt-bare-prefixes-unsure-{}", std::process::id()));
+        crate::util::write_files(
+            &root,
+            &[
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (7.1.0)\n    theme (1.0)\n      railties\n    railties (7.1.0)\n"),
+                ("app/controllers/application_controller.rb", "class ApplicationController < ActionController::Base\nend\n"),
+                ("app/controllers/admin/base_controller.rb", "class Admin::BaseController < ApplicationController\nend\n"),
+                (
+                    "app/controllers/admin/users_controller.rb",
+                    "class Admin::UsersController < Admin::BaseController\n  include Themeable\nend\n",
+                ),
+                ("lib/themeable.rb", "module Themeable\n  included { prepend_view_path \"x\" }\nend\n"),
+                ("app/views/admin/users/index.html.erb", ""),
+                ("app/views/admin/base/_nav.html.erb", ""),
+            ],
+        );
+        let views = root.join("app/views");
+        let current = views.join("admin/users/index.html.erb");
+        let project = Project::for_template(&current);
+        assert_eq!(
+            ivars::view_prefixes(&project, &current),
+            Some(vec!["admin/users".to_string(), "admin/base".to_string(), "application".to_string()])
+        );
+        assert!(!ivars::bare_lookup_is_certain(&project, &current));
+        assert_eq!(resolve(&project, &current, &render_refs("render \"nav\"").remove(0)), [views.join("admin/base/_nav.html.erb")]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn resolve_leading_slash_folder_from_views_root() {
         let root = std::env::temp_dir().join(format!("rt-slash-{}", std::process::id()));
         let users = root.join("app/views/users");
