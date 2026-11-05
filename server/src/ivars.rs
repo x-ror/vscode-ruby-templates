@@ -6,7 +6,7 @@ use crate::partials::snake_case;
 use crate::project::Project;
 use crate::rails_paths::{app_root, files_under, rails_relative, template_stem, views_root};
 use crate::ruby::logical_lines;
-use crate::util::{inline_code, word_at};
+use crate::util::{inline_code, slash_path, word_at};
 use regex::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ pub struct Assignment {
 /// The folder of `view` below `views/` and its template name without formats.
 fn folder_and_name(project: &Project, view: &Path) -> Option<(String, String)> {
     let rel = view.strip_prefix(views_root(view)?).ok()?;
-    let dir = rel.parent()?.to_str()?.replace('\\', "/");
+    let dir = slash_path(rel.parent()?);
     Some((dir, template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?).to_string()))
 }
 

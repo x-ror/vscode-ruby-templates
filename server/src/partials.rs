@@ -7,6 +7,7 @@ use crate::rails_paths::{app_root, template_format, template_stem, template_suff
 use crate::render_call::{self, Call, HamlPipes, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
 use crate::strict_locals::{self, Close};
+use crate::util::slash_path;
 use regex::{Captures, Regex};
 use std::borrow::Cow;
 use std::ops::Range;
@@ -814,7 +815,7 @@ pub fn component_classes(current: &Path) -> Vec<(String, PathBuf)> {
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
-            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let rel = slash_path(e.path().strip_prefix(&dir).ok()?);
             let name = rel.strip_suffix("_component.rb")?;
             let constant: Vec<String> = format!("{name}_component").split('/').map(camel_case).collect();
             Some((constant.join("::"), e.into_path()))
@@ -901,7 +902,7 @@ fn templates_in<'a>(
 ) -> impl Iterator<Item = (String, PathBuf)> + 'a {
     files.iter().filter_map(move |p| {
         let name = template_name(project, p, partial)?;
-        let rel_dir = p.parent()?.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
+        let rel_dir = slash_path(p.parent()?.strip_prefix(root).ok()?);
         let full = if rel_dir.is_empty() { name } else { format!("{rel_dir}/{name}") };
         Some((full, p.clone()))
     })
@@ -2358,6 +2359,24 @@ mod tests {
     fn resolved_names(project: &Project, views: &Path, view: &str, render: &str) -> Vec<String> {
         let r = render_refs(render).remove(0);
         resolve(project, &views.join(view), &r).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn nested_partial_names_use_forward_slashes() {
+        let (root, views) =
+            partial_tree("nested-names", &["users/admin/_card.html.erb", "users/admin/show.html.erb", "users/_row.html.erb"]);
+        let project = Project::unknown();
+        assert_eq!(resolved_names(&project, &views, "users/index.html.erb", "render \"users/admin/card\""), ["_card.html.erb"]);
+        let found = resolve(&project, &views.join("home/show.html.erb"), &render_refs("render \"users/admin/card\"").remove(0));
+        assert_eq!(found, [views.join("users/admin/_card.html.erb")]);
+        let files = crate::rails_paths::files_under(&views, usize::MAX);
+        let current = views.join("users/index.html.erb");
+        let names = |kind| render_candidates(&project, &current, kind, &files, &[]).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(RenderKind::Partial), ["row", "users/admin/card", "users/row"]);
+        assert_eq!(names(RenderKind::Template), ["users/admin/show"]);
+        let named: Vec<String> = named_templates(&project, &views, &files).into_iter().map(|(name, ..)| name).collect();
+        assert!(named.contains(&"users/admin/card".to_string()) && named.iter().all(|name| !name.contains('\\')), "{named:?}");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

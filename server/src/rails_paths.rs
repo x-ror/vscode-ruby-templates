@@ -1,5 +1,6 @@
 //! Rails app layout: the `app` and `app/views` folders, and what a template file name says (locale, format).
 
+use crate::util::slash_path;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -119,7 +120,7 @@ pub fn app_root(file: &Path) -> Option<PathBuf> {
 pub fn rails_relative(file: &Path, from: &Path) -> String {
     let root = app_root(from).and_then(|app| app.parent().map(Path::to_path_buf));
     let shown = root.and_then(|root| file.strip_prefix(root).ok()).unwrap_or(file);
-    shown.to_string_lossy().replace('\\', "/")
+    slash_path(shown)
 }
 
 /// Every file under `root`; the listing `render_candidates` names come from.
@@ -149,6 +150,18 @@ mod tests {
         assert_eq!(shown("public/favicon.ico"), "public/favicon.ico", "outside app/");
         assert_eq!(shown("engines/admin/app/views/shared/_nav.html.erb"), "engines/admin/app/views/shared/_nav.html.erb");
         assert_eq!(rails_relative(Path::new("/gems/devise/app/views/x.html.erb"), &from), "/gems/devise/app/views/x.html.erb");
+    }
+
+    #[test]
+    fn nested_paths_have_no_backslashes() {
+        let root = std::env::temp_dir().join(format!("rt-rails-relative-{}", std::process::id()));
+        let nested = root.join("app/views/users/admin/_card.html.erb");
+        crate::util::write_files(&root, &[("app/views/users/admin/_card.html.erb", "")]);
+        let found = files_under(&root, usize::MAX);
+        assert_eq!(found, std::slice::from_ref(&nested));
+        assert_eq!(rails_relative(&nested, &root.join("app/views/users/index.html.erb")), "app/views/users/admin/_card.html.erb");
+        assert_eq!(slash_path(nested.strip_prefix(views_root(&nested).unwrap()).unwrap()), "users/admin/_card.html.erb");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
