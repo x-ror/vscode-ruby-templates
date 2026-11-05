@@ -18,24 +18,6 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 - **Safe formatting.** It changes only whitespace and checks that the template still compiles to the same thing; if it is unsure, it leaves the file alone.
 - **Works with Ruby LSP.** Install both: Ruby LSP keeps your `.rb` files, this extension adds what templates need.
 
-## Screenshots
-
-**Errors as you type**: unclosed blocks, mismatched tags, missing `alt`, unresolved partials.
-
-![Diagnostics in an ERB view](images/screenshots/diagnostics.png)
-
-**Completion** of partial names inside `render "…"`.
-
-![Partial completion](images/screenshots/completion.png)
-
-**Hover** on a Rails helper shows its signature and links to the API docs.
-
-![Hover on link_to in Slim](images/screenshots/hover.png)
-
-**Highlighting** for Slim with embedded JavaScript and `#{}` interpolation, and the same for ERB and Haml.
-
-![Slim highlighting](images/screenshots/slim.png)
-
 ## Getting started
 
 1. Install **Ruby Templates** from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=x-ror.ruby-templates) or [Open VSX](https://open-vsx.org/extension/x-ror/ruby-templates).
