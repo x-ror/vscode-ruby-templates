@@ -1,17 +1,12 @@
 import * as vscode from "vscode";
-import cp from "child_process";
 import path from "path";
-import fs from "fs";
 
 import {
   startClient,
   stopClient,
   restartClient,
-  onServerStarted,
-  notifyServer,
   serverFormatEdits,
 } from "./client.js";
-import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
 import {
   erbTagBodyLines,
   toggleErbTagAt,
@@ -19,7 +14,6 @@ import {
 } from "./erbTags.js";
 import { toggleHamlLines } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
-import { convertedFileName } from "./convert.js";
 import {
   relatedFiles,
   relatedDirs,
@@ -27,9 +21,6 @@ import {
   actionLine,
   previewPartners,
 } from "./related.js";
-import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
-import { erbRubyArgs } from "./erbEngine.js";
-import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 import {
   toggleSlimMarker,
   inVerbatimBlock,
@@ -37,16 +28,17 @@ import {
   dedent,
   partialPath,
 } from "./slim.js";
-
-const TEMPLATE_LANGS = new Set(["erb", "haml", "slim"]);
-// Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
-const engineOf = (languageId) =>
-  languageId.startsWith("erb-") ? "erb" : languageId;
-
-// Rails boots slowly on big apps, but a hung runner shouldn't leave the preview waiting forever.
-const RAILS_RENDER_TIMEOUT_MS = 60_000;
-// How far up from a template to look for a Gemfile or bin/rails.
-const MAX_PARENT_DIRS = 6;
+import { TEMPLATE_LANGS, engineOf } from "./render.js";
+import { cfg, exists, confirmOverwrite } from "./workspace.js";
+import {
+  openPreview,
+  refreshPreviewOnSave,
+  closePreview,
+  showCompiledSource,
+} from "./preview.js";
+import { convert } from "./convertTemplate.js";
+import { registerRoutes } from "./railsRoutes.js";
+import { registerErbAutoClose } from "./erbAutoClose.js";
 
 // The server reads these at startup, so a change restarts it.
 const SERVER_SETTINGS = [
@@ -63,10 +55,6 @@ const SERVER_SETTINGS = [
   ]),
 ];
 
-/** @type {vscode.WebviewPanel | undefined} */
-let previewPanel;
-/** @type {string | undefined} */
-let previewUri;
 /** @type {vscode.LogOutputChannel | undefined} */
 let output;
 
@@ -108,11 +96,7 @@ function activate(context) {
   registerRoutes(context, output);
 
   context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (!previewPanel || !previewUri) return;
-      if (!cfg().get("preview.refreshOnSave", true)) return;
-      if (doc.uri.toString() === previewUri) renderPreview(doc);
-    }),
+    vscode.workspace.onDidSaveTextDocument(refreshPreviewOnSave),
   );
 
   // Status bar: shows active template engine and offers preview.
@@ -134,10 +118,6 @@ function activate(context) {
     vscode.window.onDidChangeActiveTextEditor(updateStatus),
   );
   updateStatus();
-}
-
-function cfg() {
-  return vscode.workspace.getConfiguration("rubyTemplates");
 }
 
 // ---------------------------------------------------------------- ERB editing
@@ -211,14 +191,14 @@ async function wrapInErb() {
 
 // ---------------------------------------------------------------- Haml editing
 
-/** Line numbers a selection covers, leaving out a last line it only touches at column 0. */
+/** Last line a selection covers; one ending at column 0 of a later line doesn't take that line along. */
+const lastSelectedLine = ({ start, end }) =>
+  end.character === 0 && end.line > start.line ? end.line - 1 : end.line;
+
+/** Line numbers a selection covers, up to `lastSelectedLine`. */
 function selectedLines(sel) {
-  const last =
-    sel.end.character === 0 && sel.end.line > sel.start.line
-      ? sel.end.line - 1
-      : sel.end.line;
   return Array.from(
-    { length: last - sel.start.line + 1 },
+    { length: lastSelectedLine(sel) - sel.start.line + 1 },
     (_, i) => sel.start.line + i,
   );
 }
@@ -272,7 +252,6 @@ const RENDER_CALL = {
   haml: (p) => `= render "${p}"`,
 };
 
-/** Move the selection into `_name.<ext>` next to the template and render it in its place. */
 /**
  * Open the view's other formats (`.html.erb` ↔ `.text.erb`), its controller action, or a component's class ↔
  * template ↔ preview.
@@ -349,6 +328,7 @@ async function controllerAction(view) {
     : undefined;
 }
 
+/** Move the selection into `_name.<ext>` next to the template and render it in its place. */
 async function extractPartial() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || ed.selection.isEmpty) return;
@@ -387,14 +367,7 @@ async function extractPartial() {
   const viewDir = /\/app\/views\/(.+)\/[^/]+$/.exec(doc.uri.path)?.[1];
   const renderPath = viewDir ? `${viewDir}/${name}` : name;
 
-  if (await exists(partial)) {
-    const ok = await vscode.window.showWarningMessage(
-      `${path.basename(partial.path)} exists. Overwrite?`,
-      { modal: true },
-      "Overwrite",
-    );
-    if (ok !== "Overwrite") return;
-  }
+  if (!(await confirmOverwrite(partial))) return;
   await vscode.workspace.fs.writeFile(
     partial,
     new TextEncoder().encode(block.text),
@@ -410,22 +383,11 @@ async function extractPartial() {
 
 // ---------------------------------------------------------------- Slim editing
 
-/** Last line a selection covers; one ending at column 0 of a later line doesn't take that line along. */
-const lastSelectedLine = ({ start, end }) =>
-  end.character === 0 && end.line > start.line ? end.line - 1 : end.line;
-
 async function toggleSlimTag() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   const text = ed.document.getText().split(/\r?\n/);
-  const lines = new Set(
-    ed.selections.flatMap((sel) =>
-      Array.from(
-        { length: lastSelectedLine(sel) - sel.start.line + 1 },
-        (_, i) => sel.start.line + i,
-      ),
-    ),
-  );
+  const lines = new Set(ed.selections.flatMap(selectedLines));
   await ed.edit((eb) => {
     for (const n of lines) {
       if (inVerbatimBlock(text, n)) continue;
@@ -523,582 +485,7 @@ async function extractSlimPartial() {
   await (await vscode.workspace.openTextDocument(targetUri)).save();
 }
 
-async function exists(uri) {
-  try {
-    await vscode.workspace.fs.stat(uri);
-    return true;
-  } catch (e) {
-    if (e instanceof vscode.FileSystemError && e.code === "FileNotFound")
-      return false;
-    throw e;
-  }
-}
-
-// ---------------------------------------------------------------- rendering
-
-function workspaceFolderFor(doc) {
-  return (
-    vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath ||
-    path.dirname(doc.uri.fsPath)
-  );
-}
-
-/** The nearest of `dir` and its parents that contains `rel`, or undefined. */
-function findUp(dir, rel) {
-  let d = dir;
-  for (let i = 0; i < MAX_PARENT_DIRS; i++) {
-    if (fs.existsSync(path.join(d, rel))) return d;
-    const parent = path.dirname(d);
-    if (parent === d) break;
-    d = parent;
-  }
-  return undefined;
-}
-
-function run(
-  cmd,
-  args,
-  { useBundler = cfg().get("preview.useBundler", false), ...options },
-  input,
-) {
-  return new Promise((resolve) => {
-    const [bin, binArgs] =
-      useBundler && findUp(options.cwd, "Gemfile") !== undefined
-        ? ["bundle", ["exec", cmd, ...args]]
-        : [cmd, args];
-    const windows = process.platform === "win32";
-    try {
-      const [file, fileArgs, spawnOptions] = windows
-        ? windowsShellCommand(bin, binArgs)
-        : [bin, binArgs, {}];
-      const child = cp.execFile(
-        file,
-        fileArgs,
-        { ...options, ...spawnOptions, maxBuffer: 16 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          // Callers detect a missing tool by ENOENT, which a shell can't report.
-          if (windows && err?.code === WINDOWS_COMMAND_NOT_FOUND) {
-            err.code = "ENOENT";
-            err.path = bin;
-          }
-          resolve({
-            code: err ? (err.code ?? 1) : 0,
-            stdout: String(stdout || ""),
-            stderr: String(stderr || ""),
-            err,
-          });
-        },
-      );
-      if (input !== undefined && child.stdin) {
-        child.stdin.on("error", () => {});
-        child.stdin.end(input);
-      }
-    } catch (err) {
-      resolve({ code: err.code ?? 1, stdout: "", stderr: err.message, err });
-    }
-  });
-}
-
-/** `haml <subcommand> -` (Haml 6+), falling back to the Haml < 6 CLI, which has no subcommands and reads stdin. */
-async function runHaml(bin, subcommand, legacyArgs, cwd, src) {
-  const r = await run(bin, [subcommand, "-"], { cwd }, src);
-  // Haml < 6 opens the subcommand name as the input file.
-  if (
-    r.code !== 0 &&
-    r.stderr.includes("ENOENT") &&
-    r.stderr.includes(` - ${subcommand}`)
-  )
-    return run(bin, legacyArgs, { cwd }, src);
-  // Thor reports usage errors on stderr but exits 0.
-  if (r.code === 0 && !r.stdout && r.stderr) return { ...r, code: 1 };
-  return r;
-}
-
-/** Render a template document to HTML with the matching CLI. */
-async function renderToHtml(doc) {
-  const lang = engineOf(doc.languageId);
-  const cwd = workspaceFolderFor(doc);
-  const src = doc.getText();
-  const railsRoot =
-    cfg().get("preview.useRails", false) && doc.uri.scheme === "file"
-      ? findUp(path.dirname(doc.uri.fsPath), path.join("bin", "rails"))
-      : undefined;
-  if (railsRoot)
-    return renderInRails(
-      railsRoot,
-      viewDir(railsRoot, doc.uri.fsPath),
-      lang,
-      src,
-    );
-  if (lang === "slim") {
-    const bin = cfg().get("commands.slimrb", "slimrb");
-    return run(bin, ["--pretty"], { cwd }, src);
-  }
-  if (lang === "haml") {
-    return runHaml(cfg().get("commands.haml", "haml"), "render", [], cwd, src);
-  }
-  if (lang === "erb")
-    return run(
-      cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("render", doc.languageId === "erb-percent"),
-      { cwd },
-      src,
-    );
-  return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
-}
-
-/** `users` for `<root>/app/views/users/show.html.slim`; undefined outside app/views. */
-function viewDir(root, file) {
-  const rel = path.relative(
-    path.join(root, "app", "views"),
-    path.dirname(file),
-  );
-  return rel && !rel.startsWith("..") && !path.isAbsolute(rel)
-    ? rel.split(path.sep).join("/")
-    : undefined;
-}
-
-const rubyString = (s) => `'${s.replace(/[\\']/g, "\\$&")}'`;
-
-/**
- * Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. A controller
- * whose path is the template's directory makes a bare `render "card"` find `<dir>/_card`, as in a request.
- */
-async function renderInRails(root, dir, lang, src) {
-  const controller = dir
-    ? `Class.new(ApplicationController) { define_singleton_method(:controller_path) { ${rubyString(dir)} } }`
-    : "ApplicationController";
-  const script = `print ${controller}.render(inline: $stdin.read, type: :${lang})`;
-  const r = await run(
-    "ruby",
-    [path.join("bin", "rails"), "runner", script],
-    { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS },
-    src,
-  );
-  if (r.err?.killed)
-    return {
-      ...r,
-      code: 1,
-      stderr: `bin/rails runner timed out after ${RAILS_RENDER_TIMEOUT_MS / 1000}s.\n${r.stderr}`,
-    };
-  return r;
-}
-
-/** Compile a template to the Ruby source the engine generates. */
-async function compileToRuby(doc) {
-  const lang = engineOf(doc.languageId);
-  const cwd = workspaceFolderFor(doc);
-  const src = doc.getText();
-  if (lang === "slim") {
-    const args = cfg().get("slim.compileForRails", false)
-      ? ["--rails"]
-      : ["--compile"];
-    return run(cfg().get("commands.slimrb", "slimrb"), args, { cwd }, src);
-  }
-  if (lang === "haml") {
-    return runHaml(
-      cfg().get("commands.haml", "haml"),
-      "compile",
-      ["--debug"],
-      cwd,
-      src,
-    );
-  }
-  if (lang === "erb")
-    return run(
-      cfg().get("commands.ruby", "ruby"),
-      erbRubyArgs("compile", doc.languageId === "erb-percent"),
-      { cwd },
-      src,
-    );
-  return { code: 1, stdout: "", stderr: `Unsupported language: ${lang}` };
-}
-
-function missingToolMessage(bin, lang) {
-  if (engineOf(lang) === "erb")
-    return `"${bin}" was not found. Install Ruby (and gem install erubi) — or point rubyTemplates.commands.ruby at it.`;
-  const gem = { slim: "slim", haml: "haml" }[engineOf(lang)] || bin;
-  return `"${bin}" was not found. Install it with: gem install ${gem} — or point rubyTemplates.commands.* at the executable.`;
-}
-
-async function openPreview(context) {
-  const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
-    vscode.window.showInformationMessage(
-      "Open an ERB, Haml or Slim file first.",
-    );
-    return;
-  }
-  previewUri = ed.document.uri.toString();
-  if (!previewPanel) {
-    previewPanel = vscode.window.createWebviewPanel(
-      "rubyTemplates.preview",
-      "Template Preview",
-      vscode.ViewColumn.Beside,
-      { enableScripts: false },
-    );
-    previewPanel.onDidDispose(
-      () => {
-        previewPanel = undefined;
-        previewUri = undefined;
-      },
-      null,
-      context.subscriptions,
-    );
-  }
-  previewPanel.title = `Preview: ${path.basename(ed.document.fileName)}`;
-  await renderPreview(ed.document);
-}
-
-const escapeHtml = (s) =>
-  String(s).replace(
-    /[&<>]/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c],
-  );
-
-async function renderPreview(doc) {
-  const panel = previewPanel;
-  if (!panel) return;
-  const r = await renderToHtml(doc);
-  // The panel may have closed, or moved to another document, during a slow render.
-  if (previewPanel !== panel || previewUri !== doc.uri.toString()) return;
-  if (r.err?.code === "ENOENT") {
-    panel.webview.html = errorPage(
-      "Renderer not found",
-      missingToolMessage(r.err.path, doc.languageId),
-    );
-    return;
-  }
-  if (r.code !== 0) {
-    panel.webview.html = errorPage(
-      "Render failed",
-      r.stderr || r.stdout,
-      engineOf(doc.languageId) === "erb"
-        ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
-        : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
-    );
-    return;
-  }
-  panel.webview.html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-  body{font-family:system-ui,sans-serif;margin:0}
-  .bar{display:flex;gap:1rem;align-items:center;padding:.4rem .8rem;font-size:12px;background:var(--vscode-editorWidget-background);border-bottom:1px solid var(--vscode-widget-border,#444)}
-  .bar b{opacity:.8}
-  iframe{border:0;width:100%;height:calc(55vh);background:#fff}
-  pre{margin:0;padding:.8rem;font:12px/1.4 var(--vscode-editor-font-family,monospace);white-space:pre-wrap;word-break:break-word;background:var(--vscode-textCodeBlock-background);max-height:40vh;overflow:auto}
-</style></head><body>
-<div class="bar"><b>Rendered</b> <span>${escapeHtml(path.basename(doc.fileName))} · ${escapeHtml(doc.languageId)}</span></div>
-<iframe sandbox="" srcdoc="${escapeHtml(r.stdout).replace(/"/g, "&quot;")}"></iframe>
-<div class="bar"><b>HTML source</b></div>
-<pre>${escapeHtml(r.stdout)}</pre>
-</body></html>`;
-}
-
-function errorPage(title, detail, hint) {
-  return `<!DOCTYPE html><html><body style="font-family:system-ui;padding:1rem">
-<h3 style="color:var(--vscode-errorForeground)">${escapeHtml(title)}</h3>
-<pre style="white-space:pre-wrap">${escapeHtml(detail)}</pre>
-${hint ? `<p style="opacity:.8">${escapeHtml(hint)}</p>` : ""}</body></html>`;
-}
-
-async function showCompiledSource() {
-  const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) return;
-  const r = await compileToRuby(ed.document);
-  if (r.err?.code === "ENOENT") {
-    vscode.window.showErrorMessage(
-      missingToolMessage(r.err.path, ed.document.languageId),
-    );
-    return;
-  }
-  if (r.code !== 0) {
-    vscode.window.showErrorMessage(
-      `Compile failed: ${(r.stderr || r.stdout).split("\n")[0]}`,
-    );
-    return;
-  }
-  const doc = await vscode.workspace.openTextDocument({
-    language: "ruby",
-    content: r.stdout,
-  });
-  await vscode.window.showTextDocument(doc, {
-    viewColumn: vscode.ViewColumn.Beside,
-    preview: true,
-  });
-}
-
-// ---------------------------------------------------------------- routes
-
-/**
- * Read each Rails app's routes with `bin/rails runner` once one of its views is open, again when its routes
- * files change, and hand them to the server for `*_path` / `*_url` completion, hover and definition.
- */
-function registerRoutes(context, output) {
-  const cache = new Map(); // Rails root → routes
-  // Roots whose boot failed: retried on a routes file change or a settings change, not on every view opened.
-  const failed = new Set();
-  const busy = new Set();
-  const again = new Set();
-  const enabled = () => cfg().get("routes.enabled", true);
-  const send = async (root, routes) => {
-    try {
-      await notifyServer("rubyTemplates/routes", { root, routes });
-    } catch (e) {
-      output.appendLine(
-        `[routes] sending routes for ${root}: ${e?.message ?? e}`,
-      );
-    }
-  };
-
-  const load = async (root) => {
-    const r = await run(
-      cfg().get("commands.ruby", "ruby"),
-      [path.join("bin", "rails"), "runner", ROUTES_SCRIPT],
-      { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS, useBundler: false },
-    );
-    if (!enabled()) return;
-    let routes;
-    try {
-      routes = r.code === 0 ? routesFromOutput(r.stdout) : undefined;
-    } catch {
-      routes = undefined;
-    }
-    if (!routes) {
-      output.appendLine(
-        `[routes] bin/rails runner failed in ${root}: ${firstLine(r) || `exit ${r.code}`}`,
-      );
-      failed.add(root);
-      return;
-    }
-    failed.delete(root);
-    cache.set(root, routes);
-    await send(root, routes);
-  };
-
-  // A change while a load runs reloads once it finishes, so the last edit to routes.rb always counts.
-  const refresh = async (root) => {
-    if (busy.has(root)) {
-      again.add(root);
-      return;
-    }
-    busy.add(root);
-    try {
-      do {
-        again.delete(root);
-        await load(root);
-      } while (again.has(root));
-    } finally {
-      busy.delete(root);
-    }
-  };
-
-  // Booting runs the app's own code: only for an app inside a trusted workspace folder, never for a file
-  // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
-  const railsRoot = (file) => {
-    if (!enabled() || !vscode.workspace.isTrusted) return undefined;
-    const root = findUp(path.dirname(file), path.join("bin", "rails"));
-    const folder =
-      root && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
-    return folder && !path.relative(folder.uri.fsPath, root).startsWith("..")
-      ? root
-      : undefined;
-  };
-  const opened = (doc) => {
-    if (doc.uri.scheme !== "file") return;
-    if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
-    const root = railsRoot(doc.uri.fsPath);
-    if (root && !cache.has(root) && !failed.has(root) && !busy.has(root))
-      void refresh(root);
-  };
-  const routesChanged = (uri) => {
-    const root = railsRoot(uri.fsPath);
-    if (root && (cache.has(root) || failed.has(root))) void refresh(root);
-  };
-
-  const watcher = vscode.workspace.createFileSystemWatcher(
-    "**/config/{routes.rb,routes/**/*.rb}",
-  );
-  context.subscriptions.push(
-    watcher,
-    watcher.onDidChange(routesChanged),
-    watcher.onDidCreate(routesChanged),
-    watcher.onDidDelete(routesChanged),
-    vscode.workspace.onDidOpenTextDocument(opened),
-    vscode.workspace.onDidGrantWorkspaceTrust(() =>
-      vscode.workspace.textDocuments.forEach(opened),
-    ),
-    onServerStarted(() => {
-      for (const [root, routes] of cache) void send(root, routes);
-    }),
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        !e.affectsConfiguration("rubyTemplates.routes") &&
-        !e.affectsConfiguration("rubyTemplates.commands.ruby")
-      )
-        return;
-      failed.clear();
-      if (enabled()) vscode.workspace.textDocuments.forEach(opened);
-      else {
-        for (const root of cache.keys()) void send(root, []);
-        cache.clear();
-      }
-    }),
-  );
-  vscode.workspace.textDocuments.forEach(opened);
-}
-
-// ---------------------------------------------------------------- converters
-
-// `command` is both the rubyTemplates.commands.* setting name and its default executable.
-const CONVERTERS = {
-  "erb>haml": { command: "html2haml", args: ["--erb"], gem: "html2haml" },
-  "html>haml": { command: "html2haml", args: ["--no-erb"], gem: "html2haml" },
-  "erb>slim": { command: "erb2slim", args: [], gem: "html2slim" },
-  "haml>slim": { command: "haml2slim", args: [], gem: "haml2slim" },
-  // haml_to_erb's own CLI only converts files in place, so call its library through ruby.
-  "haml>erb": {
-    command: "ruby",
-    args: ["-rhaml_to_erb", "-e", "print HamlToErb.convert($stdin.read)"],
-    gem: "haml_to_erb",
-  },
-  "slim>erb": { command: "slimrb", args: ["--erb"], gem: "slim" },
-};
-
-async function convert(target) {
-  const ed = vscode.window.activeTextEditor;
-  if (!ed) return;
-  const from = ed.document.languageId;
-  const cwd = workspaceFolderFor(ed.document);
-  const src = ed.document.getText();
-  const converter = CONVERTERS[`${from}>${target}`];
-  if (!converter) {
-    vscode.window.showInformationMessage(
-      `No converter for ${from} → ${target}.`,
-    );
-    return;
-  }
-  const { command, args, gem } = converter;
-  const bin = cfg().get(`commands.${command}`, command);
-
-  const r = await run(bin, args, { cwd }, src);
-  const missingGem = r.stderr.includes(`cannot load such file -- ${gem}`);
-  if (r.err?.code === "ENOENT" || missingGem) {
-    const what = missingGem ? `The ${gem} gem was` : `"${bin}" was`;
-    const pick = await vscode.window.showErrorMessage(
-      `${what} not found. Install with: gem install ${gem}`,
-      "Copy command",
-    );
-    if (pick) await vscode.env.clipboard.writeText(`gem install ${gem}`);
-    return;
-  }
-  if (r.code !== 0) {
-    vscode.window.showErrorMessage(
-      `Conversion failed: ${(r.stderr || r.stdout).split("\n")[0]}`,
-    );
-    return;
-  }
-
-  const newName = convertedFileName(ed.document.fileName, from, target);
-  const canSave = ed.document.uri.scheme === "file";
-  const choice = await vscode.window.showQuickPick(
-    [
-      ...(canSave
-        ? [
-            {
-              label: `Save as ${path.basename(newName)} next to the original`,
-              id: "save",
-            },
-          ]
-        : []),
-      { label: "Open as untitled document", id: "untitled" },
-      { label: "Replace contents of the current file", id: "replace" },
-    ],
-    {
-      placeHolder: `Converted ${from} → ${target}. What to do with the result?`,
-    },
-  );
-  if (!choice) return;
-  if (choice.id === "untitled") {
-    const d = await vscode.workspace.openTextDocument({
-      language: target,
-      content: r.stdout,
-    });
-    await vscode.window.showTextDocument(d, {
-      viewColumn: vscode.ViewColumn.Beside,
-    });
-  } else if (choice.id === "save") {
-    const newUri = vscode.Uri.file(newName);
-    if (await exists(newUri)) {
-      const ok = await vscode.window.showWarningMessage(
-        `${path.basename(newName)} exists. Overwrite?`,
-        { modal: true },
-        "Overwrite",
-      );
-      if (ok !== "Overwrite") return;
-    }
-    await vscode.workspace.fs.writeFile(
-      newUri,
-      new TextEncoder().encode(r.stdout),
-    );
-    await vscode.window.showTextDocument(newUri, {
-      viewColumn: vscode.ViewColumn.Beside,
-    });
-  } else {
-    const full = new vscode.Range(
-      ed.document.positionAt(0),
-      ed.document.positionAt(src.length),
-    );
-    await ed.edit((eb) => eb.replace(full, r.stdout));
-    await vscode.languages.setTextDocumentLanguage(ed.document, target);
-  }
-}
-
-const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
-
-/**
- * Typing `>` in ERB: drops the ` %>` auto-closing added when the user types the tag's own `%>`, and in HTML views
- * adds a start tag's end tag, as VS Code does for plain HTML.
- */
-function registerErbAutoClose(context) {
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument(async (e) => {
-      if (!/^erb/.test(e.document.languageId) || e.reason !== undefined) return;
-      if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">")
-        return;
-      const editor = vscode.window.activeTextEditor;
-      if (editor?.document !== e.document || editor.selections.length !== 1)
-        return;
-      const at = e.contentChanges[0].range.start.translate(0, 1);
-      const { text } = e.document.lineAt(at.line);
-      const doubled = doubledErbClose(
-        text.slice(0, at.character),
-        text.slice(at.character),
-      );
-      if (doubled) {
-        await editor.edit(
-          (b) => b.delete(new vscode.Range(at, at.translate(0, doubled))),
-          {
-            undoStopBefore: false,
-            undoStopAfter: false,
-          },
-        );
-        return;
-      }
-      if (!isHtmlView(e.document.fileName, () => e.document.getText())) return;
-      if (!cfg().get("erb.autoCloseTags", true)) return;
-      const before = e.document.getText(
-        new vscode.Range(0, 0, at.line, at.character),
-      );
-      const name = tagToClose(before);
-      if (!name || text.slice(at.character).startsWith(`</${name}`)) return;
-      const inserted = await editor.edit((b) => b.insert(at, `</${name}>`), {
-        undoStopBefore: false,
-        undoStopAfter: false,
-      });
-      if (inserted) editor.selection = new vscode.Selection(at, at);
-    }),
-  );
-}
+// ---------------------------------------------------------------- formatting
 
 const formatWithServer = async (doc, options, range) =>
   (await serverFormatEdits(doc, options, range)) ?? [];
@@ -1143,7 +530,7 @@ function registerServerFormatting(context) {
 }
 
 function deactivate() {
-  previewPanel?.dispose();
+  closePreview();
   return stopClient(output);
 }
 

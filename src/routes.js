@@ -13,4 +13,14 @@ function routesFromOutput(stdout) {
   return Array.isArray(routes) ? routes : undefined;
 }
 
-export { ROUTES_SCRIPT, routesFromOutput };
+/** The routes a `bin/rails runner` result printed, or undefined when it failed or printed none. */
+function routesFromRun({ code, stdout }) {
+  if (code !== 0) return undefined;
+  try {
+    return routesFromOutput(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+export { ROUTES_SCRIPT, routesFromOutput, routesFromRun };

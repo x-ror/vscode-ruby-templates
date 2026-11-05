@@ -17,7 +17,15 @@ import {
   HTML_TAGS,
 } from "../src/autoClose.js";
 import { erbRubyArgs } from "../src/erbEngine.js";
-import { routesFromOutput } from "../src/routes.js";
+import { routesFromOutput, routesFromRun } from "../src/routes.js";
+import {
+  engineOf,
+  viewDir,
+  railsRenderScript,
+  missingToolMessage,
+  previewPage,
+  errorPage,
+} from "../src/render.js";
 import { spawnSync } from "node:child_process";
 
 // convertedFileName
@@ -305,3 +313,57 @@ for (const file of [
 ]) {
   assert.deepStrictEqual(previewPartners(file), [], file);
 }
+
+// routesFromRun
+const routesOut = '__RUBY_TEMPLATES_ROUTES__\n[{"name":"users"}]\n';
+assert.deepStrictEqual(routesFromRun({ code: 0, stdout: routesOut }), [
+  { name: "users" },
+]);
+assert.strictEqual(routesFromRun({ code: 1, stdout: routesOut }), undefined);
+assert.strictEqual(
+  routesFromRun({ code: 0, stdout: "__RUBY_TEMPLATES_ROUTES__\n{oops" }),
+  undefined,
+);
+
+// engineOf
+assert.strictEqual(engineOf("erb-js"), "erb");
+assert.strictEqual(engineOf("haml"), "haml");
+
+// viewDir
+const appRoot = path.join(path.sep, "app-root");
+const viewsDir = path.join(appRoot, "app", "views");
+assert.strictEqual(
+  viewDir(appRoot, path.join(viewsDir, "admin", "users", "show.html.slim")),
+  "admin/users",
+);
+assert.strictEqual(viewDir(appRoot, path.join(viewsDir, "a.erb")), undefined);
+assert.strictEqual(
+  viewDir(appRoot, path.join(appRoot, "lib", "a.erb")),
+  undefined,
+);
+
+// railsRenderScript
+assert.strictEqual(
+  railsRenderScript(undefined, "erb"),
+  "print ApplicationController.render(inline: $stdin.read, type: :erb)",
+);
+assert.ok(
+  railsRenderScript("it's\\x", "slim").includes(
+    "define_singleton_method(:controller_path) { 'it\\'s\\\\x' }",
+  ),
+);
+
+// missingToolMessage
+assert.ok(missingToolMessage("ruby", "erb-js").includes("gem install erubi"));
+assert.ok(missingToolMessage("slimrb", "slim").includes("gem install slim"));
+assert.ok(missingToolMessage("x", "liquid").includes("gem install x"));
+
+// previewPage, errorPage
+const page = previewPage("a<b>.erb", "erb", '<p title="t">&</p>');
+assert.ok(page.includes("a&lt;b&gt;.erb · erb"));
+assert.ok(
+  page.includes('srcdoc="&lt;p title=&quot;t&quot;&gt;&amp;&lt;/p&gt;"'),
+);
+assert.ok(page.includes('<pre>&lt;p title="t"&gt;&amp;&lt;/p&gt;</pre>'));
+assert.ok(!errorPage("T", "d").includes("<p "));
+assert.ok(errorPage("T", "d", "<hint>").includes("&lt;hint&gt;"));
