@@ -487,9 +487,7 @@ pub struct Element {
 /// `partial`: split-wrapper partials (`_header` opens a `<div>` that `_footer` closes) are legitimate,
 /// so only mismatches are reported there.
 pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    scan(text, partial, &mut out, &mut Vec::new());
-    out
+    tokens_of(text, &analyzed(text), true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, partial).0)
 }
 
 /// Matched element pairs up to the first point where the tag stack becomes uncertain.
@@ -498,9 +496,7 @@ pub fn elements(text: &str) -> Vec<Element> {
 }
 
 pub(crate) fn elements_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Vec<Element> {
-    let mut elements = Vec::new();
-    scan_tokens(text, tokens_of(text, analyzed, true), true, &mut Vec::new(), &mut elements);
-    elements
+    tokens_of(text, analyzed, true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, true).1)
 }
 
 /// The open and close tag names of the element whose name holds byte `offset`, for linked editing.
@@ -528,12 +524,10 @@ fn void_close_tag(name: &str, range: Range) -> Diagnostic {
     coded(warning(range, format!("End tag `</{name}>` for a void element (HTML 13.1.2)")), code::UNEXPECTED_CLOSE_TAG)
 }
 
-fn scan(text: &str, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
-    scan_tokens(text, tokens_of(text, &analyzed(text), true), partial, out, elements)
-}
-
-fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &mut Vec<Diagnostic>, elements: &mut Vec<Element>) {
-    let Some(tokens) = tokens else { return };
+/// The tag diagnostics and the matched elements of `tokens`, up to the first point where the tag stack becomes uncertain.
+fn scan_tokens(text: &str, tokens: Vec<Token<'_>>, partial: bool) -> (Vec<Diagnostic>, Vec<Element>) {
+    let mut out = Vec::new();
+    let mut elements = Vec::new();
     let index = LineIndex::new(text);
     let range = |start, end| index.range(start, end);
     let mut stack: Vec<Tag> = Vec::new();
@@ -541,21 +535,20 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
     let mut optional: Vec<Tag> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut p = PState::Closed;
-    let first = out.len();
     // Elements a stray end tag's message already names: `<div>…</dvi>` is one mistake.
     let mut named: Vec<usize> = Vec::new();
     for token in tokens {
-        if out.len() - first >= MAX_TAG_DIAGNOSTICS {
-            return;
+        if out.len() >= MAX_TAG_DIAGNOSTICS {
+            return (out, elements);
         }
         match token {
             Token::Erb(event) => {
                 if apply(&event, &mut stack, &mut p, &mut blocks) == Paths::Differ {
-                    return;
+                    return (out, elements);
                 }
             }
             Token::Comment { .. } | Token::Raw { close: None, .. } => {}
-            Token::Unterminated => return,
+            Token::Unterminated => return (out, elements),
             Token::Raw { tag, close: Some((close_start, end)) } => {
                 elements.push(Element { name: tag.name, start: tag.start, open_end: tag.end, close_start, end })
             }
@@ -593,7 +586,7 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
             Token::Close { tag: Tag { name, start, end, .. }, .. } => match stack.last() {
                 None if partial => {}
                 None => out.push(unexpected_close_tag(&name, range(start, end))),
-                Some(top) if top.wrapper.is_some() && (top.name != name || !closes_in_matching_if(top, &blocks)) => return,
+                Some(top) if top.wrapper.is_some() && (top.name != name || !closes_in_matching_if(top, &blocks)) => return (out, elements),
                 Some(top) if top.name == name => {
                     elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
                     stack.pop();
@@ -609,8 +602,8 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
                         stack.pop();
                     } else if stack.iter().any(|t| t.name == name || (heading(&name) && heading(&t.name))) {
                         // Crossing an open element could close more than one way, so checking stops.
-                        // ponytail: recovering past it would guess, and cascade into noise.
-                        return;
+                        // Recovering past it would guess, and cascade into noise.
+                        return (out, elements);
                     } else {
                         // A stray end tag is dropped, as browsers do.
                         named.push(top.start);
@@ -624,9 +617,10 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
             coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
         };
         // A wrapper's closing `if` may be in another file (layout, partial).
-        let room = MAX_TAG_DIAGNOSTICS - (out.len() - first);
+        let room = MAX_TAG_DIAGNOSTICS - out.len();
         out.extend(stack.iter().filter(|t| t.wrapper.is_none() && !named.contains(&t.start)).take(room).map(unclosed));
     }
+    (out, elements)
 }
 
 #[cfg(test)]
