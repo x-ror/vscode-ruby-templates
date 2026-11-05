@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use crate::controller_classes::ControllerScan;
 use crate::rails_paths::{app_root, files_under, is_known_format};
 use crate::strict_locals::{self, Close, RubyContext};
-use crate::view_roots;
+use crate::view_roots::{self, adds_view_paths, spec_line};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,12 +365,6 @@ fn turns_off_partial_prefix(text: &str) -> bool {
     })
 }
 
-/// Does the Ruby `text` call `*_view_path(s)` or touch `paths["app/views"]`?
-pub(crate) fn adds_view_paths(text: &str) -> bool {
-    let mut code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
-    code.any(|line| line.contains("view_path") || line.contains(r#"paths["app/views"]"#) || line.contains("paths['app/views']"))
-}
-
 /// Does a gem from the lockfile's `PATH` sections (an engine) ship `app/views`? The app itself (`remote: .`) doesn't count.
 fn path_gem_has_views(lock: &str, lock_dir: &Path) -> bool {
     let mut in_path = false;
@@ -394,14 +388,6 @@ fn registered_format(line: &str) -> Option<&str> {
     let symbol = after_type.trim_start().strip_prefix(',')?.trim_start().strip_prefix(':')?;
     let end = symbol.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(symbol.len());
     (end > 0).then(|| &symbol[..end])
-}
-
-/// `    name (1.2.3)` or `    name (1.2.3-x86_64-linux)`; the 6-space dependency lines don't match.
-pub(crate) fn spec_line(line: &str) -> Option<(&str, &str)> {
-    let rest = line.strip_prefix("    ").filter(|r| !r.starts_with(' '))?;
-    let (name, version) = rest.split_once(" (")?;
-    let version = version.strip_suffix(')')?;
-    Some((name, version.split_once('-').map_or(version, |(v, _platform)| v)))
 }
 
 /// A RubyGems version: dotted numbers, where a segment with letters (`rc1` → `rc`, `1`) marks a prerelease.
@@ -564,10 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn view_paths_added_app_wide() {
-        assert!(adds_view_paths("ActionController::Base.prepend_view_path Rails.root.join(\"themes\")\n"));
-        assert!(adds_view_paths("config.paths[\"app/views\"] << \"x\"\n"));
-        assert!(!adds_view_paths("# prepend_view_path \"x\"\nconfig.x = 1\n"));
+    fn path_gems_with_views_add_view_paths() {
         let root = std::env::temp_dir().join(format!("rt-project-pathgem-{}", std::process::id()));
         std::fs::create_dir_all(root.join("engines/admin/app/views")).unwrap();
         std::fs::create_dir_all(root.join("app/views")).unwrap();

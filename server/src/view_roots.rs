@@ -1,7 +1,6 @@
 //! Every `app/views` folder a Rails app can render from: its own and its engines', packs' and components' under the
 //! Rails root, and those of the installed gems that could ship views.
 
-use crate::project::adds_view_paths;
 use crate::rails_paths::files_under;
 use dashmap::DashMap;
 use std::collections::HashSet;
@@ -30,6 +29,14 @@ const MIN_COMMIT_HASH: usize = 7;
 /// A gem that depends on one of these can add view paths (an engine needs `railties`).
 const VIEW_PATH_GEMS: [&str; 3] = ["railties", "actionpack", "actionview"];
 
+/// `    name (1.2.3)` or `    name (1.2.3-x86_64-linux)`; the 6-space dependency lines don't match.
+pub(crate) fn spec_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix("    ").filter(|r| !r.starts_with(' '))?;
+    let (name, version) = rest.split_once(" (")?;
+    let version = version.strip_suffix(')')?;
+    Some((name, version.split_once('-').map_or(version, |(v, _platform)| v)))
+}
+
 /// `(name, version)` of the lockfile's gems, other than Rails' own and path gems, that depend (however indirectly) on
 /// something that can add view paths: the ones whose `app/views` has to be found on disk.
 pub fn view_capable_gems(lock: &str) -> Vec<(String, String)> {
@@ -43,7 +50,7 @@ pub fn view_capable_gems(lock: &str) -> Vec<(String, String)> {
         } else if let Some(dependency) = in_specs.then(|| line.strip_prefix("      ")).flatten() {
             let (Some((.., deps)), Some(name)) = (specs.last_mut(), dependency.split_whitespace().next()) else { continue };
             deps.push(name);
-        } else if let Some((name, version)) = in_specs.then(|| crate::project::spec_line(line)).flatten() {
+        } else if let Some((name, version)) = in_specs.then(|| spec_line(line)).flatten() {
             if !in_path_section {
                 specs.push((name, version, Vec::new()));
             }
@@ -260,6 +267,12 @@ fn adds_view_paths_in(file: &Path) -> bool {
     file.extension().is_some_and(|e| e == "rb") && std::fs::read_to_string(file).is_ok_and(|text| adds_view_paths(&text))
 }
 
+/// Does the Ruby `text` call `*_view_path(s)` or touch `paths["app/views"]`?
+pub(crate) fn adds_view_paths(text: &str) -> bool {
+    let mut code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
+    code.any(|line| line.contains("view_path") || line.contains(r#"paths["app/views"]"#) || line.contains("paths['app/views']"))
+}
+
 /// Sorted, so which root wins is the same on every run.
 fn under_root(root: &Path) -> Vec<PathBuf> {
     let walk = WalkDir::new(root).max_depth(MAX_DEPTH).into_iter().filter_entry(|entry| entry.depth() == 0 || !not_searched(entry));
@@ -310,6 +323,13 @@ fn subfolders(dir: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use crate::util::{slash_path, write_files};
+
+    #[test]
+    fn view_paths_added_by_code() {
+        assert!(adds_view_paths("ActionController::Base.prepend_view_path Rails.root.join(\"themes\")\n"));
+        assert!(adds_view_paths("config.paths[\"app/views\"] << \"x\"\n"));
+        assert!(!adds_view_paths("# prepend_view_path \"x\"\nconfig.x = 1\n"));
+    }
 
     #[test]
     fn view_capable_gems_follow_dependencies_transitively() {
