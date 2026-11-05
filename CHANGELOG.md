@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- _Extract Selection to Partial_ works the same in ERB, Haml and Slim: the partial and the `render` call are one edit (a single undo, and a failed create leaves the template alone), the partial keeps the template's line endings (CRLF files no longer get an LF partial), an existing partial is overwritten only after confirming, the name must be a Ruby identifier optionally prefixed by folders (`shared/card`), and the render path is qualified (`render "users/card"`) in Slim too. A name that points at the partial being edited is refused.
 - New `liquid` language for `.liquid` and `.html.liquid` files: highlighting of `{{ }}` outputs (filters, strings, numbers, ranges, operators), `{% %}` tags, `{% comment %}` and `{% # %}` comments, `{% raw %}` and multi-line `{% liquid %}` tags over HTML, JavaScript and CSS, plus comment toggling, auto-closing and indentation. The server accepts these files and answers nothing for them (no Rails lookups, checks or formatting). Plain `.html` files are not claimed; map Jekyll includes with `files.associations`.
 
 ## 0.9.0

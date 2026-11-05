@@ -1,18 +1,27 @@
 //! The diagnostics of a template: its language's own checks plus the `render` checks against app/views.
 
 use crate::code_context::render_filter;
+use crate::erb::{html_lint, tags};
+use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
-use crate::{
-    erb, haml_indent, haml_parser, haml_ruby, html_lint, ivars, partials,
-    project::{Framework, Project, Projects},
-    rails_paths,
-    render_call::HamlPipes,
-    slim_indent, strict_locals, tags, util,
-};
+use crate::options::Options;
+use crate::rails::project::{Framework, Project, Projects};
+use crate::rails::render_call::HamlPipes;
+use crate::rails::{controller_classes, partials, paths, render_refs};
+use crate::ruby::generated::RUBY_SYNTAX;
+use crate::ruby::strict_locals;
+use crate::ruby::strict_locals::RubyContext;
+use crate::slim;
+use crate::{erb, util};
 use std::cell::LazyCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{Diagnostic, Uri};
+
+/// Diagnostic codes every language shares, with `ruby::generated::RUBY_SYNTAX`.
+pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
+pub(crate) const STRICT_LOCALS: &str = "strict-locals";
+const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 #[derive(Clone)]
 pub(crate) struct Doc {
@@ -32,94 +41,6 @@ impl Doc {
     }
 }
 
-/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml,jbuilder}.*` settings.
-#[derive(Default, Debug, PartialEq)]
-pub(crate) struct Options {
-    pub extra_engines: Vec<String>,
-    disabled_slim: Vec<String>,
-    disabled_erb: Vec<String>,
-    disabled_haml: Vec<String>,
-    disabled_jbuilder: Vec<String>,
-    diagnostics_off: Vec<TemplateLang>,
-    format_off: Vec<TemplateLang>,
-    /// `erb.format.alignComments`.
-    pub align_erb_comments: bool,
-}
-
-/// The settings sections that switch diagnostics and formatting on or off, and the languages each covers.
-const SWITCHED_SECTIONS: [(&str, &[TemplateLang]); 3] =
-    [("erb", &[TemplateLang::Erb]), ("haml", &[TemplateLang::Haml]), ("slim", &[TemplateLang::Slim, TemplateLang::Skim])];
-
-impl Options {
-    /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
-    pub(crate) fn from_init(init: Option<&serde_json::Value>) -> (Self, Vec<String>) {
-        let mut ignored = Vec::new();
-        let mut strings = |section: &str, name: &str| -> Vec<String> {
-            let Some(value) = init.and_then(|v| v.get(section)?.get(name)) else {
-                return vec![];
-            };
-            let Some(items) = value.as_array() else {
-                ignored.push(format!("{section}.{name}: expected an array, got {value}"));
-                return vec![];
-            };
-            items
-                .iter()
-                .filter_map(|item| {
-                    let s = item.as_str().map(String::from);
-                    if s.is_none() {
-                        ignored.push(format!("{section}.{name}: expected a string, got {item}"));
-                    }
-                    s
-                })
-                .collect()
-        };
-        let mut options = Self {
-            extra_engines: strings("slim", "extraEngines"),
-            disabled_slim: strings("slim", "disabledDiagnostics"),
-            disabled_erb: strings("erb", "disabledDiagnostics"),
-            disabled_haml: strings("haml", "disabledDiagnostics"),
-            disabled_jbuilder: strings("jbuilder", "disabledDiagnostics"),
-            ..Self::default()
-        };
-        for (section, langs) in SWITCHED_SECTIONS {
-            for (group, off) in [("diagnostics", &mut options.diagnostics_off), ("format", &mut options.format_off)] {
-                let Some(value) = init.and_then(|v| v.get(section)?.get(group)?.get("enabled")) else { continue };
-                match value.as_bool() {
-                    Some(false) => off.extend(langs),
-                    Some(true) => {}
-                    None => ignored.push(format!("{section}.{group}.enabled: expected a boolean, got {value}")),
-                }
-            }
-        }
-        if let Some(value) = init.and_then(|v| v.get("erb")?.get("format")?.get("alignComments")) {
-            match value.as_bool() {
-                Some(align) => options.align_erb_comments = align,
-                None => ignored.push(format!("erb.format.alignComments: expected a boolean, got {value}")),
-            }
-        }
-        (options, ignored)
-    }
-
-    fn diagnostics_enabled(&self, lang: TemplateLang) -> bool {
-        !self.diagnostics_off.contains(&lang)
-    }
-
-    pub(crate) fn format_enabled(&self, lang: TemplateLang) -> bool {
-        !self.format_off.contains(&lang)
-    }
-
-    /// Diagnostic codes turned off for `lang`; Skim shares Slim's setting.
-    fn disabled(&self, lang: TemplateLang) -> &[String] {
-        match lang {
-            TemplateLang::Slim | TemplateLang::Skim => &self.disabled_slim,
-            TemplateLang::Erb => &self.disabled_erb,
-            TemplateLang::Haml => &self.disabled_haml,
-            TemplateLang::Ruby => &self.disabled_jbuilder,
-            TemplateLang::Liquid => &[],
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     diagnostics_in(uri, doc, options, &mut Projects::new())
@@ -136,17 +57,11 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
         return vec![];
     }
     let path = util::file_path(uri);
-    let project = path.as_deref().map(|path| Project::memoized(projects, path));
-    let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| RubyContext::of(path, project));
-    let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
+    let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
+    let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
+    let mut out = language_diagnostics(uri, doc, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(render_diagnostics(
-            path,
-            project,
-            &doc.text,
-            doc.lang == TemplateLang::Haml,
-            render_filter(doc.lang, &doc.text, &options.extra_engines),
-        ));
+        out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, &options.extra_engines)));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
@@ -156,54 +71,25 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     out
 }
 
-/// How Rails evals a template: the Prism grammar of its project's Ruby, and strict locals where they exist (Rails 7.1
-/// or newer). Without them the `locals:` line is a plain comment.
-pub(crate) struct RubyContext {
-    pub grammar: ruby_prism::Version,
-    pub strict_locals: Option<strict_locals::Rails>,
-}
-
-impl RubyContext {
-    pub(crate) fn outside_project() -> Self {
-        RubyContext { grammar: ruby_prism::Version::Latest, strict_locals: None }
-    }
-
-    fn of(path: &Path, project: &Project) -> Self {
-        RubyContext {
-            grammar: project.prism_version(),
-            strict_locals: supports_strict_locals(project)
-                .then(|| project.short_identifier(path))
-                .flatten()
-                .map(|identifier| strict_locals::Rails { close: strict_locals::Close::of(project), identifier }),
-        }
-    }
-}
-
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
 pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
-    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| RubyContext::of(&path, Project::memoized(projects, &path)))
+    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| Project::memoized(projects, &path, None).ruby_context(&path))
 }
 
 /// The template language's own checks, without the render checks that need app/views.
-pub(crate) fn language_diagnostics(
-    uri: &Uri,
-    lang: TemplateLang,
-    plain_erb: bool,
-    percent_lines: bool,
-    text: &str,
-    extra_engines: &[String],
-    ruby: &RubyContext,
-) -> Vec<Diagnostic> {
+pub(crate) fn language_diagnostics(uri: &Uri, doc: &Doc, extra_engines: &[String], ruby: &RubyContext) -> Vec<Diagnostic> {
+    let (lang, text) = (doc.lang, doc.text.as_str());
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text, ruby, percent_lines),
+        TemplateLang::Erb => erb::diagnostics(text, ruby, doc.percent_lines),
         TemplateLang::Haml => {
-            let parsed = haml_parser::parse_with_ruby(text);
-            let mut out = haml_indent::diagnostics(text, &parsed);
+            let parsed = haml::parser::parse_with_ruby(text);
+            let mut out = haml::indent::diagnostics(text, &parsed);
             let comment =
                 ruby.strict_locals.as_ref().and_then(|rails| strict_locals::find(text, rails.close).map(|comment| (comment, rails)));
             // Haml stops at its first error, so there is no Ruby to check.
             if parsed.error.is_none() {
-                let ruby_errors = haml_ruby::diagnostics(text, &parsed, ruby.grammar, comment.as_ref().map(|(comment, _)| comment));
+                let ruby_errors =
+                    haml::ruby::compiled(text, &parsed, comment.as_ref().map(|(comment, _)| comment)).diagnostics(text, ruby.grammar);
                 out.extend(ruby_errors.into_iter().map(|d| util::coded(d, RUBY_SYNTAX)));
             }
             if let Some((comment, rails)) = &comment {
@@ -213,14 +99,14 @@ pub(crate) fn language_diagnostics(
             out
         }
         TemplateLang::Slim => {
-            let mut out = slim_indent::diagnostics(text, extra_engines, ruby.grammar);
+            let mut out = slim::indent::diagnostics(text, extra_engines, ruby.grammar);
             out.extend(locals_signature(text, ruby));
             out
         }
         // Skim is Slim syntax with CoffeeScript code, so the Ruby checks would misfire.
-        TemplateLang::Skim => slim_indent::diagnostics(text, extra_engines, ruby.grammar)
+        TemplateLang::Skim => slim::indent::diagnostics(text, extra_engines, ruby.grammar)
             .into_iter()
-            .filter(|d| !util::code(d).is_some_and(|c| slim_indent::code::RUBY.contains(&c)))
+            .filter(|d| !util::code(d).is_some_and(|c| slim::indent::code::RUBY.contains(&c)))
             .collect(),
         // Syntax errors are Ruby LSP's job, but it doesn't know the `locals:` comment is code to Rails.
         TemplateLang::Ruby => locals_signature(text, ruby),
@@ -228,9 +114,9 @@ pub(crate) fn language_diagnostics(
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
-        out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
+        out.retain(|d| util::code(d) != Some(slim::indent::code::VOID_CHILDREN));
     }
-    if lang == TemplateLang::Erb && !percent_lines && html_host(uri, plain_erb, text) {
+    if lang == TemplateLang::Erb && doc.html_host(uri) {
         out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));
@@ -242,38 +128,26 @@ fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
     strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals.as_ref()).into_iter().map(|d| util::coded(d, RUBY_SYNTAX)).collect()
 }
 
-/// Diagnostic codes every language shares.
-pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
-const RUBY_SYNTAX: &str = "ruby-syntax";
-pub(crate) const STRICT_LOCALS: &str = "strict-locals";
-const STRICT_LOCALS_SINCE: &str = "7.1";
-const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
-
 /// Line index, line, the call as read, and the render.
-type CheckedRender<'a> = (usize, &'a str, partials::RenderCall<'a>, partials::RenderRef);
+type CheckedRender<'a> = (usize, &'a str, render_refs::RenderCall<'a>, render_refs::RenderRef);
 
 /// The render checks of a Rails template in app/views: unresolved renders, then strict-locals mismatches.
 fn render_diagnostics(
     path: &Path,
     project: &Project,
     text: &str,
-    haml: bool,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+    lang: TemplateLang,
+    in_code: impl Fn(usize, usize, &render_refs::RenderRef) -> bool,
 ) -> Vec<Diagnostic> {
     if project.framework != Framework::Rails || project.is_gem_file(path) {
         return vec![];
     }
-    let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    let renders = checked_renders(project, path, &views, text, haml, in_code);
+    let Some(views) = paths::views_root(path) else { return vec![] };
+    let renders = checked_renders(project, path, &views, text, lang, in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
     out.extend(strict_locals_mismatches(project, &renders, &mut partials));
     out
-}
-
-/// Is `root` a gem or engine, whose templates also render the host app's partials?
-fn is_gem_root(root: &Path) -> bool {
-    std::fs::read_dir(root).is_ok_and(|mut files| files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "gemspec"))))
 }
 
 /// Literal renders in code that can be checked, as (line index, line, call, render): `dir/name` with an existing
@@ -285,23 +159,21 @@ fn checked_renders<'a>(
     path: &Path,
     views: &Path,
     text: &'a str,
-    haml: bool,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+    lang: TemplateLang,
+    in_code: impl Fn(usize, usize, &render_refs::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
-    let bare_names_known = LazyCell::new(|| {
-        let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
-        !*in_engine && !is_partial && ivars::bare_lookup_is_certain(project, path)
-    });
+    let bare_names_known =
+        LazyCell::new(|| !*in_engine && !paths::is_partial_path(path) && controller_classes::bare_lookup_is_certain(project, path));
     let mut dirs: HashMap<String, bool> = HashMap::new();
     let mut checkable = |name: &str| {
         let Some(dir) = partials::split_render_name(name).0 else { return *bare_names_known };
         *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir() || (!*in_engine && project.lacks_view_folder(dir)))
     };
-    let pipes = HamlPipes::new(haml);
+    let pipes = HamlPipes::new(lang);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
+        let refs = render_refs::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
             in_code(i, line_start, r) && checkable(&r.name)
         });
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
@@ -309,23 +181,28 @@ fn checked_renders<'a>(
     out
 }
 
+/// Is `root` a gem or engine, whose templates also render the host app's partials?
+fn is_gem_root(root: &Path) -> bool {
+    std::fs::read_dir(root).is_ok_and(|mut files| files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "gemspec"))))
+}
+
 /// A template's partials, each resolved and read once per pass: a view renders the same few many times.
 struct Partials<'a> {
     project: &'a Project,
     path: &'a Path,
-    resolved: HashMap<(partials::RenderKind, String, partials::Lookup), Vec<PathBuf>>,
-    signatures: HashMap<PathBuf, Option<partials::StrictLocals>>,
+    resolved: HashMap<(render_refs::RenderKind, String, render_refs::Lookup), Vec<PathBuf>>,
+    signatures: HashMap<PathBuf, Option<strict_locals::Signature>>,
 }
 
 impl Partials<'_> {
-    fn resolve(&mut self, r: &partials::RenderRef) -> &[PathBuf] {
+    fn resolve(&mut self, r: &render_refs::RenderRef) -> &[PathBuf] {
         let (project, path) = (self.project, self.path);
         self.resolved.entry((r.kind, r.name.clone(), r.lookup.clone())).or_insert_with(|| partials::resolve(project, path, r))
     }
 
-    fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
-        let (close, ruby) = (strict_locals::Close::of(self.project), self.project.prism_version());
-        self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close, ruby)).as_ref()
+    fn signature(&mut self, file: &Path) -> Option<&strict_locals::Signature> {
+        let project = self.project;
+        self.signatures.entry(file.to_path_buf()).or_insert_with(|| project.file_strict_locals(file)).as_ref()
     }
 }
 
@@ -344,14 +221,14 @@ fn unresolved_renders(project: &Project, renders: &[CheckedRender], partials: &m
 
 /// The folders Rails searches for a bare name in `view`: its controller's view folders; `application` when they're unknown.
 fn searched_folders(project: &Project, view: &Path) -> Vec<String> {
-    ivars::view_prefixes(project, view).unwrap_or_else(|| vec!["application".to_string()])
+    controller_classes::view_prefixes(project, view).unwrap_or_else(|| vec!["application".to_string()])
 }
 
 /// Rails' MissingTemplate message up to ` with {…}.`, which lists the request's formats and paths; they vary.
 /// A bare name lists each folder in `searched`.
-fn missing_message(r: &partials::RenderRef, searched: &[String]) -> String {
+fn missing_message(r: &render_refs::RenderRef, searched: &[String]) -> String {
     let (dir, name) = partials::split_render_name(&r.name);
-    let (kind, prefix) = if r.kind == partials::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
+    let (kind, prefix) = if r.kind == render_refs::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
     let paths = match dir {
         Some(dir) => format!("{dir}/{prefix}{name}"),
         None => searched.iter().map(|folder| format!("{folder}/{prefix}{name}")).collect::<Vec<_>>().join(", "),
@@ -366,35 +243,26 @@ fn is_gem_view(project: &Project, name: &str) -> bool {
     top.is_some_and(|top| project.has_gem_family(top))
 }
 
-/// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
-fn supports_strict_locals(project: &Project) -> bool {
-    project.framework == Framework::Rails && project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_SINCE))
-}
-
 /// Literal renders whose locals don't fit the partial's `locals: (…)` signature.
 fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partials: &mut Partials) -> Vec<Diagnostic> {
-    if !supports_strict_locals(project) {
+    if !project.supports_strict_locals() {
         return vec![];
     }
     let suffix_with_template = project.gem_version("actionview").is_some_and(|v| v.at_least(STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE));
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
     for (i, line, call, r) in renders.iter().filter(|(.., r)| !r.from_layout) {
-        let Some(passed) = partials::passed_locals(call, r) else { continue };
+        let Some(passed) = render_refs::passed_locals(call, r) else { continue };
         // Several variants/formats: which one Rails picks depends on the request.
         let [file] = partials.resolve(r) else { continue };
         let file = file.clone();
         let Some(sig) = partials.signature(&file) else { continue };
-        let missing: Vec<&str> =
-            sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
-        let mut seen = HashSet::new();
-        let unknown: Vec<&str> =
-            passed.into_iter().filter(|p| seen.insert(*p) && !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
-        let no_locals = sig.locals.is_empty() && !sig.rest;
-        let Some(mut message) = strict_locals_message(&missing, &unknown, no_locals) else { continue };
+        let Some(mut message) = strict_locals_message(&sig.missing(&passed), &sig.unknown(&passed), sig.takes_no_locals()) else {
+            continue;
+        };
         if suffix_with_template {
             // Rails prints the absolute path; relative to the app folder is stable and readable.
-            message.push_str(&format!(" for {}", rails_paths::rails_relative(&file, &file)));
+            message.push_str(&format!(" for {}", paths::rails_relative(&file, &file)));
         }
         out.push(util::coded(util::warning(util::span_range(*i, line, r.start, r.end), message), STRICT_LOCALS));
     }
@@ -433,7 +301,7 @@ mod tests {
                 &Options::default(),
             )
             .iter()
-            .any(|d| d.code == Some(NumberOrString::String(slim_indent::code::VOID_CHILDREN.into())))
+            .any(|d| d.code == Some(NumberOrString::String(slim::indent::code::VOID_CHILDREN.into())))
         };
         for (path, html) in [
             ("file:///v/show.html.slim", true),
@@ -453,33 +321,13 @@ mod tests {
     }
 
     #[test]
-    fn options_keep_valid_fields() {
-        let init = serde_json::json!({
-            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] },
-            "erb": { "disabledDiagnostics": ["unclosed-element"] },
-            "haml": { "disabledDiagnostics": "illegal-nesting" }
-        });
-        let (options, ignored) = Options::from_init(Some(&init));
-        let expected =
-            Options { disabled_slim: vec!["bad-dedent".into()], disabled_erb: vec!["unclosed-element".into()], ..Options::default() };
-        assert_eq!(options, expected);
-        assert_eq!(ignored.len(), 3, "{ignored:?}");
-        assert_eq!(Options::from_init(None), (Options::default(), vec![]));
-    }
-
-    #[test]
-    fn languages_switch_diagnostics_and_formatting_off() {
+    fn switched_off_languages_get_no_diagnostics() {
         let init = serde_json::json!({
             "erb": { "diagnostics": { "enabled": false } },
-            "slim": { "format": { "enabled": false }, "diagnostics": { "enabled": "no" } },
+            "slim": { "format": { "enabled": false } },
             "haml": { "diagnostics": { "enabled": true }, "format": {} }
         });
-        let (options, ignored) = Options::from_init(Some(&init));
-        assert_eq!(ignored.len(), 1, "{ignored:?}");
-        assert!(!options.align_erb_comments);
-        let align = |value| Options::from_init(Some(&serde_json::json!({ "erb": { "format": { "alignComments": value } } })));
-        assert!(align(serde_json::json!(true)).0.align_erb_comments);
-        assert_eq!(align(serde_json::json!("yes")).1.len(), 1);
+        let options = Options::from_init(Some(&init)).0;
         let count = |lang, text: &str, options: &Options| {
             let uri = "file:///v/show.html.erb".parse::<Uri>().unwrap();
             diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 }, options).len()
@@ -490,12 +338,13 @@ mod tests {
         assert_eq!(count(TemplateLang::Haml, haml, &options), count(TemplateLang::Haml, haml, &Options::default()));
         let slim = "p\n   a\n  b\n";
         assert_ne!(count(TemplateLang::Slim, slim, &options), 0);
-        let formats = |lang| options.format_enabled(lang);
-        assert!(formats(TemplateLang::Erb) && formats(TemplateLang::Haml) && formats(TemplateLang::Ruby));
-        assert!(!formats(TemplateLang::Slim) && !formats(TemplateLang::Skim));
         // Skim follows Slim.
         let off = Options::from_init(Some(&serde_json::json!({ "slim": { "diagnostics": { "enabled": false } } }))).0;
         assert_eq!(count(TemplateLang::Skim, slim, &off), 0);
+    }
+
+    fn disabling_haml(code: &str) -> Options {
+        Options::from_init(Some(&serde_json::json!({ "haml": { "disabledDiagnostics": [code] } }))).0
     }
 
     #[test]
@@ -515,35 +364,34 @@ mod tests {
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
         // Each code gets its own text, so one check does not hide another.
-        let erb_cases =
-            [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
+        let erb_cases = [("<% end %>\n", RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
-        let options = Options {
-            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into(), erb::code::UNCLOSED_TAG.into()],
-            disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
-            ..Options::default()
-        };
+        let options = Options::from_init(Some(&serde_json::json!({
+            "erb": { "disabledDiagnostics": [RUBY_SYNTAX, tags::code::UNCLOSED_ELEMENT, erb::code::UNCLOSED_TAG] },
+            "haml": { "disabledDiagnostics": [haml::indent::code::ILLEGAL_NESTING] }
+        })))
+        .0;
         assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
         // Text that is not HTML has no `<` to misparse.
         assert!(codes("file:///v/show.text.erb", TemplateLang::Erb, "hi <% foo", &all).is_empty());
         let haml_path = "file:///v/show.html.haml";
-        assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml_indent::code::ILLEGAL_NESTING.to_string()));
+        assert!(codes(haml_path, TemplateLang::Haml, haml, &all).contains(&haml::indent::code::ILLEGAL_NESTING.to_string()));
         let haml_codes = codes(haml_path, TemplateLang::Haml, haml, &options);
-        assert!(!haml_codes.contains(&haml_indent::code::ILLEGAL_NESTING.to_string()), "{haml_codes:?}");
+        assert!(!haml_codes.contains(&haml::indent::code::ILLEGAL_NESTING.to_string()), "{haml_codes:?}");
         // Turning one code off leaves the others.
         let void = "%br\n  %p\n";
-        assert_eq!(codes(haml_path, TemplateLang::Haml, void, &all), [haml_indent::code::VOID_CHILDREN]);
-        let quiet = Options { disabled_haml: vec![haml_indent::code::VOID_CHILDREN.into()], ..Options::default() };
+        assert_eq!(codes(haml_path, TemplateLang::Haml, void, &all), [haml::indent::code::VOID_CHILDREN]);
+        let quiet = disabling_haml(haml::indent::code::VOID_CHILDREN);
         assert!(codes(haml_path, TemplateLang::Haml, void, &quiet).is_empty());
         // Haml's Ruby is parsed once Haml itself accepts the template.
         let ruby = codes(haml_path, TemplateLang::Haml, "= foo(\n", &all);
         assert!(!ruby.is_empty() && ruby.iter().all(|c| c == RUBY_SYNTAX), "{ruby:?}");
-        let ruby_off = Options { disabled_haml: vec![RUBY_SYNTAX.into()], ..Options::default() };
+        let ruby_off = disabling_haml(RUBY_SYNTAX);
         assert!(codes(haml_path, TemplateLang::Haml, "= foo(\n", &ruby_off).is_empty());
         let after_error = codes(haml_path, TemplateLang::Haml, "- if x\n  %p\n- end\n= foo(\n", &all);
-        assert_eq!(after_error, [haml_indent::code::EXPLICIT_END]);
+        assert_eq!(after_error, [haml::indent::code::EXPLICIT_END]);
         // Every check carries a code, or the setting can't turn it off.
         assert!(!codes(erb_path, TemplateLang::Erb, include_str!("../../test/broken/bad.html.erb"), &all).is_empty());
         assert!(!codes(haml_path, TemplateLang::Haml, include_str!("../../test/broken/bad.html.haml"), &all).is_empty());
@@ -562,19 +410,21 @@ mod tests {
             let shared = [UNRESOLVED_RENDER, STRICT_LOCALS, RUBY_SYNTAX].map(String::from);
             sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
         };
-        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("tags.rs"), include_str!("html_lint.rs")]));
-        assert_eq!(setting("haml"), declared(&[include_str!("haml_indent.rs")]));
-        assert_eq!(setting("slim"), declared(&[include_str!("slim_indent.rs")]));
+        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("erb/tags.rs"), include_str!("erb/html_lint.rs")]));
+        assert_eq!(setting("haml"), declared(&[include_str!("haml/indent.rs")]));
+        assert_eq!(setting("slim"), declared(&[include_str!("slim/indent.rs")]));
         assert_eq!(setting("jbuilder"), declared(&[]));
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
         for src in [
-            include_str!("main.rs"),
+            include_str!("checks.rs"),
+            include_str!("lsp.rs"),
+            include_str!("ruby/generated.rs"),
             include_str!("erb.rs"),
-            include_str!("tags.rs"),
-            include_str!("html_lint.rs"),
-            include_str!("haml_indent.rs"),
-            include_str!("slim_indent.rs"),
+            include_str!("erb/tags.rs"),
+            include_str!("erb/html_lint.rs"),
+            include_str!("haml/indent.rs"),
+            include_str!("slim/indent.rs"),
         ] {
             assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
         }
@@ -647,7 +497,7 @@ mod tests {
     #[test]
     fn missing_message_names_each_searched_folder_only_for_bare_names() {
         let message = |text: &str, searched: &[&str]| {
-            let refs = partials::render_refs(text);
+            let refs = render_refs::render_refs(text);
             let searched: Vec<String> = searched.iter().map(|s| s.to_string()).collect();
             missing_message(&refs[0], &searched)
         };
@@ -674,10 +524,10 @@ mod tests {
                 .collect()
         };
         let slim = [codes(TemplateLang::Slim, ruby), codes(TemplateLang::Slim, explicit_end)].concat();
-        assert!(slim_indent::code::RUBY.iter().all(|c| slim.iter().any(|s| s == c)), "{slim:?}");
+        assert!(slim::indent::code::RUBY.iter().all(|c| slim.iter().any(|s| s == c)), "{slim:?}");
         assert_eq!(codes(TemplateLang::Skim, ruby), Vec::<String>::new());
         assert_eq!(codes(TemplateLang::Skim, explicit_end), Vec::<String>::new());
-        assert_eq!(codes(TemplateLang::Skim, dedent), [slim_indent::code::BAD_DEDENT]);
+        assert_eq!(codes(TemplateLang::Skim, dedent), [slim::indent::code::BAD_DEDENT]);
     }
 
     const GEM_LOCK: &str = "GEM\n  specs:\n    devise (4.9.4)\n      bcrypt (~> 3.0)\n    spree_core (4.8.0)\n    administrate (0.20.1)\n";
@@ -687,7 +537,7 @@ mod tests {
     }
 
     fn render_checks(lang: TemplateLang, path: &Path, project: &Project, text: &str, code: &str) -> Vec<Diagnostic> {
-        let found = render_diagnostics(path, project, text, lang == TemplateLang::Haml, render_filter(lang, text, &[]));
+        let found = render_diagnostics(path, project, text, lang, render_filter(lang, text, &[]));
         found.into_iter().filter(|d| util::code(d) == Some(code)).collect()
     }
 
@@ -775,7 +625,7 @@ mod tests {
                 "Missing partial users/_p2",
             ]
         );
-        let card = partials::render_refs(r#"<%= render layout: "card" do %>"#);
+        let card = render_refs::render_refs(r#"<%= render layout: "card" do %>"#);
         assert_eq!(partials::resolve(&Project::unknown(), &file, &card[0]), vec![users.join("_card.html.erb")]);
         assert!(diags.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
 
@@ -921,9 +771,12 @@ mod tests {
         let view = root.join("app/views/api/index.html.erb");
         let found = unresolved(TemplateLang::Erb, &view, "<%= render \"crad\" %>");
         assert_eq!(found.into_iter().map(|d| d.message).collect::<Vec<_>>(), ["Missing partial api/_crad"]);
-        assert!(
-            crate::partials::resolve(&Project::for_template(&view), &view, &crate::partials::render_refs("render \"crad\"")[0]).is_empty()
-        );
+        assert!(crate::rails::partials::resolve(
+            &Project::for_template(&view),
+            &view,
+            &crate::rails::render_refs::render_refs("render \"crad\"")[0]
+        )
+        .is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

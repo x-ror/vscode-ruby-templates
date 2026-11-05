@@ -1,4 +1,5 @@
 // Pure part of ERB tag auto-closing (no vscode dependency; tested in test/clientPure.js).
+import { viewsRoot } from "./views.js";
 
 const VOID = new Set([
   "area",
@@ -46,11 +47,10 @@ function tagToClose(textBefore) {
 
 // The server's `html::TAGS`.
 const HTML_TAGS = new Set(
-  "a abbr article aside audio b blockquote body br button canvas caption code col colgroup dd details dialog div dl dt em fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hr html i iframe img input label legend li link main meta nav noscript ol optgroup option p picture pre progress script section select small source span strong style sub summary sup svg table tbody td template textarea tfoot th thead time title tr ul video".split(
+  "a abbr address area article aside audio b base bdi bdo blockquote body br button canvas caption cite code col colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend li link main map mark menu meta meter nav noscript object ol optgroup option output p picture pre progress q rp rt ruby s samp script search section select slot small source span strong style sub summary sup svg table tbody td template textarea tfoot th thead time title tr track u ul var video wbr".split(
     " ",
   ),
 );
-const VIEWS_DIR = /\/app\/views\//;
 const BARE_ERB_VIEW = /^[^./]+\.(erb|erubi|erubis)$/i;
 // A locale (`about.de.erb`) but not the `js` format, as the server's `is_locale` and `is_known_format` decide.
 const LOCALE_ERB_VIEW =
@@ -82,9 +82,10 @@ function isHtmlView(fileName, getText) {
     )
   )
     return true;
-  const path = fileName.replaceAll("\\", "/");
-  if (!VIEWS_DIR.test(path)) return false;
-  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (!viewsRoot(fileName)) return false;
+  const name = fileName.slice(
+    Math.max(fileName.lastIndexOf("/"), fileName.lastIndexOf("\\")) + 1,
+  );
   if (LOCALE_ERB_VIEW.test(name)) return true;
   return BARE_ERB_VIEW.test(name) && startsWithMarkup(getText());
 }

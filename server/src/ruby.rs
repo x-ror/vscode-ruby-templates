@@ -1,6 +1,10 @@
 //! Rough Ruby snippet analysis: which snippets open blocks, which close them.
 //! We never need a full parse; template engines only need `do`/`if`/`end` balance.
 
+pub mod generated;
+pub mod prism;
+pub mod strict_locals;
+
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -12,6 +16,11 @@ static TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"::|==|!=|&&|\|\||<
 // `=begin` … `=end` at line starts; kaminari's generated partials open with one.
 static BLOCK_COMMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?ms)^=begin\b.*?(?:^=end\b[^\n]*|\z)").unwrap());
 
+/// Ruby's regexp `\s`.
+pub const REGEXP_SPACE: [char; 6] = [' ', '\t', '\n', '\x0b', '\x0c', '\r'];
+/// What Ruby's `strip` removes: `\s` and NUL.
+pub const RUBY_WHITESPACE: [char; 7] = [' ', '\t', '\n', '\x0b', '\x0c', '\r', '\0'];
+
 /// Strip strings and comments so keywords inside them don't count.
 pub fn strip(code: &str) -> String {
     let code = BLOCK_COMMENT.replace_all(code, "");
@@ -19,17 +28,14 @@ pub fn strip(code: &str) -> String {
     // Drop `# comment` to end of line, but keep `#{interpolation}`.
     let mut out = String::with_capacity(no_strings.len());
     for line in no_strings.split_inclusive('\n') {
-        let mut cut = line.len();
-        let b = line.as_bytes();
-        for i in 0..b.len() {
-            if b[i] == b'#' && b.get(i + 1) != Some(&b'{') {
-                cut = i;
-                break;
+        match line.match_indices('#').find(|&(at, _)| !line[at + 1..].starts_with('{')) {
+            Some((at, _)) => {
+                out.push_str(&line[..at]);
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
             }
-        }
-        out.push_str(&line[..cut]);
-        if cut < line.len() && line.ends_with('\n') {
-            out.push('\n');
+            None => out.push_str(line),
         }
     }
     out
@@ -134,11 +140,8 @@ impl PercentLiteral {
         }
         *chars = ahead;
         let close = match delimiter {
-            '(' => ')',
-            '[' => ']',
-            '{' => '}',
             '<' => '>',
-            same => same,
+            other => crate::util::closing_bracket(other).unwrap_or(other),
         };
         Some(PercentLiteral { open: delimiter, close, depth: 0, interpolates: !kind.is_some_and(|kind| "qwis".contains(kind)) })
     }
@@ -210,12 +213,13 @@ pub enum BlockEffect {
 }
 
 const OPENERS: &[&str] = &["if", "unless", "while", "until", "case", "begin", "def", "class", "module", "for", "do"];
-const CONTINUERS: &[&str] = &["else", "elsif", "when", "rescue", "ensure", "in"];
+/// The keywords that continue the block they are in.
+pub const CONTINUERS: &[&str] = &["else", "elsif", "when", "rescue", "ensure", "in"];
 const PREFIX_OK: &[&str] =
     &["=", "(", ",", ";", "&&", "||", "and", "or", "not", "!", "then", "else", "[", "{", "?", ":", "=>", "|", "<<", "+=", "-=", "||="];
 
-/// Net block effect of a Ruby snippet. `end` count and opener count are also returned.
-pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
+/// Net block effect of a Ruby snippet.
+pub fn analyze(code: &str) -> BlockEffect {
     let stripped = strip(code);
     let matches: Vec<regex::Match> = TOKEN.find_iter(&stripped).collect();
     let tokens: Vec<&str> = matches.iter().map(|m| m.as_str()).collect();
@@ -266,7 +270,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
         }
     }
 
-    let effect = if opens > closes {
+    if opens > closes {
         BlockEffect::Open(opens - closes)
     } else if closes > opens {
         BlockEffect::Close(closes - opens)
@@ -274,8 +278,7 @@ pub fn analyze(code: &str) -> (BlockEffect, usize, usize) {
         BlockEffect::Continue
     } else {
         BlockEffect::Neutral
-    };
-    (effect, opens, closes)
+    }
 }
 
 /// `def f = 1`, `def f(a) = a`: an endless method has no `end`. A setter's `=` touches its name (`def x=(v)`).
@@ -339,19 +342,19 @@ mod tests {
     #[test]
     fn endless_methods_open_nothing() {
         for code in ["def f = 1", "def f(a) = a + 1", "def self.f = 1", "def f(*, **, &) = g(*, **, &)"] {
-            assert_eq!(analyze(code).0, BlockEffect::Neutral, "{code}");
+            assert_eq!(analyze(code), BlockEffect::Neutral, "{code}");
         }
         for code in ["def x=(v)", "def f(a)", "def ==(o)", "def f"] {
-            assert_eq!(analyze(code).0, BlockEffect::Open(1), "{code}");
+            assert_eq!(analyze(code), BlockEffect::Open(1), "{code}");
         }
     }
 
     #[test]
     fn non_ascii_identifiers_hold_no_keywords() {
         for code in ["x = éif", "ñdo |a|", "café = 1", "naïve_end"] {
-            assert_eq!(analyze(code).0, BlockEffect::Neutral, "{code}");
+            assert_eq!(analyze(code), BlockEffect::Neutral, "{code}");
         }
-        assert_eq!(analyze("éléments.each do |e|").0, BlockEffect::Open(1));
+        assert_eq!(analyze("éléments.each do |e|"), BlockEffect::Open(1));
     }
 
     #[test]
@@ -365,33 +368,33 @@ mod tests {
 
     #[test]
     fn line_breaks_start_statements() {
-        assert_eq!(analyze("\nroles = []\nif admin\n  roles = [1]\nend\n").0, BlockEffect::Neutral);
-        assert_eq!(analyze("tags = list\nif flare").0, BlockEffect::Open(1));
-        assert_eq!(analyze("x = long_call \\\n  if y").0, BlockEffect::Neutral);
-        assert_eq!(analyze("t(\"k\",\n  actors: if one\n    a\n  else\n    b\n  end)").0, BlockEffect::Neutral);
-        assert_eq!(analyze("link_to x, if: y").0, BlockEffect::Neutral);
-        assert_eq!(analyze("validate :x, :if => :y").0, BlockEffect::Neutral);
+        assert_eq!(analyze("\nroles = []\nif admin\n  roles = [1]\nend\n"), BlockEffect::Neutral);
+        assert_eq!(analyze("tags = list\nif flare"), BlockEffect::Open(1));
+        assert_eq!(analyze("x = long_call \\\n  if y"), BlockEffect::Neutral);
+        assert_eq!(analyze("t(\"k\",\n  actors: if one\n    a\n  else\n    b\n  end)"), BlockEffect::Neutral);
+        assert_eq!(analyze("link_to x, if: y"), BlockEffect::Neutral);
+        assert_eq!(analyze("validate :x, :if => :y"), BlockEffect::Neutral);
     }
 
     #[test]
     fn block_comments_hide_keywords() {
-        assert_eq!(analyze("\n=begin\nfor each page\n- if any\n=end\n").0, BlockEffect::Neutral);
-        assert_eq!(analyze("=begin\nunclosed for").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = 1 # =begin\ny.each do").0, BlockEffect::Open(1));
+        assert_eq!(analyze("\n=begin\nfor each page\n- if any\n=end\n"), BlockEffect::Neutral);
+        assert_eq!(analyze("=begin\nunclosed for"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = 1 # =begin\ny.each do"), BlockEffect::Open(1));
     }
 
     #[test]
     fn basics() {
-        assert_eq!(analyze("@users.each do |u|").0, BlockEffect::Open(1));
-        assert_eq!(analyze("if user.admin?").0, BlockEffect::Open(1));
-        assert_eq!(analyze("end").0, BlockEffect::Close(1));
-        assert_eq!(analyze("else").0, BlockEffect::Continue);
-        assert_eq!(analyze("link_to 'x', path, class: 'a' if ok").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = if a then 1 else 2 end").0, BlockEffect::Neutral);
-        assert_eq!(analyze("while i < 3 do").0, BlockEffect::Open(1));
-        assert_eq!(analyze("render partial: 'x', locals: { class: foo.class }").0, BlockEffect::Neutral);
-        assert_eq!(analyze("form_with model: @u do |f|").0, BlockEffect::Open(1));
-        assert_eq!(analyze("puts \"if\" # if end").0, BlockEffect::Neutral);
+        assert_eq!(analyze("@users.each do |u|"), BlockEffect::Open(1));
+        assert_eq!(analyze("if user.admin?"), BlockEffect::Open(1));
+        assert_eq!(analyze("end"), BlockEffect::Close(1));
+        assert_eq!(analyze("else"), BlockEffect::Continue);
+        assert_eq!(analyze("link_to 'x', path, class: 'a' if ok"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = if a then 1 else 2 end"), BlockEffect::Neutral);
+        assert_eq!(analyze("while i < 3 do"), BlockEffect::Open(1));
+        assert_eq!(analyze("render partial: 'x', locals: { class: foo.class }"), BlockEffect::Neutral);
+        assert_eq!(analyze("form_with model: @u do |f|"), BlockEffect::Open(1));
+        assert_eq!(analyze("puts \"if\" # if end"), BlockEffect::Neutral);
     }
 
     #[test]
@@ -444,9 +447,9 @@ mod tests {
 
     #[test]
     fn strip_drops_percent_literals_holding_keywords() {
-        assert_eq!(analyze("x = %q{if end}").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = %w(do end)").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = %q{a {if} b}; if y").0, BlockEffect::Open(1));
+        assert_eq!(analyze("x = %q{if end}"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = %w(do end)"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = %q{a {if} b}; if y"), BlockEffect::Open(1));
     }
 
     #[test]
@@ -457,21 +460,21 @@ mod tests {
 
     #[test]
     fn analyze_counts_nested_blocks_loops_and_modifiers() {
-        assert_eq!(analyze("if a"), (BlockEffect::Open(1), 1, 0));
-        assert_eq!(analyze("if a; if b"), (BlockEffect::Open(2), 2, 0));
-        assert_eq!(analyze("end; if a; if b"), (BlockEffect::Open(1), 2, 1));
-        assert_eq!(analyze("x = :if").0, BlockEffect::Neutral);
-        assert_eq!(analyze("def end").0, BlockEffect::Open(1));
-        assert_eq!(analyze("end; end"), (BlockEffect::Close(2), 0, 2));
-        assert_eq!(analyze("if a; end; end"), (BlockEffect::Close(1), 1, 2));
-        assert_eq!(analyze("for x in xs").0, BlockEffect::Open(1));
-        assert_eq!(analyze("for x in xs do").0, BlockEffect::Open(1));
-        assert_eq!(analyze("until done do").0, BlockEffect::Open(1));
-        assert_eq!(analyze("elsif b").0, BlockEffect::Continue);
-        assert_eq!(analyze("x = y rescue nil").0, BlockEffect::Neutral);
-        assert_eq!(analyze("return if x").0, BlockEffect::Neutral);
-        assert_eq!(analyze("return unless current_user").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = 1 if (a)").0, BlockEffect::Neutral);
-        assert_eq!(analyze("x = (if a then 1 else 2 end)").0, BlockEffect::Neutral);
+        assert_eq!(analyze("if a"), BlockEffect::Open(1));
+        assert_eq!(analyze("if a; if b"), BlockEffect::Open(2));
+        assert_eq!(analyze("end; if a; if b"), BlockEffect::Open(1));
+        assert_eq!(analyze("x = :if"), BlockEffect::Neutral);
+        assert_eq!(analyze("def end"), BlockEffect::Open(1));
+        assert_eq!(analyze("end; end"), BlockEffect::Close(2));
+        assert_eq!(analyze("if a; end; end"), BlockEffect::Close(1));
+        assert_eq!(analyze("for x in xs"), BlockEffect::Open(1));
+        assert_eq!(analyze("for x in xs do"), BlockEffect::Open(1));
+        assert_eq!(analyze("until done do"), BlockEffect::Open(1));
+        assert_eq!(analyze("elsif b"), BlockEffect::Continue);
+        assert_eq!(analyze("x = y rescue nil"), BlockEffect::Neutral);
+        assert_eq!(analyze("return if x"), BlockEffect::Neutral);
+        assert_eq!(analyze("return unless current_user"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = 1 if (a)"), BlockEffect::Neutral);
+        assert_eq!(analyze("x = (if a then 1 else 2 end)"), BlockEffect::Neutral);
     }
 }

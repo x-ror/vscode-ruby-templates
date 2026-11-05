@@ -65,4 +65,4 @@ file_patterns = ["demo/**", "test/**"]
 # Its only TODO is text inside a test string.
 [[exclude]]
 plugins = ["ripgrep"]
-file_patterns = ["server/src/partials.rs"]
+file_patterns = ["server/src/rails/render_refs.rs"]

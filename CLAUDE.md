@@ -60,7 +60,7 @@ Run the ones that cover what you changed; all of them before a release.
 
 ## Where tests go
 
-- Rust logic: `#[cfg(test)] mod tests` in the same file; file-system cases on a temp dir (see `partials.rs` `model_render_partials`).
+- Rust logic: `#[cfg(test)] mod tests` in the same file; file-system cases on a temp dir (see `rails/partials.rs` `model_render_partials`).
 - LSP behaviour through the real server: a case in `test/e2e.js`.
 - The `ruby-templates` command line (arguments, exit codes, files written): a case in `test/cli.js`.
 - Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).

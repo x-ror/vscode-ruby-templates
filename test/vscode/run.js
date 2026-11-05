@@ -73,6 +73,12 @@ write(
 );
 write("app/views/users/extract.html.haml", "%div\n  %p a\n  %p b\n");
 write("app/views/users/extract.html.slim", "div\n  p a\n  p b\n");
+write(
+  "app/views/users/extract_crlf.html.erb",
+  "<div>\r\n  <p>a</p>\r\n</div>\r\n",
+);
+write("app/views/users/_crlf_part.html.erb", "old\n");
+write("app/views/users/_self.html.erb", "<p>a</p>\n");
 try {
   await runTests({
     version: process.env.VSCODE_VERSION ?? "stable",

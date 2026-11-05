@@ -2,10 +2,13 @@
 //! instance variables, component slots and classes, receivers' methods, helpers and partial locals.
 
 use crate::lang::TemplateLang;
-use crate::partials::RenderRef;
-use crate::project::Project;
-use crate::strict_locals::Close;
-use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
+use crate::rails::project::Project;
+use crate::rails::render_refs;
+use crate::rails::render_refs::RenderRef;
+use crate::rails::{i18n, ivars, partials, slots, stimulus};
+use crate::ruby::strict_locals;
+use crate::ruby::strict_locals::Close;
+use crate::{helpers, util};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};
@@ -20,7 +23,7 @@ pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<Co
 
 /// The current template's own strict locals, as completions.
 pub(crate) fn local_completions(text: &str, typed: &str, close: Close, ruby: ruby_prism::Version) -> Vec<CompletionItem> {
-    let Some(sig) = partials::strict_locals(text, close, ruby) else { return vec![] };
+    let Some(sig) = strict_locals::signature(text, close, ruby) else { return vec![] };
     sig.locals.into_iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, default)| local_item(name, default)).collect()
 }
 
@@ -32,10 +35,7 @@ pub(crate) fn render_local_completions(
     passed: &[String],
     typed: &str,
 ) -> Vec<CompletionItem> {
-    let close = Close::of(project);
-    let Some(sig) =
-        partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close, project.prism_version()))
-    else {
+    let Some(sig) = partials::resolve(project, path, r).first().and_then(|file| project.file_strict_locals(file)) else {
         return vec![];
     };
     sig.locals
@@ -54,7 +54,7 @@ fn local_item(name: String, default: Option<String>) -> CompletionItem {
 pub(crate) fn render_completions(
     project: &Project,
     path: &Path,
-    kind: partials::RenderKind,
+    kind: render_refs::RenderKind,
     prefix: &str,
     templates: &[PathBuf],
     other_roots: &[(&Path, &[PathBuf])],
@@ -69,33 +69,31 @@ pub(crate) fn render_completions(
         .collect()
 }
 
+/// An item whose `label` replaces `range`.
+fn replacing(range: Range, label: String, kind: CompletionItemKind, detail: impl Into<String>) -> CompletionItem {
+    CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
+        ..util::completion_item(label, kind, detail)
+    }
+}
+
 /// i18n keys for the `t("…")` string being typed; each replaces `range`.
 pub(crate) fn i18n_completions(project: &Project, locales: &i18n::Locales, path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
     i18n::completions(project, locales, path, prefix)
         .into_iter()
-        .map(|(key, value)| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
-            ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
-        })
+        .map(|(key, value)| replacing(range, key, CompletionItemKind::CONSTANT, value))
         .collect()
 }
 
 /// Stimulus controllers, or a controller's action methods or targets, for a `data-*` value; each replaces `range`.
 pub(crate) fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: Range) -> Vec<CompletionItem> {
-    let source = |id: &str| stimulus::resolve(path, id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+    let source = |id: &str| stimulus::controller_source(path, id);
     let (names, kind, detail) = match slot {
         stimulus::Slot::Controller => (stimulus::controllers(path), CompletionItemKind::CLASS, "Stimulus controller".to_string()),
         stimulus::Slot::Method(id) => (stimulus::methods(&source(&id)), CompletionItemKind::METHOD, format!("{id} action")),
         stimulus::Slot::Target(id) => (stimulus::targets(&source(&id)), CompletionItemKind::FIELD, format!("{id} target")),
     };
-    names
-        .into_iter()
-        .filter(|name| name.starts_with(typed))
-        .map(|name| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, name.clone()))),
-            ..util::completion_item(name, kind, detail.clone())
-        })
-        .collect()
+    names.into_iter().filter(|name| name.starts_with(typed)).map(|name| replacing(range, name, kind, detail.clone())).collect()
 }
 
 /// `@name` for the instance variables the view's controller action assigns; each replaces `range`.
@@ -107,11 +105,8 @@ pub(crate) fn ivar_completions(project: &Project, path: &Path, typed: &str, rang
         .map(|a| {
             let label = format!("@{}", a.name);
             let from = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-            CompletionItem {
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
-                filter_text: Some(label.clone()),
-                ..util::completion_item(label, CompletionItemKind::VARIABLE, format!("assigned in {from}:{}", a.line + 1))
-            }
+            let detail = format!("assigned in {from}:{}", a.line + 1);
+            CompletionItem { filter_text: Some(label.clone()), ..replacing(range, label, CompletionItemKind::VARIABLE, detail) }
         })
         .collect()
 }

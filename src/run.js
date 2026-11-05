@@ -3,13 +3,14 @@ import cp from "child_process";
 import path from "path";
 import fs from "fs";
 
-import { cfg } from "./workspace.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 
 // Rails boots slowly on big apps, but a hung runner shouldn't leave the preview waiting forever.
-const RAILS_RENDER_TIMEOUT_MS = 60_000;
+const RAILS_RUNNER_TIMEOUT_MS = 60_000;
 // How far up from a template to look for a Gemfile or bin/rails.
 const MAX_PARENT_DIRS = 6;
+const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+const RAILS_BIN = path.join("bin", "rails");
 
 /** The nearest of `dir` and its parents that contains `rel`, or undefined. */
 function findUp(dir, rel) {
@@ -23,12 +24,7 @@ function findUp(dir, rel) {
   return undefined;
 }
 
-function run(
-  cmd,
-  args,
-  { useBundler = cfg().get("preview.useBundler", false), ...options },
-  input,
-) {
+function run(cmd, args, { useBundler, ...options }, input) {
   return new Promise((resolve) => {
     const [bin, binArgs] =
       useBundler && findUp(options.cwd, "Gemfile") !== undefined
@@ -42,7 +38,7 @@ function run(
       const child = cp.execFile(
         file,
         fileArgs,
-        { ...options, ...spawnOptions, maxBuffer: 16 * 1024 * 1024 },
+        { ...options, ...spawnOptions, maxBuffer: MAX_OUTPUT_BYTES },
         (err, stdout, stderr) => {
           // Callers detect a missing tool by ENOENT, which a shell can't report.
           if (windows && err?.code === WINDOWS_COMMAND_NOT_FOUND) {
@@ -68,20 +64,36 @@ function run(
 }
 
 /** `haml <subcommand> -` (Haml 6+), falling back to the Haml < 6 CLI, which has no subcommands and reads stdin. */
-async function runHaml(bin, subcommand, legacyArgs, cwd, src) {
-  const r = await run(bin, [subcommand, "-"], { cwd }, src);
+async function runHaml(bin, subcommand, legacyArgs, options, src) {
+  const r = await run(bin, [subcommand, "-"], options, src);
   // Haml < 6 opens the subcommand name as the input file.
   if (
     r.code !== 0 &&
     r.stderr.includes("ENOENT") &&
     r.stderr.includes(` - ${subcommand}`)
   )
-    return run(bin, legacyArgs, { cwd }, src);
+    return run(bin, legacyArgs, options, src);
   // Thor reports usage errors on stderr but exits 0.
   if (r.code === 0 && !r.stdout && r.stderr) return { ...r, code: 1 };
   return r;
 }
 
+/** `bin/rails runner script` in the app at `root`, a run that times out reported as a failure. */
+async function railsRunner(root, script, { ruby, useBundler, input }) {
+  const r = await run(
+    ruby,
+    [RAILS_BIN, "runner", script],
+    { cwd: root, timeout: RAILS_RUNNER_TIMEOUT_MS, useBundler },
+    input,
+  );
+  if (!r.err?.killed) return r;
+  return {
+    ...r,
+    code: 1,
+    stderr: `bin/rails runner timed out after ${RAILS_RUNNER_TIMEOUT_MS / 1000}s.\n${r.stderr}`,
+  };
+}
+
 const firstLine = (r) => (r.stderr || r.stdout).split("\n")[0];
 
-export { RAILS_RENDER_TIMEOUT_MS, findUp, run, runHaml, firstLine };
+export { RAILS_BIN, findUp, run, runHaml, railsRunner, firstLine };

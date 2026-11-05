@@ -964,6 +964,18 @@ const check = (label, actual, expected) => {
     ],
   );
   check(
+    "strict locals quick fixes offer an unknown key passed twice once",
+    await strictFixes(
+      fileUri(path.join(views, "strict", "twice.html.erb")),
+      '<%= render "strict/row", c: 2, c: 3 %>\n',
+    ),
+    [
+      'Pass `a` to the render | /app/views/strict/twice.html.erb 0:35-35 ", a: nil"',
+      'Remove `c` from the render | /app/views/strict/twice.html.erb 0:23-29 ""',
+      'Declare `c` in the locals of `_row.html.erb` | /app/views/strict/_row.html.erb 0:21-21 ", c: nil"',
+    ],
+  );
+  check(
     "strict locals quick fixes on a call continued before its partial",
     await strictFixes(
       fileUri(path.join(views, "strict", "continued.html.erb")),

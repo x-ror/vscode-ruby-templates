@@ -1,17 +1,20 @@
 // Pure part of "Extract Selection to Partial" (no vscode dependency; tested in test/haml.js).
+import path from "path";
 
-const leadingWs = (line) => /^[ \t]*/.exec(line)[0];
+import { dedent, lastSelectedLine } from "./text.js";
+import { viewsRoot, viewDirOf } from "./views.js";
 
 /**
  * The block to move into a partial, given the document lines and a selection
  * `{ start: { line, character }, end: { line, character } }`. `wholeLines` (Haml, Slim) widens it to
  * full lines; otherwise it starts at column 0 when only indentation precedes it. A selection ending at
  * column 0 stops at the end of the previous line, keeping that newline in the template.
- * Returns the range to replace, the dedented text and the indentation it had, or null if it is blank.
+ * Returns the range to replace, the dedented lines and the indentation they had, or null if they are blank.
  */
-function extractBlock(lines, { start, end }, wholeLines) {
-  const endsAtLineStart = end.character === 0 && end.line > start.line;
-  const endLine = endsAtLineStart ? end.line - 1 : end.line;
+function extractBlock(lines, selection, wholeLines) {
+  const { start, end } = selection;
+  const endLine = lastSelectedLine(selection);
+  const endsAtLineStart = endLine !== end.line;
   const onlyIndentBefore = !lines[start.line].slice(0, start.character).trim();
   const range = {
     start: {
@@ -27,20 +30,33 @@ function extractBlock(lines, { start, end }, wholeLines) {
   const picked = lines.slice(range.start.line, endLine + 1);
   picked[picked.length - 1] = picked.at(-1).slice(0, range.end.character);
   picked[0] = picked[0].slice(range.start.character);
-  const indents = picked.filter((l) => l.trim()).map(leadingWs);
-  if (!indents.length) return null;
-  const width = Math.min(...indents.map((ws) => ws.length));
-  const indent = indents.find((ws) => ws.length === width);
-  const text = picked
-    .map((l) => l.slice(Math.min(width, leadingWs(l).length)))
-    .join("\n");
-  return { range, indent, text: `${text}\n` };
+  if (!picked.some((l) => l.trim())) return null;
+  return { range, ...dedent(picked) };
 }
 
-/** `_name` plus every extension of the template: `show.html+phone.haml` → `_name.html+phone.haml`. */
+/** `_name` plus the template's extensions without its `+variant`, so every variant renders it: `show.html+phone.haml` → `_name.html.haml`. */
 function partialFileName(templateName, name) {
   const dot = templateName.indexOf(".");
-  return `_${name}${dot < 0 ? "" : templateName.slice(dot)}`;
+  const extensions = dot < 0 ? "" : templateName.slice(dot);
+  return `_${name}${extensions.replace(/\+[^.]*/, "")}`;
 }
 
-export { extractBlock, partialFileName };
+/**
+ * Where `render "name"` from `file` looks for the partial: next to `file` for a bare name,
+ * under the `app/views` root for `dir/name`. Null when `dir/name` is used outside app/views.
+ */
+function partialPath(file, name) {
+  const slash = name.lastIndexOf("/");
+  const partial = partialFileName(path.basename(file), name.slice(slash + 1));
+  if (slash < 0) return path.join(path.dirname(file), partial);
+  const root = viewsRoot(file);
+  return root ? path.join(root, name.slice(0, slash), partial) : null;
+}
+
+/** The path to render: a bare name under the template's views folder, so any controller finds it; `dir/name` as given. */
+function renderPath(file, name) {
+  const dir = !name.includes("/") && viewDirOf(file);
+  return dir ? `${dir}/${name}` : name;
+}
+
+export { extractBlock, partialFileName, partialPath, renderPath };

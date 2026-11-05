@@ -1,6 +1,12 @@
 import assert from "assert";
 import { toggleHamlPrefix, toggleHamlLines } from "../src/haml.js";
-import { extractBlock, partialFileName } from "../src/partial.js";
+import path from "path";
+import {
+  extractBlock,
+  partialFileName,
+  partialPath,
+  renderPath,
+} from "../src/partial.js";
 
 // toggleHamlPrefix: - → = → -# → -, other output prefixes become comments, == text and plain lines are left alone.
 assert.strictEqual(toggleHamlPrefix("  - x = 1"), "  = x = 1");
@@ -40,7 +46,7 @@ assert.deepStrictEqual(
   {
     range: { start: pos(1, 0), end: pos(2, 10) },
     indent: "  ",
-    text: ".card\n  %h2= x\n",
+    lines: [".card", "  %h2= x"],
   },
 );
 assert.deepStrictEqual(
@@ -52,7 +58,7 @@ assert.deepStrictEqual(
   {
     range: { start: pos(1, 0), end: pos(1, 17) },
     indent: "  ",
-    text: "<p><%= a %></p>\n",
+    lines: ["<p><%= a %></p>"],
   },
 );
 assert.deepStrictEqual(
@@ -64,7 +70,7 @@ assert.deepStrictEqual(
   {
     range: { start: pos(1, 0), end: pos(3, 7) },
     indent: "  ",
-    text: "<ul>\n  <li>a</li>\n</ul>\n",
+    lines: ["<ul>", "  <li>a</li>", "</ul>"],
   },
 );
 assert.deepStrictEqual(
@@ -72,17 +78,56 @@ assert.deepStrictEqual(
   {
     range: { start: pos(0, 6), end: pos(0, 14) },
     indent: "",
-    text: "<%= a %>\n",
+    lines: ["<%= a %>"],
   },
 );
 assert.strictEqual(
   extractBlock(["%div", "   ", "%p"], sel(1, 0, 1, 3), true),
   null,
 );
+// Tabs and spaces don't mix: the common indent is compared as a string.
+assert.deepStrictEqual(
+  extractBlock(["\t\t%p", "    %q"], sel(0, 0, 1, 6), true).lines,
+  ["\t\t%p", "    %q"],
+);
 assert.strictEqual(
   partialFileName("show.html+phone.haml", "card"),
-  "_card.html+phone.haml",
+  "_card.html.haml",
 );
 assert.strictEqual(partialFileName("Gemfile", "card"), "_card");
+assert.strictEqual(
+  partialFileName("show.html.erb.tt", "card"),
+  "_card.html.erb.tt",
+);
+
+// partialPath joins with the platform separator, so the expected paths do too.
+assert.strictEqual(
+  partialPath("/app/views/users/show.html.slim", "card"),
+  path.normalize("/app/views/users/_card.html.slim"),
+);
+assert.strictEqual(
+  partialPath("/r/app/views/users/show.html.erb", "shared/ui/card"),
+  path.normalize("/r/app/views/shared/ui/_card.html.erb"),
+);
+assert.strictEqual(partialPath("/tmp/show.slim", "shared/card"), null);
+assert.strictEqual(
+  partialPath("/app/views/posts/feed.xml.haml", "item"),
+  path.normalize("/app/views/posts/_item.xml.haml"),
+);
+assert.strictEqual(
+  partialPath("/app/views/posts/show.html+phone.slim", "item"),
+  path.normalize("/app/views/posts/_item.html.slim"),
+);
+
+assert.strictEqual(
+  renderPath("/r/app/views/admin/users/show.html.erb", "card"),
+  "admin/users/card",
+);
+assert.strictEqual(
+  renderPath("/r/app/views/users/show.html.erb", "shared/card"),
+  "shared/card",
+);
+assert.strictEqual(renderPath("/r/app/views/show.html.erb", "card"), "card");
+assert.strictEqual(renderPath("/tmp/show.html.erb", "card"), "card");
 
 console.log("haml helpers ok");

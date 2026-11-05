@@ -16,10 +16,11 @@ import {
   doubledErbClose,
   HTML_TAGS,
 } from "../src/autoClose.js";
-import { erbRubyArgs } from "../src/erbEngine.js";
 import { routesFromOutput, routesFromRun } from "../src/routes.js";
+import { viewsRoot, viewDirOf } from "../src/views.js";
+import { engineOf, isTemplateLanguage, isErb } from "../src/languages.js";
 import {
-  engineOf,
+  erbRubyArgs,
   viewDir,
   railsRenderScript,
   missingToolMessage,
@@ -328,6 +329,25 @@ assert.strictEqual(
 // engineOf
 assert.strictEqual(engineOf("erb-js"), "erb");
 assert.strictEqual(engineOf("haml"), "haml");
+assert.ok(isTemplateLanguage("erb-percent") && !isTemplateLanguage("liquid"));
+assert.ok(isErb("erb") && isErb("erb-js") && !isErb("haml"));
+
+// viewsRoot: the innermost app/views, with either separator
+assert.strictEqual(
+  viewsRoot("/r/app/views/users/show.html.erb"),
+  "/r/app/views",
+);
+assert.strictEqual(
+  viewsRoot("/r/app/views/x/app/views/a/b.erb"),
+  "/r/app/views/x/app/views",
+);
+assert.strictEqual(viewsRoot("C:\\r\\app\\views\\a.erb"), "C:\\r\\app\\views");
+assert.strictEqual(viewsRoot("/r/app/views"), undefined);
+assert.strictEqual(viewsRoot("/r/myapp/views/a.erb"), undefined);
+assert.strictEqual(viewDirOf("/r/app/views/admin/users/a.erb"), "admin/users");
+assert.strictEqual(viewDirOf("C:\\r\\app\\views\\users\\a.erb"), "users");
+assert.strictEqual(viewDirOf("/r/app/views/a.erb"), undefined);
+assert.strictEqual(viewDirOf("/r/lib/a.erb"), undefined);
 
 // viewDir
 const appRoot = path.join(path.sep, "app-root");

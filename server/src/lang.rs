@@ -1,7 +1,7 @@
 //! Which template language a document is, and whether its output is HTML.
 
 use crate::html;
-use crate::rails_paths::{is_known_format, is_locale, template_format, views_root};
+use crate::rails::paths::{is_known_format, is_locale, template_format, views_root};
 use crate::util;
 use std::path::Path;
 use tower_lsp_server::ls_types::Uri;
@@ -64,7 +64,7 @@ impl TemplateLang {
     }
 }
 
-pub const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
+const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
 /// format (`app/views/pages/about.de.erb`), which is HTML in practice.
@@ -97,7 +97,7 @@ pub fn html_host(uri: &Uri, plain_erb: bool, text: &str) -> bool {
 /// Whether the first text outside ERB tags opens an HTML element (or custom element), a comment or a doctype; other
 /// XML (`<rss>`) isn't HTML.
 fn starts_with_markup(text: &str) -> bool {
-    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    let mut rest = text.trim_start_matches(crate::util::BOM).trim_start();
     while let Some(after_open) = rest.strip_prefix("<%") {
         let Some((_, after_close)) = after_open.split_once("%>") else { return false };
         rest = after_close.trim_start();

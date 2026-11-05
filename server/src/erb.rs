@@ -1,20 +1,25 @@
-//! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves.
+//! ERB diagnostics: the Ruby syntax errors of `erb::ruby` and the HTML errors Erubi's text leaves.
 
-use crate::checks::RubyContext;
-use crate::erb_ruby;
+pub mod complete;
+pub mod html_lint;
+pub mod ruby;
+pub mod tags;
+
+use crate::html::TOKENIZED_AS_TEXT;
+use crate::ruby::generated::RUBY_SYNTAX;
+use crate::ruby::strict_locals::RubyContext;
 use crate::util::{coded, warning, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
     pub const UNCLOSED_TAG: &str = "unclosed-tag";
-    pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
 /// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
 pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
-    for tag in erb_ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
+    for tag in ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
         let source = &text[tag.code.clone()];
         if source.contains('\n') || source.trim().is_empty() {
             continue;
@@ -28,14 +33,34 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
 }
 
 pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<Diagnostic> {
-    erb_ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref())
+    ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref()).into_iter().map(|d| coded(d, RUBY_SYNTAX)).collect()
+}
+
+/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
+/// when the tokenizer is in the data state. Complete tags are invisible to it.
+pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
+    let (texts, tail_at) = ruby::rendered_texts(text);
+    let mut html = Html::default();
+    for rendered in &texts {
+        html.feed(rendered);
+    }
+    let openers = html.feed(&text[tail_at..]);
+    if openers.is_empty() {
+        return vec![];
+    }
+    let index = LineIndex::new(text);
+    openers
         .into_iter()
-        .map(|d| coded(d, code::RUBY_SYNTAX))
+        .map(|at| {
+            let start = index.position(tail_at + at);
+            let range = Range::new(start, Position::new(start.line, u32::MAX));
+            let message =
+                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
+            coded(warning(range, message), code::UNCLOSED_TAG)
+        })
         .collect()
 }
 
-/// Elements whose content the tokenizer reads as raw text or RCDATA, up to their end tag (`noscript` with scripting on).
-const TEXT_ELEMENTS: [&str; 9] = ["script", "style", "xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"];
 const FOREIGN_ROOTS: [&str; 2] = ["svg", "math"];
 
 /// The attribute sub-states of the tokenizer (13.2.5.32 to 13.2.5.40) that decide where a quote opens a value.
@@ -121,10 +146,10 @@ impl Html {
         if let Some(comment) = after.strip_prefix("!--") {
             // `<!-->` and `<!--->` are empty comments.
             let empty = if comment.starts_with("->") { 2 } else { usize::from(comment.starts_with('>')) };
-            return (4 + empty, if empty > 0 { State::Data } else { State::Comment });
+            return ("<!--".len() + empty, if empty > 0 { State::Data } else { State::Comment });
         }
         if self.foreign_depth > 0 && after.starts_with("![CDATA[") {
-            return (9, State::Cdata);
+            return ("<![CDATA[".len(), State::Cdata);
         }
         let (closing, name_text) = after.strip_prefix('/').map_or((false, after), |name| (true, name));
         if name_text.starts_with(|c: char| c.is_ascii_alphabetic()) {
@@ -182,7 +207,7 @@ impl Html {
         if tag.name == "plaintext" {
             return State::Plaintext;
         }
-        TEXT_ELEMENTS.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
+        TOKENIZED_AS_TEXT.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
     }
 }
 
@@ -215,39 +240,6 @@ fn raw_text(element: &'static str, rest: &str) -> (usize, State) {
     match end {
         Some(i) => (i + close.len(), State::Tag(Tag::new(true, element.to_string()))),
         None => (rest.len(), State::RawText(element)),
-    }
-}
-
-/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
-/// when the tokenizer is in the data state. Complete tags are invisible to it.
-pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
-    let (texts, tail_at) = erb_ruby::rendered_texts(text);
-    let mut html = Html::default();
-    for rendered in &texts {
-        html.feed(rendered);
-    }
-    let openers = html.feed(&text[tail_at..]);
-    if openers.is_empty() {
-        return vec![];
-    }
-    let index = LineIndex::new(text);
-    openers
-        .into_iter()
-        .map(|at| {
-            let start = index.position(tail_at + at);
-            let range = Range::new(start, Position::new(start.line, u32::MAX));
-            let message =
-                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
-            coded(warning(range, message), code::UNCLOSED_TAG)
-        })
-        .collect()
-}
-
-pub fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() > n {
-        format!("{}…", s.chars().take(n).collect::<String>())
-    } else {
-        s.to_string()
     }
 }
 
@@ -333,7 +325,7 @@ mod tests {
             .map(|d| (d.range.start.line, crate::util::code(&d).unwrap_or_default().to_string()))
             .collect();
         got.sort();
-        let want = [(0, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX)];
+        let want = [(0, RUBY_SYNTAX), (5, RUBY_SYNTAX), (5, RUBY_SYNTAX), (5, RUBY_SYNTAX)];
         assert_eq!(got, want.map(|(line, code)| (line, code.to_string())));
         let html = html_diagnostics(include_str!("../../test/broken/bad.html.erb"));
         assert_eq!(html.iter().map(|d| d.range.start.line).collect::<Vec<_>>(), [9]);
