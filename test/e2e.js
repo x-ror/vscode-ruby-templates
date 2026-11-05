@@ -103,7 +103,16 @@ fs.writeFileSync(
 fs.mkdirSync(path.join(root, "db"), { recursive: true });
 fs.writeFileSync(
   path.join(root, "db", "schema.rb"),
-  'create_table "users", force: :cascade do |t|\n  t.string "name"\n  t.string "nickname"\n  t.string "email"\nend\n',
+  'create_table "users", force: :cascade do |t|\n  t.string "name"\n  t.string "nickname"\n  t.string "email"\nend\ncreate_table "reports", force: :cascade do |t|\n  t.string "title", null: false\nend\n',
+);
+fs.mkdirSync(path.join(root, "app", "models"), { recursive: true });
+fs.writeFileSync(
+  path.join(root, "app", "models", "report.rb"),
+  "class Report < ApplicationRecord\nend\n",
+);
+fs.writeFileSync(
+  path.join(root, "app", "controllers", "reports_controller.rb"),
+  "class ReportsController < ApplicationController\n  def index\n    @reports = Report.order(:title)\n  end\nend\n",
 );
 fs.mkdirSync(path.join(root, "config", "locales"), { recursive: true });
 fs.writeFileSync(
@@ -546,6 +555,42 @@ const check = (label, actual, expected) => {
       slim_lines: ["data-hello-target", "data-hello-greeting-text-value"],
     },
   );
+  const columnChecks = { hover: {}, definition: {} };
+  for (const [lang, text] of Object.entries({
+    erb: "<% @reports.each do |report| %>\n  <p><%= report.title %></p>\n<% end %>\n",
+    haml: "- @reports.each do |report|\n  %p= report.title\n",
+    slim: "- @reports.each do |report|\n  p = report.title\n",
+  })) {
+    const columnUri = fileUri(
+      path.join(views, "reports", `index.html.${lang}`),
+    );
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: columnUri, languageId: lang, version: 1, text } },
+      true,
+    );
+    const title = text.split("\n")[1].indexOf("report.title") + 8;
+    columnChecks.hover[lang] = (
+      await req("textDocument/hover", columnUri, 1, title)
+    ).result?.contents.value;
+    const found = (await req("textDocument/definition", columnUri, 1, title))
+      .result;
+    columnChecks.definition[lang] = found
+      ? `${rel(found.uri)}:${found.range.start.line + 1}`
+      : null;
+  }
+  const reportsHover = "`reports.title` — string, null: false";
+  check("hover on a model column", columnChecks.hover, {
+    erb: reportsHover,
+    haml: reportsHover,
+    slim: reportsHover,
+  });
+  const schemaTarget = "/db/schema.rb:7";
+  check("definition on a model column", columnChecks.definition, {
+    erb: schemaTarget,
+    haml: schemaTarget,
+    slim: schemaTarget,
+  });
   check("definition on a block variable", blockDefinitions, {
     erb: "0:19-23",
     haml: "0:18-22",

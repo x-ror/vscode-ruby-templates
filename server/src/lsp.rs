@@ -7,9 +7,9 @@ use crate::completion::{
 };
 use crate::lang::{file_name, html_host, is_partial, TemplateLang};
 use crate::{
-    assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, outline, partial_rename,
-    partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, slim_complete, slim_hover, slim_outline,
-    slim_parser, slots, stimulus, strict_locals, tags, util,
+    assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns, outline,
+    partial_rename, partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, slim_complete, slim_hover,
+    slim_outline, slim_parser, slots, stimulus, strict_locals, tags, util,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
@@ -718,6 +718,11 @@ impl LanguageServer for Backend {
         if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
+        let engines = &self.options().extra_engines;
+        let declaration = |at| code_context::local_definition(doc.lang, &doc.text, at, engines).filter(|d| d.parameter).map(|d| d.start);
+        if let Some(found) = model_columns::column_at(&project, &path, &doc.text, line_start, col, declaration) {
+            return Ok(line_location(&found.schema, found.column.line).map(GotoDefinitionResponse::Scalar));
+        }
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
         let helper = helper_defs::name_at(line, col).map(str::to_string);
         let route = helper.as_deref().and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
@@ -829,6 +834,14 @@ impl LanguageServer for Backend {
             let assignments = file.as_ref().map(|(project, path)| ivars::for_view(project, path)).unwrap_or_default();
             let view = file.as_ref().map(|(_, path)| path.as_path()).unwrap_or(Path::new(""));
             return Ok(ivars::hover(&assignments, name, view).and_then(markdown_hover));
+        }
+        if let Some((project, path)) = file.as_ref().filter(|_| code_here) {
+            let engines = &self.options().extra_engines;
+            let declaration =
+                |at| code_context::local_definition(doc.lang, &doc.text, at, engines).filter(|d| d.parameter).map(|d| d.start);
+            if let Some(found) = model_columns::column_at(project, path, &doc.text, line_start, col, declaration) {
+                return Ok(markdown_hover(found.hover()));
+            }
         }
         let declared_local = file.as_ref().filter(|_| code_here && is_partial(&uri)).and_then(|(project, _)| {
             let name = helper_defs::name_at(line, col).filter(|_| !is_key(line, col))?;

@@ -4,7 +4,7 @@ use crate::partials::{pluralize, singularize, snake_case};
 use crate::rails_paths::app_root;
 use crate::util::leading_ws;
 use regex::Regex;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 // `f.text_field :na`, `form.label(:na`: the symbol being typed.
@@ -17,7 +17,7 @@ static FORM_MODEL: LazyLock<Regex> = LazyLock::new(|| {
 /// Calls that build or fetch a record of the collection before them (`@post.comments.build`).
 const RECORD_CALLS: &[&str] = &["new", "build", "create", "first", "last", "find"];
 static CREATE_TABLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*create_table\s+"(\w+)""#).unwrap());
-static COLUMN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*t\.(\w+)\s+"(\w+)""#).unwrap());
+static COLUMN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*t\.(\w+)\s+"(\w+)"(.*)"#).unwrap());
 
 /// The attribute name typed after a form builder field method's `:`.
 pub fn attribute_prefix(before: &str) -> Option<&str> {
@@ -39,25 +39,51 @@ pub fn form_table(text_before: &str) -> Option<String> {
     Some(pluralize(&singularize(&snake_case(model))))
 }
 
-/// `(column, type)` of `table` in the app's `db/schema.rb`; `t.references "user"` gives `user_id`.
+/// A column line of `db/schema.rb`; `t.references "user"` is the column `user_id`.
+#[derive(Debug, PartialEq)]
+pub struct Column {
+    pub name: String,
+    pub kind: String,
+    /// What follows the name: `, null: false, default: "x"`.
+    pub options: String,
+    /// 0-based line in the schema.
+    pub line: usize,
+}
+
+fn schema_file(current: &Path) -> Option<PathBuf> {
+    Some(app_root(current)?.parent()?.join("db/schema.rb"))
+}
+
+/// `(column, type)` of `table` in the app's `db/schema.rb`.
 pub fn columns(current: &Path, table: &str) -> Vec<(String, String)> {
-    let Some(schema) = app_root(current).and_then(|app| std::fs::read_to_string(app.parent()?.join("db/schema.rb")).ok()) else {
-        return vec![];
-    };
+    let Some(schema) = schema_file(current).and_then(|file| std::fs::read_to_string(file).ok()) else { return vec![] };
+    table_columns(&schema, table).into_iter().map(|c| (c.name, c.kind)).collect()
+}
+
+/// The column `name` in the first of `tables` that has it, with the schema file and the table.
+pub fn column(current: &Path, tables: &[String], name: &str) -> Option<(PathBuf, String, Column)> {
+    let file = schema_file(current)?;
+    let schema = std::fs::read_to_string(&file).ok()?;
+    tables.iter().find_map(|table| {
+        let column = table_columns(&schema, table).into_iter().find(|c| c.name == name)?;
+        Some((file.clone(), table.clone(), column))
+    })
+}
+
+fn table_columns(schema: &str, table: &str) -> Vec<Column> {
     // The quoted name is in every line that opens the table, and far cheaper to look for than the regex.
     let quoted = format!("\"{table}\"");
-    let opens = |l: &str| l.contains(&quoted) && CREATE_TABLE.captures(l).is_some_and(|c| &c[1] == table);
-    let mut lines = schema.lines().skip_while(|l| !opens(l)).skip(1);
+    let opens = |(_, l): &(usize, &str)| l.contains(&quoted) && CREATE_TABLE.captures(l).is_some_and(|c| &c[1] == table);
     let mut out = Vec::new();
-    for line in lines.by_ref() {
-        if line.trim() == "end" {
+    for (line, text) in schema.lines().enumerate().skip_while(|l| !opens(l)).skip(1) {
+        if text.trim() == "end" {
             break;
         }
-        let Some(cap) = COLUMN.captures(line) else { continue };
-        let (kind, name) = (&cap[1], &cap[2]);
+        let Some(cap) = COLUMN.captures(text) else { continue };
+        let (kind, name, options) = (&cap[1], &cap[2], cap[3].to_string());
         match kind {
-            "references" | "belongs_to" => out.push((format!("{name}_id"), "references".to_string())),
-            _ => out.push((name.to_string(), kind.to_string())),
+            "references" | "belongs_to" => out.push(Column { name: format!("{name}_id"), kind: "references".into(), options, line }),
+            _ => out.push(Column { name: name.to_string(), kind: kind.to_string(), options, line }),
         }
     }
     out
