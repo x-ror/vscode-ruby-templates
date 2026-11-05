@@ -122,7 +122,9 @@ function registerRoutes(context) {
   const watcher = vscode.workspace.createFileSystemWatcher(
     "**/config/{routes.rb,routes/**/*.rb}",
   );
-  const appsWatcher = vscode.workspace.createFileSystemWatcher("**/bin/rails");
+  // Moving a whole bin/ folder reports the folder only.
+  const appsWatcher =
+    vscode.workspace.createFileSystemWatcher("**/{bin,bin/rails}");
   const appsChanged = () => state.roots.clear();
   context.subscriptions.push(
     appsWatcher,
