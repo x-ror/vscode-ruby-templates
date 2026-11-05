@@ -1,7 +1,7 @@
 name: pages
 on:
   push:
-    branches: [main, docs/site]
+    branches: [main]
     paths:
       - site/**
       - syntaxes/**
