@@ -293,6 +293,56 @@ const check = (label, actual, expected) => {
     targets(await req("textDocument/definition", engineUri, 0, 14)),
     ["/engines/blog/app/views/blog/_post.html.erb"],
   );
+  const liquidUri = fileUri(path.join(views, "users", "card.liquid"));
+  const liquidHelperUri = fileUri(path.join(views, "users", "helper.liquid"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: liquidUri,
+        languageId: "liquid",
+        version: 1,
+        text: '{% render "card" %}\n',
+      },
+    },
+    true,
+  );
+  check(
+    "definition: liquid render is not a partial",
+    targets(await req("textDocument/definition", liquidUri, 0, 14)),
+    [],
+  );
+  check(
+    "document links: none in liquid",
+    (
+      await send("textDocument/documentLink", {
+        textDocument: { uri: liquidUri },
+      })
+    ).result ?? null,
+    null,
+  );
+  check(
+    "hover: none on a liquid render",
+    (await req("textDocument/hover", liquidUri, 0, 14)).result ?? null,
+    null,
+  );
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: liquidHelperUri,
+        languageId: "liquid",
+        version: 1,
+        text: "{{ link_to }}\n",
+      },
+    },
+    true,
+  );
+  check(
+    "hover: none on a helper in liquid",
+    (await req("textDocument/hover", liquidHelperUri, 0, 5)).result ?? null,
+    null,
+  );
   check(
     "hover",
     firstLine(await req("textDocument/hover", uri, 0, 14)),
