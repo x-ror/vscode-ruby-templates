@@ -138,7 +138,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
         return vec![];
     }
     let path = util::file_path(uri);
-    let project = path.as_deref().map(|path| Project::memoized(projects, path));
+    let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
@@ -160,7 +160,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
 pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
-    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| Project::memoized(projects, &path).ruby_context(&path))
+    util::file_path(uri).map_or_else(RubyContext::outside_project, |path| Project::memoized(projects, &path, None).ruby_context(&path))
 }
 
 /// The template language's own checks, without the render checks that need app/views.

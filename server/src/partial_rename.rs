@@ -229,7 +229,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
         .filter_map(|LocalKey { source, key, .. }| {
             let (start, end) = key?;
             let index = LineIndex::new(&source.text);
-            Some(Location::new(crate::util::file_uri(&source.path)?, index.range(start, end)))
+            crate::util::file_range_location(&source.path, index.range(start, end))
         })
         .collect()
 }
@@ -366,10 +366,7 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
                 Some(ext) if ext == "rb" => None,
                 _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None).filter(|&lang| lang != TemplateLang::Liquid)?),
             };
-            let text = match open.get(&path) {
-                Some(text) => text.clone(),
-                None => std::fs::read_to_string(&path).ok()?,
-            };
+            let text = crate::util::open_or_read(open.get(&path).cloned(), &path)?;
             keep(&text).then_some(Source { path, lang, text })
         })
         .collect()

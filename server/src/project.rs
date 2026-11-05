@@ -117,9 +117,21 @@ impl Project {
         Self::load(&ProjectKey::of(template))
     }
 
-    /// The project of `template`, loaded once per `ProjectKey` for a run over many templates.
-    pub fn memoized<'a>(projects: &'a mut Projects, template: &Path) -> &'a Self {
-        projects.entry(ProjectKey::of(template)).or_insert_with_key(Self::load)
+    /// The project of the templates in the views folder `views`.
+    pub fn for_views(views: &Path) -> Self {
+        Self::for_template(&views.join("_"))
+    }
+
+    /// The project of `template`, loaded once per `ProjectKey` for a run over many templates; it keeps its view roots
+    /// in `view_cache` when given one.
+    pub fn memoized<'a>(projects: &'a mut Projects, template: &Path, view_cache: Option<&Arc<view_roots::Cache>>) -> &'a Self {
+        projects.entry(ProjectKey::of(template)).or_insert_with_key(|key| {
+            let project = Self::load(key);
+            match view_cache {
+                Some(cache) => project.with_view_cache(Arc::clone(cache)),
+                None => project,
+            }
+        })
     }
 
     fn load(key: &ProjectKey) -> Self {

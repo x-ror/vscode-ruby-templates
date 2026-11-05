@@ -6,10 +6,11 @@ use crate::completion::{
     stimulus_completions,
 };
 use crate::lang::{file_name, is_partial, TemplateLang};
+use crate::util::{file_location, line_location};
 use crate::{
     assets, config, controller_classes, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars,
     model_columns, outline, partial_rename, partials,
-    project::{Project, ProjectKey, Projects},
+    project::{Project, Projects},
     rails_paths,
     render_call::HamlPipes,
     routes, ruby, schema, semantic_tokens, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus, strict_locals, tags,
@@ -184,10 +185,7 @@ fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
 
 /// The line of `key` in each locale file that defines it.
 fn translation_locations(files: &i18n::Locales, key: &str) -> Vec<Location> {
-    let start = |t: &i18n::Translation| Position::new(t.line as u32, 0);
-    i18n::lookup(files, key)
-        .filter_map(|(file, t)| Some(Location::new(crate::util::file_uri(file)?, Range::new(start(t), start(t)))))
-        .collect()
+    i18n::lookup(files, key).filter_map(|(file, t)| line_location(file, t.line)).collect()
 }
 
 fn markdown_hover(value: String) -> Option<Hover> {
@@ -285,15 +283,6 @@ fn spacing_actions(uri: &Uri, text: &str, range: Range, only: Option<&[CodeActio
     out
 }
 
-fn file_location(file: impl AsRef<Path>) -> Option<Location> {
-    line_location(file, 0)
-}
-
-fn line_location(file: impl AsRef<Path>, line: usize) -> Option<Location> {
-    let start = Position::new(line as u32, 0);
-    Some(Location::new(crate::util::file_uri(file)?, Range::new(start, start)))
-}
-
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
     FileOperationFilter {
         scheme: Some("file".into()),
@@ -369,7 +358,7 @@ impl Backend {
             let Ok(diags) = off_server_task(move || {
                 let mut projects = Projects::new();
                 if let Some(path) = util::file_path(&checked) {
-                    projects.insert(ProjectKey::of(&path), Project::for_template(&path).with_view_cache(view_roots));
+                    Project::memoized(&mut projects, &path, Some(&view_roots));
                 }
                 diagnostics_in(&checked, &doc, options.get_or_init(Options::default), &mut projects)
             })
@@ -547,10 +536,7 @@ impl Backend {
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
         let (Some(uri), Some(partial_uri)) = (crate::util::file_uri(path), crate::util::file_uri(&partial)) else { return vec![] };
-        let partial_text = match self.docs.get(&partial_uri) {
-            Some(doc) => doc.text.clone(),
-            None => std::fs::read_to_string(&partial).unwrap_or_default(),
-        };
+        let partial_text = util::open_or_read(self.docs.get(&partial_uri).map(|doc| doc.text.clone()), &partial).unwrap_or_default();
         let sig = project.strict_locals(&partial_text);
         let (Some(sig), Some(comment)) = (sig, strict_locals::find(&partial_text, project.strict_locals_close())) else {
             return vec![];
@@ -1413,7 +1399,7 @@ impl LanguageServer for Backend {
                     .is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some_and(|lang| lang != TemplateLang::Liquid))
             };
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
-            let project = self.project_for(&views.join("_"));
+            let project = Project::for_views(&views).with_view_cache(Arc::clone(&self.view_roots));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
                 if !util::fuzzy_match(&name.to_lowercase(), &query) {
                     continue;
@@ -1448,7 +1434,7 @@ impl LanguageServer for Backend {
             let mut changes = HashMap::new();
             for views in roots {
                 let sources = partial_rename::sources(&views, &open);
-                let project = Project::for_template(&views.join("_")).with_view_cache(Arc::clone(&view_roots));
+                let project = Project::for_views(&views).with_view_cache(Arc::clone(&view_roots));
                 changes.extend(partial_rename::render_edits(&project, &renames, &sources, &extra_engines));
             }
             changes
