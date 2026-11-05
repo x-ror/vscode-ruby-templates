@@ -2,6 +2,7 @@
 
 use crate::controller_classes::{self, controller_file};
 use crate::inflect::{self, pluralize, singularize};
+use crate::lang::TemplateLang;
 use crate::prism;
 use crate::project::Project;
 use crate::rails_paths::{
@@ -366,7 +367,7 @@ pub fn render_calls_in<'a>(
     if !kept.contains(&true) {
         return vec![];
     }
-    let haml = pipes.apply(text, line_start);
+    let haml_multiline = pipes.apply(text, line_start);
     // A kept `layout:` takes its partial's lookup, so that call is read too.
     // A continued ref's `call` is 0 in its own line, so it pairs only with refs from the same origin.
     let needed = |i: usize| {
@@ -379,7 +380,7 @@ pub fn render_calls_in<'a>(
                 read_call_with_lookup(&text[c.call_line_start..], &c.on_call_line, pipes.apply(text, c.call_line_start), ruby);
             (RenderCall { shift: line_start - c.call_line_start, ..call }, lookup)
         }
-        None => read_call_with_lookup(&text[line_start..], &refs[i], haml, ruby),
+        None => read_call_with_lookup(&text[line_start..], &refs[i], haml_multiline, ruby),
     };
     let (calls, lookups): (Vec<_>, Vec<_>) = (0..refs.len())
         .map(|i| match needed(i) {
@@ -449,9 +450,16 @@ fn literal_names(value: &str) -> Option<Vec<String>> {
 }
 
 /// Find a render reference whose string spans `col` (byte column) on `line`, the line of `text` at `line_start`.
-pub fn render_ref_at(text: &str, line_start: usize, line: &str, haml: bool, ruby: ruby_prism::Version, col: usize) -> Option<RenderRef> {
+pub fn render_ref_at(
+    text: &str,
+    line_start: usize,
+    line: &str,
+    lang: TemplateLang,
+    ruby: ruby_prism::Version,
+    col: usize,
+) -> Option<RenderRef> {
     let spans_col = |r: &RenderRef| col >= r.start.saturating_sub(1) && col <= r.end + 1;
-    render_refs_in(text, line_start, line, &HamlPipes::new(haml), ruby, spans_col).into_iter().next()
+    render_refs_in(text, line_start, line, &HamlPipes::new(lang), ruby, spans_col).into_iter().next()
 }
 
 pub fn component_ref_at(line: &str, col: usize) -> Option<String> {
@@ -966,28 +974,28 @@ fn passed_names<'a>(call: &Call<'a>, form: &RenderForm) -> Option<Vec<&'a str>> 
     Some(names)
 }
 
-fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml: bool, ruby: ruby_prism::Version) -> (RenderCall<'a>, Lookup) {
+fn read_call_with_lookup<'a>(text: &'a str, r: &RenderRef, haml_multiline: bool, ruby: ruby_prism::Version) -> (RenderCall<'a>, Lookup) {
     let form = RenderForm::of(text, r);
-    let parsed = render_call::read(text, r.call, r.start, haml, ruby);
+    let parsed = render_call::read(text, r.call, r.start, haml_multiline, ruby);
     let lookup = parsed.as_ref().map(|parsed| lookup(parsed, &form)).unwrap_or_default();
     (RenderCall { form, parsed, shift: 0, call_at: r.call }, lookup)
 }
 
 /// The partial ref, the locals already passed and the name typed so far where a local's name may be typed at `offset`;
-/// the render call may start up to `MAX_CALL_LINES` lines higher. `haml`: `text` is Haml. `ruby`: the grammar to read the call with
+/// the render call may start up to `MAX_CALL_LINES` lines higher. `lang`: the language of `text`. `ruby`: the grammar to read the call with
 /// (and its lookup options), asked for once a partial ref is found.
 pub fn local_key_before(
     text: &str,
     offset: usize,
-    haml: bool,
+    lang: TemplateLang,
     ruby: impl FnOnce() -> ruby_prism::Version,
 ) -> Option<(RenderRef, Vec<String>, &str)> {
     let line_starts = text[..offset].rmatch_indices('\n').map(|(i, _)| i + 1).chain([0]).take(MAX_CALL_LINES);
     // Starts above the first one that sees the partial ref see the same ref, so they can't read the call any better.
     let (start, r) = line_starts.into_iter().find_map(|start| Some((start, partial_ref_before(&text[start..offset])?)))?;
-    let haml = HamlPipes::new(haml).apply(text, start);
+    let haml_multiline = HamlPipes::new(lang).apply(text, start);
     let ruby = ruby();
-    let (names, typed, lookup) = local_key_after(&text[start..], offset - start, &r, haml, ruby)?;
+    let (names, typed, lookup) = local_key_after(&text[start..], offset - start, &r, haml_multiline, ruby)?;
     Some((RenderRef { start: r.start + start, end: r.end + start, call: r.call + start, lookup, ..r }, names, typed))
 }
 
@@ -1007,11 +1015,11 @@ fn local_key_after<'a>(
     text: &'a str,
     col: usize,
     r: &RenderRef,
-    haml: bool,
+    haml_multiline: bool,
     ruby: ruby_prism::Version,
 ) -> Option<(Vec<String>, &'a str, Lookup)> {
     // The blanking keeps offsets, so the typed word is taken from `text`.
-    let joined = if haml { render_call::haml_group_joined(text) } else { Cow::Borrowed(text) };
+    let joined = if haml_multiline { render_call::haml_group_joined(text) } else { Cow::Borrowed(text) };
     let blanked = joined.as_ref();
     let line = blanked.get(..col)?;
     let args = line.get(r.end + 1..)?;
@@ -1062,12 +1070,12 @@ fn local_key_after<'a>(
         Some(names.into_iter().map(str::to_string).collect::<Vec<_>>())
     };
     // The whole call, when it reads, decides: the probe is a local there or nowhere.
-    if let Some(call) = render_call::read(&spliced, 0, name_at, haml, ruby).filter(|call| call.readable) {
+    if let Some(call) = render_call::read(&spliced, 0, name_at, haml_multiline, ruby).filter(|call| call.readable) {
         return Some((others(passed_names(&call, &form)?)?, &text[col - typed.len()..col], lookup(&call, &form)));
     }
     // Cut at the cursor, the probe may also sit beside a hash the call ignores.
     let passed = |source: &str| {
-        let call = render_call::read(source, 0, name_at, haml, ruby)?;
+        let call = render_call::read(source, 0, name_at, haml_multiline, ruby)?;
         let names = passed_names(&call, &form)?;
         let lookup = lookup(&call, &form);
         if !names.contains(&CURSOR_KEY) && call.pairs.iter().any(|pair| pair.key == CURSOR_KEY) {
@@ -1113,8 +1121,8 @@ mod tests {
     const LATEST: ruby_prism::Version = ruby_prism::Version::Latest;
 
     /// The call of `r`, read from `text`, which starts at `r`'s line; `haml`: `text` is Haml.
-    fn read_call<'a>(text: &'a str, r: &RenderRef, haml: bool) -> RenderCall<'a> {
-        read_call_with_lookup(text, r, haml, LATEST).0
+    fn read_call<'a>(text: &'a str, r: &RenderRef, haml_multiline: bool) -> RenderCall<'a> {
+        read_call_with_lookup(text, r, haml_multiline, LATEST).0
     }
 
     #[test]
@@ -1165,7 +1173,8 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col, false, || LATEST).map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, TemplateLang::Erb, || LATEST)
+                .map(|(r, passed, typed)| (r.name, passed.join(" "), typed.to_string()))
         };
         let card = |passed: &str, typed: &str| Some(("card".to_string(), passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", | %>"#), card("", ""));
@@ -1237,14 +1246,14 @@ mod tests {
     #[test]
     fn refs() {
         let l = r#"<%= render "users/card", user: u %>"#;
-        let r = render_ref_at(l, 0, l, false, LATEST, 14).unwrap();
+        let r = render_ref_at(l, 0, l, TemplateLang::Erb, LATEST, 14).unwrap();
         assert_eq!(r.name, "users/card");
         assert_eq!(r.kind, RenderKind::Partial);
         let row = "= render partial: 'row', collection: @x";
-        let r = render_ref_at(row, 0, row, false, LATEST, 20).unwrap();
+        let r = render_ref_at(row, 0, row, TemplateLang::Erb, LATEST, 20).unwrap();
         assert_eq!(r.name, "row");
         let tpl = "= render template: 'a/b'";
-        assert_eq!(render_ref_at(tpl, 0, tpl, false, LATEST, 22).unwrap().kind, RenderKind::Template);
+        assert_eq!(render_ref_at(tpl, 0, tpl, TemplateLang::Erb, LATEST, 22).unwrap().kind, RenderKind::Template);
         assert_eq!(component_ref_at("= render Users::CardComponent.new(user: u)", 12).unwrap(), "Users::CardComponent");
         assert_eq!(render_string_prefix(r#"<%= render "us"#, 14).unwrap(), (RenderKind::Partial, "us".to_string()));
         assert_eq!(render_string_prefix(r#"render template: "a/"#, 20).unwrap(), (RenderKind::Template, "a/".to_string()));
@@ -1309,7 +1318,7 @@ mod tests {
             r#"<%= content_tag(:div) { render partial: "post", formats: [:html] } %>"#,
             r#"= content_tag(:div) { render partial: "post", formats: [:html] }"#,
         ] {
-            let found = render_refs_in(line, 0, line, &HamlPipes::new(false), LATEST, |_| true);
+            let found = render_refs_in(line, 0, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true);
             assert_eq!(found[0].lookup.formats, Some(vec!["html".to_string()]), "{line}");
         }
     }
@@ -2005,7 +2014,7 @@ mod tests {
         let text = "<p>é</p>\r\n<%= render formats: [:json], locals: { user: u },\r\n  partial: \"users/card\" %>\r\n";
         let line_start = text.find("  partial").unwrap();
         let line = text[line_start..].lines().next().unwrap();
-        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(false), LATEST, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["user"]));
         let base = call.base(line_start);
         assert_eq!(base, text.find("<%= render").unwrap());
@@ -2019,32 +2028,32 @@ mod tests {
         let no_locals = "<%= render formats: [:json],\n  partial: \"users/card\", locals: { a: 1, size: 1 } %>\n";
         let line_start = no_locals.find("  partial").unwrap();
         let line = no_locals[line_start..].lines().next().unwrap();
-        let (r, call) = render_calls_in(no_locals, line_start, line, &HamlPipes::new(false), LATEST, |_| true).remove(0);
+        let (r, call) = render_calls_in(no_locals, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true).remove(0);
         let (range, _) = remove_local_edit(&call, &r, "size").unwrap();
         assert_eq!(&no_locals[call.base(line_start) + range.start..call.base(line_start) + range.end], ", size: 1");
     }
 
     #[test]
     fn local_edits_on_a_continuation_line_land_in_erb_and_haml_calls() {
-        let edit = |text: &str, haml: bool, change: &dyn Fn(&RenderCall, &RenderRef) -> Option<ByteEdit>| {
+        let edit = |text: &str, lang: TemplateLang, change: &dyn Fn(&RenderCall, &RenderRef) -> Option<ByteEdit>| {
             let line_start = text.find("  partial: \"").unwrap();
             let line = text[line_start..].lines().next().unwrap();
-            let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(haml), LATEST, |_| true).remove(0);
+            let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(lang), LATEST, |_| true).remove(0);
             let base = call.base(line_start);
             let (range, new) = change(&call, &r).unwrap();
             format!("{}{new}{}", &text[..base + range.start], &text[base + range.end..])
         };
-        let remove = |text: &str, haml| edit(text, haml, &|call, r| remove_local_edit(call, r, "user"));
-        let add = |text: &str, haml| edit(text, haml, &|call, r| add_locals_edit(call, r, &["size"]));
+        let remove = |text: &str, lang| edit(text, lang, &|call, r| remove_local_edit(call, r, "user"));
+        let add = |text: &str, lang| edit(text, lang, &|call, r| add_locals_edit(call, r, &["size"]));
         let erb = |locals: &str| format!("<%= render formats: [:json],\r\n  partial: \"users/card\"{locals} %>\r\n");
         let haml = |locals: &str| format!("= render formats: [:json], |\r\n  partial: \"users/card\"{locals} |\r\n");
         // The only local goes with its hash's contents; the others keep their separators.
-        assert_eq!(remove(&erb(", locals: { user: u }"), false), erb(", locals: {  }"));
-        assert_eq!(remove(&erb(", locals: { a: 1, user: u }"), false), erb(", locals: { a: 1 }"));
-        assert_eq!(remove(&haml(", locals: { user: u, b: 1 }"), true), haml(", locals: { b: 1 }"));
-        assert_eq!(remove(&haml(", locals: { a: 1, user: u }"), true), haml(", locals: { a: 1 }"));
-        assert_eq!(add(&erb(""), false), erb(", locals: { size: nil }"));
-        assert_eq!(add(&haml(""), true), haml(", locals: { size: nil }"));
+        assert_eq!(remove(&erb(", locals: { user: u }"), TemplateLang::Erb), erb(", locals: {  }"));
+        assert_eq!(remove(&erb(", locals: { a: 1, user: u }"), TemplateLang::Erb), erb(", locals: { a: 1 }"));
+        assert_eq!(remove(&haml(", locals: { user: u, b: 1 }"), TemplateLang::Haml), haml(", locals: { b: 1 }"));
+        assert_eq!(remove(&haml(", locals: { a: 1, user: u }"), TemplateLang::Haml), haml(", locals: { a: 1 }"));
+        assert_eq!(add(&erb(""), TemplateLang::Erb), erb(", locals: { size: nil }"));
+        assert_eq!(add(&haml(""), TemplateLang::Haml), haml(", locals: { size: nil }"));
     }
 
     #[test]
@@ -2052,7 +2061,7 @@ mod tests {
         let key = |text: &str| {
             let offset = text.find('|').unwrap();
             let text = text.replace('|', "");
-            local_key_before(&text, offset, false, || LATEST)
+            local_key_before(&text, offset, TemplateLang::Erb, || LATEST)
                 .map(|(r, passed, typed)| (r.name, r.start, passed.join(" "), typed.to_string()))
         };
         let card = |passed: &str, typed: &str| Some(("card".to_string(), 12, passed.to_string(), typed.to_string()));
@@ -2065,12 +2074,12 @@ mod tests {
     fn local_key_lookup_follows_the_ruby_version() {
         let text = "<%= render partial: \"card\", formats: [:json], a: (1\n && 2), locals: { } %>";
         let offset = text.find("{ ").unwrap() + 2;
-        let formats = |ruby| local_key_before(text, offset, false, || ruby).map(|(r, ..)| r.lookup.formats);
+        let formats = |ruby| local_key_before(text, offset, TemplateLang::Erb, || ruby).map(|(r, ..)| r.lookup.formats);
         assert_eq!(formats(LATEST), Some(Some(vec!["json".to_string()])));
         assert_eq!(formats(ruby_prism::Version::CRuby3_3), None);
         let unclosed = "<%= render partial: \"card\", formats: [:json], locals: { ";
         assert_eq!(
-            local_key_before(unclosed, unclosed.len(), false, || LATEST).map(|(r, ..)| r.lookup.formats),
+            local_key_before(unclosed, unclosed.len(), TemplateLang::Erb, || LATEST).map(|(r, ..)| r.lookup.formats),
             Some(Some(vec!["json".to_string()]))
         );
     }
@@ -2081,7 +2090,7 @@ mod tests {
         let head = "= render \"card\", |\n".to_string() + &rows("a", 0, 3);
         let text = format!("{head}  x, |\n{}  z: 1 |\np x", rows("b", 0, 15));
         let offset = head.len() + 3;
-        let passed = local_key_before(&text, offset, true, || LATEST).map(|(_, passed, _)| passed.len());
+        let passed = local_key_before(&text, offset, TemplateLang::Haml, || LATEST).map(|(_, passed, _)| passed.len());
         assert_eq!(passed, Some(3 + 15 + 1));
     }
 
@@ -2407,8 +2416,8 @@ mod tests {
     }
 
     /// The refs `render_calls_in` finds on each line of `text`, as `line:name:start-end:call:layout?:formats`.
-    fn refs_by_line(text: &str, haml: bool) -> Vec<String> {
-        let pipes = HamlPipes::new(haml);
+    fn refs_by_line(text: &str, lang: TemplateLang) -> Vec<String> {
+        let pipes = HamlPipes::new(lang);
         let mut found = vec![];
         for (i, (line_start, line)) in crate::util::lines_with_offsets(text).enumerate() {
             for (r, _) in render_calls_in(text, line_start, line, &pipes, LATEST, |_| true) {
@@ -2423,20 +2432,20 @@ mod tests {
     #[test]
     fn options_continued_after_a_trailing_comma() {
         let erb = "<%= render formats: [:json],\n           partial: \"users/user\" %>\n";
-        assert_eq!(refs_by_line(erb, false), ["1:users/user:21-31:0:false:json"]);
+        assert_eq!(refs_by_line(erb, TemplateLang::Erb), ["1:users/user:21-31:0:false:json"]);
         let erb = "<%= render partial: \"row\",\n           layout: \"box\" %>\n";
-        assert_eq!(refs_by_line(erb, false), ["0:row:21-24:4:false:", "1:box:20-23:0:true:"]);
+        assert_eq!(refs_by_line(erb, TemplateLang::Erb), ["0:row:21-24:4:false:", "1:box:20-23:0:true:"]);
         let haml = "= render formats: [:json],\n  layout: \"shared/wrap\" do\n  p x\n";
-        assert_eq!(refs_by_line(haml, true), ["1:shared/wrap:11-22:0:false:json"]);
+        assert_eq!(refs_by_line(haml, TemplateLang::Haml), ["1:shared/wrap:11-22:0:false:json"]);
         // No render above, or a line that ends the call: nothing continues.
-        assert!(refs_by_line("<%= link_to \"x\", a,\n  partial: \"users/user\" %>\n", false).is_empty());
-        assert!(refs_by_line("<%= render formats: [:json] %>\n  partial: \"users/user\"\n", false).is_empty());
+        assert!(refs_by_line("<%= link_to \"x\", a,\n  partial: \"users/user\" %>\n", TemplateLang::Erb).is_empty());
+        assert!(refs_by_line("<%= render formats: [:json] %>\n  partial: \"users/user\"\n", TemplateLang::Erb).is_empty());
     }
 
     #[test]
     fn jbuilder_options_continued_on_a_later_line() {
         let refs = |text: &str| {
-            let found = refs_by_line(text, false);
+            let found = refs_by_line(text, TemplateLang::Erb);
             found.iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
         };
         assert_eq!(refs("json.partial! partial: \"users/user\",\n  locals: { user: @user }\n"), ["0:users/user"]);
@@ -2450,8 +2459,9 @@ mod tests {
 
     #[test]
     fn open_paren_continues_only_render_and_json_calls() {
-        let names =
-            |text: &str| refs_by_line(text, false).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>();
+        let names = |text: &str| {
+            refs_by_line(text, TemplateLang::Erb).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
+        };
         assert!(names("<%= link_to(\n  \"x\", partial: \"y\") %>\n").is_empty());
         assert!(names("<%= my_json.map(\n  partial: \"x\") %>\n").is_empty());
         assert!(names("<%= foo # render (\n  partial: \"x\" %>\n").is_empty());
@@ -2462,18 +2472,18 @@ mod tests {
 
     #[test]
     fn element_ids_and_html_before_a_call_are_not_comments() {
-        let names = |text: &str, haml| {
-            refs_by_line(text, haml).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
+        let names = |text: &str, lang| {
+            refs_by_line(text, lang).iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect::<Vec<_>>()
         };
-        assert_eq!(names("#main= render formats: [:json],\n  partial: \"users/user\"\n", true), ["1:users/user"]);
-        assert_eq!(names("%div#main= render formats: [:json],\n  partial: \"users/user\"\n", true), ["1:users/user"]);
-        assert_eq!(names("#main = render(\n  \"users/user\")\n", true), ["1:users/user"]);
-        assert_eq!(names("<a href=#top><%= render(\n  \"users/user\") %>\n", false), ["1:users/user"]);
+        assert_eq!(names("#main= render formats: [:json],\n  partial: \"users/user\"\n", TemplateLang::Haml), ["1:users/user"]);
+        assert_eq!(names("%div#main= render formats: [:json],\n  partial: \"users/user\"\n", TemplateLang::Haml), ["1:users/user"]);
+        assert_eq!(names("#main = render(\n  \"users/user\")\n", TemplateLang::Haml), ["1:users/user"]);
+        assert_eq!(names("<a href=#top><%= render(\n  \"users/user\") %>\n", TemplateLang::Erb), ["1:users/user"]);
     }
 
     #[test]
     fn continued_call_does_not_repeat_refs_of_its_first_line() {
-        let refs = refs_by_line("<%= render partial: \"a\",\n  layout: \"c\", as: :x %>\n", false);
+        let refs = refs_by_line("<%= render partial: \"a\",\n  layout: \"c\", as: :x %>\n", TemplateLang::Erb);
         let names: Vec<_> = refs.iter().map(|r| r.split(':').take(2).collect::<Vec<_>>().join(":")).collect();
         assert_eq!(names, ["0:a", "1:c"]);
     }
@@ -2482,15 +2492,15 @@ mod tests {
     fn continuation_refs_need_a_render_call_within_reach_and_a_trailing_comma() {
         // A call line that ended its call has no continuation; CRLF lines continue like LF ones.
         let quoted = "<%= render formats: [:json] %>\n<%= x \"a,\"\n  partial: \"users/user\" %>\n";
-        assert!(refs_by_line(quoted, false).is_empty());
+        assert!(refs_by_line(quoted, TemplateLang::Erb).is_empty());
         let ended = "<%= render formats: [:json]\n  partial: \"users/user\" %>\n";
-        assert!(refs_by_line(ended, false).is_empty());
+        assert!(refs_by_line(ended, TemplateLang::Erb).is_empty());
         let crlf = "<%= render formats: [:json],\r\n  partial: \"users/user\" %>\r\n";
-        assert_eq!(refs_by_line(crlf, false), ["1:users/user:12-22:0:false:json"]);
+        assert_eq!(refs_by_line(crlf, TemplateLang::Erb), ["1:users/user:12-22:0:false:json"]);
         // A call line further than MAX_CALL_LINES lines above is out of reach.
         let filler = |n: usize| "  a: 1,\n".repeat(n);
         let reach = |n: usize| format!("<%= render formats: [:json],\n{}  partial: \"users/user\" %>\n", filler(n));
-        let last = |text: String| refs_by_line(&text, false).pop();
+        let last = |text: String| refs_by_line(&text, TemplateLang::Erb).pop();
         assert_eq!(last(reach(MAX_CALL_LINES - 2)), Some(format!("{}:users/user:12-22:0:false:json", MAX_CALL_LINES - 1)));
         assert_eq!(last(reach(MAX_CALL_LINES - 1)), None);
     }
@@ -2498,7 +2508,7 @@ mod tests {
     #[test]
     fn continuation_refs_in_haml_with_pipes_and_trailing_commas() {
         let haml = "= render formats: [:json], |\n  partial: \"users/user\" |\np x\n";
-        assert_eq!(refs_by_line(haml, true), ["1:users/user:12-22:0:false:json"]);
+        assert_eq!(refs_by_line(haml, TemplateLang::Haml), ["1:users/user:12-22:0:false:json"]);
     }
 
     #[test]
@@ -2531,7 +2541,7 @@ mod tests {
     fn render_ref_at_reads_lookups_from_later_lines() {
         let text = "<%= render partial: \"users/card\",\n  formats: [:json] %>\n";
         let line = text.lines().next().unwrap();
-        let r = render_ref_at(text, 0, line, false, LATEST, 22).unwrap();
+        let r = render_ref_at(text, 0, line, TemplateLang::Erb, LATEST, 22).unwrap();
         assert_eq!(r.lookup.formats, Some(vec!["json".to_string()]));
     }
 
@@ -2551,7 +2561,7 @@ mod tests {
         let text = "p\n<%= render partial: \"card\", layout: \"wrap\",\n  formats: [:json], locals: { a: 1 } %>\n";
         let line_start = 2;
         let line = text[line_start..].lines().next().unwrap();
-        let found = render_calls_in(text, line_start, line, &HamlPipes::new(false), LATEST, |r| r.from_layout);
+        let found = render_calls_in(text, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |r| r.from_layout);
         assert_eq!(found.len(), 1);
         let (layout, call) = &found[0];
         assert_eq!((layout.name.as_str(), layout.lookup.formats.clone()), ("wrap", Some(vec!["json".to_string()])));
@@ -2663,10 +2673,10 @@ mod tests {
         let line = r#"<%= render "users/card" %>"#;
         let open_quote = line.find('"').unwrap();
         let end = open_quote + 1 + "users/card".len();
-        assert!(render_ref_at(line, 0, line, false, LATEST, open_quote - 1).is_none());
-        assert!(render_ref_at(line, 0, line, false, LATEST, open_quote).is_some());
-        assert!(render_ref_at(line, 0, line, false, LATEST, end + 1).is_some());
-        assert!(render_ref_at(line, 0, line, false, LATEST, end + 2).is_none());
+        assert!(render_ref_at(line, 0, line, TemplateLang::Erb, LATEST, open_quote - 1).is_none());
+        assert!(render_ref_at(line, 0, line, TemplateLang::Erb, LATEST, open_quote).is_some());
+        assert!(render_ref_at(line, 0, line, TemplateLang::Erb, LATEST, end + 1).is_some());
+        assert!(render_ref_at(line, 0, line, TemplateLang::Erb, LATEST, end + 2).is_none());
     }
 
     #[test]
@@ -2689,9 +2699,9 @@ mod tests {
         passed_for(text, false)
     }
 
-    fn passed_for(text: &str, haml: bool) -> Option<Vec<&str>> {
+    fn passed_for(text: &str, haml_multiline: bool) -> Option<Vec<&str>> {
         let r = render_refs(text.lines().next().unwrap()).remove(0);
-        passed_locals(&read_call(text, &r, haml), &r)
+        passed_locals(&read_call(text, &r, haml_multiline), &r)
     }
 
     /// `passed_in` for a Haml template.
@@ -2704,9 +2714,9 @@ mod tests {
         added_for(text, name, false)
     }
 
-    fn added_for(text: &str, name: &str, haml: bool) -> Option<String> {
+    fn added_for(text: &str, name: &str, haml_multiline: bool) -> Option<String> {
         let r = render_refs(text.lines().next().unwrap()).remove(0);
-        let (range, new) = add_locals_edit(&read_call(text, &r, haml), &r, &[name])?;
+        let (range, new) = add_locals_edit(&read_call(text, &r, haml_multiline), &r, &[name])?;
         let mut out = text.to_string();
         out.replace_range(range, &new);
         Some(out)
@@ -2751,21 +2761,22 @@ mod tests {
     fn haml_filter_bodies_have_no_pipe_groups() {
         let text = ":ruby\n  x = render \"card\", a: b |\n    c, d: 1\np x";
         let line_start = text.find("  x =").unwrap();
-        assert!(!HamlPipes::new(true).apply(text, line_start));
-        assert!(!HamlPipes::new(true).apply(text, text.find("p x").unwrap()));
+        assert!(!HamlPipes::new(TemplateLang::Haml).apply(text, line_start));
+        assert!(!HamlPipes::new(TemplateLang::Haml).apply(text, text.find("p x").unwrap()));
         let line = &text[line_start..text.find("\n    c").unwrap()];
-        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(true), LATEST, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(TemplateLang::Haml), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
         let outside = ":ruby\n  x = 1\n= render \"card\", a: b, |\n    d: 1 |\np x";
         let line_start = outside.find("= render").unwrap();
         let (r, call) =
-            render_calls_in(outside, line_start, "= render \"card\", a: b, |", &HamlPipes::new(true), LATEST, |_| true).remove(0);
+            render_calls_in(outside, line_start, "= render \"card\", a: b, |", &HamlPipes::new(TemplateLang::Haml), LATEST, |_| true)
+                .remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "d"]));
         // A `:symbol` line above (attribute hash continuation) is no filter.
         let hash = "%section\n  %div{ :class => \"x\",\n  :id => \"y\" }\n    = render \"card\", a: 1, |\n      b: 2 |\n";
         let line_start = hash.find("    = render").unwrap();
         let line = "    = render \"card\", a: 1, |";
-        let (r, call) = render_calls_in(hash, line_start, line, &HamlPipes::new(true), LATEST, |_| true).remove(0);
+        let (r, call) = render_calls_in(hash, line_start, line, &HamlPipes::new(TemplateLang::Haml), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
     }
 
@@ -2773,7 +2784,7 @@ mod tests {
     fn haml_structure_pass_runs_once_per_document_and_only_for_pipe_lines() {
         let passes = || render_call::STRUCTURE_PASSES.with(|passes| passes.get());
         let render_all = |text: &str| {
-            let pipes = HamlPipes::new(true);
+            let pipes = HamlPipes::new(TemplateLang::Haml);
             for (start, line) in crate::util::lines_with_offsets(text) {
                 render_calls_in(text, start, line, &pipes, LATEST, |_| true);
             }
@@ -2791,7 +2802,7 @@ mod tests {
         assert_eq!(passed_in("<%= render \"card\", a: x |\n y, b: 1 %>"), strs(&["a", "b"]));
         let text = "<%=\n  render \"card\", a: x |\n  y, b: 1 %>";
         let (line_start, line) = (4, "  render \"card\", a: x |");
-        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(false), LATEST, |_| true).remove(0);
+        let (r, call) = render_calls_in(text, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert_eq!(passed_in("<%= render \"card\", a: 1 ||\n  b %>"), strs(&["a"]));
         // The same in a Ruby file.
@@ -2816,7 +2827,7 @@ mod tests {
         let text = "<%= render \"card\", z|a: x |\n y, b: 1 %>";
         let col = text.find('|').unwrap();
         let text = text.replacen('|', "", 1);
-        let passed = local_key_before(&text, col, false, || LATEST).map(|(_, passed, _)| passed.join(" "));
+        let passed = local_key_before(&text, col, TemplateLang::Erb, || LATEST).map(|(_, passed, _)| passed.join(" "));
         assert_eq!(passed.as_deref(), Some("b"));
     }
 
@@ -2825,7 +2836,7 @@ mod tests {
         let complete = |text: &str| {
             let col = text.find('^').unwrap();
             let text = text.replacen('^', "", 1);
-            local_key_before(&text, col, true, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&text, col, TemplateLang::Haml, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let expect = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(complete("= render \"card\", a: 1, |\n  ^ |\np x"), expect("a", ""));
@@ -2985,7 +2996,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col, false, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, TemplateLang::Erb, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "card", a| %>"#), at("", "a"));
@@ -3014,7 +3025,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col, false, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, TemplateLang::Erb, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key("<%= render \"a\", | %>\n<%= render \"a\", b: 1 %>"), at("", ""), "the next tag's call");
@@ -3034,7 +3045,7 @@ mod tests {
         let key = |line: &str| {
             let col = line.find('|').unwrap();
             let line = line.replace('|', "");
-            local_key_before(&line, col, false, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
+            local_key_before(&line, col, TemplateLang::Erb, || LATEST).map(|(_, passed, typed)| (passed.join(" "), typed.to_string()))
         };
         let at = |passed: &str, typed: &str| Some((passed.to_string(), typed.to_string()));
         assert_eq!(key(r#"<%= render "a", |b: 2, c: 3 %>"#), at("b c", ""), "the next key right at the cursor");
@@ -3048,11 +3059,11 @@ mod tests {
         let line = r#"json.partial! "a", |, locals: { b: 1 }"#;
         let col = line.find('|').unwrap();
         let line = line.replace('|', "");
-        let names = local_key_before(&line, col, false, || LATEST).map(|(_, passed, _)| passed);
+        let names = local_key_before(&line, col, TemplateLang::Erb, || LATEST).map(|(_, passed, _)| passed);
         assert_eq!(names, None, "top-level keys are ignored when locals: is given");
         let key = |line: &str| {
             let col = line.find('|').unwrap();
-            local_key_before(&line.replace('|', ""), col, false, || LATEST).map(|(_, passed, _)| passed.join(" "))
+            local_key_before(&line.replace('|', ""), col, TemplateLang::Erb, || LATEST).map(|(_, passed, _)| passed.join(" "))
         };
         assert_eq!(key(r#"<%= render partial: "a", locals: { x: 1, | }, collection: c %>"#), None, "collection: after the cursor");
         assert_eq!(key(r#"<%= render partial: "a", collection: c, locals: { x: 1, | } %>"#), None);
@@ -3066,7 +3077,7 @@ mod tests {
         let offset = text.find('|').unwrap();
         let text = text.replace('|', "");
         let before = render_call::PARSES.with(|parses| parses.get());
-        local_key_before(&text, offset, false, || LATEST);
+        local_key_before(&text, offset, TemplateLang::Erb, || LATEST);
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 100, "{parses} parses for one keystroke");
     }
@@ -3079,7 +3090,7 @@ mod tests {
             let offset = text.find('|').unwrap();
             let text = text.replace('|', "");
             let before = render_call::PARSES.with(|parses| parses.get());
-            let (_, names, _) = local_key_before(&text, offset, false, || LATEST).unwrap();
+            let (_, names, _) = local_key_before(&text, offset, TemplateLang::Erb, || LATEST).unwrap();
             (names, render_call::PARSES.with(|parses| parses.get()) - before)
         };
         let blank_lines = "\n".repeat(19);
@@ -3095,7 +3106,7 @@ mod tests {
     fn half_typed_local_key_costs_few_parses() {
         let line = r#"<%= render "card", a: 1, b: 2, c , d: 3 %>"#;
         let before = render_call::PARSES.with(|parses| parses.get());
-        local_key_before(line, line.find(" ,").unwrap(), false, || LATEST).unwrap();
+        local_key_before(line, line.find(" ,").unwrap(), TemplateLang::Erb, || LATEST).unwrap();
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;
         assert!(parses <= 6, "{parses} parses for one keystroke");
     }
@@ -3117,7 +3128,8 @@ mod tests {
     fn locals_and_edits_reuse_the_call_read_with_the_refs() {
         let text = "<%= render \"card\", a: 1, b: 2 %>\n";
         let before = render_call::PARSES.with(|parses| parses.get());
-        let (r, call) = render_calls_in(text, 0, text.lines().next().unwrap(), &HamlPipes::new(false), LATEST, |_| true).remove(0);
+        let (r, call) =
+            render_calls_in(text, 0, text.lines().next().unwrap(), &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true).remove(0);
         assert_eq!(passed_locals(&call, &r), Some(vec!["a", "b"]));
         assert!(add_locals_edit(&call, &r, &["c"]).is_some());
         assert!(remove_local_edit(&call, &r, "a").is_some());
@@ -3132,7 +3144,7 @@ mod tests {
         let before = render_call::PARSES.with(|parses| parses.get());
         let mut line_start = 0;
         for line in text.lines() {
-            render_calls_in(&text, line_start, line, &HamlPipes::new(false), LATEST, |_| true);
+            render_calls_in(&text, line_start, line, &HamlPipes::new(TemplateLang::Erb), LATEST, |_| true);
             line_start += line.len() + 1;
         }
         let parses = render_call::PARSES.with(|parses| parses.get()) - before;

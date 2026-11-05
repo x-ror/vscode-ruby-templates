@@ -80,7 +80,7 @@ fn code_refs<'s, T>(
     find: impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, T)>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef, T)> {
-    let pipes = HamlPipes::new(source.lang == Some(TemplateLang::Haml));
+    let pipes = HamlPipes::new(source.lang.unwrap_or(TemplateLang::Ruby));
     let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);

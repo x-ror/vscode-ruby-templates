@@ -147,7 +147,7 @@ fn convention_targets(
 /// else the partial itself; `None` on a component render or in a template that isn't a partial.
 fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position) -> Option<Vec<PathBuf>> {
     let (line_start, line, col) = util::line_at(&doc.text, pos);
-    if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col) {
+    if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
         return Some(partials::first_folder_only(partials::resolve(project, path, &r)));
     }
     if let Some((_, _, name)) = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col)) {
@@ -530,7 +530,7 @@ impl Backend {
     fn strict_locals_fixes(&self, project: &Project, path: &Path, doc: &Doc, d: &Diagnostic) -> Vec<CodeAction> {
         let text = &doc.text;
         let (line_start, line, start) = util::line_at(text, d.range.start);
-        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
+        let pipes = HamlPipes::new(doc.lang);
         let Some((r, call)) =
             partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()
         else {
@@ -648,7 +648,7 @@ impl Backend {
 
         let engines = &self.options().extra_engines;
         let ruby = || path.map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
-        let render_key = partials::local_key_before(&doc.text, line_start + col, doc.lang == TemplateLang::Haml, ruby)
+        let render_key = partials::local_key_before(&doc.text, line_start + col, doc.lang, ruby)
             .filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
         if let (Some((r, passed, typed)), Some(path)) = (render_key, path) {
             let found = render_local_completions(project(path), path, &r, &passed, typed);
@@ -988,19 +988,18 @@ impl LanguageServer for Backend {
             let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
-        let targets: Vec<PathBuf> = if let Some(r) =
-            partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col)
-        {
-            partials::resolve(&project, &path, &r)
-        } else if let Some(c) = partials::component_ref_at(line, col) {
-            partials::resolve_component(&project, &path, &c)
-        } else {
-            convention_targets(&project, &path, &doc.text, line_start, line, Some(col))
-                .into_iter()
-                .next()
-                .map(|(_, _, found)| found)
-                .unwrap_or_default()
-        };
+        let targets: Vec<PathBuf> =
+            if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
+                partials::resolve(&project, &path, &r)
+            } else if let Some(c) = partials::component_ref_at(line, col) {
+                partials::resolve_component(&project, &path, &c)
+            } else {
+                convention_targets(&project, &path, &doc.text, line_start, line, Some(col))
+                    .into_iter()
+                    .next()
+                    .map(|(_, _, found)| found)
+                    .unwrap_or_default()
+            };
         let mut locs: Vec<Location> = targets.into_iter().filter_map(file_location).collect();
         if !locs.is_empty() || !code_at(doc.lang, &doc.text, line_start + col, &self.options().extra_engines) {
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
@@ -1053,7 +1052,7 @@ impl LanguageServer for Backend {
         }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
-        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
+        let pipes = HamlPipes::new(doc.lang);
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
             // Same renders as diagnostics and references: code only, and the file Rails would pick.
@@ -1093,9 +1092,7 @@ impl LanguageServer for Backend {
             }
         }
         if let Some((project, path)) = &file {
-            if let Some(r) =
-                partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col)
-            {
+            if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
             }
             if let Some(md) = i18n_key_at(project, &doc, path, line_start, line, col, &self.options().extra_engines)
@@ -1246,7 +1243,7 @@ impl LanguageServer for Backend {
             actions.extend(self.strict_locals_fixes(&project, &path, &doc, d).into_iter().map(CodeActionOrCommand::CodeAction));
         }
         let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
-        let pipes = HamlPipes::new(doc.lang == TemplateLang::Haml);
+        let pipes = HamlPipes::new(doc.lang);
         let quick_fixes = unresolved.filter_map(|d| {
             let (line_start, line, start) = util::line_at(&doc.text, d.range.start);
             let r = partials::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()?;
@@ -1662,14 +1659,15 @@ mod tests {
         let md = render_hover(
             &Project::unknown(),
             &file,
-            &partials::render_ref_at(line, 0, line, false, ruby_prism::Version::Latest, 22).unwrap(),
+            &partials::render_ref_at(line, 0, line, TemplateLang::Erb, ruby_prism::Version::Latest, 22).unwrap(),
         );
         assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
         assert!(md.contains("- `app/views/users/_card.html.erb`"), "a path from the Rails root: {md}");
         assert!(!render_hover(
             &Project::unknown(),
             &file,
-            &partials::render_ref_at(r#"render "plain""#, 0, r#"render "plain""#, false, ruby_prism::Version::Latest, 9).unwrap()
+            &partials::render_ref_at(r#"render "plain""#, 0, r#"render "plain""#, TemplateLang::Erb, ruby_prism::Version::Latest, 9)
+                .unwrap()
         )
         .contains("locals:"));
 

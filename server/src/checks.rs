@@ -142,13 +142,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(render_diagnostics(
-            path,
-            project,
-            &doc.text,
-            doc.lang == TemplateLang::Haml,
-            render_filter(doc.lang, &doc.text, &options.extra_engines),
-        ));
+        out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, &options.extra_engines)));
     }
     let disabled = options.disabled(doc.lang);
     out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
@@ -235,14 +229,14 @@ fn render_diagnostics(
     path: &Path,
     project: &Project,
     text: &str,
-    haml: bool,
+    lang: TemplateLang,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<Diagnostic> {
     if project.framework != Framework::Rails || project.is_gem_file(path) {
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
-    let renders = checked_renders(project, path, &views, text, haml, in_code);
+    let renders = checked_renders(project, path, &views, text, lang, in_code);
     let mut partials = Partials { project, path, resolved: HashMap::new(), signatures: HashMap::new() };
     let mut out = unresolved_renders(project, &renders, &mut partials);
     out.extend(strict_locals_mismatches(project, &renders, &mut partials));
@@ -263,7 +257,7 @@ fn checked_renders<'a>(
     path: &Path,
     views: &Path,
     text: &'a str,
-    haml: bool,
+    lang: TemplateLang,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
@@ -274,7 +268,7 @@ fn checked_renders<'a>(
         let Some(dir) = partials::split_render_name(name).0 else { return *bare_names_known };
         *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir() || (!*in_engine && project.lacks_view_folder(dir)))
     };
-    let pipes = HamlPipes::new(haml);
+    let pipes = HamlPipes::new(lang);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
         let refs = partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
@@ -654,7 +648,7 @@ mod tests {
     }
 
     fn render_checks(lang: TemplateLang, path: &Path, project: &Project, text: &str, code: &str) -> Vec<Diagnostic> {
-        let found = render_diagnostics(path, project, text, lang == TemplateLang::Haml, render_filter(lang, text, &[]));
+        let found = render_diagnostics(path, project, text, lang, render_filter(lang, text, &[]));
         found.into_iter().filter(|d| util::code(d) == Some(code)).collect()
     }
 

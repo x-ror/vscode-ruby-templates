@@ -159,7 +159,7 @@ mod tests {
         let text = "{% render \"card\" %}\n";
         let refs = |keep: bool| {
             let in_code = render_filter(TemplateLang::Liquid, text, &[]);
-            partials::render_refs_in(text, 0, text.trim_end(), &HamlPipes::new(false), ruby_prism::Version::Latest, |r| {
+            partials::render_refs_in(text, 0, text.trim_end(), &HamlPipes::new(TemplateLang::Liquid), ruby_prism::Version::Latest, |r| {
                 !keep || in_code(0, 0, r)
             })
         };
