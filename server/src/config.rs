@@ -23,62 +23,82 @@ pub fn settings_for(path: &Path) -> Resolved {
 /// later sections and nearer files winning, as the EditorConfig spec has it.
 fn editorconfig_indent_size(path: &Path, notes: &mut Vec<String>) -> Option<usize> {
     path.file_name()?;
+    let mut properties = Vec::new();
+    for (dir, text) in editorconfig_files(path).iter().rev() {
+        let Ok(relative) = path.strip_prefix(dir) else { continue };
+        if read_matching_sections(text, &slash_path(relative), &mut properties, notes) {
+            notes.push(format!("read {}", dir.join(".editorconfig").display()));
+        }
+    }
+    for (key, value) in properties.iter().filter(|(k, v)| v != "unset" && !is_understood(k, v)) {
+        notes.push(format!(".editorconfig: ignored {key} = {value}"));
+    }
+    indent_size(&properties)
+}
+
+/// The folders above `path` that hold an `.editorconfig`, with its text: nearest first, up to the first `root = true`.
+fn editorconfig_files(path: &Path) -> Vec<(&Path, String)> {
     let mut files = Vec::new();
     for dir in path.ancestors().skip(1) {
-        let file = dir.join(".editorconfig");
-        let Ok(text) = std::fs::read_to_string(&file) else { continue };
+        let Ok(text) = std::fs::read_to_string(dir.join(".editorconfig")) else { continue };
         let root = editorconfig_is_root(&text);
-        files.push((dir.to_path_buf(), file, text));
+        files.push((dir, text));
         if root {
             break;
         }
     }
-    let mut properties: Vec<(String, String)> = Vec::new();
-    for (dir, file, text) in files.iter().rev() {
-        let Ok(relative) = path.strip_prefix(dir) else { continue };
-        let relative = slash_path(relative);
-        let mut applies = false;
-        let mut read = false;
-        for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])) {
-            if let Some(glob) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                applies = section_matches(glob, &relative).unwrap_or_else(|| {
-                    notes.push(format!(".editorconfig: ignored section [{glob}]: can't read the glob"));
-                    false
-                });
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else { continue };
-            if applies {
-                read = true;
-                let key = key.trim().to_ascii_lowercase();
-                properties.retain(|(k, _)| *k != key);
-                properties.push((key, value.trim().to_ascii_lowercase()));
-            }
+    files
+}
+
+/// Sets `properties` (lowercased) from the sections of one `.editorconfig` that match `relative`; true when any did.
+fn read_matching_sections(text: &str, relative: &str, properties: &mut Vec<(String, String)>, notes: &mut Vec<String>) -> bool {
+    let mut applies = false;
+    let mut read = false;
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])) {
+        if let Some(glob) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            applies = section_matches(glob, relative).unwrap_or_else(|| {
+                notes.push(format!(".editorconfig: ignored section [{glob}]: can't read the glob"));
+                false
+            });
+            continue;
         }
-        if read {
-            notes.push(format!("read {}", file.display()));
+        let Some((key, value)) = line.split_once('=') else { continue };
+        if !applies {
+            continue;
         }
+        read = true;
+        let key = key.trim().to_ascii_lowercase();
+        properties.retain(|(k, _)| *k != key);
+        properties.push((key, value.trim().to_ascii_lowercase()));
     }
+    read
+}
+
+fn indent_size(properties: &[(String, String)]) -> Option<usize> {
     let get = |key: &str| properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| *v != "unset");
-    let number = |key: &str| get(key).and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 0);
+    let number = |key: &str| get(key).and_then(positive_number);
     let tab_width = number("tab_width");
     let tabs = get("indent_style") == Some("tab");
     // `tab_width` stands in for `indent_size` only with tabs, as the spec has it.
-    let indent_size = match get("indent_size") {
+    match get("indent_size") {
         Some("tab") => tab_width,
         Some(_) => number("indent_size"),
         None => tab_width.filter(|_| tabs),
-    };
-    let readable = |key: &str, value: &str| match key {
-        "indent_style" => matches!(value, "space" | "tab"),
-        "indent_size" => value == "tab" || number(key).is_some(),
-        "tab_width" => number(key).is_some(),
-        _ => false,
-    };
-    for (key, value) in properties.iter().filter(|(k, v)| v != "unset" && !readable(k, v)) {
-        notes.push(format!(".editorconfig: ignored {key} = {value}"));
     }
-    indent_size
+}
+
+/// Whether `indent_size` reads this property; any other is listed in the notes.
+fn is_understood(key: &str, value: &str) -> bool {
+    match key {
+        "indent_style" => matches!(value, "space" | "tab"),
+        "indent_size" => value == "tab" || positive_number(value).is_some(),
+        "tab_width" => positive_number(value).is_some(),
+        _ => false,
+    }
+}
+
+fn positive_number(value: &str) -> Option<usize> {
+    value.parse().ok().filter(|&n| n > 0)
 }
 
 fn editorconfig_is_root(text: &str) -> bool {
