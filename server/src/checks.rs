@@ -261,9 +261,9 @@ fn is_gem_root(root: &Path) -> bool {
 }
 
 /// Literal renders in code that can be checked, as (line index, line, call, render): `dir/name` with an existing
-/// app/views/dir (a missing dir is usually a gem's, `devise/…`, or a pack's), and a bare name in an action template
-/// when its controller chain is in the app and the app isn't a gem or engine (a partial's bare names follow whichever
-/// controller renders it).
+/// app/views/dir or one no view root has (`view_roots`; a missing dir is usually a gem's or a pack's), and a bare name
+/// in an action template when its controller chain is in the app and the app isn't a gem or engine (a partial's
+/// bare names follow whichever controller renders it).
 fn checked_renders<'a>(
     project: &Project,
     path: &Path,
@@ -272,15 +272,15 @@ fn checked_renders<'a>(
     haml: bool,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
+    let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
     let bare_names_known = LazyCell::new(|| {
-        let in_engine = views.parent().and_then(Path::parent).is_some_and(is_gem_root);
         let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
-        !in_engine && !is_partial && ivars::view_prefixes(project, path).is_some()
+        !*in_engine && !is_partial && ivars::view_prefixes(project, path).is_some()
     });
     let mut dirs: HashMap<String, bool> = HashMap::new();
     let mut checkable = |name: &str| {
         let Some(dir) = partials::split_render_name(name).0 else { return *bare_names_known };
-        *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir())
+        *dirs.entry(dir.to_string()).or_insert_with(|| views.join(dir).is_dir() || (!*in_engine && project.lacks_view_folder(dir)))
     };
     let pipes = HamlPipes::new(haml);
     let mut out = Vec::new();
@@ -789,6 +789,34 @@ mod tests {
         assert!(!in_ruby_context(TemplateLang::Skim, "= render \"x\"", &[], 10));
         assert!(in_ruby_context(TemplateLang::Slim, "= render \"x\"", &[], 10));
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_folders_are_reported_only_when_every_view_root_is_known() {
+        let lock = |gems: &str| format!("GEM\n  specs:\n    actionview (7.1.0)\n{gems}");
+        let viewless = "    zz_pg (1.5.0)\n";
+        let engine = "    zz_engine (1.0.0)\n      railties (>= 6.0)\n    railties (7.1.0)\n";
+        let text = "<%= render \"uesrs/card\" %><%= render \"packs_x/box\" %><%= render \"fancy/nav\" %><%= render \"rails/info\" %>";
+        let messages = |name: &str, gems: &str, extra: &[(&str, &str)]| {
+            let root = std::env::temp_dir().join(format!("rt-missing-folder-{name}-{}", std::process::id()));
+            std::fs::remove_dir_all(&root).ok();
+            write_files(&root, &[("app/views/users/show.html.erb", ""), ("Gemfile.lock", &lock(gems))]);
+            write_files(&root, extra);
+            let view = root.join("app/views/users/show.html.erb");
+            let project = Project::for_template(&view);
+            let found = render_checks(TemplateLang::Erb, &view, &project, text, UNRESOLVED_RENDER);
+            std::fs::remove_dir_all(&root).unwrap();
+            found.into_iter().map(|d| d.message).collect::<Vec<_>>()
+        };
+        let packs = ("packs/packs_x/app/views/packs_x/_box.html.erb", "");
+        let (typo, box_) = ("Missing partial uesrs/_card", "Missing partial packs_x/_box");
+        assert_eq!(messages("plain", viewless, &[]), [typo, box_, "Missing partial fancy/_nav"]);
+        assert_eq!(messages("pack", viewless, &[packs]), [typo, "Missing partial fancy/_nav"], "a pack's views are a root");
+        assert!(messages("engine", engine, &[packs]).is_empty(), "an engine gem that isn't installed may hold any folder");
+        let installed = ("vendor/bundle/ruby/3.3.0/gems/zz_engine-1.0.0/app/views/fancy/_nav.html.erb", "");
+        assert_eq!(messages("installed", engine, &[packs, installed]), [typo]);
+        let prepended = ("config/initializers/views.rb", "ActionController::Base.prepend_view_path \"themes\"\n");
+        assert!(messages("prepended", viewless, &[prepended]).is_empty());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use crate::erb_ruby;
 use crate::ruby::{analyze, BlockEffect};
 use crate::util::{coded, offset_to_position, warning, LineIndex};
 use regex::Regex;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
@@ -30,7 +30,10 @@ const CLOSES_P: &[&str] = &[
 // Inside these a start tag doesn't close a `p` opened outside (13.2.6.4.7 "has an element in button scope").
 const SCOPE_BOUNDARY: &[&str] = &["button", "applet", "object", "template", "marquee", "table", "td", "th", "caption", "svg", "math"];
 const HTML_END_TAG_RULE: &str = "HTML 13.2.6.4.7";
+const HEADINGS: [&str; 6] = ["h1", "h2", "h3", "h4", "h5", "h6"];
 const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
+/// Past this many a file is broken beyond what more warnings would help with.
+const MAX_TAG_DIAGNOSTICS: usize = 20;
 
 // Block helpers whose body is JS/CSS, not HTML; the source has no literal `<script>` to skip.
 static RAW_BLOCK: LazyLock<Regex> =
@@ -44,14 +47,16 @@ pub(crate) struct Tag {
     pub name: String,
     pub start: usize,
     pub end: usize,
-    /// Set on a tag a lone `if`/`unless` left open: only the same condition at the same level closes it.
-    pub wrapper: Option<Wrapper>,
+    /// Set on a tag an `if` chain left open: only a later chain at the same level with the same conditions closes it.
+    pub wrapper: Option<Arc<Wrapper>>,
 }
 
-#[derive(Clone, PartialEq)]
 pub(crate) struct Wrapper {
-    condition: String,
+    /// The normalised condition of each branch (`else` for the last one, if any).
+    chain: Vec<String>,
     level: usize,
+    /// The tags each branch left open, unmarked.
+    branches: Vec<Vec<Tag>>,
 }
 
 /// How the branches of the ERB blocks an event closed ended, worst last.
@@ -68,12 +73,14 @@ pub(crate) enum Paths {
 pub(crate) struct Block {
     pub entry: Vec<Tag>,
     entry_p: PState,
-    branch_ends: Vec<Vec<String>>,
+    branch_ends: Vec<Vec<Tag>>,
     branch_p_ends: Vec<PState>,
     has_else: bool,
     in_branch: bool,
-    /// `if`/`unless` and its whitespace-normalised condition.
-    condition: Option<String>,
+    /// The conditions of an `if`/`unless` chain's branches so far; `None` for any other block.
+    chain: Option<Vec<String>>,
+    /// The wrapper whose open tags this chain's branches have closed so far, in the same order.
+    closing: Option<Arc<Wrapper>>,
 }
 
 /// Whether a `p` element is open, tracked through ERB branches like the tag stack.
@@ -326,39 +333,55 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
 /// Track the tag stack and `p` state through ERB branches. When the branches disagree the blocks are closed anyway,
 /// and the stack is the one the last branch left.
 // ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
-// open makes the stack path-dependent, so checking stops there. The exception is a conditional wrapper, a lone
-// `if`/`unless` that opens tags and a later one with the same condition at the same level that closes them.
+// open makes the stack path-dependent, so checking stops there. The exception is a conditional wrapper: an
+// `if`/`unless` chain that opens tags and a later chain with the same conditions at the same level that closes them.
 pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, blocks: &mut Vec<Block>) -> Paths {
     match event.effect {
         BlockEffect::Open(n) => {
             for _ in 0..n {
                 let in_branch = event.keyword != "case";
                 let entry = stack.clone();
-                let condition =
-                    matches!(event.keyword, "if" | "unless").then(|| event.code.split_whitespace().collect::<Vec<_>>().join(" "));
+                let chain = matches!(event.keyword, "if" | "unless").then(|| vec![condition_key(event.keyword, event.code)]);
+                let closing = chain.as_ref().and_then(|chain| closing_wrapper(stack, blocks.len(), &chain[0]));
+                if let Some(wrapper) = &closing {
+                    reopen_branch(stack, wrapper, 0);
+                }
                 let (branch_ends, branch_p_ends) = (Vec::new(), Vec::new());
-                blocks.push(Block { entry, entry_p: *p, branch_ends, branch_p_ends, has_else: false, in_branch, condition });
+                blocks.push(Block { entry, entry_p: *p, branch_ends, branch_p_ends, has_else: false, in_branch, chain, closing });
             }
         }
         BlockEffect::Continue => {
             let Some(block) = blocks.last_mut() else { return Paths::Differ };
             if block.in_branch {
-                block.branch_ends.push(names(stack));
+                block.branch_ends.push(stack.clone());
                 block.branch_p_ends.push(*p);
             }
             block.in_branch = true;
             block.has_else |= event.keyword == "else";
             *stack = block.entry.clone();
             *p = block.entry_p;
+            let key = if event.keyword == "else" { ELSE.to_string() } else { condition_key(event.keyword, event.code) };
+            match block.chain.as_mut() {
+                Some(chain) if matches!(event.keyword, "elsif" | "else") => chain.push(key),
+                _ => block.chain = None,
+            }
+            let branch = block.chain.as_ref().map_or(0, |c| c.len() - 1);
+            let same_branch = |w: &Arc<Wrapper>| block.chain.as_ref().is_some_and(|c| w.chain.get(branch) == Some(&c[branch]));
+            block.closing = block.closing.take().filter(same_branch);
+            if let Some(wrapper) = &block.closing {
+                reopen_branch(stack, wrapper, branch);
+            }
         }
         BlockEffect::Close(n) => {
             let mut paths = Paths::Agree;
             for _ in 0..n {
                 let Some(block) = blocks.pop() else { return Paths::Differ };
-                let agree = paths_agree(&block.branch_ends, &names(&block.entry), block.has_else, &names(stack));
-                paths = paths.max(if agree {
+                let ends: Vec<Vec<String>> = block.branch_ends.iter().map(|b| names(b)).collect();
+                let now = names(stack);
+                let level = blocks.len();
+                paths = paths.max(if paths_agree(&ends, &names(&block.entry), block.has_else, &now) {
                     Paths::Agree
-                } else if is_conditional_wrapper(&block, stack, blocks.len()) {
+                } else if closes_wrapper(&block, &ends, &now) || mark_wrapper(&block, stack, level) {
                     Paths::Wrapper
                 } else {
                     Paths::Differ
@@ -374,34 +397,81 @@ pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, bloc
     Paths::Agree
 }
 
-/// A lone `if`/`unless` that leaves tags open (and marks them) or closes ones an earlier `if` with its condition left.
-fn is_conditional_wrapper(block: &Block, stack: &mut [Tag], level: usize) -> bool {
-    let Some(condition) = &block.condition else { return false };
-    if !block.branch_ends.is_empty() || block.has_else {
-        return false;
+const ELSE: &str = "else";
+
+/// A branch condition with `unless`, `!` and `not` folded into one form, so `if !x` and `unless x` compare equal.
+/// Only a plain method or variable is negated; for anything with operators the text is kept as written.
+fn condition_key(keyword: &str, code: &str) -> String {
+    let condition = code.split_whitespace().skip(1).collect::<Vec<_>>().join(" ");
+    let condition = condition.strip_suffix(" then").unwrap_or(&condition);
+    let mut negated = keyword == "unless";
+    let mut rest = condition;
+    while let Some(inner) = rest.strip_prefix('!').or_else(|| rest.strip_prefix("not ")) {
+        negated = !negated;
+        rest = inner.trim_start();
     }
-    let entry = &block.entry;
-    let wrapper = Wrapper { condition: condition.clone(), level };
-    if stack.len() > entry.len()
-        && stack.iter().zip(entry).all(|(a, b)| a.name == b.name)
-        && stack[entry.len()..].iter().all(|t| t.wrapper.is_none())
-    {
-        stack[entry.len()..].iter_mut().for_each(|t| t.wrapper = Some(wrapper.clone()));
-        return true;
+    let plain = !rest.is_empty() && rest.chars().all(|c| c.is_alphanumeric() || "_@$.?:()[]'\"".contains(c));
+    match (plain, negated) {
+        (true, true) => format!("!{rest}"),
+        (true, false) => rest.to_string(),
+        (false, _) if keyword == "unless" => format!("!({condition})"),
+        (false, _) => condition.to_string(),
     }
-    stack.len() < entry.len()
-        && stack.iter().zip(entry).all(|(a, b)| a.name == b.name)
-        && entry[stack.len()..].iter().all(|t| t.wrapper.as_ref() == Some(&wrapper))
 }
 
-/// Whether `tag`, a wrapper's, is being closed inside the `if` that matches its condition.
+/// The wrapper whose open tags end `stack`, if the chain `level` deep starting with `key` is the one that closes them.
+fn closing_wrapper(stack: &[Tag], level: usize, key: &str) -> Option<Arc<Wrapper>> {
+    let wrapper = stack.last()?.wrapper.as_ref()?;
+    let tail = stack.iter().rev().take_while(|t| t.wrapper.as_ref().is_some_and(|w| Arc::ptr_eq(w, wrapper))).count();
+    (wrapper.level == level && wrapper.chain.first().map(String::as_str) == Some(key) && wrapper.branches.last()?.len() == tail)
+        .then(|| wrapper.clone())
+}
+
+/// Swap the open tags of the wrapper's last branch for the ones `branch` left, which this branch is to close.
+fn reopen_branch(stack: &mut Vec<Tag>, wrapper: &Arc<Wrapper>, branch: usize) {
+    let kept = stack.len() - wrapper.branches.last().map_or(0, Vec::len);
+    stack.truncate(kept);
+    stack.extend(wrapper.branches[branch].iter().cloned().map(|tag| Tag { wrapper: Some(wrapper.clone()), ..tag }));
+}
+
+/// Every branch of `block`, the same chain as the wrapper it closed tags of, ended without them.
+fn closes_wrapper(block: &Block, ends: &[Vec<String>], now: &[String]) -> bool {
+    let Some(wrapper) = &block.closing else { return false };
+    if block.chain.as_ref() != Some(&wrapper.chain) {
+        return false;
+    }
+    let kept = block.entry.len() - wrapper.branches.last().map_or(0, Vec::len);
+    let base = names(&block.entry[..kept]);
+    paths_agree(ends, &base, block.has_else, now)
+}
+
+/// An `if`/`unless` chain whose branches leave tags open (and mark them): every branch keeps the entry stack and adds to it.
+fn mark_wrapper(block: &Block, stack: &mut [Tag], level: usize) -> bool {
+    let Some(chain) = &block.chain else { return false };
+    let entry = &block.entry;
+    let ends = block.branch_ends.iter().map(Vec::as_slice).chain(std::iter::once(&*stack));
+    let extras: Option<Vec<Vec<Tag>>> = ends
+        .map(|end| {
+            let extra = end.get(entry.len()..)?;
+            let intact = end.iter().zip(entry).all(|(a, b)| a.name == b.name);
+            (intact && extra.iter().all(|t| t.wrapper.is_none())).then(|| extra.to_vec())
+        })
+        .collect();
+    // The stack holds the last branch's tags, which carry the mark.
+    let Some(branches) = extras.filter(|b| b.last().is_some_and(|extra| !extra.is_empty())) else { return false };
+    let wrapper = Arc::new(Wrapper { chain: chain.clone(), level, branches });
+    stack[entry.len()..].iter_mut().for_each(|t| t.wrapper = Some(wrapper.clone()));
+    true
+}
+
+/// Whether `tag`, a wrapper's, is being closed inside the chain that matches its conditions.
 fn closes_in_matching_if(tag: &Tag, blocks: &[Block]) -> bool {
     let Some(wrapper) = &tag.wrapper else { return true };
-    blocks.len() == wrapper.level + 1 && blocks.last().and_then(|b| b.condition.as_ref()) == Some(&wrapper.condition)
+    blocks.len() == wrapper.level + 1 && blocks.last().and_then(|b| b.closing.as_ref()).is_some_and(|w| Arc::ptr_eq(w, wrapper))
 }
 
 /// Every finished branch, and the fall-through when there's no `else`, ends in `now`.
-fn paths_agree<T: PartialEq>(branch_ends: &[T], entry: &T, has_else: bool, now: &T) -> bool {
+fn paths_agree<T: PartialEq<U>, U: ?Sized>(branch_ends: &[T], entry: &T, has_else: bool, now: &U) -> bool {
     branch_ends.iter().all(|b| b == now) && (has_else || entry == now)
 }
 
@@ -471,7 +541,13 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
     let mut optional: Vec<Tag> = Vec::new();
     let mut blocks: Vec<Block> = Vec::new();
     let mut p = PState::Closed;
+    let first = out.len();
+    // Elements a stray end tag's message already names: `<div>…</dvi>` is one mistake.
+    let mut named: Vec<usize> = Vec::new();
     for token in tokens {
+        if out.len() - first >= MAX_TAG_DIAGNOSTICS {
+            return;
+        }
         match token {
             Token::Erb(event) => {
                 if apply(&event, &mut stack, &mut p, &mut blocks) == Paths::Differ {
@@ -527,8 +603,18 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
                     let message =
                         format!("End tag `</{name}>` doesn't close the open `<{}>` (line {line}) ({HTML_END_TAG_RULE})", top.name);
                     out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
-                    // ponytail: first mismatch only; recovery guesses would cascade into noise.
-                    return;
+                    let heading = |name: &str| HEADINGS.contains(&name);
+                    if heading(&name) && heading(&top.name) {
+                        // Any heading's end tag closes the open heading (13.2.6.4.7).
+                        stack.pop();
+                    } else if stack.iter().any(|t| t.name == name || (heading(&name) && heading(&t.name))) {
+                        // Crossing an open element could close more than one way, so checking stops.
+                        // ponytail: recovering past it would guess, and cascade into noise.
+                        return;
+                    } else {
+                        // A stray end tag is dropped, as browsers do.
+                        named.push(top.start);
+                    }
                 }
             },
         }
@@ -538,7 +624,8 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
             coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
         };
         // A wrapper's closing `if` may be in another file (layout, partial).
-        out.extend(stack.iter().filter(|t| t.wrapper.is_none()).map(unclosed));
+        let room = MAX_TAG_DIAGNOSTICS - (out.len() - first);
+        out.extend(stack.iter().filter(|t| t.wrapper.is_none() && !named.contains(&t.start)).take(room).map(unclosed));
     }
 }
 
@@ -576,6 +663,46 @@ mod tests {
         );
         assert_eq!(messages("<% items.each do |i| %><div><% end %></div>"), Vec::<String>::new());
         assert_eq!(messages("<ul><% items.each do |i| %><li><%= i %><% end %>"), ["`<ul>` is never closed (HTML 13.2.6.4.7)"]);
+    }
+
+    #[test]
+    fn a_stray_end_tag_is_dropped_and_checking_goes_on() {
+        let stray = "End tag `</span>` doesn't close the open `<div>` (line 1) (HTML 13.2.6.4.7)";
+        let unexpected = "Unexpected end tag `</b>`: no open element of that name (HTML 13.2.6.4.7)";
+        assert_eq!(messages("<div></span><p>x</p></div></b>"), [stray, unexpected]);
+        assert_eq!(messages("<div></span></div><section>"), [stray, "`<section>` is never closed (HTML 13.2.6.4.7)"]);
+        assert_eq!(messages("<div><% if a %></span><% end %></div></b>"), [stray, unexpected]);
+        assert_eq!(super::diagnostics("<div></span></div>", true).len(), 1);
+        assert_eq!(messages("<div></dvi>").len(), 1, "the typo'd end tag already names the unclosed element");
+    }
+
+    #[test]
+    fn an_end_tag_crossing_an_open_element_stops_checking() {
+        let crossed = "End tag `</div>` doesn't close the open `<span>` (line 1) (HTML 13.2.6.4.7)";
+        assert_eq!(messages("<div><span></div></b>"), [crossed]);
+        assert_eq!(messages("<div><span></div><i>"), [crossed]);
+    }
+
+    #[test]
+    fn a_heading_end_tag_closes_the_open_heading() {
+        let mismatch = "End tag `</h2>` doesn't close the open `<h3>` (line 1) (HTML 13.2.6.4.7)";
+        assert_eq!(messages("<div><h3>a</h2></div><b>"), [mismatch, "`<b>` is never closed (HTML 13.2.6.4.7)"]);
+        assert_eq!(messages("<h3><b>a</h2></b>").len(), 1, "a heading below another element stops checking");
+    }
+
+    #[test]
+    fn end_tags_close_through_implied_end_elements() {
+        assert!(messages("<ul><li>a<li>b</ul><dl><dt>a<dd>b</dl><table><tr><td>a<td>b</table><select><option>a</select>").is_empty());
+        assert_eq!(messages("<ul><li>a<li>b</ul></i>").len(), 1);
+    }
+
+    #[test]
+    fn diagnostics_per_file_are_capped() {
+        let strays = "<div></span></div>".repeat(MAX_TAG_DIAGNOSTICS * 2);
+        assert_eq!(messages(&strays).len(), MAX_TAG_DIAGNOSTICS);
+        let unclosed = "<section>".repeat(MAX_TAG_DIAGNOSTICS * 2);
+        assert_eq!(messages(&unclosed).len(), MAX_TAG_DIAGNOSTICS);
+        assert_eq!(messages(&"</b>".repeat(MAX_TAG_DIAGNOSTICS + 1)).len(), MAX_TAG_DIAGNOSTICS);
     }
 
     #[test]
@@ -770,6 +897,87 @@ mod tests {
         let looped = "<% items.each do |i| %><% if i %><div><% end %>x<% if i %></div><% end %><% end %>";
         assert!(messages(looped).is_empty());
         assert_eq!(messages(&format!("{looped}</i>")).len(), 1);
+    }
+
+    #[test]
+    fn if_else_chain_wrapper_is_balanced() {
+        let open = "<% if link %><a href=\"<%= link %>\"><% else %><span><% end %>\n  x\n";
+        let close = "<% if link %></a><% else %></span><% end %>";
+        assert!(messages(&format!("{open}{close}")).is_empty());
+        assert_eq!(messages(&format!("{open}{close}</i>")).len(), 1, "error after");
+        assert_eq!(messages(&format!("{open}<div></i></div>{close}")).len(), 1, "error between");
+        let three = "<% if a %><b><% elsif c %><i><% else %><u><% end %>x<% if a %></b><% elsif c %></i><% else %></u><% end %>";
+        assert_eq!(messages(&format!("{three}</s>")).len(), 1);
+        let no_else = "<% if a %><b><% elsif c %><i><% end %>x<% if a %></b><% elsif c %></i><% end %>";
+        assert_eq!(messages(&format!("{no_else}</s>")).len(), 1);
+        let empty_middle = "<% if a %><b><% elsif c %><% else %><u><% end %>x<% if a %></b><% elsif c %><% else %></u><% end %>";
+        assert_eq!(messages(&format!("{empty_middle}</s>")).len(), 1);
+        let unclosed = "<% if a %><b><% else %><i><% end %>x<% if a %></b><% else %></i><% end %><p></p><u>";
+        assert_eq!(messages(unclosed), ["`<u>` is never closed (HTML 13.2.6.4.7)"]);
+    }
+
+    #[test]
+    fn if_else_chain_wrapper_stops_when_the_closing_chain_differs() {
+        let open = "<% if a %><b><% else %><i><% end %>x";
+        let over_closed = "<% if a %></b></i><% else %></i><% end %>";
+        assert_eq!(messages(&format!("{open}{over_closed}")).len(), 1, "a real error inside a matching branch");
+        let empty_last = "<% if a %><b><% else %><% end %>x<% if a %></b><% else %><% end %></s>";
+        assert!(messages(empty_last).is_empty(), "no tag to carry the mark");
+        for close in [
+            "<% if a %></i><% else %></b><% end %>",
+            "<% if c %></b><% else %></i><% end %>",
+            "<% if a %></b><% end %>",
+            "<% if a %></b><% elsif c %></i><% else %></i><% end %>",
+            "<% if a %></b><% else %><% end %>",
+            "<% if a %><% else %><% end %>",
+            "<% unless a %></b><% else %></i><% end %>",
+            "</i>",
+        ] {
+            assert!(messages(&format!("{open}{close}</s>")).is_empty(), "{close}");
+        }
+    }
+
+    #[test]
+    fn unless_else_chain_wrapper_closes_with_the_negated_if_else() {
+        let open = "<% unless a %><b><% else %><i><% end %>x";
+        for close in ["<% unless a %></b><% else %></i><% end %>", "<% if !a %></b><% else %></i><% end %>"] {
+            assert!(messages(&format!("{open}{close}")).is_empty(), "{close}");
+            assert_eq!(messages(&format!("{open}{close}</s>")).len(), 1, "{close}");
+        }
+    }
+
+    #[test]
+    fn stray_end_tags_in_conditional_branches_are_each_reported() {
+        let text = "<div><% if a %></span><% else %></em><% end %></div>";
+        assert_eq!(messages(text).len(), 2);
+        assert_eq!(messages("<div><% if a %><b><% end %></span></div>").len(), 0, "path-dependent stack stops checking");
+    }
+
+    #[test]
+    fn negated_conditions_match_unless() {
+        for (open, close) in [
+            ("if !admin", "unless admin"),
+            ("if not admin", "unless admin"),
+            ("unless !admin", "if admin"),
+            ("unless admin", "if ! admin"),
+            ("if !user.admin?", "unless user.admin?"),
+            ("if !admin then", "unless admin"),
+            ("unless a && b", "if !(a && b)"),
+            ("if a && b", "if a && b"),
+        ] {
+            let text = format!("<% {open} %><div class=\"x\"><% end %>y<% {close} %></div><% end %>");
+            assert_eq!(messages(&format!("{text}</i>")).len(), 1, "{open} / {close}");
+        }
+        for (open, close) in [
+            ("if !a && b", "unless a && b"),
+            ("if not a and b", "unless a and b"),
+            ("if admin", "if !admin"),
+            ("if !a", "unless !a"),
+            ("unless a || b", "if !a || b"),
+        ] {
+            let text = format!("<% {open} %><div><% end %>y<% {close} %></div><% end %></i>");
+            assert!(messages(&text).is_empty(), "{open} / {close}");
+        }
     }
 
     #[test]
