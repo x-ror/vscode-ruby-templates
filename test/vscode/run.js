@@ -78,6 +78,7 @@ write(
   "<div>\r\n  <p>a</p>\r\n</div>\r\n",
 );
 write("app/views/users/_crlf_part.html.erb", "old\n");
+write("app/views/users/_self.html.erb", "<p>a</p>\n");
 try {
   await runTests({
     version: process.env.VSCODE_VERSION ?? "stable",

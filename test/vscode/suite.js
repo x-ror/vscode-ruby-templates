@@ -595,6 +595,30 @@ const checks = {
     }
   },
 
+  async "extract partial refuses the partial's own name"() {
+    const rel = "app/views/users/_self.html.erb";
+    const original = vscode.window.showWarningMessage;
+    vscode.window.showWarningMessage = async () => "Overwrite";
+    try {
+      return await answeringInputBox("self", async () => {
+        const editor = await open(rel);
+        try {
+          select(editor, 0, 0, 0, 8);
+          await vscode.commands.executeCommand("rubyTemplates.extractPartial");
+          assert.strictEqual(editor.document.getText(), "<p>a</p>\n");
+          assert.strictEqual(
+            fs.readFileSync(path.join(app, rel), "utf8"),
+            "<p>a</p>\n",
+          );
+        } finally {
+          await revert(editor);
+        }
+      });
+    } finally {
+      vscode.window.showWarningMessage = original;
+    }
+  },
+
   async "switch to related: component class"() {
     await open("app/components/badge_component.html.erb");
     await vscode.commands.executeCommand("rubyTemplates.switchRelated");

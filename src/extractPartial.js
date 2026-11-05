@@ -50,6 +50,12 @@ async function extractPartial() {
     );
     return;
   }
+  if (path.resolve(target) === path.resolve(doc.uri.fsPath)) {
+    vscode.window.showErrorMessage(
+      `"${name}" names this partial itself; pick another name.`,
+    );
+    return;
+  }
   const targetUri = vscode.Uri.file(target);
   if (!(await confirmOverwrite(targetUri))) return;
 
