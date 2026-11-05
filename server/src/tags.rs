@@ -41,6 +41,58 @@ static RAW_BLOCK: LazyLock<Regex> =
 // A `{ … }` block has no `end` for `raw_block_bodies` to find, so its helper is left unchecked like the formatter does.
 static BRACE_BLOCK_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\s*(\|[^|]*\|\s*)?$").unwrap());
 
+/// A matched `<name …>…</name>` pair, as byte offsets.
+pub struct Element {
+    pub name: String,
+    pub start: usize,
+    pub open_end: usize,
+    pub close_start: usize,
+    pub end: usize,
+}
+
+/// `partial`: split-wrapper partials (`_header` opens a `<div>` that `_footer` closes) are legitimate,
+/// so only mismatches are reported there.
+pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
+    tokens_of(text, &analyzed(text), true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, partial).0)
+}
+
+/// Matched element pairs up to the first point where the tag stack becomes uncertain.
+pub fn elements(text: &str) -> Vec<Element> {
+    elements_of(text, &analyzed(text))
+}
+
+pub(crate) fn elements_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Vec<Element> {
+    tokens_of(text, analyzed, true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, true).1)
+}
+
+/// The open and close tag names of the element whose name holds byte `offset`, for linked editing.
+pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
+    elements(text).into_iter().find_map(|e| {
+        let open = (e.start + 1, e.start + 1 + e.name.len());
+        let close = (e.close_start + 2, e.close_start + 2 + e.name.len());
+        // An implied end (`<li>a<li>`) has no `</li>` to edit along.
+        let names = |(s, end): (usize, usize)| text.get(s..end).is_some_and(|n| n.eq_ignore_ascii_case(&e.name));
+        let holds = |(s, end): (usize, usize)| (s..=end).contains(&offset);
+        (names(open) && names(close) && (holds(open) || holds(close))).then_some([open, close])
+    })
+}
+
+/// Every Erubi tag with its block effect; comments and `<%%` literals are `Neutral`.
+pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
+    erb_ruby::tags(text)
+        .into_iter()
+        .map(|t| {
+            let effect = if t.is_literal() || t.is_comment() { BlockEffect::Neutral } else { analyze(&text[t.code.clone()]) };
+            (t, effect)
+        })
+        .collect()
+}
+
+/// The template's tokens; `None` for broken ERB or a JS/CSS block helper, which the formatter can't re-indent.
+pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
+    tokens_of(text, &analyzed(text), false)
+}
+
 #[derive(Clone)]
 pub(crate) struct Tag {
     pub name: String,
@@ -128,152 +180,116 @@ pub(crate) enum Token<'a> {
     Unterminated,
 }
 
-fn names(stack: &[Tag]) -> Vec<String> {
-    stack.iter().map(|t| t.name.clone()).collect()
-}
-
-fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
-}
-
-struct TagEnd {
-    end: usize,
-    self_closing: bool,
-    quoted: Vec<(usize, usize)>,
-}
-
-/// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
-/// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
-/// value, not to `/>`.
-fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
-    let mut i = from;
-    let mut prev = 0u8;
-    let mut unquoted = false;
-    let mut quoted = Vec::new();
-    while let Some(&b) = html.get(i) {
-        match b {
-            b'>' => return Some(TagEnd { end: i + 1, self_closing: prev == b'/' && !unquoted, quoted }),
-            b'"' | b'\'' if prev == b'=' => {
-                let close = find(html, i + 1, &[b])?;
-                quoted.push((i, close + 1));
-                i = close;
-            }
-            _ if b.is_ascii_whitespace() => unquoted = false,
-            _ if prev == b'=' => unquoted = true,
-            _ => {}
+/// The tag diagnostics and the matched elements of `tokens`, up to the first point where the tag stack becomes uncertain.
+fn scan_tokens(text: &str, tokens: Vec<Token<'_>>, partial: bool) -> (Vec<Diagnostic>, Vec<Element>) {
+    let mut out = Vec::new();
+    let mut elements = Vec::new();
+    let index = LineIndex::new(text);
+    let range = |start, end| index.range(start, end);
+    let mut stack: Vec<Tag> = Vec::new();
+    // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
+    let mut optional: Vec<Tag> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut p = PState::Closed;
+    // Elements a stray end tag's message already names: `<div>…</dvi>` is one mistake.
+    let mut named: Vec<usize> = Vec::new();
+    for token in tokens {
+        if out.len() >= MAX_TAG_DIAGNOSTICS {
+            return (out, elements);
         }
-        if !b.is_ascii_whitespace() {
-            prev = b;
-        }
-        i += 1;
-    }
-    None
-}
-
-/// Every Erubi tag with its block effect; comments and `<%%` literals are `Neutral`.
-pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
-    erb_ruby::tags(text)
-        .into_iter()
-        .map(|t| {
-            let effect = if t.is_literal() || t.is_comment() { BlockEffect::Neutral } else { analyze(&text[t.code.clone()]) };
-            (t, effect)
-        })
-        .collect()
-}
-
-/// Body byte ranges of the JS/CSS block helpers (`javascript_tag do … end`), up to their matching `end`. When the
-/// depth never closes (an inner `if` lacks its `end`), up to the last `end` before the next markup line that is no
-/// more indented than the helper; failing that, the end of the text.
-fn raw_block_bodies(text: &str, analyzed: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> Vec<(usize, usize)> {
-    let mut bodies = Vec::new();
-    for (i, (tag, effect)) in analyzed.iter().enumerate() {
-        let BlockEffect::Open(opened) = *effect else { continue };
-        if tag.is_literal() || tag.is_comment() || !RAW_BLOCK.is_match(&text[tag.code.clone()]) {
-            continue;
-        }
-        let mut depth = opened;
-        let close = analyzed[i + 1..].iter().find_map(|(t, effect)| {
-            match *effect {
-                BlockEffect::Open(n) => depth += n,
-                BlockEffect::Close(n) => depth = depth.saturating_sub(n),
-                _ => {}
-            }
-            (depth == 0).then_some(t.start)
-        });
-        let close = close.unwrap_or_else(|| unbalanced_body_end(text, tag.start, opened, &analyzed[i + 1..]));
-        bodies.push((tag.end, close));
-    }
-    bodies
-}
-
-fn unbalanced_body_end(text: &str, helper_start: usize, opened: usize, after: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> usize {
-    let indentation = |line: &str| line.len() - line.trim_start().len();
-    let helper_line = &text[text[..helper_start].rfind('\n').map_or(0, |i| i + 1)..];
-    let helper_indent = indentation(helper_line);
-    let markup_line = text[helper_start..].match_indices('\n').map(|(i, _)| helper_start + i + 1).find(|&start| {
-        let line = text[start..].lines().next().unwrap_or("");
-        let Some(tag) = line.trim_start().strip_prefix('<') else { return false };
-        tag.strip_prefix('/').unwrap_or(tag).starts_with(|c: char| c.is_ascii_alphabetic()) && indentation(line) <= helper_indent
-    });
-    let Some(markup_line) = markup_line else { return text.len() };
-    // Only an `end` that could close the helper itself: a balanced inner `if`'s end is JS body.
-    let mut depth = opened;
-    let mut last_end = None;
-    for (t, effect) in after.iter().take_while(|(t, _)| t.end <= markup_line) {
-        match *effect {
-            BlockEffect::Open(n) => depth += n,
-            BlockEffect::Close(n) => {
-                if depth <= opened {
-                    last_end = Some(t.start);
+        match token {
+            Token::Erb(event) => {
+                if apply(&event, &mut stack, &mut p, &mut blocks) == Paths::Differ {
+                    return (out, elements);
                 }
-                depth = depth.saturating_sub(n);
             }
-            _ => {}
+            Token::Comment { .. } | Token::Raw { close: None, .. } => {}
+            Token::Unterminated => return (out, elements),
+            Token::Raw { tag, close: Some((close_start, end)) } => {
+                elements.push(Element { name: tag.name, start: tag.start, open_end: tag.end, close_start, end })
+            }
+            Token::Open { tag, pairs, .. } => {
+                if CLOSES_P.contains(&tag.name.as_str()) {
+                    p = match p {
+                        _ if tag.name == "p" => PState::Open,
+                        PState::Open if scope_boundary_open(&stack, &optional) => PState::Unknown,
+                        PState::Open => PState::Closed,
+                        other => other,
+                    };
+                }
+                if pairs {
+                    stack.push(tag);
+                } else if OPTIONAL_END.contains(&tag.name.as_str()) {
+                    optional.push(tag);
+                }
+            }
+            Token::Close { tag: Tag { name, start, end, .. }, .. } if NO_END_TAG.contains(&name.as_str()) => {
+                out.push(void_close_tag(&name, range(start, end)));
+            }
+            Token::Close { tag: Tag { name, start, end, .. }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
+                // `<p>a<div>b</div></p>`: the `div` closed the `p`, and the parser inserts an empty one for this end tag.
+                if name == "p" {
+                    if p == PState::Closed && !partial {
+                        out.push(unexpected_close_tag(&name, range(start, end)));
+                    }
+                    p = PState::Closed;
+                }
+                if let Some(at) = optional.iter().rposition(|t| t.name == name) {
+                    elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
+                    optional.truncate(at);
+                }
+            }
+            Token::Close { tag: Tag { name, start, end, .. }, .. } => match stack.last() {
+                None if partial => {}
+                None => out.push(unexpected_close_tag(&name, range(start, end))),
+                Some(top) if top.wrapper.is_some() && (top.name != name || !closes_in_matching_if(top, &blocks)) => return (out, elements),
+                Some(top) if top.name == name => {
+                    elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
+                    stack.pop();
+                }
+                Some(top) => {
+                    let line = index.line_of(top.start) + 1;
+                    let message =
+                        format!("End tag `</{name}>` doesn't close the open `<{}>` (line {line}) ({HTML_END_TAG_RULE})", top.name);
+                    out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
+                    let heading = |name: &str| HEADINGS.contains(&name);
+                    if heading(&name) && heading(&top.name) {
+                        // Any heading's end tag closes the open heading (13.2.6.4.7).
+                        stack.pop();
+                    } else if stack.iter().any(|t| t.name == name || (heading(&name) && heading(&t.name))) {
+                        // Crossing an open element could close more than one way, so checking stops.
+                        // Recovering past it would guess, and cascade into noise.
+                        return (out, elements);
+                    } else {
+                        // A stray end tag is dropped, as browsers do.
+                        named.push(top.start);
+                    }
+                }
+            },
         }
     }
-    last_end.unwrap_or(markup_line)
-}
-
-/// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
-/// renders as text, so it stays in the HTML. With `skip_raw_blocks` the JS/CSS block helpers' bodies are blanked and
-/// their events dropped; without, any such helper makes the result `None`.
-fn split<'a>(
-    text: &'a str,
-    analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)],
-    skip_raw_blocks: bool,
-) -> Option<(Vec<u8>, Vec<ErbEvent<'a>>)> {
-    // An unclosed `<%` is reported elsewhere; tag positions would be guesswork. `<%%` is text.
-    let tail = &text[analyzed.last().map_or(0, |(t, _)| t.end)..];
-    if tail.match_indices("<%").any(|(at, _)| !tail[at..].starts_with("<%%")) {
-        return None;
-    }
-    let mut html = text.as_bytes().to_ascii_lowercase();
-    let mut events = Vec::new();
-    for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
-        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
-        let (effect, keyword, code) = if tag.is_comment() {
-            (BlockEffect::Neutral, "", "")
-        } else {
-            let snippet = &text[tag.code.clone()];
-            if RAW_BLOCK.is_match(snippet) && (!skip_raw_blocks || BRACE_BLOCK_OPEN.is_match(snippet)) {
-                return None;
-            }
-            (*effect, snippet.split_whitespace().next().unwrap_or(""), snippet)
+    if blocks.is_empty() && !partial {
+        let unclosed = |t: &Tag| {
+            coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
         };
-        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, code, comment: tag.is_comment() });
+        // A wrapper's closing `if` may be in another file (layout, partial).
+        let room = MAX_TAG_DIAGNOSTICS - out.len();
+        out.extend(stack.iter().filter(|t| t.wrapper.is_none() && !named.contains(&t.start)).take(room).map(unclosed));
     }
-    if skip_raw_blocks {
-        for (from, to) in raw_block_bodies(text, analyzed) {
-            html[from..to].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
-            events.retain(|e| e.at < from || e.at >= to);
-        }
-    }
-    Some((html, events))
+    (out, elements)
 }
 
-/// The template's tokens; `None` for broken ERB or a JS/CSS block helper, which the formatter can't re-indent.
-pub(crate) fn tokens(text: &str) -> Option<Vec<Token<'_>>> {
-    tokens_of(text, &analyzed(text), false)
+fn scope_boundary_open(stack: &[Tag], optional: &[Tag]) -> bool {
+    stack.iter().chain(optional).any(|t| SCOPE_BOUNDARY.contains(&t.name.as_str()))
+}
+
+fn unexpected_close_tag(name: &str, range: Range) -> Diagnostic {
+    let message = format!("Unexpected end tag `</{name}>`: no open element of that name ({HTML_END_TAG_RULE})");
+    coded(warning(range, message), code::UNEXPECTED_CLOSE_TAG)
+}
+
+fn void_close_tag(name: &str, range: Range) -> Diagnostic {
+    coded(warning(range, format!("End tag `</{name}>` for a void element (HTML 13.1.2)")), code::UNEXPECTED_CLOSE_TAG)
 }
 
 /// `skip_raw_blocks`: keep the tokens around JS/CSS block helpers and leave their bodies out.
@@ -327,6 +343,134 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
     }
     tokens.extend(events.map(Token::Erb));
     Some(tokens)
+}
+
+fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+}
+
+struct TagEnd {
+    end: usize,
+    self_closing: bool,
+    quoted: Vec<(usize, usize)>,
+}
+
+/// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
+/// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
+/// value, not to `/>`.
+fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
+    let mut i = from;
+    let mut prev = 0u8;
+    let mut unquoted = false;
+    let mut quoted = Vec::new();
+    while let Some(&b) = html.get(i) {
+        match b {
+            b'>' => return Some(TagEnd { end: i + 1, self_closing: prev == b'/' && !unquoted, quoted }),
+            b'"' | b'\'' if prev == b'=' => {
+                let close = find(html, i + 1, &[b])?;
+                quoted.push((i, close + 1));
+                i = close;
+            }
+            _ if b.is_ascii_whitespace() => unquoted = false,
+            _ if prev == b'=' => unquoted = true,
+            _ => {}
+        }
+        if !b.is_ascii_whitespace() {
+            prev = b;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
+/// renders as text, so it stays in the HTML. With `skip_raw_blocks` the JS/CSS block helpers' bodies are blanked and
+/// their events dropped; without, any such helper makes the result `None`.
+fn split<'a>(
+    text: &'a str,
+    analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)],
+    skip_raw_blocks: bool,
+) -> Option<(Vec<u8>, Vec<ErbEvent<'a>>)> {
+    // An unclosed `<%` is reported elsewhere; tag positions would be guesswork. `<%%` is text.
+    let tail = &text[analyzed.last().map_or(0, |(t, _)| t.end)..];
+    if tail.match_indices("<%").any(|(at, _)| !tail[at..].starts_with("<%%")) {
+        return None;
+    }
+    let mut html = text.as_bytes().to_ascii_lowercase();
+    let mut events = Vec::new();
+    for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
+        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+        let (effect, keyword, code) = if tag.is_comment() {
+            (BlockEffect::Neutral, "", "")
+        } else {
+            let snippet = &text[tag.code.clone()];
+            if RAW_BLOCK.is_match(snippet) && (!skip_raw_blocks || BRACE_BLOCK_OPEN.is_match(snippet)) {
+                return None;
+            }
+            (*effect, snippet.split_whitespace().next().unwrap_or(""), snippet)
+        };
+        events.push(ErbEvent { at: tag.start, end: tag.end, effect, keyword, code, comment: tag.is_comment() });
+    }
+    if skip_raw_blocks {
+        for (from, to) in raw_block_bodies(text, analyzed) {
+            html[from..to].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+            events.retain(|e| e.at < from || e.at >= to);
+        }
+    }
+    Some((html, events))
+}
+
+/// Body byte ranges of the JS/CSS block helpers (`javascript_tag do … end`), up to their matching `end`. When the
+/// depth never closes (an inner `if` lacks its `end`), up to the last `end` before the next markup line that is no
+/// more indented than the helper; failing that, the end of the text.
+fn raw_block_bodies(text: &str, analyzed: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> Vec<(usize, usize)> {
+    let mut bodies = Vec::new();
+    for (i, (tag, effect)) in analyzed.iter().enumerate() {
+        let BlockEffect::Open(opened) = *effect else { continue };
+        if tag.is_literal() || tag.is_comment() || !RAW_BLOCK.is_match(&text[tag.code.clone()]) {
+            continue;
+        }
+        let mut depth = opened;
+        let close = analyzed[i + 1..].iter().find_map(|(t, effect)| {
+            match *effect {
+                BlockEffect::Open(n) => depth += n,
+                BlockEffect::Close(n) => depth = depth.saturating_sub(n),
+                _ => {}
+            }
+            (depth == 0).then_some(t.start)
+        });
+        let close = close.unwrap_or_else(|| unbalanced_body_end(text, tag.start, opened, &analyzed[i + 1..]));
+        bodies.push((tag.end, close));
+    }
+    bodies
+}
+
+fn unbalanced_body_end(text: &str, helper_start: usize, opened: usize, after: &[(erb_ruby::ErbTag<'_>, BlockEffect)]) -> usize {
+    let indentation = |line: &str| line.len() - line.trim_start().len();
+    let helper_line = &text[text[..helper_start].rfind('\n').map_or(0, |i| i + 1)..];
+    let helper_indent = indentation(helper_line);
+    let markup_line = text[helper_start..].match_indices('\n').map(|(i, _)| helper_start + i + 1).find(|&start| {
+        let line = text[start..].lines().next().unwrap_or("");
+        let Some(tag) = line.trim_start().strip_prefix('<') else { return false };
+        tag.strip_prefix('/').unwrap_or(tag).starts_with(|c: char| c.is_ascii_alphabetic()) && indentation(line) <= helper_indent
+    });
+    let Some(markup_line) = markup_line else { return text.len() };
+    // Only an `end` that could close the helper itself: a balanced inner `if`'s end is JS body.
+    let mut depth = opened;
+    let mut last_end = None;
+    for (t, effect) in after.iter().take_while(|(t, _)| t.end <= markup_line) {
+        match *effect {
+            BlockEffect::Open(n) => depth += n,
+            BlockEffect::Close(n) => {
+                if depth <= opened {
+                    last_end = Some(t.start);
+                }
+                depth = depth.saturating_sub(n);
+            }
+            _ => {}
+        }
+    }
+    last_end.unwrap_or(markup_line)
 }
 
 /// Track the tag stack and `p` state through ERB branches. When the branches disagree the blocks are closed anyway,
@@ -474,152 +618,8 @@ fn paths_agree<T: PartialEq<U>, U: ?Sized>(branch_ends: &[T], entry: &T, has_els
     branch_ends.iter().all(|b| b == now) && (has_else || entry == now)
 }
 
-/// A matched `<name …>…</name>` pair, as byte offsets.
-pub struct Element {
-    pub name: String,
-    pub start: usize,
-    pub open_end: usize,
-    pub close_start: usize,
-    pub end: usize,
-}
-
-/// `partial`: split-wrapper partials (`_header` opens a `<div>` that `_footer` closes) are legitimate,
-/// so only mismatches are reported there.
-pub fn diagnostics(text: &str, partial: bool) -> Vec<Diagnostic> {
-    tokens_of(text, &analyzed(text), true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, partial).0)
-}
-
-/// Matched element pairs up to the first point where the tag stack becomes uncertain.
-pub fn elements(text: &str) -> Vec<Element> {
-    elements_of(text, &analyzed(text))
-}
-
-pub(crate) fn elements_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]) -> Vec<Element> {
-    tokens_of(text, analyzed, true).map_or_else(Vec::new, |tokens| scan_tokens(text, tokens, true).1)
-}
-
-/// The open and close tag names of the element whose name holds byte `offset`, for linked editing.
-pub fn linked_names(text: &str, offset: usize) -> Option<[(usize, usize); 2]> {
-    elements(text).into_iter().find_map(|e| {
-        let open = (e.start + 1, e.start + 1 + e.name.len());
-        let close = (e.close_start + 2, e.close_start + 2 + e.name.len());
-        // An implied end (`<li>a<li>`) has no `</li>` to edit along.
-        let names = |(s, end): (usize, usize)| text.get(s..end).is_some_and(|n| n.eq_ignore_ascii_case(&e.name));
-        let holds = |(s, end): (usize, usize)| (s..=end).contains(&offset);
-        (names(open) && names(close) && (holds(open) || holds(close))).then_some([open, close])
-    })
-}
-
-fn scope_boundary_open(stack: &[Tag], optional: &[Tag]) -> bool {
-    stack.iter().chain(optional).any(|t| SCOPE_BOUNDARY.contains(&t.name.as_str()))
-}
-
-fn unexpected_close_tag(name: &str, range: Range) -> Diagnostic {
-    let message = format!("Unexpected end tag `</{name}>`: no open element of that name ({HTML_END_TAG_RULE})");
-    coded(warning(range, message), code::UNEXPECTED_CLOSE_TAG)
-}
-
-fn void_close_tag(name: &str, range: Range) -> Diagnostic {
-    coded(warning(range, format!("End tag `</{name}>` for a void element (HTML 13.1.2)")), code::UNEXPECTED_CLOSE_TAG)
-}
-
-/// The tag diagnostics and the matched elements of `tokens`, up to the first point where the tag stack becomes uncertain.
-fn scan_tokens(text: &str, tokens: Vec<Token<'_>>, partial: bool) -> (Vec<Diagnostic>, Vec<Element>) {
-    let mut out = Vec::new();
-    let mut elements = Vec::new();
-    let index = LineIndex::new(text);
-    let range = |start, end| index.range(start, end);
-    let mut stack: Vec<Tag> = Vec::new();
-    // Optional-end elements with an explicit end tag; paired for `elements` only, invisible to diagnostics.
-    let mut optional: Vec<Tag> = Vec::new();
-    let mut blocks: Vec<Block> = Vec::new();
-    let mut p = PState::Closed;
-    // Elements a stray end tag's message already names: `<div>…</dvi>` is one mistake.
-    let mut named: Vec<usize> = Vec::new();
-    for token in tokens {
-        if out.len() >= MAX_TAG_DIAGNOSTICS {
-            return (out, elements);
-        }
-        match token {
-            Token::Erb(event) => {
-                if apply(&event, &mut stack, &mut p, &mut blocks) == Paths::Differ {
-                    return (out, elements);
-                }
-            }
-            Token::Comment { .. } | Token::Raw { close: None, .. } => {}
-            Token::Unterminated => return (out, elements),
-            Token::Raw { tag, close: Some((close_start, end)) } => {
-                elements.push(Element { name: tag.name, start: tag.start, open_end: tag.end, close_start, end })
-            }
-            Token::Open { tag, pairs, .. } => {
-                if CLOSES_P.contains(&tag.name.as_str()) {
-                    p = match p {
-                        _ if tag.name == "p" => PState::Open,
-                        PState::Open if scope_boundary_open(&stack, &optional) => PState::Unknown,
-                        PState::Open => PState::Closed,
-                        other => other,
-                    };
-                }
-                if pairs {
-                    stack.push(tag);
-                } else if OPTIONAL_END.contains(&tag.name.as_str()) {
-                    optional.push(tag);
-                }
-            }
-            Token::Close { tag: Tag { name, start, end, .. }, .. } if NO_END_TAG.contains(&name.as_str()) => {
-                out.push(void_close_tag(&name, range(start, end)));
-            }
-            Token::Close { tag: Tag { name, start, end, .. }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
-                // `<p>a<div>b</div></p>`: the `div` closed the `p`, and the parser inserts an empty one for this end tag.
-                if name == "p" {
-                    if p == PState::Closed && !partial {
-                        out.push(unexpected_close_tag(&name, range(start, end)));
-                    }
-                    p = PState::Closed;
-                }
-                if let Some(at) = optional.iter().rposition(|t| t.name == name) {
-                    elements.push(Element { name, start: optional[at].start, open_end: optional[at].end, close_start: start, end });
-                    optional.truncate(at);
-                }
-            }
-            Token::Close { tag: Tag { name, start, end, .. }, .. } => match stack.last() {
-                None if partial => {}
-                None => out.push(unexpected_close_tag(&name, range(start, end))),
-                Some(top) if top.wrapper.is_some() && (top.name != name || !closes_in_matching_if(top, &blocks)) => return (out, elements),
-                Some(top) if top.name == name => {
-                    elements.push(Element { name, start: top.start, open_end: top.end, close_start: start, end });
-                    stack.pop();
-                }
-                Some(top) => {
-                    let line = index.line_of(top.start) + 1;
-                    let message =
-                        format!("End tag `</{name}>` doesn't close the open `<{}>` (line {line}) ({HTML_END_TAG_RULE})", top.name);
-                    out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
-                    let heading = |name: &str| HEADINGS.contains(&name);
-                    if heading(&name) && heading(&top.name) {
-                        // Any heading's end tag closes the open heading (13.2.6.4.7).
-                        stack.pop();
-                    } else if stack.iter().any(|t| t.name == name || (heading(&name) && heading(&t.name))) {
-                        // Crossing an open element could close more than one way, so checking stops.
-                        // Recovering past it would guess, and cascade into noise.
-                        return (out, elements);
-                    } else {
-                        // A stray end tag is dropped, as browsers do.
-                        named.push(top.start);
-                    }
-                }
-            },
-        }
-    }
-    if blocks.is_empty() && !partial {
-        let unclosed = |t: &Tag| {
-            coded(warning(range(t.start, t.end), format!("`<{}>` is never closed ({HTML_END_TAG_RULE})", t.name)), code::UNCLOSED_ELEMENT)
-        };
-        // A wrapper's closing `if` may be in another file (layout, partial).
-        let room = MAX_TAG_DIAGNOSTICS - out.len();
-        out.extend(stack.iter().filter(|t| t.wrapper.is_none() && !named.contains(&t.start)).take(room).map(unclosed));
-    }
-    (out, elements)
+fn names(stack: &[Tag]) -> Vec<String> {
+    stack.iter().map(|t| t.name.clone()).collect()
 }
 
 #[cfg(test)]
