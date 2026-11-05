@@ -551,6 +551,26 @@ mod tests {
     }
 
     #[test]
+    fn heredoc_bodies_in_multi_line_tags_are_valid_ruby() {
+        for text in [
+            "<% sql = <<~SQL\n  SELECT 1\nSQL\n%>",
+            "<%= <<~HTML.html_safe\n  <b>x</b>\nHTML\n%>\n<p>after</p>",
+            "<%\n  sql = <<~SQL\n    SELECT * FROM users WHERE id = #{id}\n  SQL\n%>",
+        ] {
+            assert!(errors(text).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
+    fn percent_gt_inside_a_heredoc_ends_the_tag() {
+        let text = "<%\n  sql = <<~SQL\n    SELECT * FROM users WHERE name = '%>'\n  SQL\n%>";
+        assert_eq!(
+            messages(text),
+            ["unterminated string meets end of file", "unexpected end-of-input, assuming it is closing the parent top level context"]
+        );
+    }
+
+    #[test]
     fn tag_left_open_before_the_next_one() {
         let lines: Vec<u32> = errors("<%= render \"sh\n<%= link_to x %>\n").into_iter().map(|(line, _)| line).collect();
         assert_eq!(lines, [1, 1, 1]);
