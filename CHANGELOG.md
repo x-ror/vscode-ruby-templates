@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Ctrl+/ (Cmd+/) on lines inside a multi-line ERB code or output tag, indented or not, toggles a Ruby `# ` comment (common indent kept) instead of wrapping the line in `<%# %>`; the `<%` and `%>` lines and everything outside a tag toggle as before.
 - Semantic highlighting for the Ruby locals the grammars can't tell apart, in ERB, Haml and Slim: uses of strict locals (`user` after `<%# locals: (user:) %>`; the declaration in the comment is left alone) get the `parameter` token type, and block variables (`|item|`) and their uses the `variable` type. Only those identifiers get a token, so the TextMate colours of everything else stay; turn it off with `editor.semanticHighlighting.enabled`. Strict locals are plain calls in Slim, which has no `locals:` comment, so only its block variables and assignments are coloured.
 - Comment toggling follows the host of an ERB file: `//` in `.js.erb` and `.scss.erb`, `/* */` in `.css.erb`, `#` in `.rb.erb` and `.yml.erb`, `<!-- -->` in `.xml.erb` and `.md.erb`. The README lists the file types, language ids (for `[erb-js]` settings) and what works in each.
 - Hover on an app helper (`format_price` from `app/helpers`, `current_user` from a controller's `helper_method`) shows its `def` line with the parameters (a wrapped list joined), a link to where it is defined, and the `#` comment block above it, in ERB, Haml and Slim. Rails helpers keep their API docs, and a block variable or local of the same name shows nothing.
