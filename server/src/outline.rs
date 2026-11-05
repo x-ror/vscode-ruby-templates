@@ -34,8 +34,8 @@ const TAB_SIZE: i64 = 4;
 /// ERB blocks (split at `else`/`elsif`/`when`), multi-line ERB tags and `<%# %>`, HTML elements, region markers,
 /// plus indentation folds: any array we return disables VS Code's own indentation folding, so we reproduce it.
 pub fn folding_ranges(text: &str) -> Vec<FoldingRange> {
-    let line_starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
-    let line = |offset: usize| (line_starts.partition_point(|&s| s <= offset) - 1) as u32;
+    let index = LineIndex::new(text);
+    let line = |offset: usize| index.line_of(offset) as u32;
     let mut out = Vec::new();
     let mut push = |start_line: u32, end_line: u32, kind: Option<FoldingRangeKind>| {
         if end_line > start_line {
@@ -224,22 +224,22 @@ pub(crate) fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
 /// `#id` tags, each spanning its line and the lines nested under it.
 pub fn haml_document_symbols(text: &str) -> Vec<DocumentSymbol> {
     let lines: Vec<&str> = text.split('\n').collect();
-    let line_starts: Vec<usize> = std::iter::once(0).chain(text.match_indices('\n').map(|(i, _)| i + 1)).collect();
-    let line_end = |i: usize| line_starts[i] + lines[i].trim_end().len();
-    let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
     let index = LineIndex::new(text);
+    let line_end = |i: usize| index.line_start(i) + lines[i].trim_end().len();
+    let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
     let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
         items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
     };
     for (i, span) in haml_structure(text) {
         let line = lines[i];
-        let content_start = line_starts[i] + leading_ws(line).len();
+        let line_start = index.line_start(i);
+        let content_start = line_start + leading_ws(line).len();
         let selection = (content_start, line_end(i + span - 1));
         let range = (content_start, line_end(block_end(&lines, i, span)));
         if let Some(code_start) = haml_code_start(line) {
             let code = &line[code_start..];
             for r in render_refs(code).into_iter().filter(|r| !ruby::comment_before(&code[..r.start])) {
-                let name_range = (line_starts[i] + code_start + r.start, line_starts[i] + code_start + r.end);
+                let name_range = (line_start + code_start + r.start, line_start + code_start + r.end);
                 add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
             }
             if let Some((name, kind)) = erb_symbol(code) {

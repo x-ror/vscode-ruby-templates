@@ -71,6 +71,16 @@ impl<'a> LineIndex<'a> {
         // A final line ending opens no line of its own.
         self.starts.len() - usize::from(self.text.is_empty() || self.text.ends_with('\n'))
     }
+
+    /// The line `offset` is on.
+    pub fn line_of(&self, offset: usize) -> usize {
+        self.starts.partition_point(|&s| s <= offset) - 1
+    }
+
+    /// The offset line `n` starts at.
+    pub fn line_start(&self, n: usize) -> usize {
+        self.starts[n]
+    }
 }
 
 /// A line as `str::lines` yields it: without its `\n` or `\r\n`; a lone `\r` at the very end stays.

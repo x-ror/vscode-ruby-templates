@@ -2,7 +2,7 @@
 
 use crate::erb_ruby;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{coded, offset_to_position, warning, LineIndex};
+use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
 use std::sync::{Arc, LazyLock};
 use tower_lsp_server::ls_types::{Diagnostic, Range};
@@ -599,7 +599,7 @@ fn scan_tokens(text: &str, tokens: Option<Vec<Token<'_>>>, partial: bool, out: &
                     stack.pop();
                 }
                 Some(top) => {
-                    let line = offset_to_position(text, top.start).line + 1;
+                    let line = index.line_of(top.start) + 1;
                     let message =
                         format!("End tag `</{name}>` doesn't close the open `<{}>` (line {line}) ({HTML_END_TAG_RULE})", top.name);
                     out.push(coded(warning(range(start, end), message), code::MISMATCHED_CLOSE_TAG));
