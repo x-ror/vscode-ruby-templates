@@ -375,6 +375,16 @@ pub fn local_uses(text: &str, close: Close, name: &str) -> prism::LocalUses {
     prism::LocalUses { spans, ..uses }
 }
 
+/// The template's local variables; `close` finds the `locals:` comment, whose parameters are the strict locals.
+pub fn local_tokens(text: &str, close: Close) -> Vec<prism::LocalToken> {
+    let compiled = compile(text, Some(close));
+    let tokens = prism::local_tokens(&compiled.source);
+    let mapped = tokens.into_iter().filter_map(|t| Some((template_span(&compiled.verbatim, t.start, t.end)?, t)));
+    mapped
+        .map(|((start, end), t)| prism::LocalToken { start: compiled.cut.original(start), end: compiled.cut.original(end), ..t })
+        .collect()
+}
+
 /// Exact inside code the template wrote, else the whole of the line the error is on; none for the wrapper's own error.
 fn template_range(text: &str, index: &LineIndex, compiled: &Compiled, e: &prism::RubyError) -> Option<Range> {
     if let Some(range) = verbatim_range(index, compiled, e.start, e.end) {

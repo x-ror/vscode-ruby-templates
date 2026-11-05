@@ -210,6 +210,51 @@ macro_rules! visit_local_variables {
     };
 }
 
+/// The visits of every parameter and block-local name, each handed to `self.$on(name, location)`.
+macro_rules! visit_parameters {
+    ($pr:lifetime, $on:ident) => {
+        fn visit_required_parameter_node(&mut self, node: &ruby_prism::RequiredParameterNode<$pr>) {
+            self.$on(node.name(), node.location());
+        }
+
+        fn visit_optional_parameter_node(&mut self, node: &ruby_prism::OptionalParameterNode<$pr>) {
+            self.$on(node.name(), node.name_loc());
+            ruby_prism::visit_optional_parameter_node(self, node);
+        }
+
+        fn visit_required_keyword_parameter_node(&mut self, node: &ruby_prism::RequiredKeywordParameterNode<$pr>) {
+            self.$on(node.name(), node.name_loc());
+        }
+
+        fn visit_optional_keyword_parameter_node(&mut self, node: &ruby_prism::OptionalKeywordParameterNode<$pr>) {
+            self.$on(node.name(), node.name_loc());
+            ruby_prism::visit_optional_keyword_parameter_node(self, node);
+        }
+
+        fn visit_rest_parameter_node(&mut self, node: &ruby_prism::RestParameterNode<$pr>) {
+            if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
+                self.$on(name, at);
+            }
+        }
+
+        fn visit_keyword_rest_parameter_node(&mut self, node: &ruby_prism::KeywordRestParameterNode<$pr>) {
+            if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
+                self.$on(name, at);
+            }
+        }
+
+        fn visit_block_parameter_node(&mut self, node: &ruby_prism::BlockParameterNode<$pr>) {
+            if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
+                self.$on(name, at);
+            }
+        }
+
+        fn visit_block_local_variable_node(&mut self, node: &ruby_prism::BlockLocalVariableNode<$pr>) {
+            self.$on(node.name(), node.location());
+        }
+    };
+}
+
 struct Uses<'a> {
     name: &'a [u8],
     /// How many blocks and lambdas the visitor is in, which a read of the outermost scope's variable reaches up through.
@@ -418,44 +463,116 @@ impl<'pr> ruby_prism::Visit<'pr> for Declaration<'_> {
         self.scoped(false, |v| ruby_prism::visit_lambda_node(v, node));
     }
 
-    fn visit_required_parameter_node(&mut self, node: &ruby_prism::RequiredParameterNode<'pr>) {
-        self.parameter(node.name(), node.location());
+    visit_parameters!('pr, parameter);
+}
+
+/// What a local variable is, for highlighting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum LocalKind {
+    /// A parameter of the enclosing method, which is where a template's strict locals are.
+    Parameter,
+    Variable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct LocalToken {
+    pub start: usize,
+    pub end: usize,
+    pub kind: LocalKind,
+}
+
+/// The parameters of the method Rails compiles a template into that aren't the template's own locals.
+const WRAPPER_PARAMETERS: [&[u8]; 3] = [b"local_assigns", b"output_buffer", b"_"];
+
+/// Every declaration and use of a local variable in `source`, in no particular order.
+pub(crate) fn local_tokens(source: &str) -> Vec<LocalToken> {
+    let result = ruby_prism::parse(source.as_bytes());
+    let mut tokens = Tokens { source: source.as_bytes(), scopes: Vec::new(), found: Vec::new() };
+    ruby_prism::Visit::visit(&mut tokens, &result.node());
+    tokens.found
+}
+
+struct Tokens<'a> {
+    source: &'a [u8],
+    /// The scopes around the visitor; a method's holds the names of its parameters.
+    scopes: Vec<Option<Vec<Vec<u8>>>>,
+    found: Vec<LocalToken>,
+}
+
+impl Tokens<'_> {
+    fn scoped(&mut self, parameters: Option<Vec<Vec<u8>>>, visit: impl FnOnce(&mut Self)) {
+        self.scopes.push(parameters);
+        visit(self);
+        self.scopes.pop();
     }
 
-    fn visit_optional_parameter_node(&mut self, node: &ruby_prism::OptionalParameterNode<'pr>) {
-        self.parameter(node.name(), node.name_loc());
-        ruby_prism::visit_optional_parameter_node(self, node);
-    }
-
-    fn visit_required_keyword_parameter_node(&mut self, node: &ruby_prism::RequiredKeywordParameterNode<'pr>) {
-        self.parameter(node.name(), node.name_loc());
-    }
-
-    fn visit_optional_keyword_parameter_node(&mut self, node: &ruby_prism::OptionalKeywordParameterNode<'pr>) {
-        self.parameter(node.name(), node.name_loc());
-        ruby_prism::visit_optional_keyword_parameter_node(self, node);
-    }
-
-    fn visit_rest_parameter_node(&mut self, node: &ruby_prism::RestParameterNode<'pr>) {
-        if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
-            self.parameter(name, at);
+    /// A token for the `name` that starts at `start`, unless the source there is something else (a regexp's named
+    /// capture is located at the whole regexp).
+    fn add(&mut self, name: &[u8], start: usize, is_parameter: bool) {
+        let end = start + name.len();
+        if self.source.get(start..end) != Some(name) {
+            return;
         }
+        let kind = if is_parameter { LocalKind::Parameter } else { LocalKind::Variable };
+        self.found.push(LocalToken { start, end, kind });
     }
 
-    fn visit_keyword_rest_parameter_node(&mut self, node: &ruby_prism::KeywordRestParameterNode<'pr>) {
-        if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
-            self.parameter(name, at);
+    fn local(&mut self, name: ruby_prism::ConstantId, depth: u32, at: ruby_prism::Location, _read: bool) {
+        let name = name.as_slice();
+        let owner = self.scopes.iter().rev().nth(depth as usize).and_then(Option::as_ref);
+        if owner.is_some_and(|parameters| WRAPPER_PARAMETERS.contains(&name) && parameters.iter().any(|p| p == name)) {
+            return;
         }
+        let is_parameter = owner.is_some_and(|parameters| parameters.iter().any(|p| p == name));
+        // A shorthand hash value (`user:`) is located with its colon.
+        self.add(name, at.start() as usize, is_parameter);
     }
 
-    fn visit_block_parameter_node(&mut self, node: &ruby_prism::BlockParameterNode<'pr>) {
-        if let (Some(name), Some(at)) = (node.name(), node.name_loc()) {
-            self.parameter(name, at);
+    fn parameter(&mut self, name: ruby_prism::ConstantId, at: ruby_prism::Location) {
+        let name = name.as_slice();
+        let method = self.scopes.last_mut().and_then(Option::as_mut);
+        let is_parameter = method.map(|parameters| parameters.push(name.to_vec())).is_some();
+        if is_parameter && WRAPPER_PARAMETERS.contains(&name) {
+            return;
         }
+        self.add(name, at.start() as usize, is_parameter);
+    }
+}
+
+impl<'pr> ruby_prism::Visit<'pr> for Tokens<'_> {
+    visit_local_variables!('pr, local);
+    visit_parameters!('pr, parameter);
+
+    fn visit_program_node(&mut self, node: &ruby_prism::ProgramNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_program_node(v, node));
     }
 
-    fn visit_block_local_variable_node(&mut self, node: &ruby_prism::BlockLocalVariableNode<'pr>) {
-        self.parameter(node.name(), node.location());
+    fn visit_def_node(&mut self, node: &ruby_prism::DefNode<'pr>) {
+        self.scoped(Some(Vec::new()), |v| ruby_prism::visit_def_node(v, node));
+    }
+
+    fn visit_class_node(&mut self, node: &ruby_prism::ClassNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_class_node(v, node));
+    }
+
+    fn visit_module_node(&mut self, node: &ruby_prism::ModuleNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_module_node(v, node));
+    }
+
+    fn visit_singleton_class_node(&mut self, node: &ruby_prism::SingletonClassNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_singleton_class_node(v, node));
+    }
+
+    fn visit_block_node(&mut self, node: &ruby_prism::BlockNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_block_node(v, node));
+    }
+
+    fn visit_lambda_node(&mut self, node: &ruby_prism::LambdaNode<'pr>) {
+        self.scoped(None, |v| ruby_prism::visit_lambda_node(v, node));
+    }
+
+    fn visit_it_local_variable_read_node(&mut self, node: &ruby_prism::ItLocalVariableReadNode<'pr>) {
+        self.add(b"it", node.location().start() as usize, false);
     }
 }
 
@@ -617,6 +734,40 @@ mod tests {
         assert_eq!(keyword_parameter_at(list, "guest"), None);
         let at = list.find("user.name").unwrap();
         assert_eq!(parameter_reads(list, "user"), [(at, at + 4)]);
+    }
+
+    #[test]
+    fn local_tokens_tell_method_parameters_from_variables() {
+        let source = "def t(n = 1, user:)\n  user.name; helper; @user\n  x = n\n  [1].each { |user| user + x }\nend\n";
+        let found: Vec<(&str, LocalKind)> = local_tokens(source).iter().map(|t| (&source[t.start..t.end], t.kind)).collect();
+        use LocalKind::{Parameter, Variable};
+        let want = [
+            ("n", Parameter),
+            ("user", Parameter),
+            ("user", Parameter),
+            ("x", Variable),
+            ("n", Parameter),
+            ("user", Variable),
+            ("user", Variable),
+            ("x", Variable),
+        ];
+        assert_eq!(found, want);
+    }
+
+    #[test]
+    fn local_tokens_are_the_names_only() {
+        let names = |source: &str| -> Vec<(String, LocalKind)> {
+            local_tokens(source).iter().map(|t| (source[t.start..t.end].to_string(), t.kind)).collect()
+        };
+        let shorthand = "def t(user:)\n  render \"card\", user:\nend\n";
+        assert_eq!(names(shorthand), [("user".to_string(), LocalKind::Parameter), ("user".to_string(), LocalKind::Parameter)]);
+        let regexp = "if /(?<word>\\w+)/ =~ text then word end\n";
+        assert_eq!(names(regexp), [("word".to_string(), LocalKind::Variable)], "the capture's declaration is not a name");
+        let class = "def t(user:)\n  class Card\n    user = 1\n  end\nend\n";
+        assert_eq!(names(class), [("user".to_string(), LocalKind::Parameter), ("user".to_string(), LocalKind::Variable)]);
+        let wrapper = "def _(local_assigns, output_buffer, user:, &_)\n  local_assigns[:a]; output_buffer; user\nend\n";
+        assert_eq!(names(wrapper).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["user", "user"]);
+        assert_eq!(names("items.each { it.name }\n"), [("it".to_string(), LocalKind::Variable)]);
     }
 
     #[test]
