@@ -6,3 +6,6 @@ server/target/
 .vscode-test/
 dist/
 .claude/reviews/
+.astro/
+.impeccable/review/
+.impeccable/questions/

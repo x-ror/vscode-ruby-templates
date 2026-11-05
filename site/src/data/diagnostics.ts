@@ -1,0 +1,486 @@
+// Every diagnostic code the language server reports, with a template that triggers it and the message
+// `ruby-templates check` prints for that template.
+import fs from "node:fs";
+import path from "node:path";
+
+export type Language = "erb" | "haml" | "slim" | "jbuilder";
+
+export const LANGUAGE_NAMES: Record<Language, string> = {
+  erb: "ERB",
+  haml: "Haml",
+  slim: "Slim",
+  jbuilder: "Jbuilder",
+};
+
+export interface Diagnostic {
+  code: string;
+  languages: Language[];
+  summary: string;
+  /** When it fires; backticks quote code, as in the server's messages. */
+  explanation: string;
+  example: { file: string; lang: string; code: string };
+  message: string;
+  line: number;
+  column: number;
+}
+
+export const diagnostics: Diagnostic[] = [
+  {
+    code: "unclosed-tag",
+    languages: ["erb"],
+    summary: "A `<%` with no `%>` after it.",
+    explanation:
+      "Erubi only compiles a tag it can close, so a `<%` without `%>` stays in the output as text, and the Ruby is printed instead of run. In HTML, `<` followed by `%` starts no tag (HTML 13.2.5.6). Reported only where the HTML tokenizer is between tags, not inside attribute values, comments or `<script>` and `<style>` bodies, and only in ERB with an HTML host (`.html.erb` and the like).",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<p><%= @user.name %></p>
+<p><%= @user.email</p>
+`,
+    },
+    message:
+      "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)",
+    line: 2,
+    column: 4,
+  },
+  {
+    code: "unexpected-close-tag",
+    languages: ["erb"],
+    summary: "An end tag with no open element of that name.",
+    explanation:
+      'The end tag closes nothing, so the browser drops it. Also reported for the end tag of a void element ("End tag `</br>` for a void element") and for a `</p>` after a block element such as `<div>` already closed the paragraph. A stray end tag in a partial is not reported, since a partial may close what another one opened. ERB with an HTML host only; checking stops after 20 tag problems in one file.',
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<div class="profile">
+  <p><%= @user.name %></p>
+</div>
+</div>
+`,
+    },
+    message:
+      "Unexpected end tag `</div>`: no open element of that name (HTML 13.2.6.4.7)",
+    line: 4,
+    column: 1,
+  },
+  {
+    code: "mismatched-close-tag",
+    languages: ["erb"],
+    summary: "An end tag that doesn't close the innermost open element.",
+    explanation:
+      "The message names the element that is still open and its line. When the end tag crosses an open element (`<div><span></div>`), the browser could recover in more than one way, so checking stops there instead of guessing. Reported in partials too. ERB with an HTML host only.",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<div class="profile">
+  <span><%= @user.name %></div>
+`,
+    },
+    message:
+      "End tag `</div>` doesn't close the open `<span>` (line 2) (HTML 13.2.6.4.7)",
+    line: 2,
+    column: 26,
+  },
+  {
+    code: "unclosed-element",
+    languages: ["erb"],
+    summary: "An element whose end tag never comes.",
+    explanation:
+      "Reported at the start tag when the file ends with the element still open. Elements whose end tag HTML lets you omit (`li`, `p`, `td`, `option`, …) and void elements are never reported. Partials are exempt, because a `_header` partial may open a `<div>` that `_footer` closes, and so is a file that ends inside an ERB block. ERB with an HTML host only.",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<section class="users">
+  <h2>Users</h2>
+`,
+    },
+    message: "`<section>` is never closed (HTML 13.2.6.4.7)",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "img-missing-alt",
+    languages: ["erb"],
+    summary: "An image without alt text.",
+    explanation:
+      'Fires for an `<img>` with no `alt` attribute and for an `image_tag` call in an output tag whose options have no `alt:`; that one reads "`image_tag` without `alt:`". Not reported for an `<img>` with ERB where attributes go (`<img <%= attrs %>>`), an `image_tag` given a `**splat`, or `generator-unable-to-provide-required-alt`, since each may supply the text. An empty `alt=""` counts as alt text. ERB with an HTML host only.',
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<img src="<%= @user.avatar_url %>">
+`,
+    },
+    message:
+      "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "duplicate-id",
+    languages: ["erb"],
+    summary: "The same static id twice in one template.",
+    explanation:
+      "Reported at the second occurrence, naming the line of the first. Only literal values count: an id holding ERB is left alone. Two ids in different branches of an ERB conditional don't clash, and content inside `<template>` isn't in the document yet. ERB with an HTML host only.",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<div id="profile">
+  <%= @user.name %>
+</div>
+<div id="profile"></div>
+`,
+    },
+    message:
+      "Duplicate id `profile` (first on line 1): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
+    line: 4,
+    column: 10,
+  },
+  {
+    code: "inconsistent-indent",
+    languages: ["haml"],
+    summary: "Indentation Haml can't follow.",
+    explanation:
+      'Haml\'s own indentation errors: a width other than the one the rest of the document uses, tabs mixed with spaces ("Indentation can\'t use both tabs and spaces."), or a line more than one level deeper than the one before ("The line was indented 2 levels deeper than the previous line."). Haml stops at its first error, so only that one is shown, and the Ruby isn\'t checked until it is fixed.',
+    example: {
+      file: "app/views/users/index.html.haml",
+      lang: "haml",
+      code: `%section
+  %h2 Users
+  %ul
+   %li= @user.name
+`,
+    },
+    message:
+      "Inconsistent indentation: 3 spaces used for indentation, but the rest of the document was indented using 2 spaces.",
+    line: 4,
+    column: 1,
+  },
+  {
+    code: "top-level-indent",
+    languages: ["haml"],
+    summary: "The first line is indented.",
+    explanation:
+      "Haml measures every level from the first line, which must start at column 1.",
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `  %p= @user.name
+`,
+    },
+    message: "Indenting at the beginning of the document is illegal.",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "illegal-nesting",
+    languages: ["haml"],
+    summary: "Lines nested under something that can't hold them.",
+    explanation:
+      'Haml rejects lines nested under a tag that already has content on its own line, under plain text, and under a self-closing tag such as `%br/`; each has its own "Illegal nesting" message. Nesting under `!!!` has its own code, `doctype-children`.',
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `%p= @user.name
+  %span Admin
+`,
+    },
+    message:
+      "Illegal nesting: content can't be both given on the same line as %p and nested within it.",
+    line: 2,
+    column: 3,
+  },
+  {
+    code: "doctype-children",
+    languages: ["haml", "slim"],
+    summary: "Lines nested under the doctype.",
+    explanation:
+      'The doctype line (`!!!` in Haml, `doctype` in Slim) takes no children; the `%html` or `html` that follows belongs at the same level. Slim reports it as "Unexpected indentation".',
+    example: {
+      file: "app/views/layouts/application.html.haml",
+      lang: "haml",
+      code: `!!! 5
+  %html
+`,
+    },
+    message: "Illegal nesting: nesting within a header command is illegal.",
+    line: 2,
+    column: 3,
+  },
+  {
+    code: "unmatched-branch",
+    languages: ["haml"],
+    summary:
+      "An `else`, `elsif` or `when` that doesn't line up with its block.",
+    explanation:
+      'In Haml a branch keyword must stand at the indentation of the `- if` or `- case` it continues. One at another level is reported with the expected and actual levels; one with no open block before it reads "Got "else" with no preceding "if"". The first `when` may sit one level deeper than its `case`.',
+    example: {
+      file: "app/views/users/index.html.haml",
+      lang: "haml",
+      code: `- if @users.any?
+  = render @users
+  - else
+    %p No users
+`,
+    },
+    message: '"else" is indented at wrong level: expected 0, but was at 1.',
+    line: 3,
+    column: 3,
+  },
+  {
+    code: "explicit-end",
+    languages: ["haml", "slim"],
+    summary: "A `- end` line.",
+    explanation:
+      'Haml and Slim close a Ruby block by un-indenting, and both refuse an explicit `- end`. Slim\'s message is shown here; Haml\'s starts with "You don\'t need to use "- end" in Haml." and goes on with an example. Skim templates, whose code is CoffeeScript, are not checked for it.',
+    example: {
+      file: "app/views/users/show.html.slim",
+      lang: "slim",
+      code: `- if @user.admin?
+  p Admin
+- end
+`,
+    },
+    message: "Explicit end statements are forbidden",
+    line: 3,
+    column: 1,
+  },
+  {
+    code: "illegal-element",
+    languages: ["haml"],
+    summary: "A `.` or `#` with no class or id name after it.",
+    explanation:
+      "Haml needs a name after each `.` and `#` in a tag (`%p.lead`, `#main`).",
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `%p. Hello
+`,
+    },
+    message: "Illegal element: classes and ids must have values.",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "unknown-filter",
+    languages: ["haml"],
+    summary: "A filter Haml doesn't have.",
+    explanation:
+      "The name after `:` isn't one of Haml's filters (`:javascript`, `:css`, `:markdown`, `:plain`, `:ruby`, …), usually a typo. Haml raises this when it compiles the template. A name that isn't a word at all is a `syntax-error` (\"Invalid filter name\").",
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `:mardown
+  # Users
+`,
+    },
+    message: "FilterCompiler for 'mardown' was not found",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "self-closing-content",
+    languages: ["haml"],
+    summary: "Content after a tag closed with `/`.",
+    explanation:
+      "A tag ending in `/` renders as `<br />` and can hold nothing on its own line.",
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `%br/ Hello
+`,
+    },
+    message: "Self-closing tags can't have content.",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "unclosed-attribute",
+    languages: ["haml", "slim"],
+    summary: "An attribute list or value that is never closed.",
+    explanation:
+      'Slim reports the bracket it expected ("Expected closing delimiter )", or `]` or `}`), or "Unexpected end of file" for a quote left open. Haml reports "Unbalanced brackets." for a `{` or `(` attribute list that doesn\'t close, and "Invalid attribute list" for one it can\'t read.',
+    example: {
+      file: "app/views/users/show.html.slim",
+      lang: "slim",
+      code: `a href=(user_path(@user) Profile
+`,
+    },
+    message: "Expected closing delimiter )",
+    line: 1,
+    column: 33,
+  },
+  {
+    code: "syntax-error",
+    languages: ["haml", "slim"],
+    summary: "Any other error the Haml or Slim parser raises.",
+    explanation:
+      'The parser errors that have no code of their own. In Haml: "Invalid tag", "Invalid filter name" and "There\'s no Ruby code for = to evaluate." In Slim: "Unknown line indicator", "Illegal shortcut", "Invalid empty attribute", "Expected attribute", "Expected tag" for a block expansion with nothing after it (`ul:`), "Unexpected text after closed tag", "Multiple id attributes specified" (for any repeated attribute) and "Invalid doctype".',
+    example: {
+      file: "app/views/users/show.html.haml",
+      lang: "haml",
+      code: `%p=
+`,
+    },
+    message: "There's no Ruby code for = to evaluate.",
+    line: 1,
+    column: 1,
+  },
+  {
+    code: "void-children",
+    languages: ["haml", "slim"],
+    summary: "Content inside a void element such as `img` or `input`.",
+    explanation:
+      'Void elements have no end tag, so the content would end up after them. Haml reports content on the tag\'s line or nested under it. Slim reports lines nested under a void element, and "Unexpected indentation" under a tag closed with `/`. In Slim it applies to HTML templates only, not to `.xml.slim` and other formats.',
+    example: {
+      file: "app/views/users/show.html.slim",
+      lang: "slim",
+      code: `img src="/logo.png"
+  | Logo
+`,
+    },
+    message: "`img` is a void element and can't have children",
+    line: 2,
+    column: 3,
+  },
+  {
+    code: "bad-dedent",
+    languages: ["slim"],
+    summary: "A line un-indented to a level no open line has.",
+    explanation:
+      "When a line moves left, Slim needs it to land on the indentation of a line still open above it. Here `li Two` stops between `ul` and `li One`.",
+    example: {
+      file: "app/views/users/index.html.slim",
+      lang: "slim",
+      code: `section
+  ul
+    li One
+   li Two
+`,
+    },
+    message: "Malformed indentation",
+    line: 4,
+    column: 4,
+  },
+  {
+    code: "unknown-engine",
+    languages: ["slim"],
+    summary: "An embedded engine Slim doesn't know.",
+    explanation:
+      'A lone `name:` line opens an embedded engine. Slim\'s own are `ruby`, `javascript`, `css`, `sass`, `scss`, `coffee`, `markdown`, `textile`, `rdoc` and `asciidoc`; for any other Slim raises "Expected tag". Engines your app registers (such as `mjml`) go in `rubyTemplates.slim.extraEngines`.',
+    example: {
+      file: "app/views/users/show.html.slim",
+      lang: "slim",
+      code: `markdwn:
+  # Users
+`,
+    },
+    message: "Expected tag",
+    line: 1,
+    column: 9,
+  },
+  {
+    code: "ruby-syntax",
+    languages: ["erb", "haml", "slim", "jbuilder"],
+    summary: "Ruby in the template that doesn't parse.",
+    explanation:
+      "The template is compiled the way Erubi, Haml or Slim compile it, and the result is parsed with Prism for the project's Ruby version; the message is Prism's. Haml and Slim code is checked only once the template itself parses. Also covers the `locals:` comment of strict locals (Rails 7.1 and later), for instance a local without a colon: `# locals: (user)` gives \"`user` set as non-keyword argument for … Locals can only be set as keyword arguments.\" In Jbuilder and Builder views only that comment is checked, and in Skim templates nothing, since their code is CoffeeScript.",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<ul>
+  <% @users.each do |user| %>
+    <li><%= user.name %></li>
+</ul>
+`,
+    },
+    message:
+      "unexpected end-of-input, assuming it is closing the parent top level context",
+    line: 4,
+    column: 1,
+  },
+  {
+    code: "unresolved-render",
+    languages: ["erb", "haml", "slim", "jbuilder"],
+    summary: "A `render` of a partial or template that isn't in app/views.",
+    explanation:
+      'Checks literal names in `render "users/card"`, `render partial:`, `render template:` and Jbuilder\'s `json.partial!`, in a Rails app (`actionview` in `Gemfile.lock`) and in templates under app/views. A name with a folder is checked when that folder exists in app/views; a bare name (`render "form"`) only in an action template, not a partial, whose controller chain is in the app, and the message then lists each folder Rails searches. Folders of view-shipping gems such as `devise/` are skipped. The message is Rails\' "Missing partial" or "Missing template", without the formats and view paths Rails adds.',
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<%= render "users/profile", user: @user %>
+`,
+    },
+    message: "Missing partial users/_profile",
+    line: 1,
+    column: 13,
+  },
+  {
+    code: "strict-locals",
+    languages: ["erb", "haml", "slim", "jbuilder"],
+    summary:
+      "A `render` whose locals don't match the partial's `locals:` comment.",
+    explanation:
+      'With Rails 7.1 or later in `Gemfile.lock`, a literal render that resolves to exactly one partial is compared with that partial\'s strict locals. Here `_card.html.erb` starts with `<%# locals: (user:) -%>`. The messages are Rails\': "missing local", "missing keywords", "unknown local", "unknown keywords", and "no locals accepted" for a partial declaring `locals: ()`. From Rails 7.2 they end with the partial\'s path. The `layout:` of a render isn\'t checked, since it gets the call\'s locals.',
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<%= render "users/card", person: @user %>
+`,
+    },
+    message: "missing local: :user for app/views/users/_card.html.erb",
+    line: 1,
+    column: 13,
+  },
+];
+
+/** The codes each language's `disabledDiagnostics` setting in `package.json` accepts. */
+function settingCodes(): Map<string, string[]> {
+  // Builds run from site/; this module is bundled elsewhere, so its own path says nothing.
+  const manifest = JSON.parse(
+    fs.readFileSync(path.resolve(process.cwd(), "..", "package.json"), "utf8"),
+  );
+  const properties: Record<string, { items?: { enum?: string[] } }> =
+    manifest.contributes.configuration.properties;
+  return new Map(
+    Object.entries(properties).flatMap(([key, value]) => {
+      const lang = key.match(
+        /^rubyTemplates\.(\w+)\.disabledDiagnostics$/,
+      )?.[1];
+      return lang ? [[lang, value.items?.enum ?? []]] : [];
+    }),
+  );
+}
+
+/** Fails the build unless the entries cover exactly the codes the settings accept, language by language. */
+function checkCoverage(entries: Diagnostic[], settings: Map<string, string[]>) {
+  const setting = (lang: string) => `rubyTemplates.${lang}.disabledDiagnostics`;
+  const missing = [...settings].flatMap(([lang, codes]) =>
+    codes
+      .filter(
+        (code) =>
+          !entries.some(
+            (d) => d.code === code && d.languages.includes(lang as Language),
+          ),
+      )
+      .map(
+        (code) =>
+          `no entry for \`${code}\` in ${LANGUAGE_NAMES[lang as Language] ?? lang} (${setting(lang)})`,
+      ),
+  );
+  const stale = entries.flatMap((d) =>
+    d.languages
+      .filter((lang) => !settings.get(lang)?.includes(d.code))
+      .map(
+        (lang) =>
+          `entry \`${d.code}\` lists ${LANGUAGE_NAMES[lang]}, but ${setting(lang)} has no such code`,
+      ),
+  );
+  const problems = [...missing, ...stale];
+  if (problems.length) {
+    throw new Error(
+      `site/src/data/diagnostics.ts is out of step with package.json:\n  ${problems.join("\n  ")}`,
+    );
+  }
+}
+
+checkCoverage(diagnostics, settingCodes());

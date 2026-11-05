@@ -1,0 +1,214 @@
+---
+title: ERB examples
+description: Rails views in ERB as the extension highlights them, with what the language server checks and finds in each one.
+sidebar:
+  order: 1
+---
+
+Each example is a file from a Rails app, highlighted here with the extension's own ERB grammar. Every one passes `ruby-templates check` without a message and is already formatted (`ruby-templates format --check`). The same views are on the [Haml examples](/vscode-ruby-templates/examples/haml/) and [Slim examples](/vscode-ruby-templates/examples/slim/) pages.
+
+## Layout with `content_for` and `yield`
+
+### The layout
+
+<kbd>F12</kbd> on `render "shared/header"` opens the partial. If `app/views/shared/_header.html.erb` didn't exist, the call would get an `unresolved-render` warning with a quick fix that creates the file. The HTML checks report elements that are never closed or closed by the wrong end tag, `<img>` without `alt` and duplicate ids.
+
+```erb title="app/views/layouts/application.html.erb"
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title><%= content_for?(:title) ? yield(:title) : "Shop" %></title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <%= csrf_meta_tags %>
+    <%= stylesheet_link_tag "application", "data-turbo-track": "reload" %>
+    <%= javascript_importmap_tags %>
+    <%= yield :head %>
+  </head>
+  <body>
+    <%= render "shared/header" %>
+    <main id="main">
+      <%= yield %>
+    </main>
+  </body>
+</html>
+```
+
+### A view that fills it
+
+`@product` completes after `@`, and hover lists where the `show` action and its `before_action` callbacks assign it. `edit_product_path` completes from the app's routes, and hover shows its URL and `controller#action`.
+
+```erb title="app/views/products/show.html.erb"
+<% content_for :title, @product.name %>
+<% content_for :head do %>
+  <meta name="description" content="<%= @product.summary %>">
+<% end %>
+
+<h1><%= @product.name %></h1>
+<p><%= number_to_currency(@product.price) %></p>
+<%= link_to t(".edit"), edit_product_path(@product) %>
+```
+
+## Partial with strict locals
+
+The `locals:` comment is highlighted as Ruby. A `render` that misses `product:` or passes a local the partial doesn't declare gets Rails' own message (`strict-locals`), with quick fixes that add or remove the local. Hover on `compact` shows its default and how many `render` calls pass it; <kbd>F2</kbd> on `product` renames it here and in every `render` that passes it. Uses of `product` get the `parameter` semantic token, so they can be coloured apart from other Ruby.
+
+```erb title="app/views/products/_product.html.erb"
+<%# locals: (product:, compact: false) -%>
+<article id="<%= dom_id(product) %>" class="product">
+  <h2><%= link_to product.name, product %></h2>
+  <% unless compact %>
+    <p><%= product.summary %></p>
+    <p><%= number_to_currency(product.price) %></p>
+  <% end %>
+</article>
+```
+
+## Rendering partials, collections and components
+
+`render "products/product"` goes to the partial and, after the comma, completes the locals it declares and the call doesn't pass yet. `render partial:` with `collection:` resolves the same partial. `render CardComponent.new` goes to the component's class and template, and `card.with_` completes the slots it declares with `renders_one` and `renders_many`. `t(".title")` completes the keys from `config/locales`, and hover shows the value in each locale.
+
+```erb title="app/views/products/index.html.erb"
+<h1><%= t(".title") %></h1>
+
+<%= render "products/product", product: @featured, compact: true %>
+
+<section id="products">
+  <%= render partial: "products/product", collection: @products, as: :product %>
+</section>
+
+<%= render CardComponent.new(title: t(".help")) do |card| %>
+  <% card.with_header { t(".help_header") } %>
+  <% card.with_item { link_to t(".contact"), contact_path } %>
+<% end %>
+```
+
+## Form with a form builder
+
+After `form.` completion lists the form builder methods; after `form.text_field :` it lists the columns of the `products` table from `db/schema.rb`. Inside a block the server knows `message` is the block variable: <kbd>F12</kbd> on it jumps to `|message|`.
+
+```erb title="app/views/products/_form.html.erb"
+<%# locals: (product:) -%>
+<%= form_with model: product do |form| %>
+  <% if product.errors.any? %>
+    <ul class="errors">
+      <% product.errors.full_messages.each do |message| %>
+        <li><%= message %></li>
+      <% end %>
+    </ul>
+  <% end %>
+
+  <div class="field">
+    <%= form.label :name %>
+    <%= form.text_field :name, required: true %>
+  </div>
+  <div class="field">
+    <%= form.label :price %>
+    <%= form.number_field :price, step: 0.01 %>
+  </div>
+  <div class="field">
+    <%= form.label :category_id %>
+    <%= form.collection_select :category_id, Category.order(:name), :id, :name %>
+  </div>
+
+  <%= form.submit %>
+<% end %>
+```
+
+## Hotwire
+
+### Turbo Frame
+
+`turbo_frame_tag` and `link_to` complete with snippet arguments and show their API docs on hover. <kbd>F12</kbd> on `render "form"` opens `app/views/products/_form.html.erb`, the partial Rails finds from the view's folder.
+
+```erb title="app/views/products/edit.html.erb"
+<%= turbo_frame_tag dom_id(@product) do %>
+  <h1><%= t(".title", name: @product.name) %></h1>
+  <%= render "form", product: @product %>
+  <%= link_to t(".cancel"), @product, data: { turbo_frame: "_top" } %>
+<% end %>
+```
+
+### Turbo Stream template
+
+A `.turbo_stream.erb` file is an HTML ERB view (language id `erb`): it gets the HTML checks and is formatted. After `turbo_stream.` completion lists the Turbo Stream actions.
+
+```erb title="app/views/products/create.turbo_stream.erb"
+<%= turbo_stream.prepend "products", partial: "products/product", locals: { product: @product } %>
+<%= turbo_stream.update "flash" do %>
+  <p class="notice"><%= t(".created", name: @product.name) %></p>
+<% end %>
+<%= turbo_stream.remove "empty-state" %>
+```
+
+### Stimulus controller
+
+Completion offers the app's Stimulus controller names in `data-controller` and `data-action`, and the controller's actions after `clipboard#`. On an element with `data-controller="clipboard"` it offers `data-clipboard-target` and the `-value`, `-class` and `-outlet` attributes the controller declares. <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click on `clipboard` opens `app/javascript/controllers/clipboard_controller.js`.
+
+```erb title="app/views/products/_share.html.erb"
+<%# locals: (product:) -%>
+<div data-controller="clipboard" data-clipboard-success-class="copied">
+  <input type="text" value="<%= product_url(product) %>" readonly
+    data-clipboard-target="source">
+  <button type="button" data-action="clipboard#copy"><%= t(".copy") %></button>
+</div>
+```
+
+## Embedded JavaScript and CSS
+
+`<style>` and `<script>` bodies are highlighted as CSS and JavaScript, and the ERB tags inside them as Ruby. The formatter indents the tags around them and keeps every byte of their bodies.
+
+```erb title="app/views/products/_gallery.html.erb"
+<%# locals: (product:) -%>
+<div id="gallery" class="gallery"></div>
+
+<style>
+  .gallery { --accent: <%= product.color_hex %>; display: grid; gap: 1rem; }
+</style>
+
+<script type="module">
+  const images = <%= raw product.image_urls.to_json %>;
+  document.getElementById("gallery").dataset.count = images.length;
+</script>
+```
+
+## Other ERB hosts
+
+The part of the file name before `.erb` picks the host language. These files get the ERB and Ruby checks, and under `app/views` the `render` checks; they have no HTML checks and the formatter leaves them alone.
+
+### JavaScript: `.js.erb`
+
+Language id `erb-js`: JavaScript with Ruby in the tags, and <kbd>Ctrl</kbd>+<kbd>/</kbd> toggles `//` comments. `render("products/empty")` is checked like a `render` in an HTML view.
+
+```erb-js title="app/views/products/destroy.js.erb"
+document.getElementById("<%= dom_id(@product) %>").remove();
+<% if @products_left.zero? %>
+document.getElementById("products").innerHTML = "<%= j render("products/empty") %>";
+<% end %>
+```
+
+### JSON: `.json.erb`
+
+Language id `erb-json`: JSON with Ruby in the tags.
+
+```erb-json title="app/views/products/show.json.erb"
+{
+  "id": <%= @product.id %>,
+  "name": <%= raw @product.name.to_json %>,
+  "price": "<%= @product.price %>",
+  "tags": <%= raw @product.tags.pluck(:name).to_json %>
+}
+```
+
+### YAML: `.yml.erb`
+
+Language id `erb-yaml`: YAML with Ruby in the tags, and <kbd>Ctrl</kbd>+<kbd>/</kbd> toggles `#` comments. Outside `app/views` only the ERB and Ruby checks run.
+
+```erb-yaml title="config/settings.yml.erb"
+default: &default
+  host: <%= ENV.fetch("APP_HOST", "localhost") %>
+  per_page: 25
+
+production:
+  <<: *default
+  cdn: <%= ENV["CDN_URL"] %>
+```

@@ -1,0 +1,249 @@
+---
+import "../styles/fonts.css";
+import "../styles/tokens.css";
+import "../styles/landing.css";
+import Noren from "../components/Noren.astro";
+import Seal from "../components/Seal.astro";
+import Course from "../components/Course.astro";
+import Listing from "../components/Listing.astro";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const MARKETPLACE = "https://marketplace.visualstudio.com/items?itemName=x-ror.ruby-templates";
+const OPEN_VSX = "https://open-vsx.org/extension/x-ror/ruby-templates";
+const NPM = "https://www.npmjs.com/package/@x-ror/ruby-templates";
+
+const courses = [
+  { id: "checks", numeral: "01", label: "Errors" },
+  { id: "rails", numeral: "02", label: "Your app" },
+  { id: "languages", numeral: "03", label: "Three languages" },
+  { id: "formatting", numeral: "04", label: "Formatting" },
+  { id: "ci", numeral: "05", label: "CI" },
+];
+
+// The output of `ruby-templates check` on this view.
+const index = `<% @users.each do |user| %>
+  <%= render "users/card", user: user %>
+<% end %>
+
+<div class="banner">
+  <img src="/banner.png">
+  <%= render "users/car" %>
+</span>
+`;
+const indexFaults = [
+  {
+    line: 6,
+    column: 3,
+    message: "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)",
+    code: "img-missing-alt",
+  },
+  { line: 7, column: 15, message: "Missing partial users/_car", code: "unresolved-render" },
+  {
+    line: 8,
+    column: 1,
+    message: "End tag `</span>` doesn't close the open `<div>` (line 5) (HTML 13.2.6.4.7)",
+    code: "mismatched-close-tag",
+  },
+];
+
+const navigation = [
+  { where: 'render "users/card"', what: "Go to the partial, hover shows the file, completion of partial names, find all renders" },
+  { where: "@user", what: "Completion, hover and go to definition from the action and its before_actions" },
+  { where: "users_path", what: "Completion, hover with the URL and controller#action, go to config/routes.rb" },
+  { where: 't(".title")', what: "Completion, hover with each locale's value, go to the locale file" },
+  { where: "report.title", what: "Column type, null: and default: on hover, go to db/schema.rb" },
+  { where: 'data-controller="search"', what: "Stimulus controller names, actions, targets and values" },
+];
+
+const badge = {
+  erb: `<%# locals: (user:) %>
+<article class="badge" id="<%= dom_id(user) %>">
+  <h2><%= link_to user.name, user_path(user) %></h2>
+  <% if user.admin? %>
+    <p class="badge__role"><%= t(".admin") %></p>
+  <% end %>
+</article>
+`,
+  haml: `-# locals: (user:)
+%article.badge{id: dom_id(user)}
+  %h2= link_to user.name, user_path(user)
+  - if user.admin?
+    %p.badge__role= t(".admin")
+`,
+  slim: `/# locals: (user:)
+article.badge id=dom_id(user)
+  h2 = link_to user.name, user_path(user)
+  - if user.admin?
+    p.badge__role = t(".admin")
+`,
+};
+
+// `ruby-templates format` on the first listing gives the second, byte for byte.
+const unformatted = `<% if @user.admin? %>
+<nav class="admin">
+      <%= link_to "Users", admin_users_path %>
+  <% @reports.each do |report| %>
+<p><%= report.title %></p>
+    <% end %>
+</nav>
+<% end %>
+`;
+const formatted = `<% if @user.admin? %>
+  <nav class="admin">
+    <%= link_to "Users", admin_users_path %>
+    <% @reports.each do |report| %>
+      <p><%= report.title %></p>
+    <% end %>
+  </nav>
+<% end %>
+`;
+
+const ci = `npm install --save-dev @x-ror/ruby-templates
+npx ruby-templates check app/views            # errors and warnings; exit 1 if any
+npx ruby-templates format --check app/views   # files that would change; exit 1 if any
+npx ruby-templates format --write app/views   # format them
+`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ruby Templates: ERB, Haml and Slim for VS Code</title>
+    <meta
+      name="description"
+      content="Rails view tooling for VS Code: highlighting, errors as you type, formatting and Rails-aware navigation for ERB, Haml and Slim, with no gems to install."
+    />
+    <link rel="icon" href={`${base}/favicon.png`} type="image/png" />
+    <script is:inline>
+      // The docs' theme choice (Starlight's), else the system's.
+      const stored = localStorage.getItem("starlight-theme");
+      const light = stored ? stored === "light" : matchMedia("(prefers-color-scheme: light)").matches;
+      document.documentElement.dataset.theme = light ? "light" : "dark";
+    </script>
+  </head>
+  <body class="counter">
+    <a class="skip-link" href="#menu">Skip to content</a>
+    <Noren base={base} />
+
+    <main class="menu-card" id="menu">
+      <header class="menu-card__head">
+        <div class="menu-card__intro">
+          <h1 class="menu-card__title">Ruby Templates</h1>
+          <p class="menu-card__lede">
+            One VS Code extension for Rails views in ERB, Haml and Slim, the menu chosen for you: errors as you type,
+            navigation that knows your app, whitespace-only formatting. No gems to install.
+          </p>
+        </div>
+        <div class="menu-card__order">
+          <Seal href={MARKETPLACE} label="Install for VS Code" />
+          <ul class="menu-card__also">
+            <li><a class="menu-card__link" href={OPEN_VSX}>Open VSX</a></li>
+            <li><a class="menu-card__link" href={NPM}>npm CLI</a></li>
+          </ul>
+        </div>
+        <nav class="menu-card__index" aria-label="Courses">
+          <ol class="course-index">
+            {
+              courses.map(({ id, numeral, label }) => (
+                <li class="course-index__item">
+                  <a class="course-index__link" href={`#${id}`}>
+                    <span class="course-index__numeral" aria-hidden="true">
+                      {numeral}
+                    </span>
+                    {label}
+                  </a>
+                </li>
+              ))
+            }
+          </ol>
+        </nav>
+      </header>
+
+      <Course id="checks" numeral="01" title="Errors as you type, in Rails' own words" wide>
+        <p class="course__text">
+          Ruby is parsed with Prism for your app's Ruby version, HTML as browsers read it, and every <code>render</code> is
+          looked up the way Rails would. These are the server's messages for this view.
+        </p>
+        <Listing id="checks-index" file="app/views/users/index.html.erb" lang="erb" code={index} faults={indexFaults} notesBeside />
+        <p class="course__more"><a href={`${base}/reference/diagnostics/`}>Every diagnostic, with how to turn it off</a></p>
+      </Course>
+
+      <Course id="rails" numeral="02" title="It knows your app">
+        <p class="course__text">
+          Hover, go to definition and completion follow Rails conventions from the template you are editing.
+        </p>
+        <table class="pairing">
+          <caption class="pairing__caption">Where the cursor is, and what you get</caption>
+          <thead>
+            <tr>
+              <th scope="col" class="pairing__head">In the template</th>
+              <th scope="col" class="pairing__head">You get</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              navigation.map(({ where, what }) => (
+                <tr class="pairing__row">
+                  <th scope="row" class="pairing__where">
+                    <code>{where}</code>
+                  </th>
+                  <td class="pairing__what">{what}</td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+        <p class="course__more"><a href={`${base}/guides/rails-navigation/`}>Navigation and completion in detail</a></p>
+      </Course>
+
+      <Course id="languages" numeral="03" title="One partial, three languages">
+        <p class="course__text">
+          The same checks, lookups and formatter in ERB, Haml and Slim, highlighted here by the extension's own grammars.
+        </p>
+        <div class="tasting">
+          <Listing id="badge-erb" file="users/_badge.html.erb" lang="erb" code={badge.erb} />
+          <Listing id="badge-haml" file="users/_badge.html.haml" lang="haml" code={badge.haml} />
+          <Listing id="badge-slim" file="users/_badge.html.slim" lang="slim" code={badge.slim} />
+        </div>
+        <p class="course__more"><a href={`${base}/examples/erb/`}>More examples</a></p>
+      </Course>
+
+      <Course id="formatting" numeral="04" title="Formatting that only moves whitespace">
+        <p class="course__text">
+          Indentation, trailing spaces and the final newline, nothing else: lines are never wrapped or joined and Ruby is
+          never touched. If the result would not compile to the same template, the file is left alone.
+        </p>
+        <div class="before-after">
+          <Listing id="format-before" file="Before" lang="erb" code={unformatted} />
+          <Listing id="format-after" file="After Format Document" lang="erb" code={formatted} />
+        </div>
+        <p class="course__more"><a href={`${base}/guides/formatting/`}>How the formatter decides</a></p>
+      </Course>
+
+      <Course id="ci" numeral="05" title="The same checks in CI">
+        <p class="course__text">
+          The language server's checks and formatter also ship as a command line on npm, so the editor and the pipeline
+          agree. Exit codes: 0 ok, 1 diagnostics or files that would change, 2 usage or I/O errors.
+        </p>
+        <Listing id="ci-commands" file="Terminal" lang="shellscript" code={ci} />
+        <p class="course__more"><a href={`${base}/guides/command-line/`}>Command line options</a></p>
+      </Course>
+
+      <footer class="menu-card__close">
+        <p class="menu-card__close-text">Every course ships in one extension, alongside Ruby LSP.</p>
+        <Seal href={MARKETPLACE} label="Install for VS Code" />
+        <p class="menu-card__close-text">
+          <a class="menu-card__link" href={`${base}/getting-started/`}>Read the docs</a>
+        </p>
+      </footer>
+    </main>
+
+    <footer class="counter__footer">
+      <p>
+        MIT licensed. <a class="counter__link" href="https://github.com/x-ror/vscode-ruby-templates">Source on GitHub</a>.
+      </p>
+    </footer>
+  </body>
+</html>

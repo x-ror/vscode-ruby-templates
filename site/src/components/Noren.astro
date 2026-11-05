@@ -1,0 +1,37 @@
+---
+import icon from "../../../images/icon.png";
+
+interface Props {
+  base: string;
+}
+const { base } = Astro.props;
+const links = [
+  { href: `${base}/getting-started/`, label: "Docs" },
+  { href: `${base}/examples/erb/`, label: "Examples" },
+  { href: `${base}/reference/diagnostics/`, label: "Diagnostics" },
+  { href: `${base}/changelog/`, label: "Changelog" },
+];
+---
+
+<header class="noren">
+  <a class="noren__brand" href={`${base}/`}>
+    <img class="noren__icon" src={icon.src} alt="" width="32" height="32" />
+    Ruby Templates
+  </a>
+  <nav class="noren__nav" aria-label="Site">
+    <ul class="noren__list">
+      {
+        links.map(({ href, label }) => (
+          <li>
+            <a class="noren__link" href={href}>
+              {label}
+            </a>
+          </li>
+        ))
+      }
+      <li>
+        <a class="noren__link" href="https://github.com/x-ror/vscode-ruby-templates">GitHub</a>
+      </li>
+    </ul>
+  </nav>
+</header>

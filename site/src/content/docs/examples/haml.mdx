@@ -1,0 +1,157 @@
+---
+title: Haml examples
+description: Rails views in Haml as the extension highlights them, with what the language server checks and finds in each one.
+sidebar:
+  order: 2
+---
+
+Each example is a file from a Rails app, highlighted here with the extension's own Haml grammar. Every one passes `ruby-templates check` without a message and is already formatted (`ruby-templates format --check`). The server parses Haml as Haml 7.5.1 does, reports its errors with Haml's own messages at the same line and column, and checks the Ruby in code lines, attribute hashes and `#{}` with Prism. The same views are on the [ERB examples](/vscode-ruby-templates/examples/erb/) and [Slim examples](/vscode-ruby-templates/examples/slim/) pages.
+
+## Layout with `content_for` and `yield`
+
+### The layout
+
+<kbd>F12</kbd> on `render "shared/header"` opens the partial; a partial that
+doesn't exist gets an `unresolved-render` warning with a quick fix that creates
+it.
+
+```haml title="app/views/layouts/blog.html.haml"
+!!! 5
+%html{lang: I18n.locale}
+  %head
+    %title= content_for?(:title) ? yield(:title) : "Blog"
+    = csrf_meta_tags
+    = stylesheet_link_tag "application", "data-turbo-track": "reload"
+    = javascript_importmap_tags
+  %body
+    = render "shared/header"
+    %main#main
+      = yield
+    = yield :sidebar
+```
+
+### A view that fills it
+
+`- content_for :sidebar do` opens a block, so the nested lines belong to it; a `- end` under it would get Haml's error `You don't need to use "- end" in Haml.` `t(".byline")` completes the keys from `config/locales`, and hover shows the value in each locale.
+
+```haml title="app/views/articles/show.html.haml"
+- content_for :title, @article.title
+- content_for :sidebar do
+  %aside.sidebar
+    = render "articles/related", articles: @article.related.limit(3)
+
+%article[@article]
+  %h1= @article.title
+  %p.byline= t(".byline", author: @article.author.name, date: l(@article.published_on))
+  .body= simple_format(@article.body)
+```
+
+## Partial with strict locals
+
+Haml partials declare strict locals in a `-#` comment. The server reads it as Rails does: a `render` that misses `articles:` or passes an unknown local gets Rails' message (`strict-locals`), hover on `heading` shows its default, and <kbd>F2</kbd> on `articles` renames it here and in every `render` that passes it.
+
+```haml title="app/views/articles/_related.html.haml"
+-# locals: (articles:, heading: nil)
+%section.related
+  %h2= heading || t(".heading")
+  %ul
+    - articles.each do |article|
+      %li= link_to article.title, article
+```
+
+## Attribute hashes in braces, parentheses and brackets
+
+Ruby-hash attributes in `{}`, HTML-style attributes in `()` and object references in `[]` are all highlighted and parsed, and the Ruby inside them is checked. In `()` a value is a quoted string or a variable, as in Haml; anything else, such as a method call with arguments, is Haml's `Invalid attribute list` error, which is why the URL is assigned to `url` first. `%li[tag]` takes its `id` and `class` from the record.
+
+```haml title="app/views/articles/_article.html.haml"
+-# locals: (article:, show_summary: true)
+- url = article_path(article)
+%article.article-card{id: dom_id(article), class: ("draft" unless article.published?)}
+  %h2
+    %a(href=url class="title")= article.title
+  - if show_summary
+    %p.summary= article.summary
+  %ul.tags
+    - article.tags.each do |tag|
+      %li[tag]= link_to tag.name, tag_path(tag)
+```
+
+## Rendering partials, collections and components
+
+`render "articles/article"` goes to the partial and, after the comma, completes the locals it declares. `render @articles` resolves to `app/views/articles/_article.html.haml`. `render CardComponent.new` goes to the component's class and template, and `card.with_` completes its slots.
+
+```haml title="app/views/articles/index.html.haml"
+%h1= t(".title")
+
+= render "articles/article", article: @pinned, show_summary: false
+
+%section#articles
+  = render @articles
+
+= render CardComponent.new(title: t(".subscribe")) do |card|
+  - card.with_header { t(".subscribe_header") }
+  - card.with_item { link_to t(".rss"), articles_path(format: :rss) }
+```
+
+## Form with a form builder
+
+After `form.` completion lists the form builder methods; after `form.text_field :` it lists the columns of the `articles` table from `db/schema.rb`.
+
+```haml title="app/views/articles/_form.html.haml"
+-# locals: (article:)
+= form_with model: article do |form|
+  - if article.errors.any?
+    %ul.errors
+      - article.errors.full_messages.each do |message|
+        %li= message
+  .field
+    = form.label :title
+    = form.text_field :title, required: true
+  .field
+    = form.label :body
+    = form.text_area :body, rows: 12
+  .field
+    = form.label :published_on
+    = form.date_field :published_on
+  = form.submit
+```
+
+## Hotwire
+
+### Turbo Frame
+
+`turbo_frame_tag` and `link_to` complete with snippet arguments and show their API docs on hover; `edit_comment_path` completes from the app's routes.
+
+```haml title="app/views/comments/_comment.html.haml"
+-# locals: (comment:)
+= turbo_frame_tag dom_id(comment) do
+  %blockquote= comment.body
+  %p.meta
+    = comment.author_name
+    = link_to t(".edit"), edit_comment_path(comment)
+```
+
+### Stimulus controller
+
+Stimulus completion works in `data-…` attributes and in `data:` hash keys: controller names in `controller:` and `action:`, the actions after `clipboard#`, and on the controller's element its `-target`, `-value`, `-class` and `-outlet` attributes.
+
+```haml title="app/views/articles/_share.html.haml"
+-# locals: (article:, url: article_url(article))
+.share{data: {controller: "clipboard", clipboard_success_class: "copied"}}
+  %input(type="text" value=url readonly data-clipboard-target="source")
+  %button{type: "button", data: {action: "clipboard#copy"}}= t(".copy")
+```
+
+## Embedded CSS and JavaScript filters
+
+Filter bodies are highlighted in their own language, and `#{}` inside them as Ruby. The formatter moves a filter's body with its line and never re-indents it by CSS or JavaScript rules. A filter Haml 7 doesn't have, such as Haml 5's `:textile`, gets Haml's error `FilterCompiler for 'textile' was not found` (code `unknown-filter`).
+
+```haml title="app/views/articles/_reading_time.html.haml"
+-# locals: (article:)
+%p#reading-time{data: {words: article.word_count}}
+:css
+  #reading-time { color: #{article.category.color_hex}; }
+:javascript
+  const words = Number(document.getElementById("reading-time").dataset.words);
+  document.getElementById("reading-time").textContent = `${Math.ceil(words / 200)} min`;
+```

@@ -11,6 +11,7 @@ images/screenshots/**
 npm/**
 node_modules/**
 server/**
+site/**
 src/**
 test/**
 *.vsix

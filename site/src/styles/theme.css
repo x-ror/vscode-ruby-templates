@@ -1,0 +1,151 @@
+/* Starlight dressed as the omakase card: indigo noren header, card-white reading surface, indigo links. */
+@import "./tokens.css";
+
+:root {
+  --sl-font: var(--rt-font);
+  --sl-font-mono: var(--rt-font-mono);
+  --sl-text-h1: clamp(2.25rem, 1.6rem + 2.4vw, 3.25rem);
+  --sl-line-height-headings: 1.12;
+}
+
+:root[data-theme="light"] {
+  --sl-color-white: #121216;
+  --sl-color-gray-1: #24232a;
+  --sl-color-gray-2: #3a3940;
+  --sl-color-gray-3: #55545c;
+  --sl-color-gray-4: #85848c;
+  --sl-color-gray-5: #c9c8ce;
+  --sl-color-gray-6: #ebeaee;
+  --sl-color-gray-7: #f5f5f3;
+  --sl-color-black: var(--rt-card);
+  --sl-color-accent-low: #dfe3f2;
+  --sl-color-accent: var(--rt-noren);
+  --sl-color-accent-high: #1a2447;
+  --sl-color-text-accent: var(--rt-link);
+  --sl-color-bg-sidebar: var(--rt-card);
+  --sl-color-hairline: var(--rt-hairline);
+  --sl-color-hairline-light: #ebeaee;
+}
+
+:root[data-theme="dark"] {
+  --sl-color-white: #f6f5f9;
+  --sl-color-gray-1: #e4e3e8;
+  --sl-color-gray-2: #cfced5;
+  --sl-color-gray-3: #a9a8b1;
+  --sl-color-gray-4: #75747d;
+  --sl-color-gray-5: #44434b;
+  --sl-color-gray-6: #2b2a31;
+  --sl-color-black: var(--rt-card);
+  --sl-color-accent-low: #26315c;
+  --sl-color-accent: #8c9cff;
+  --sl-color-accent-high: #d3d9ff;
+  --sl-color-text-accent: var(--rt-link);
+  --sl-color-bg-sidebar: var(--rt-card);
+  --sl-color-hairline: var(--rt-hairline);
+  --sl-color-hairline-shade: var(--rt-counter);
+}
+
+/* The noren: an indigo band over a strip of the black counter. Starlight nests a div.header inside header.header. */
+header.header {
+  --sl-color-white: var(--rt-noren-ink);
+  --sl-color-gray-1: var(--rt-noren-ink);
+  --sl-color-gray-2: var(--rt-noren-ink-muted);
+  --sl-color-gray-5: rgb(255 255 255 / 0.28);
+  --sl-color-gray-6: rgb(255 255 255 / 0.1);
+  --sl-color-black: var(--rt-noren);
+  --sl-color-text-accent: var(--rt-noren-ink);
+  --rt-focus: var(--rt-noren-ink);
+  background-color: var(--rt-noren);
+  border-bottom: 0.375rem solid var(--rt-counter);
+}
+
+.site-title {
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+:root {
+  --sl-nav-height: 4.25rem;
+}
+
+/* One focus ring everywhere, legible on card and noren alike. */
+:focus-visible {
+  outline: 2px solid var(--rt-focus);
+  outline-offset: 2px;
+}
+
+.sl-markdown-content :is(h2, h3) {
+  letter-spacing: -0.015em;
+}
+
+.sl-markdown-content a {
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+.sl-markdown-content a:hover {
+  text-decoration-thickness: 2px;
+}
+
+.sl-markdown-content table {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The counter: page ground under the navigation panes; the card carries the reading. */
+body {
+  background-color: var(--rt-counter);
+}
+
+.sidebar-pane {
+  --sl-color-white: #f4f3f7;
+  --sl-color-gray-1: #e8e7ec;
+  --sl-color-gray-2: #cbcad1;
+  --sl-color-gray-3: #a8a7b0;
+  --sl-color-gray-4: #7d7c85;
+  --sl-color-gray-5: #3a3940;
+  --sl-color-gray-6: #26252b;
+  --sl-color-black: var(--rt-counter);
+  --sl-color-bg-sidebar: var(--rt-counter);
+  --sl-color-hairline: #2a2930;
+  --sl-color-hairline-light: #2a2930;
+  --sl-color-text-accent: var(--rt-card);
+  --sl-color-text-invert: var(--rt-ink);
+  --rt-focus: #f4f3f7;
+  color: var(--sl-color-gray-2);
+}
+
+:root[data-theme="dark"] .sidebar-pane {
+  --sl-color-text-accent: #2e2d35;
+  --sl-color-text-invert: #f4f3f7;
+}
+
+/* The page's table of contents stands on the counter only where it is a pane; on narrow screens it is a bar on the card. */
+@media (min-width: 72rem) {
+  .right-sidebar {
+    --sl-color-white: #f4f3f7;
+    --sl-color-gray-2: #cbcad1;
+    --sl-color-gray-3: #a8a7b0;
+    --sl-color-hairline: #2a2930;
+    --sl-color-text-accent: #c9d1ff;
+    --rt-focus: #f4f3f7;
+    background-color: var(--rt-counter);
+    border-inline-start-color: transparent;
+  }
+}
+
+/* The table of contents marks the current heading by weight as well as colour. */
+.right-sidebar [aria-current="true"] {
+  font-weight: 650;
+}
+
+.main-pane {
+  background-color: var(--rt-card);
+}
+
+@media (min-width: 50rem) {
+  .main-pane {
+    margin-block: 0.75rem;
+    border-radius: 3px;
+    box-shadow: 0 18px 40px -22px rgb(0 0 0 / 0.7);
+  }
+}
