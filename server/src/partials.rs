@@ -3245,6 +3245,26 @@ mod tests {
     }
 
     #[test]
+    fn local_keys_after_the_cursor_stop_at_the_call_line_cap() {
+        // Written for a cap of 20 lines on purpose: the test must fail when the cap changes.
+        let names_and_parses = |after_cursor: &str| {
+            let text = format!("<%= render \"card\", a: 1, |{after_cursor}{}", "\n".repeat(1000));
+            let offset = text.find('|').unwrap();
+            let text = text.replace('|', "");
+            let before = render_call::PARSES.with(|parses| parses.get());
+            let (_, names, _) = local_key_before(&text, offset, false, || LATEST).unwrap();
+            (names, render_call::PARSES.with(|parses| parses.get()) - before)
+        };
+        let blank_lines = "\n".repeat(19);
+        let (names, parses) = names_and_parses(&format!("{blank_lines}last: 2\n, past: 3"));
+        assert_eq!(names, ["a", "last"], "the 20th line is within the cap");
+        assert!(parses <= 70, "{parses} parses for one keystroke");
+        let (names, parses) = names_and_parses(&format!("{blank_lines}last: 2,\npast: 3"));
+        assert!(!names.contains(&"past".to_string()), "the 21st line is past the cap: {names:?}");
+        assert!(parses <= 70, "{parses} parses for one keystroke");
+    }
+
+    #[test]
     fn half_typed_local_key_costs_few_parses() {
         let line = r#"<%= render "card", a: 1, b: 2, c , d: 3 %>"#;
         let before = render_call::PARSES.with(|parses| parses.get());
