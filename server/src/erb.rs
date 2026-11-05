@@ -242,14 +242,6 @@ fn raw_text(element: &'static str, rest: &str) -> (usize, State) {
     }
 }
 
-pub fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() > n {
-        format!("{}…", s.chars().take(n).collect::<String>())
-    } else {
-        s.to_string()
-    }
-}
-
 /// Ruby code of each ERB tag as sorted `(start, end)` byte bounds: `start` is just after `<%`, `end` the `>` of
 /// `%>` (an offset there still belongs to the tag), or the text's end when unclosed. `<%#` comments and `<%%`
 /// literals are left out. Like ERB, a tag ends at the first `%>`, even inside a string.

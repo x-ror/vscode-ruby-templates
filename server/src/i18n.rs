@@ -1,6 +1,5 @@
 //! Rails i18n keys in `t("…")` calls → `config/locales/**/*.yml`: definition, hover, completion.
 
-use crate::erb::truncate;
 use crate::project::Project;
 use crate::rails_paths::{rails_root, template_stem, view_relative};
 use crate::util::{inline_code, slash_path};
@@ -118,11 +117,7 @@ pub fn hover(files: &Locales, key: &str) -> Option<String> {
     let values: Vec<String> = found
         .iter()
         .map(|t| {
-            format!(
-                "- **{}**: {}",
-                t.locale,
-                t.value.as_deref().map_or_else(|| "{…}".to_string(), |v| inline_code(&truncate(v, VALUE_PREVIEW)))
-            )
+            format!("- **{}**: {}", t.locale, t.value.as_deref().map_or_else(|| "{…}".to_string(), |v| inline_code(&value_preview(v))))
         })
         .collect();
     let mut md = format!("`{key}`\n\n{}", values.join("\n"));
@@ -144,7 +139,7 @@ pub fn completions(project: &Project, files: &Locales, current: &Path, prefix: &
         // Keys come sorted, so a repeat of the last label is the same key from a later file.
         let label = &t.key[scope.len()..];
         if out.last().is_none_or(|(last, _)| last != label) {
-            out.push((label.to_string(), format!("{}: {}", t.locale, truncate(value, VALUE_PREVIEW))));
+            out.push((label.to_string(), format!("{}: {}", t.locale, value_preview(value))));
         }
     }
     out
@@ -173,6 +168,14 @@ type Anchors = HashMap<String, (String, String, usize)>;
 
 // Line-based YAML subset: block mappings, scalars, `|`/`>` blocks, block sequences of scalars, flow collections on one
 // line, anchors, aliases and `<<` merges. A list is one key whose value is `[a, b]`, as `t` returns the whole array.
+/// `value` cut to `VALUE_PREVIEW` characters, with `…` when something was cut.
+fn value_preview(value: &str) -> String {
+    match value.char_indices().nth(VALUE_PREVIEW) {
+        Some((cut, _)) => format!("{}…", &value[..cut]),
+        None => value.to_string(),
+    }
+}
+
 pub fn parse(text: &str) -> Vec<Translation> {
     let text = text.strip_prefix(crate::util::BOM).unwrap_or(text);
     let mut parser = LocaleParser::default();
