@@ -1,7 +1,7 @@
 //! Controller and mailer classes as Rails finds a view's: the class of its folder, the parents and modules it gets
 //! view folders and callbacks from, and the callbacks that run before an action.
 
-use crate::inflect::{constant_path, snake_case};
+use crate::rails::inflect::{constant_path, snake_case};
 use crate::rails::paths::{app_root, ruby_files_under, template_stem, view_relative};
 use crate::rails::project::Project;
 use crate::ruby::logical_lines;

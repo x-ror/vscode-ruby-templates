@@ -1,9 +1,9 @@
 //! Resolve `render "partial"` and friends to files; list partials for completion.
 
-use crate::inflect;
-use crate::inflect::{pluralize, singularize};
 use crate::rails::controller_classes;
 use crate::rails::controller_classes::controller_file;
+use crate::rails::inflect;
+use crate::rails::inflect::{pluralize, singularize};
 use crate::rails::paths::{
     app_root, is_partial_path, template_format, template_stem, template_suffix, template_variant, view_relative, views_root,
 };

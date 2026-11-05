@@ -2,7 +2,7 @@
 //! assigns from `Model.find(…)`, or the block variable of `@relation.each do |record|` where `@relation` is
 //! `Model.where(…)`. Anything less plain answers nothing.
 
-use crate::inflect::{pluralize, snake_case};
+use crate::rails::inflect::{pluralize, snake_case};
 use crate::rails::ivars;
 use crate::rails::ivars::Assignment;
 use crate::rails::paths;

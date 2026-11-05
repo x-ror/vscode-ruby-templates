@@ -209,7 +209,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
             source,
             extra_engines,
             |_, _, line, _| model_refs(line).into_iter().map(|r| (r, ())).collect(),
-            |r| may_name(&stems, &crate::inflect::singularize(&r.name)),
+            |r| may_name(&stems, &crate::rails::inflect::singularize(&r.name)),
         )
         .into_iter()
         .filter(|(_, _, r, _)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)))

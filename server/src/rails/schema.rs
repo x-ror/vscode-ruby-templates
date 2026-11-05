@@ -1,6 +1,6 @@
 //! Model attributes from `db/schema.rb`, for `f.text_field :` completion inside a `form_with model:` block.
 
-use crate::inflect::{pluralize, singularize, snake_case};
+use crate::rails::inflect::{pluralize, singularize, snake_case};
 use crate::rails::paths::rails_root;
 use crate::util::leading_ws;
 use regex::Regex;

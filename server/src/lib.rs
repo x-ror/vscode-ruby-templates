@@ -10,7 +10,6 @@ mod format;
 mod haml;
 mod helpers;
 mod html;
-mod inflect;
 mod lang;
 mod lsp;
 mod options;

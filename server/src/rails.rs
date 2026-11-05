@@ -5,6 +5,7 @@ pub mod controller_classes;
 pub mod controllers;
 pub mod helper_defs;
 pub mod i18n;
+pub mod inflect;
 pub mod ivars;
 pub mod model_columns;
 pub mod partials;
