@@ -35,6 +35,31 @@ pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<D
         .collect()
 }
 
+/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
+/// when the tokenizer is in the data state. Complete tags are invisible to it.
+pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
+    let (texts, tail_at) = erb_ruby::rendered_texts(text);
+    let mut html = Html::default();
+    for rendered in &texts {
+        html.feed(rendered);
+    }
+    let openers = html.feed(&text[tail_at..]);
+    if openers.is_empty() {
+        return vec![];
+    }
+    let index = LineIndex::new(text);
+    openers
+        .into_iter()
+        .map(|at| {
+            let start = index.position(tail_at + at);
+            let range = Range::new(start, Position::new(start.line, u32::MAX));
+            let message =
+                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
+            coded(warning(range, message), code::UNCLOSED_TAG)
+        })
+        .collect()
+}
+
 const FOREIGN_ROOTS: [&str; 2] = ["svg", "math"];
 
 /// The attribute sub-states of the tokenizer (13.2.5.32 to 13.2.5.40) that decide where a quote opens a value.
@@ -215,31 +240,6 @@ fn raw_text(element: &'static str, rest: &str) -> (usize, State) {
         Some(i) => (i + close.len(), State::Tag(Tag::new(true, element.to_string()))),
         None => (rest.len(), State::RawText(element)),
     }
-}
-
-/// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
-/// when the tokenizer is in the data state. Complete tags are invisible to it.
-pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
-    let (texts, tail_at) = erb_ruby::rendered_texts(text);
-    let mut html = Html::default();
-    for rendered in &texts {
-        html.feed(rendered);
-    }
-    let openers = html.feed(&text[tail_at..]);
-    if openers.is_empty() {
-        return vec![];
-    }
-    let index = LineIndex::new(text);
-    openers
-        .into_iter()
-        .map(|at| {
-            let start = index.position(tail_at + at);
-            let range = Range::new(start, Position::new(start.line, u32::MAX));
-            let message =
-                "invalid-first-character-of-tag-name: `<%` without `%>` is text, and `<` followed by `%` starts no tag (HTML 13.2.5.6)";
-            coded(warning(range, message), code::UNCLOSED_TAG)
-        })
-        .collect()
 }
 
 pub fn truncate(s: &str, n: usize) -> String {
