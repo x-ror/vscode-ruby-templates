@@ -33,11 +33,13 @@ function inVerbatimBlock(lines, n) {
   return false;
 }
 
+const INTERPOLATION_CLOSE = "}";
+
 /** `= text` when the selection is a whole line's plain content, else inline `#{text}`. */
 function wrapSlim(text, wholeLine) {
   return wholeLine && !SLIM_LINE_START_RE.test(text)
     ? `= ${text}`
-    : `#{${text}}`;
+    : `#{${text}${INTERPOLATION_CLOSE}`;
 }
 
-export { toggleSlimMarker, inVerbatimBlock, wrapSlim };
+export { INTERPOLATION_CLOSE, toggleSlimMarker, inVerbatimBlock, wrapSlim };

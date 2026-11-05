@@ -18,6 +18,8 @@ let watchers;
 let output;
 // A restarted server has lost what was sent to the previous one.
 const startListeners = new Set();
+// stop() hands concurrent callers one shared promise, so overlapping restarts would each start a server.
+let queue = Promise.resolve();
 
 const log = (msg) => output?.appendLine(`[ruby-templates] ${msg}`);
 
@@ -87,6 +89,29 @@ const SERVER_SETTINGS = [
     `${lang}.format.enabled`,
   ]),
 ].map((key) => `${SECTION}.${key}`);
+
+// Not awaited by callers: the restart queue must not wait for the notification to be dismissed.
+async function offerHelp(msg) {
+  const pick = await vscode.window.showWarningMessage(
+    msg,
+    "Open settings",
+    "Show log",
+  );
+  if (pick === "Open settings")
+    await vscode.commands.executeCommand(
+      "workbench.action.openSettings",
+      `${SECTION}.server`,
+    );
+  if (pick === "Show log") output.show();
+}
+
+async function disposeQuietly(languageClient) {
+  try {
+    await languageClient.dispose();
+  } catch (e) {
+    log(`stopping language server: ${e}`);
+  }
+}
 
 async function doStart(context) {
   const config = settings();
@@ -159,37 +184,12 @@ async function doStart(context) {
   }
 }
 
-// Not awaited by callers: the restart queue must not wait for the notification to be dismissed.
-async function offerHelp(msg) {
-  const pick = await vscode.window.showWarningMessage(
-    msg,
-    "Open settings",
-    "Show log",
-  );
-  if (pick === "Open settings")
-    await vscode.commands.executeCommand(
-      "workbench.action.openSettings",
-      `${SECTION}.server`,
-    );
-  if (pick === "Show log") output.show();
-}
-
-async function disposeQuietly(languageClient) {
-  try {
-    await languageClient.dispose();
-  } catch (e) {
-    log(`stopping language server: ${e}`);
-  }
-}
-
 async function doStop() {
   const old = client;
   client = undefined;
   if (old) await disposeQuietly(old);
 }
 
-// stop() hands concurrent callers one shared promise, so overlapping restarts would each start a server.
-let queue = Promise.resolve();
 const serialize = (task) =>
   (queue = queue.then(task).catch((e) => log(e?.message ?? e)));
 

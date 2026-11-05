@@ -92,6 +92,36 @@ async function renderToHtml(doc) {
   });
 }
 
+async function renderPreview(doc) {
+  const panel = previewPanel;
+  if (!panel) return;
+  const r = await renderToHtml(doc);
+  // The panel may have closed, or moved to another document, during a slow render.
+  if (previewPanel !== panel || previewUri !== doc.uri.toString()) return;
+  if (r.err?.code === "ENOENT") {
+    panel.webview.html = errorPage(
+      "Renderer not found",
+      missingToolMessage(r.err.path, doc.languageId),
+    );
+    return;
+  }
+  if (r.code !== 0) {
+    panel.webview.html = errorPage(
+      "Render failed",
+      r.stderr || r.stdout,
+      isErb(doc.languageId)
+        ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
+        : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
+    );
+    return;
+  }
+  panel.webview.html = previewPage(
+    path.basename(doc.fileName),
+    doc.languageId,
+    r.stdout,
+  );
+}
+
 async function openPreview() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || !isTemplateLanguage(ed.document.languageId)) {
@@ -123,36 +153,6 @@ function refreshPreviewOnSave(doc) {
   if (!settings().get("preview.refreshOnSave", true)) return;
   if (doc.uri.toString() === previewUri)
     renderPreview(doc).catch((e) => log(`preview: ${e?.message ?? e}`));
-}
-
-async function renderPreview(doc) {
-  const panel = previewPanel;
-  if (!panel) return;
-  const r = await renderToHtml(doc);
-  // The panel may have closed, or moved to another document, during a slow render.
-  if (previewPanel !== panel || previewUri !== doc.uri.toString()) return;
-  if (r.err?.code === "ENOENT") {
-    panel.webview.html = errorPage(
-      "Renderer not found",
-      missingToolMessage(r.err.path, doc.languageId),
-    );
-    return;
-  }
-  if (r.code !== 0) {
-    panel.webview.html = errorPage(
-      "Render failed",
-      r.stderr || r.stdout,
-      isErb(doc.languageId)
-        ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
-        : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
-    );
-    return;
-  }
-  panel.webview.html = previewPage(
-    path.basename(doc.fileName),
-    doc.languageId,
-    r.stdout,
-  );
 }
 
 function closePreview() {

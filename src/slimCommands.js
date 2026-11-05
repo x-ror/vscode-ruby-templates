@@ -1,7 +1,12 @@
 // Slim editing commands: cycle the line marker, wrap in output.
 import * as vscode from "vscode";
 
-import { toggleSlimMarker, inVerbatimBlock, wrapSlim } from "./slim.js";
+import {
+  INTERPOLATION_CLOSE,
+  toggleSlimMarker,
+  inVerbatimBlock,
+  wrapSlim,
+} from "./slim.js";
 import { selectedLines } from "./editor.js";
 
 async function toggleSlimTag() {
@@ -49,7 +54,7 @@ async function wrapInSlim() {
     }
   });
   if (ed.selections.length === 1 && ed.selection.isEmpty) {
-    const p = ed.selection.active.translate(0, -1);
+    const p = ed.selection.active.translate(0, -INTERPOLATION_CLOSE.length);
     ed.selection = new vscode.Selection(p, p);
   }
 }

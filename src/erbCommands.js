@@ -54,17 +54,20 @@ async function toggleErbLineComment() {
   });
 }
 
+const ERB_OUTPUT_OPEN = "<%= ";
+const ERB_CLOSE = " %>";
+
 async function wrapInErb() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   await ed.edit((eb) => {
     for (const sel of ed.selections) {
       const text = ed.document.getText(sel);
-      eb.replace(sel, text ? `<%= ${text} %>` : "<%=  %>");
+      eb.replace(sel, `${ERB_OUTPUT_OPEN}${text}${ERB_CLOSE}`);
     }
   });
   if (ed.selections.length === 1 && ed.selection.isEmpty) {
-    const p = ed.selection.active.translate(0, -3);
+    const p = ed.selection.active.translate(0, -ERB_CLOSE.length);
     ed.selection = new vscode.Selection(p, p);
   }
 }
