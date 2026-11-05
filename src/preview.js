@@ -21,6 +21,10 @@ import {
   errorPage,
 } from "./render.js";
 
+// The preview command and its webview's type.
+const PREVIEW = "rubyTemplates.preview";
+const STATUS_BAR_PRIORITY = 90;
+
 /** @type {vscode.WebviewPanel | undefined} */
 let previewPanel;
 /** @type {string | undefined} */
@@ -91,7 +95,7 @@ async function renderInRails(root, dir, lang, src) {
   return r;
 }
 
-async function openPreview(context) {
+async function openPreview() {
   const ed = vscode.window.activeTextEditor;
   if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
     vscode.window.showInformationMessage(
@@ -102,19 +106,15 @@ async function openPreview(context) {
   previewUri = ed.document.uri.toString();
   if (!previewPanel) {
     previewPanel = vscode.window.createWebviewPanel(
-      "rubyTemplates.preview",
+      PREVIEW,
       "Template Preview",
       vscode.ViewColumn.Beside,
       { enableScripts: false },
     );
-    previewPanel.onDidDispose(
-      () => {
-        previewPanel = undefined;
-        previewUri = undefined;
-      },
-      null,
-      context.subscriptions,
-    );
+    previewPanel.onDidDispose(() => {
+      previewPanel = undefined;
+      previewUri = undefined;
+    });
   }
   previewPanel.title = `Preview: ${path.basename(ed.document.fileName)}`;
   await renderPreview(ed.document);
@@ -185,4 +185,33 @@ async function showCompiledSource() {
   });
 }
 
-export { openPreview, refreshPreviewOnSave, closePreview, showCompiledSource };
+/** The preview and compiled-source commands, and a status bar item showing the active template's engine. */
+function registerPreview(context) {
+  const status = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    STATUS_BAR_PRIORITY,
+  );
+  status.command = PREVIEW;
+  status.tooltip = "Ruby Templates: preview rendered HTML";
+  const updateStatus = () => {
+    const ed = vscode.window.activeTextEditor;
+    if (ed && TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
+      status.text = `$(preview) ${ed.document.languageId.toUpperCase()}`;
+      status.show();
+    } else status.hide();
+  };
+  context.subscriptions.push(
+    vscode.commands.registerCommand(PREVIEW, openPreview),
+    vscode.commands.registerCommand(
+      "rubyTemplates.showRenderedSource",
+      showCompiledSource,
+    ),
+    vscode.workspace.onDidSaveTextDocument(refreshPreviewOnSave),
+    status,
+    vscode.window.onDidChangeActiveTextEditor(updateStatus),
+    { dispose: closePreview },
+  );
+  updateStatus();
+}
+
+export { registerPreview };
