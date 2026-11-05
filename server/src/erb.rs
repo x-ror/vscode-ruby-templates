@@ -1,6 +1,7 @@
 //! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves.
 
 use crate::erb_ruby;
+use crate::generated_ruby::RUBY_SYNTAX;
 use crate::html::TOKENIZED_AS_TEXT;
 use crate::strict_locals::RubyContext;
 use crate::util::{coded, warning, LineIndex};
@@ -9,7 +10,6 @@ use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
     pub const UNCLOSED_TAG: &str = "unclosed-tag";
-    pub const RUBY_SYNTAX: &str = "ruby-syntax";
 }
 
 /// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
@@ -31,7 +31,7 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
 pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<Diagnostic> {
     erb_ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref())
         .into_iter()
-        .map(|d| coded(d, code::RUBY_SYNTAX))
+        .map(|d| coded(d, RUBY_SYNTAX))
         .collect()
 }
 
@@ -332,7 +332,7 @@ mod tests {
             .map(|d| (d.range.start.line, crate::util::code(&d).unwrap_or_default().to_string()))
             .collect();
         got.sort();
-        let want = [(0, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX), (5, code::RUBY_SYNTAX)];
+        let want = [(0, RUBY_SYNTAX), (5, RUBY_SYNTAX), (5, RUBY_SYNTAX), (5, RUBY_SYNTAX)];
         assert_eq!(got, want.map(|(line, code)| (line, code.to_string())));
         let html = html_diagnostics(include_str!("../../test/broken/bad.html.erb"));
         assert_eq!(html.iter().map(|d| d.range.start.line).collect::<Vec<_>>(), [9]);

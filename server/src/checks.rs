@@ -1,6 +1,7 @@
 //! The diagnostics of a template: its language's own checks plus the `render` checks against app/views.
 
 use crate::code_context::render_filter;
+use crate::generated_ruby::RUBY_SYNTAX;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::options::Options;
 use crate::{
@@ -16,6 +17,11 @@ use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{Diagnostic, Uri};
+
+/// Diagnostic codes every language shares, with `generated_ruby::RUBY_SYNTAX`.
+pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
+pub(crate) const STRICT_LOCALS: &str = "strict-locals";
+const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 #[derive(Clone)]
 pub(crate) struct Doc {
@@ -121,12 +127,6 @@ pub(crate) fn language_diagnostics(uri: &Uri, doc: &Doc, extra_engines: &[String
 fn locals_signature(text: &str, ruby: &RubyContext) -> Vec<Diagnostic> {
     strict_locals::diagnostics(text, ruby.grammar, ruby.strict_locals.as_ref()).into_iter().map(|d| util::coded(d, RUBY_SYNTAX)).collect()
 }
-
-/// Diagnostic codes every language shares.
-pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
-const RUBY_SYNTAX: &str = "ruby-syntax";
-pub(crate) const STRICT_LOCALS: &str = "strict-locals";
-const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 /// Line index, line, the call as read, and the render.
 type CheckedRender<'a> = (usize, &'a str, render_refs::RenderCall<'a>, render_refs::RenderRef);
@@ -364,13 +364,12 @@ mod tests {
         let all = Options::default();
         let erb_path = "file:///v/show.html.erb";
         // Each code gets its own text, so one check does not hide another.
-        let erb_cases =
-            [("<% end %>\n", erb::code::RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
+        let erb_cases = [("<% end %>\n", RUBY_SYNTAX), ("<div>\n", tags::code::UNCLOSED_ELEMENT), ("hi\n<% foo", erb::code::UNCLOSED_TAG)];
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
         let options = Options::from_init(Some(&serde_json::json!({
-            "erb": { "disabledDiagnostics": [erb::code::RUBY_SYNTAX, tags::code::UNCLOSED_ELEMENT, erb::code::UNCLOSED_TAG] },
+            "erb": { "disabledDiagnostics": [RUBY_SYNTAX, tags::code::UNCLOSED_ELEMENT, erb::code::UNCLOSED_TAG] },
             "haml": { "disabledDiagnostics": [haml_indent::code::ILLEGAL_NESTING] }
         })))
         .0;
@@ -418,7 +417,9 @@ mod tests {
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
         for src in [
-            include_str!("main.rs"),
+            include_str!("checks.rs"),
+            include_str!("lsp.rs"),
+            include_str!("generated_ruby.rs"),
             include_str!("erb.rs"),
             include_str!("tags.rs"),
             include_str!("html_lint.rs"),

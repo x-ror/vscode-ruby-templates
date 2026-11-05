@@ -1,5 +1,6 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
+use crate::generated_ruby::RUBY_SYNTAX;
 use crate::html::VOID_ELEMENTS;
 use crate::slim_parser::{self, indent_width, Piece};
 use crate::slim_ruby;
@@ -16,10 +17,9 @@ pub mod code {
     /// Slim parser errors that belong to no other code.
     pub const SYNTAX_ERROR: &str = "syntax-error";
     pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
-    pub const RUBY_SYNTAX: &str = "ruby-syntax";
     pub const EXPLICIT_END: &str = "explicit-end";
     /// Checks that parse the `-`/`=` code as Ruby.
-    pub const RUBY: &[&str] = &[RUBY_SYNTAX, EXPLICIT_END];
+    pub const RUBY: &[&str] = &[crate::generated_ruby::RUBY_SYNTAX, EXPLICIT_END];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
     }
     // Slim compiles only a template it parsed, and stops at the errors its filters raise.
     if filters_pass && invalid_doctype.is_none() {
-        out.extend(slim_ruby::compiled(&parsed).diagnostics(text, ruby).into_iter().map(|d| coded(d, code::RUBY_SYNTAX)));
+        out.extend(slim_ruby::compiled(&parsed).diagnostics(text, ruby).into_iter().map(|d| coded(d, RUBY_SYNTAX)));
     }
     // A file the parser rejects has every line after the unclosed construct as its continuation; those still count.
     let roles = if parsed.valid { parsed.lines } else { vec![] };
@@ -478,10 +478,10 @@ mod tests {
         // A parser error, an explicit `end` and a repeated attribute come before Slim generates any Ruby.
         for text in ["?bad\n= foo(\n", "- end\n= foo(\n", "a id=1 id=2\n= foo(\n"] {
             let found = diagnostics(text, &[]);
-            assert!(found.iter().all(|d| d.code != Some(NumberOrString::String(code::RUBY_SYNTAX.into()))), "{text:?}: {found:?}");
+            assert!(found.iter().all(|d| d.code != Some(NumberOrString::String(RUBY_SYNTAX.into()))), "{text:?}: {found:?}");
         }
         let found = diagnostics("= foo(\n", &[]);
-        assert!(found.iter().all(|d| d.code == Some(NumberOrString::String(code::RUBY_SYNTAX.into()))) && found.len() == 2, "{found:?}");
+        assert!(found.iter().all(|d| d.code == Some(NumberOrString::String(RUBY_SYNTAX.into()))) && found.len() == 2, "{found:?}");
     }
 
     #[test]
