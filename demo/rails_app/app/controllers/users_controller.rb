@@ -1,5 +1,5 @@
 class UsersController < ApplicationController
-  before_action :set_user, only: %i[show edit]
+  before_action :set_user, only: %i[show edit engines formats]
 
   def index
     @users = User.all
@@ -15,6 +15,12 @@ class UsersController < ApplicationController
   end
 
   def edit
+  end
+
+  def engines
+  end
+
+  def formats
   end
 
   private

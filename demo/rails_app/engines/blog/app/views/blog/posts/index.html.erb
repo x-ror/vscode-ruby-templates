@@ -1,0 +1,5 @@
+<%# Rendered by the engine: "blog/post" is its own, "users/card" comes from the app's app/views. %>
+<% @posts.each do |post| %>
+  <%= render "blog/post", post: post %>
+<% end %>
+<%= render "users/card", user: current_user_name %>

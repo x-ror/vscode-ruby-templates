@@ -1,0 +1,8 @@
+<%# render with formats:, variants: and handlers: picks the file Rails would. users/_badge has four of them. %>
+<%= render partial: "users/badge", locals: { user: @user } %>
+<%= render partial: "users/badge", formats: [:json], locals: { user: @user } %>
+<%= render partial: "users/badge", variants: [:phone], locals: { user: @user } %>
+<%= render partial: "users/badge", handlers: [:haml], locals: { user: @user } %>
+<%= render formats: [:json], partial: "badge", locals: { user: @user } %>
+<%= render "note", formats: [:json] %>
+<%= render "/users/card", user: @user %>

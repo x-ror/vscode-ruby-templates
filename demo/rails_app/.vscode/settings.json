@@ -1,4 +1,9 @@
 {
   "[erb]": { "editor.linkedEditing": true },
+  "files.associations": {
+    "**/lib/reports/*.erb": "erb-percent",
+    "**/playground/highlight/sample.percent.erb": "erb-percent",
+    "**/playground/liquid/_includes/*.html": "liquid"
+  },
   "rubyTemplates.slim.extraEngines": ["mjml"]
 }

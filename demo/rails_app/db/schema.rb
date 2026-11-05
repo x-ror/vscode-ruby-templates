@@ -8,7 +8,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_11_01_000000) do
   end
 
   create_table "reports", force: :cascade do |t|
-    t.string "title"
+    t.string "title", null: false
     t.text "body"
   end
 end

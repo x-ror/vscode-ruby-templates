@@ -1,0 +1,6 @@
+<%# Second app of the workspace: partials, translations and routes come from this app only. %>
+<h1><%= t(".title") %></h1>
+<%= render "badge" %>
+<%= render "users/card", customer: @products.first %>
+<%= render "shared/footer" %>
+<%= link_to "About", about_path %>

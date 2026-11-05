@@ -23,3 +23,14 @@
 <a title="<%== raw_title %>" data-y="<%= y -%>" data-z="<%# note %>" data-l="<%% not code %>">x</a>
 <script>const a = "<%== json %>"; <%# in script %> <%= b -%></script>
 <style><%# in style %>.b { width: <%== w %>px; }</style>
+<% sql = <<~SQL
+  SELECT * FROM users WHERE id = #{id}
+SQL
+%>
+<%= <<~HTML.html_safe
+  <b>x</b>
+HTML
+%>
+<p>after heredoc</p>
+
+% complete (plain text in a Rails view, not Ruby)

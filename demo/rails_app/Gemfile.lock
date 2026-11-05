@@ -1,3 +1,9 @@
+PATH
+  remote: engines/blog
+  specs:
+    blog (0.1.0)
+      rails (>= 8.0)
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -11,6 +17,7 @@ PLATFORMS
   x86_64-linux
 
 DEPENDENCIES
+  blog!
   devise
   rails (~> 8.0)
   view_component

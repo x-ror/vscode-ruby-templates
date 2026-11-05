@@ -1,0 +1,11 @@
+<div class="notice">
+<%= <<~HTML.html_safe
+  <b>Heads up:</b> #{h @notice}
+HTML
+%>
+    <% summary = <<~TEXT
+  Total: #{@total}
+      TEXT
+    %>
+<p><%= summary %></p>
+</div>
