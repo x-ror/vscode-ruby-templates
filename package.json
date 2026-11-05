@@ -211,6 +211,18 @@
         "configuration": "./language-configuration/slim.json"
       },
       {
+        "id": "liquid",
+        "aliases": [
+          "Liquid",
+          "liquid"
+        ],
+        "extensions": [
+          ".liquid",
+          ".html.liquid"
+        ],
+        "configuration": "./language-configuration/liquid.json"
+      },
+      {
         "id": "ruby",
         "extensions": [
           ".jbuilder",
@@ -348,6 +360,18 @@
           "source.sass": "sass",
           "source.coffee": "coffeescript",
           "text.html.markdown": "markdown"
+        }
+      },
+      {
+        "language": "liquid",
+        "scopeName": "text.html.liquid",
+        "path": "./syntaxes/liquid.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.liquid": "liquid",
+          "meta.embedded.line.liquid": "liquid",
+          "comment.block.liquid": "liquid",
+          "source.js": "javascript",
+          "source.css": "css"
         }
       }
     ],
@@ -822,7 +846,8 @@
     "configurationDefaults": {
       "emmet.includeLanguages": {
         "erb": "html",
-        "skim": "slim"
+        "skim": "slim",
+        "liquid": "html"
       },
       "[haml]": {
         "editor.tabSize": 2,
@@ -840,6 +865,10 @@
         "editor.detectIndentation": false
       },
       "[erb]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "[liquid]": {
         "editor.tabSize": 2,
         "editor.insertSpaces": true
       }

@@ -1,0 +1,48 @@
+{% comment %} A {{ commented }} block {% endcomment %}
+{% # inline note %}
+{%- # trimmed note -%}
+{% raw %}{{ not_liquid }} {% if x %}{% endraw %}
+{%- raw -%}{{ trimmed_raw }}{%- endraw -%}
+{%- comment -%} trimmed {%- endcomment -%}
+{% comment %}{% comment %}inner{% endcomment %} still comment {% endcomment %}
+<b>after nested</b>
+{{ "a }} b" }}
+{{ "unterminated }}
+<i>string ended at the tag</i>
+{{ x-}}
+{% liquid assign y = 2
+  echo y
+%}
+<h1>{{ page.title | escape }}</h1>
+{{- product.title | upcase | truncate: 20, "..." -}}
+{{ 'a' | append: "b" | default: nil }}
+{{ price | times: 1.5 | round: 2 }}
+{% assign total = cart.total_price | divided_by: 100 %}
+{%- if user.name == "Ann" and count >= 3 or tags contains 'new' -%}
+  <p class="{{ klass }}">{{ user.name }}</p>
+{% elsif user.role != "admin" %}
+  <p>other</p>
+{% else %}
+  <p>{{ empty }} {{ blank }} {{ true }} {{ false }} {{ nil }}</p>
+{% endif %}
+{% unless items == empty %}
+  {% for i in (1..5) %}{{ i }}{% endfor %}
+  {% for item in items limit: 2 reversed %}
+    {{ forloop.index }} {{ item.title }}
+  {% endfor %}
+{% endunless %}
+{% case type %}{% when "a" %}A{% else %}B{% endcase %}
+{% capture note %}hello {{ name }}{% endcapture %}
+{% render "card", product: product, show: true %}
+{% include 'snippet' %}
+{% liquid
+  # statement comment
+  assign x = 1
+  if x < 2
+    echo "small" | upcase
+  endif
+%}
+<a class="btn {{ active }}" href="{{ url }}" data-x='{% if y %}y{% endif %}'>x</a>
+<div {{ attrs }} id="d"></div>
+<script>const n = {{ count | json }}; {% if debug %}console.log(n);{% endif %}</script>
+<style>.a { color: {{ color }}; }</style>
