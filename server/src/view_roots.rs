@@ -236,7 +236,7 @@ mod tests {
         write_files(&root, &[(".bundle/config", "---\nBUNDLE_PATH: \"vendor/bundle\"\n")]);
         let relative = |roots: ViewRoots| {
             let mut names: Vec<String> =
-                roots.app.iter().chain(&roots.gems).map(|r| r.strip_prefix(&root).unwrap().display().to_string()).collect();
+                roots.app.iter().chain(&roots.gems).map(|r| r.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/")).collect();
             names.sort();
             names
         };
