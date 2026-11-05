@@ -7,8 +7,9 @@
 use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
+use crate::html::NO_END_TAG;
 use crate::ruby::BlockEffect;
-use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END, VOID};
+use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END};
 use crate::util::{leading_ws, raw_lines};
 use regex::Regex;
 use std::collections::HashSet;
@@ -330,7 +331,7 @@ impl<'t> Nesting<'t> {
 
     fn ignored_close(&self, i: usize, tag: &Tag) -> bool {
         let name = tag.name.as_str();
-        VOID.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
+        NO_END_TAG.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
     }
 
     /// `<% end %>` and `<% else %>` (token `i`) line up with their block's opening, under tags a branch left open.

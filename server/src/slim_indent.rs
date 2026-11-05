@@ -1,6 +1,7 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::slim_parser::{self, indent_width, Piece, VOID_ELEMENTS};
+use crate::html::VOID_ELEMENTS;
+use crate::slim_parser::{self, indent_width, Piece};
 use crate::slim_ruby;
 use crate::util::BOM;
 use crate::util::{balanced_across_lines, coded, error, leading_ws, span_range, warning};

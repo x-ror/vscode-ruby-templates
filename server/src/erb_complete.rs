@@ -1,9 +1,8 @@
 //! HTML completion in ERB template text: element names after `<`, the open element after `</`, attribute names
 //! inside a start tag.
 
-use crate::html::{self, BOOLEAN_ATTRIBUTES, TAGS};
+use crate::html::{self, BOOLEAN_ATTRIBUTES, NO_END_TAG, TAGS};
 use crate::html_lint::{inside, non_markup};
-use crate::tags::VOID;
 use crate::util::completion_item;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -90,7 +89,7 @@ fn open_element(before: &str) -> Option<String> {
             if let Some(at) = stack.iter().rposition(|open| *open == name) {
                 stack.truncate(at);
             }
-        } else if !VOID.contains(&name.as_str()) && !self_closing {
+        } else if !NO_END_TAG.contains(&name.as_str()) && !self_closing {
             stack.push(name);
         }
     }

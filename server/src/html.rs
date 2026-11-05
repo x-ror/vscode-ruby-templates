@@ -224,6 +224,17 @@ pub const ATTRIBUTES: &[&str] = &[
     "wrap",
 ];
 
+/// The void elements (HTML 13.1.2): no content and no end tag.
+pub const VOID_ELEMENTS: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
+/// `VOID_ELEMENTS` and `param`, void until HTML dropped the element: none of them is expected to have an end tag.
+pub const NO_END_TAG: &[&str] =
+    &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
+/// The raw text and escapable raw text elements (HTML 13.1.2): their content is text up to their end tag.
+pub const TEXT_ELEMENTS: &[&str] = &["script", "style", "textarea", "title"];
+/// `TEXT_ELEMENTS` and the legacy elements whose start tag also switches the tokenizer to a text state (HTML 13.2.6.4.7),
+/// `noscript` as with scripting on.
+pub const TOKENIZED_AS_TEXT: &[&str] = &["script", "style", "xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"];
+
 /// Attributes whose presence is the value; Slim writes them bare inside `()`/`[]`/`{}`.
 pub const BOOLEAN_ATTRIBUTES: &[&str] = &[
     "async",

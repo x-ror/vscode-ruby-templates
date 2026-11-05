@@ -2,8 +2,8 @@
 //! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
 use crate::generated_ruby::ruby_string_body;
+use crate::html::VOID_ELEMENTS;
 use crate::ruby::{CONTINUERS, REGEXP_SPACE, RUBY_WHITESPACE};
-use crate::slim_parser::VOID_ELEMENTS;
 use crate::util::leading_ws;
 use regex::Regex;
 use std::collections::VecDeque;

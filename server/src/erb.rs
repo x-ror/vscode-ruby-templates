@@ -2,6 +2,7 @@
 
 use crate::checks::RubyContext;
 use crate::erb_ruby;
+use crate::html::TOKENIZED_AS_TEXT;
 use crate::util::{coded, warning, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
@@ -34,8 +35,6 @@ pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<D
         .collect()
 }
 
-/// Elements whose content the tokenizer reads as raw text or RCDATA, up to their end tag (`noscript` with scripting on).
-const TEXT_ELEMENTS: [&str; 9] = ["script", "style", "xmp", "iframe", "noembed", "noframes", "noscript", "textarea", "title"];
 const FOREIGN_ROOTS: [&str; 2] = ["svg", "math"];
 
 /// The attribute sub-states of the tokenizer (13.2.5.32 to 13.2.5.40) that decide where a quote opens a value.
@@ -182,7 +181,7 @@ impl Html {
         if tag.name == "plaintext" {
             return State::Plaintext;
         }
-        TEXT_ELEMENTS.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
+        TOKENIZED_AS_TEXT.iter().find(|&&t| t == tag.name).map_or(State::Data, |&t| State::RawText(t))
     }
 }
 

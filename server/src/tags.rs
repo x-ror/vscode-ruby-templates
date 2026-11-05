@@ -1,6 +1,7 @@
 //! Unclosed and mismatched HTML tags in ERB templates with an HTML host.
 
 use crate::erb_ruby;
+use crate::html::{NO_END_TAG, TEXT_ELEMENTS};
 use crate::ruby::{analyze, BlockEffect};
 use crate::util::{coded, warning, LineIndex};
 use regex::Regex;
@@ -14,7 +15,6 @@ pub mod code {
     pub const UNCLOSED_ELEMENT: &str = "unclosed-element";
 }
 
-pub const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"];
 // End tags HTML lets you omit; never tracked, so they can't be reported.
 pub(crate) const OPTIONAL_END: &[&str] = &[
     "li", "p", "td", "tr", "th", "option", "dt", "dd", "thead", "tbody", "tfoot", "colgroup", "caption", "rp", "rt", "optgroup", "html",
@@ -31,7 +31,6 @@ const CLOSES_P: &[&str] = &[
 const SCOPE_BOUNDARY: &[&str] = &["button", "applet", "object", "template", "marquee", "table", "td", "th", "caption", "svg", "math"];
 const HTML_END_TAG_RULE: &str = "HTML 13.2.6.4.7";
 const HEADINGS: [&str; 6] = ["h1", "h2", "h3", "h4", "h5", "h6"];
-const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
 /// Past this many a file is broken beyond what more warnings would help with.
 const MAX_TAG_DIAGNOSTICS: usize = 20;
 
@@ -312,7 +311,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
         let tag = Tag { name, start, end, wrapper: None };
         if closing {
             tokens.push(Token::Close { tag, quoted });
-        } else if RAW_TEXT.contains(&tag.name.as_str()) && !self_closing {
+        } else if TEXT_ELEMENTS.contains(&tag.name.as_str()) && !self_closing {
             let close = format!("</{}", tag.name);
             let close = find(&html, end, close.as_bytes()).map(|close_start| {
                 let after = close_start + close.len();
@@ -322,7 +321,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
             tokens.push(Token::Raw { tag, close });
         } else {
             let name = tag.name.as_str();
-            let pairs = !self_closing && !VOID.contains(&name) && !OPTIONAL_END.contains(&name);
+            let pairs = !self_closing && !NO_END_TAG.contains(&name) && !OPTIONAL_END.contains(&name);
             tokens.push(Token::Open { tag, pairs, quoted });
         }
     }
@@ -567,7 +566,7 @@ fn scan_tokens(text: &str, tokens: Vec<Token<'_>>, partial: bool) -> (Vec<Diagno
                     optional.push(tag);
                 }
             }
-            Token::Close { tag: Tag { name, start, end, .. }, .. } if VOID.contains(&name.as_str()) => {
+            Token::Close { tag: Tag { name, start, end, .. }, .. } if NO_END_TAG.contains(&name.as_str()) => {
                 out.push(void_close_tag(&name, range(start, end)));
             }
             Token::Close { tag: Tag { name, start, end, .. }, .. } if OPTIONAL_END.contains(&name.as_str()) => {
