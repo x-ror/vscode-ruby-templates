@@ -16,10 +16,10 @@ import {
   doubledErbClose,
   HTML_TAGS,
 } from "../src/autoClose.js";
-import { erbRubyArgs } from "../src/erbEngine.js";
 import { routesFromOutput, routesFromRun } from "../src/routes.js";
+import { engineOf, isTemplateLanguage, isErb } from "../src/languages.js";
 import {
-  engineOf,
+  erbRubyArgs,
   viewDir,
   railsRenderScript,
   missingToolMessage,
@@ -328,6 +328,8 @@ assert.strictEqual(
 // engineOf
 assert.strictEqual(engineOf("erb-js"), "erb");
 assert.strictEqual(engineOf("haml"), "haml");
+assert.ok(isTemplateLanguage("erb-percent") && !isTemplateLanguage("liquid"));
+assert.ok(isErb("erb") && isErb("erb-js") && !isErb("haml"));
 
 // viewDir
 const appRoot = path.join(path.sep, "app-root");

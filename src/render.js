@@ -1,10 +1,20 @@
 // Pure part of the preview and compiled-source commands (no vscode dependency; tested in test/clientPure.js).
 import path from "path";
 
-const TEMPLATE_LANGS = new Set(["erb", "haml", "slim"]);
-// Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
-const engineOf = (languageId) =>
-  languageId.startsWith("erb-") ? "erb" : languageId;
+import { engineOf, isErb } from "./languages.js";
+
+// A script file, not `-e`: Windows runs commands through cmd.exe, which can't pass its quotes and newlines.
+const ERB_SCRIPT = path.join(
+  import.meta.dirname,
+  "..",
+  "ruby",
+  "erb_engine.rb",
+);
+
+/** `ruby` arguments that compile (`"compile"`) or render (`"render"`) the ERB on stdin; `percentLines` for `trim_mode: "%"`. */
+function erbRubyArgs(mode, percentLines = false) {
+  return percentLines ? [ERB_SCRIPT, mode, "percent"] : [ERB_SCRIPT, mode];
+}
 
 /** `users` for `<root>/app/views/users/show.html.slim`; undefined outside app/views. */
 function viewDir(root, file) {
@@ -31,7 +41,7 @@ function railsRenderScript(dir, lang) {
 }
 
 function missingToolMessage(bin, lang) {
-  if (engineOf(lang) === "erb")
+  if (isErb(lang))
     return `"${bin}" was not found. Install Ruby (and gem install erubi) — or point rubyTemplates.commands.ruby at it.`;
   const gem = { slim: "slim", haml: "haml" }[engineOf(lang)] || bin;
   return `"${bin}" was not found. Install it with: gem install ${gem} — or point rubyTemplates.commands.* at the executable.`;
@@ -68,8 +78,7 @@ ${hint ? `<p style="opacity:.8">${escapeHtml(hint)}</p>` : ""}</body></html>`;
 }
 
 export {
-  TEMPLATE_LANGS,
-  engineOf,
+  erbRubyArgs,
   viewDir,
   railsRenderScript,
   missingToolMessage,

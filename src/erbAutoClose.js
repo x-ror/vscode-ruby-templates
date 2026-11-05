@@ -3,13 +3,14 @@ import * as vscode from "vscode";
 
 import { tagToClose, isHtmlView, doubledErbClose } from "./autoClose.js";
 import { settings } from "./workspace.js";
+import { isErb } from "./languages.js";
 
 // Part of the user's typing, so undo takes it back together with the `>`.
 const WITH_TYPING = { undoStopBefore: false, undoStopAfter: false };
 
 /** The active editor and the position after the `>` the user just typed into its ERB document, or undefined. */
 function typedGreaterThan(e) {
-  if (!/^erb/.test(e.document.languageId) || e.reason !== undefined) return;
+  if (!isErb(e.document.languageId) || e.reason !== undefined) return;
   if (e.contentChanges.length !== 1 || e.contentChanges[0].text !== ">") return;
   const editor = vscode.window.activeTextEditor;
   if (editor?.document !== e.document || editor.selections.length !== 1) return;

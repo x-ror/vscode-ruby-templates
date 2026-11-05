@@ -6,7 +6,7 @@ import { notifyServer, onServerStarted } from "./client.js";
 import { ROUTES_SCRIPT, routesFromRun } from "./routes.js";
 import { SECTION, settings, commandPath } from "./workspace.js";
 import { RAILS_BIN, findUp, railsRunner, firstLine } from "./run.js";
-import { TEMPLATE_LANGS, engineOf } from "./render.js";
+import { isTemplateLanguage } from "./languages.js";
 
 const routesEnabled = () => settings().get("routes.enabled", true);
 
@@ -78,7 +78,7 @@ async function refreshRoutes(state, root) {
 /** Loads the routes of the app an opened view belongs to, unless they're loaded, loading or failed. */
 function viewOpened(state, doc) {
   if (doc.uri.scheme !== "file") return;
-  if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
+  if (!isTemplateLanguage(doc.languageId)) return;
   const root = trustedRailsRoot(state, doc.uri.fsPath);
   const { cache, failed, busy } = state;
   if (root && !cache.has(root) && !failed.has(root) && !busy.has(root))

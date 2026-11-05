@@ -16,10 +16,14 @@ import {
   railsRunner,
   firstLine,
 } from "./run.js";
-import { erbRubyArgs } from "./erbEngine.js";
 import {
-  TEMPLATE_LANGS,
+  ERB_PERCENT,
   engineOf,
+  isTemplateLanguage,
+  isErb,
+} from "./languages.js";
+import {
+  erbRubyArgs,
   viewDir,
   railsRenderScript,
   missingToolMessage,
@@ -58,7 +62,7 @@ function runEngine(doc, mode) {
   if (lang === "erb")
     return run(
       commandPath("ruby"),
-      erbRubyArgs(mode, doc.languageId === "erb-percent"),
+      erbRubyArgs(mode, doc.languageId === ERB_PERCENT),
       options,
       src,
     );
@@ -89,7 +93,7 @@ async function renderToHtml(doc) {
 
 async function openPreview() {
   const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
+  if (!ed || !isTemplateLanguage(ed.document.languageId)) {
     vscode.window.showInformationMessage(
       "Open an ERB, Haml or Slim file first.",
     );
@@ -136,7 +140,7 @@ async function renderPreview(doc) {
     panel.webview.html = errorPage(
       "Render failed",
       r.stderr || r.stdout,
-      engineOf(doc.languageId) === "erb"
+      isErb(doc.languageId)
         ? "A standalone Erubi render has no Rails helpers (link_to, render, …); set rubyTemplates.preview.useRails to render inside the app."
         : "Rails helpers (link_to, render, …) are not available in a standalone render; set rubyTemplates.preview.useRails to render inside the app.",
     );
@@ -155,7 +159,7 @@ function closePreview() {
 
 async function showCompiledSource() {
   const ed = vscode.window.activeTextEditor;
-  if (!ed || !TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) return;
+  if (!ed || !isTemplateLanguage(ed.document.languageId)) return;
   const r = await runEngine(ed.document, "compile");
   if (r.err?.code === "ENOENT") {
     vscode.window.showErrorMessage(
@@ -187,7 +191,7 @@ function registerPreview(context) {
   status.tooltip = "Ruby Templates: preview rendered HTML";
   const updateStatus = () => {
     const ed = vscode.window.activeTextEditor;
-    if (ed && TEMPLATE_LANGS.has(engineOf(ed.document.languageId))) {
+    if (ed && isTemplateLanguage(ed.document.languageId)) {
       status.text = `$(preview) ${ed.document.languageId.toUpperCase()}`;
       status.show();
     } else status.hide();
