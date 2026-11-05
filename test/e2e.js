@@ -2189,6 +2189,118 @@ const check = (label, actual, expected) => {
     ],
     [4, false],
   );
+  // Two apps in one workspace: every lookup resolves against the app the file belongs to.
+  const multiRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "rt-multi-")),
+  );
+  const multi = startServer();
+  const apps = ["a", "b"].map((name) => {
+    const dir = path.join(multiRoot, `app_${name}`);
+    const route = name === "a" ? "users" : "posts";
+    fs.mkdirSync(path.join(dir, "app/views/shared"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "app/views/pages"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "config/locales"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "Gemfile.lock"),
+      "GEM\n  specs:\n    actionview (7.1.3)\n",
+    );
+    fs.writeFileSync(
+      path.join(dir, "app/views/shared/_card.html.erb"),
+      `<p>${name}</p>\n`,
+    );
+    fs.writeFileSync(
+      path.join(dir, "config/locales/en.yml"),
+      `en:\n  greet:\n    hello: "Hi ${name}"\n    only_${name}: "x"\n`,
+    );
+    const page = fileUri(path.join(dir, "app/views/pages/show.html.erb"));
+    const text = `<%= render "shared/card" %>\n<%= t("greet.hello") %>\n<%= ${route}_p %>\n<%= ${route}_path %>\n<%= t("greet.on") %>\n`;
+    return { name, dir, route, page, text };
+  });
+  await multi.send("initialize", {
+    processId: null,
+    rootUri: fileUri(apps[0].dir),
+    workspaceFolders: apps.map(({ name, dir }) => ({
+      name,
+      uri: fileUri(dir),
+    })),
+    capabilities: {},
+  });
+  await multi.send("initialized", {}, true);
+  for (const { dir, route, page, text } of apps) {
+    const routes = [
+      {
+        name: route,
+        verb: "GET",
+        path: `/${route}(.:format)`,
+        action: `${route}#index`,
+        source: "config/routes.rb:2",
+      },
+    ];
+    await multi.send("rubyTemplates/routes", { root: dir, routes }, true);
+    await multi.send(
+      "textDocument/didOpen",
+      { textDocument: { uri: page, languageId: "erb", version: 1, text } },
+      true,
+    );
+  }
+  const ask = (method, u, line, character) =>
+    multi.send(method, {
+      textDocument: { uri: u },
+      position: { line, character },
+    });
+  const where = (r) =>
+    (r.result || []).map(
+      (l) =>
+        `${path.relative(multiRoot, fileURLToPath(l.uri)).replaceAll(path.sep, "/")}:${l.range.start.line}`,
+    );
+  const lookups = [];
+  for (const { name, route, page, text } of apps) {
+    lookups.push([
+      where(await ask("textDocument/definition", page, 0, 14)),
+      where(await ask("textDocument/definition", page, 1, 10)),
+      (
+        await ask("textDocument/hover", page, 1, 10)
+      ).result?.contents.value.includes(`Hi ${name}`),
+      (
+        await ask(
+          "textDocument/completion",
+          page,
+          2,
+          text.split("\n")[2].length - 3,
+        )
+      ).result?.map((i) => i.label),
+      (
+        await ask("textDocument/hover", page, 3, 6)
+      ).result?.contents.value.split("\n")[0],
+      where(await ask("textDocument/definition", page, 3, 6)),
+      (await ask("textDocument/completion", page, 4, 15)).result?.map(
+        (i) => i.label,
+      ),
+    ]);
+  }
+  check("two apps in one workspace", lookups, [
+    [
+      ["app_a/app/views/shared/_card.html.erb:0"],
+      ["app_a/config/locales/en.yml:2"],
+      true,
+      ["users_path"],
+      "`users_path` → `/users`",
+      ["app_a/config/routes.rb:1"],
+      ["greet.only_a"],
+    ],
+    [
+      ["app_b/app/views/shared/_card.html.erb:0"],
+      ["app_b/config/locales/en.yml:2"],
+      true,
+      ["posts_path"],
+      "`posts_path` → `/posts`",
+      ["app_b/config/routes.rb:1"],
+      ["greet.only_b"],
+    ],
+  ]);
+  await multi.send("shutdown", {});
+  await multi.send("exit", {}, true);
+  fs.rmSync(multiRoot, { recursive: true, force: true });
   // Per-language switches from the client's initializationOptions: no diagnostics, no formatting edits.
   const off = startServer();
   await off.send("initialize", {
