@@ -8,15 +8,15 @@ Report and progress live in `.claude/reviews/architect.md` (git-ignored). If it 
 ```markdown
 # Architect review of server/src
 
-- [ ] 1. Request flow and state: lsp.rs, project.rs, lib.rs, config.rs, util.rs, main.rs
-- [ ] 2. Diagnostics: checks.rs, html_lint.rs, tags.rs, html.rs, strict_locals.rs, code_context.rs
-- [ ] 3. Haml parsing: haml_parser.rs, haml.rs, haml_ruby.rs
-- [ ] 4. Slim parsing: slim_parser.rs, slim_ruby.rs
-- [ ] 5. ERB and Ruby: erb.rs, erb_ruby.rs, ruby.rs, prism.rs, generated_ruby.rs
-- [ ] 6. Completion and hover: completion.rs, erb_complete.rs, slim_complete.rs, slim_hover.rs, helpers.rs, helper_defs.rs, ivars.rs, i18n.rs, routes.rs, stimulus.rs, assets.rs, schema.rs, controllers.rs, slots.rs
-- [ ] 7. Partials, references, rename: partials.rs, partial_rename.rs, rails_paths.rs
-- [ ] 8. Formatting and indentation: format.rs, erb_format.rs, haml_format.rs, slim_format.rs, haml_indent.rs, slim_indent.rs
-- [ ] 9. Outline: outline.rs, slim_outline.rs, lang.rs
+- [ ] 1. Request flow and state: lsp.rs, lsp/, rails/project.rs, options.rs, lib.rs, config.rs, util.rs, main.rs
+- [ ] 2. Diagnostics: checks.rs, erb/html_lint.rs, erb/tags.rs, html.rs, ruby/strict_locals.rs, code_context.rs
+- [ ] 3. Haml parsing: haml/parser.rs, haml.rs, haml/ruby.rs
+- [ ] 4. Slim parsing: slim/parser.rs, slim/ruby.rs
+- [ ] 5. ERB and Ruby: erb.rs, erb/ruby.rs, ruby.rs, ruby/prism.rs, ruby/generated.rs
+- [ ] 6. Completion and hover: completion.rs, lsp/complete.rs, erb/complete.rs, slim/complete.rs, slim/hover.rs, helpers.rs, html.rs, rails/helper_defs.rs, rails/ivars.rs, rails/controller_classes.rs, rails/i18n.rs, rails/routes.rs, rails/stimulus.rs, rails/assets.rs, rails/schema.rs, rails/model_columns.rs, rails/controllers.rs, rails/slots.rs
+- [ ] 7. Partials, references, rename: rails/render_refs.rs, rails/render_call.rs, rails/partials.rs, partial_rename.rs, rails/paths.rs, inflect.rs
+- [ ] 8. Formatting and indentation: format.rs, format/erb.rs, format/haml.rs, format/slim.rs, haml/indent.rs, slim/indent.rs
+- [ ] 9. Outline: outline.rs, outline/slim.rs, lang.rs
 - [ ] 10. Command line: cli.rs, bin/ruby-templates.rs
 ```
 

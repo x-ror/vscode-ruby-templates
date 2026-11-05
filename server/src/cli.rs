@@ -2,12 +2,13 @@
 
 use crate::checks::{diagnostics_in, Doc};
 use crate::config;
-use crate::format::{self, SkipKind};
+use crate::format;
+use crate::format::SkipKind;
 use crate::lang::TemplateLang;
 use crate::options::Options;
-use crate::project::{Project, Projects};
+use crate::rails::project::{Project, Projects};
+use crate::rails::view_roots;
 use crate::util;
-use crate::view_roots;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
@@ -54,7 +55,7 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 fn legacy_format(file: &str) -> i32 {
     let formatted = std::fs::read_to_string(file)
         .ok()
-        .and_then(|text| crate::slim_format::format(&text, crate::format::Settings::default().indent_size, &[]));
+        .and_then(|text| crate::format::slim::format(&text, crate::format::Settings::default().indent_size, &[]));
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;

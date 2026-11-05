@@ -2,10 +2,13 @@
 //! instance variables, component slots and classes, receivers' methods, helpers and partial locals.
 
 use crate::lang::TemplateLang;
-use crate::project::Project;
-use crate::render_refs::{self, RenderRef};
-use crate::strict_locals::{self, Close};
-use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
+use crate::rails::project::Project;
+use crate::rails::render_refs;
+use crate::rails::render_refs::RenderRef;
+use crate::rails::{i18n, ivars, partials, slots, stimulus};
+use crate::ruby::strict_locals;
+use crate::ruby::strict_locals::Close;
+use crate::{helpers, util};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, Range, TextEdit};

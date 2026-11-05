@@ -1,16 +1,19 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
-use crate::generated_ruby::Compiled;
 use crate::lang::TemplateLang;
-use crate::prism::{LocalDefinition, LocalToken, LocalUses};
-use crate::strict_locals::{self, Close};
-use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, render_refs, ruby, slim_parser, slim_ruby, util};
-use haml_indent::LineRole;
+use crate::rails::render_refs;
+use crate::ruby::generated::Compiled;
+use crate::ruby::prism::{LocalDefinition, LocalToken, LocalUses};
+use crate::ruby::strict_locals;
+use crate::ruby::strict_locals::Close;
+use crate::slim;
+use crate::{erb, haml, ruby, util};
+use haml::indent::LineRole;
 
 /// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
 pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engines: &[String]) -> bool {
     match lang {
-        TemplateLang::Slim => slim_parser::in_ruby(text, &slim_parser::parse(text, extra_engines), offset),
+        TemplateLang::Slim => slim::parser::in_ruby(text, &slim::parser::parse(text, extra_engines), offset),
         _ => in_ruby_context(lang, text, &erb::code_spans(text), offset),
     }
 }
@@ -18,11 +21,11 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
 /// The Ruby the template compiles to; with `close`, the strict locals comment makes the method's parameters.
 fn compiled(lang: TemplateLang, text: &str, close: Option<Close>, extra_engines: &[String]) -> Option<Compiled> {
     match lang {
-        TemplateLang::Erb => Some(erb_ruby::compiled(text, close)),
-        TemplateLang::Slim => Some(slim_ruby::compiled(&slim_parser::parse(text, extra_engines))),
+        TemplateLang::Erb => Some(erb::ruby::compiled(text, close)),
+        TemplateLang::Slim => Some(slim::ruby::compiled(&slim::parser::parse(text, extra_engines))),
         TemplateLang::Haml => {
             let comment = close.and_then(|close| strict_locals::find(text, close));
-            Some(haml_ruby::compiled(text, &haml_parser::parse_with_ruby(text), comment.as_ref()))
+            Some(haml::ruby::compiled(text, &haml::parser::parse_with_ruby(text), comment.as_ref()))
         }
         TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => None,
     }
@@ -52,7 +55,7 @@ pub(crate) fn local_tokens(lang: TemplateLang, text: &str, close: Close, extra_e
 /// Haml line roles; every other language's lines all start their own construct.
 pub(crate) fn line_roles(lang: TemplateLang, text: &str) -> Vec<LineRole> {
     match lang {
-        TemplateLang::Haml => haml_indent::haml_line_roles(text),
+        TemplateLang::Haml => haml::indent::haml_line_roles(text),
         _ => vec![LineRole::Start; text.lines().count()],
     }
 }
@@ -72,7 +75,7 @@ fn render_in_code(
     let code_start = match (lang, role) {
         // A tag opened on an earlier line puts the whole line before `render` in Ruby.
         (TemplateLang::Erb, _) => in_ruby().then(|| line[..r.call].rfind("<%").map_or(0, |open| open + 2)),
-        (TemplateLang::Haml, LineRole::Start) => haml_indent::haml_code_start(line).filter(|&code| code <= r.call),
+        (TemplateLang::Haml, LineRole::Start) => haml::indent::haml_code_start(line).filter(|&code| code <= r.call),
         (TemplateLang::Haml, LineRole::Ruby) => Some(0),
         (TemplateLang::Haml, LineRole::Text) => None,
         (TemplateLang::Slim, _) => {
@@ -98,15 +101,15 @@ pub(crate) fn render_filter<'a>(
 ) -> impl Fn(usize, usize, &render_refs::RenderRef) -> bool + 'a {
     let roles = line_roles(lang, text);
     let spans = erb::code_spans(text);
-    let slim = (lang == TemplateLang::Slim).then(|| slim_parser::parse(text, extra_engines));
+    let slim = (lang == TemplateLang::Slim).then(|| slim::parser::parse(text, extra_engines));
     move |i, line_start, r| {
         render_in_code(lang, roles[i], text, &spans, line_start, r)
-            && slim.as_ref().is_none_or(|parsed| slim_parser::in_ruby(text, parsed, line_start + r.start))
+            && slim.as_ref().is_none_or(|parsed| slim::parser::in_ruby(text, parsed, line_start + r.start))
     }
 }
 
 /// Is byte `offset` of `text` in Ruby: inside an ERB code tag (`spans` from `erb::code_spans`, may cross lines)
-/// or on a Haml/Slim Ruby line. Slim documents go through `slim_parser` where the whole text is at hand.
+/// or on a Haml/Slim Ruby line. Slim documents go through `slim::parser` where the whole text is at hand.
 pub(crate) fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, usize)], offset: usize) -> bool {
     let offset = offset.min(text.len());
     let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
@@ -138,8 +141,8 @@ pub(crate) fn in_ruby_context(lang: TemplateLang, text: &str, spans: &[(usize, u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::Project;
-    use crate::render_call::HamlPipes;
+    use crate::rails::project::Project;
+    use crate::rails::render_call::HamlPipes;
 
     #[test]
     fn liquid_render_is_not_a_partial_reference() {
@@ -155,7 +158,7 @@ mod tests {
                 !keep || in_code(0, 0, r)
             })
         };
-        let resolved: Vec<_> = refs(false).iter().flat_map(|r| crate::partials::resolve(&Project::unknown(), &current, r)).collect();
+        let resolved: Vec<_> = refs(false).iter().flat_map(|r| crate::rails::partials::resolve(&Project::unknown(), &current, r)).collect();
         let filtered = refs(true);
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(resolved, [views.join("_card.html.slim")]);

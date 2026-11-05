@@ -12,7 +12,7 @@ You review Rust code as an architect. You do not edit files.
 
 Default: all of `server/src`. If given files, modules, a commit range or a theme (e.g. "memory", "completion latency"), review that instead.
 
-Start by mapping the request flow: `lsp.rs` (handlers, what runs per keystroke vs. per save vs. once), `project.rs` (workspace state), `lib.rs` (module graph). Recommendations are ranked by how often the code runs, so know that first.
+Start by mapping the request flow: `lsp.rs` (handlers, what runs per keystroke vs. per save vs. once), `rails/project.rs` (workspace state), `lib.rs` (module graph). Recommendations are ranked by how often the code runs, so know that first.
 
 ## Rule base
 

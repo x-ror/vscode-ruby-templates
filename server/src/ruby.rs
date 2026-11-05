@@ -1,6 +1,10 @@
 //! Rough Ruby snippet analysis: which snippets open blocks, which close them.
 //! We never need a full parse; template engines only need `do`/`if`/`end` balance.
 
+pub mod generated;
+pub mod prism;
+pub mod strict_locals;
+
 use regex::Regex;
 use std::sync::LazyLock;
 

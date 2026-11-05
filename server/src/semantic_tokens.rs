@@ -3,8 +3,8 @@
 
 use crate::code_context;
 use crate::lang::TemplateLang;
-use crate::prism::{LocalKind, LocalToken};
-use crate::strict_locals::Close;
+use crate::ruby::prism::{LocalKind, LocalToken};
+use crate::ruby::strict_locals::Close;
 use crate::util::LineIndex;
 use tower_lsp_server::ls_types::{SemanticToken, SemanticTokenType, SemanticTokensLegend};
 

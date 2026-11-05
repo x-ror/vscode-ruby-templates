@@ -1,10 +1,12 @@
 //! Folding ranges and document symbols for ERB and Haml templates.
 
-use crate::haml_indent::{haml_code_start, haml_structure, is_haml_tag, tag_name_len};
-use crate::render_refs::render_refs;
+pub mod slim;
+
+use crate::erb::tags;
+use crate::haml::indent::{haml_code_start, haml_structure, is_haml_tag, tag_name_len};
+use crate::rails::render_refs::render_refs;
 use crate::ruby;
 use crate::ruby::BlockEffect;
-use crate::tags;
 use crate::util::{closing_bracket, find_balanced, leading_ws, LineIndex};
 use regex::Regex;
 use std::sync::LazyLock;

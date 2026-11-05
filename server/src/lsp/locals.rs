@@ -4,10 +4,12 @@
 use super::{is_builtin_helper, off_server_task, Backend};
 use crate::checks::Doc;
 use crate::lang::is_partial;
-use crate::project::Project;
-use crate::render_call::HamlPipes;
+use crate::rails::project::Project;
+use crate::rails::render_call::HamlPipes;
+use crate::rails::{helper_defs, ivars, partials, paths, render_refs};
+use crate::ruby::strict_locals;
 use crate::util::line_location;
-use crate::{code_context, helper_defs, ivars, partial_rename, partials, rails_paths, render_refs, ruby, strict_locals, util};
+use crate::{code_context, partial_rename, ruby, util};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::jsonrpc::Result;
@@ -49,7 +51,7 @@ impl Backend {
                 .filter_map(|a| line_location(&a.file, a.line))
                 .collect());
         }
-        let is_partial = rails_paths::is_partial_path(path);
+        let is_partial = paths::is_partial_path(path);
         // `link_to` or `t` is never a local; the scan below reads every view.
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !is_builtin_helper(name)) else { return Ok(vec![]) };
         let project = self.project_for(path);
@@ -65,7 +67,7 @@ impl Backend {
 
     /// The `render` calls that pass `local` to the partial at `path`, read from app/views and the open documents.
     async fn local_passes(&self, project: Project, path: &Path, local: &str) -> Result<Vec<Location>> {
-        let Some(views) = rails_paths::views_root(path) else { return Ok(vec![]) };
+        let Some(views) = paths::views_root(path) else { return Ok(vec![]) };
         let (open, partial, local) = (self.open_texts(), path.to_path_buf(), local.to_string());
         let extra_engines = self.options().extra_engines.clone();
         off_server_task(move || {

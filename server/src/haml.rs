@@ -1,10 +1,14 @@
 //! Haml editing features on one line: where Ruby is, what to complete, and hover docs for filters and prefixes.
 
-use crate::haml_indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole};
-use crate::haml_parser::HAML_FILTERS;
-use crate::html::{self, ARIA_KEYS, ATTRIBUTES, DATA_KEYS, TAGS};
-use crate::ruby;
+pub mod indent;
+pub mod parser;
+pub mod ruby;
+
+use crate::haml::indent::{haml_code_start, is_haml_tag, tag_attr_groups, tag_head_len, AttrGroup, LineRole};
+use crate::html;
+use crate::html::{ARIA_KEYS, ATTRIBUTES, DATA_KEYS, TAGS};
 use crate::util::{completion_item, leading_ws};
+use parser::HAML_FILTERS;
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// What the cursor is completing, besides Ruby.
@@ -31,7 +35,7 @@ pub enum AttrPlace {
 pub fn in_ruby(line: &str, col: usize) -> bool {
     let col = col.min(line.len());
     if let Some(start) = haml_code_start(line).filter(|&start| start <= col) {
-        return !ruby::comment_before(&line[start..col]);
+        return !crate::ruby::comment_before(&line[start..col]);
     }
     let ws = leading_ws(line).len();
     let content = &line[ws..];
@@ -343,7 +347,7 @@ mod tests {
     fn continued_heads_complete_attributes() {
         let text = "%a{href: x,\n   cla\n  data: {\n    contr\n  }}\n- link_to x,\n  cla\n";
         let lines: Vec<&str> = text.lines().collect();
-        let roles = crate::haml_indent::haml_line_roles(text);
+        let roles = indent::haml_line_roles(text);
         let context = |at: usize| {
             let head = continued_head(&lines, &roles, at, lines[at].len())?;
             completion_context(&head, head.len()).map(|c| format!("{c:?}"))
@@ -409,7 +413,7 @@ mod tests {
     #[test]
     fn every_filter_is_documented() {
         let documented: Vec<&str> = FILTER_DOCS.iter().map(|(name, _)| *name).collect();
-        assert_eq!(documented, crate::haml_parser::HAML_FILTERS);
+        assert_eq!(documented, parser::HAML_FILTERS);
     }
 
     #[test]

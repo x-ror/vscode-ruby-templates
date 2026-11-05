@@ -2,23 +2,26 @@ mod complete;
 mod locals;
 
 use crate::checks::{diagnostics_in, Doc, STRICT_LOCALS, UNRESOLVED_RENDER};
-use crate::code_context::{self, block_locals, code_at, line_roles, render_filter};
+use crate::code_context;
+use crate::code_context::{block_locals, code_at, line_roles, render_filter};
 use crate::completion::helpers_for;
-use crate::controllers::Target;
+use crate::erb::tags;
 use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::options::Options;
-use crate::util::{file_location, line_location};
-use crate::{
-    assets, config, controller_classes, controllers, erb, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns,
-    outline, partial_rename, partials,
-    project::{self, Project, Projects},
-    rails_paths,
-    render_call::HamlPipes,
-    render_refs, routes, ruby, semantic_tokens, slim_hover, slim_outline, slim_parser, stimulus, tags, util, view_roots,
+use crate::rails::controllers::Target;
+use crate::rails::project::{Project, Projects};
+use crate::rails::render_call::HamlPipes;
+use crate::rails::{
+    assets, controller_classes, controllers, helper_defs, i18n, ivars, model_columns, partials, paths, project, render_refs, routes,
+    stimulus, view_roots,
 };
+use crate::slim;
+use crate::slim::hover;
+use crate::util::{file_location, line_location};
+use crate::{config, erb, format, haml, helpers, outline, partial_rename, ruby, semantic_tokens, util};
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
-use haml_indent::LineRole;
+use haml::indent::LineRole;
 use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -367,8 +370,8 @@ impl LanguageServer for Backend {
         let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         let engines = &self.options().extra_engines;
         if doc.lang == TemplateLang::Slim {
-            let parsed = slim_parser::parse(&doc.text, engines);
-            let marker = util::position_to_offset(&doc.text, pos).and_then(|o| slim_hover::marker_doc(&doc.text, o, &parsed));
+            let parsed = slim::parser::parse(&doc.text, engines);
+            let marker = util::position_to_offset(&doc.text, pos).and_then(|o| hover::marker_doc(&doc.text, o, &parsed));
             if let Some(md) = marker {
                 return Ok(markdown_hover(md));
             }
@@ -461,7 +464,7 @@ impl LanguageServer for Backend {
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
             TemplateLang::Haml => Some(outline::haml_folding_ranges(&text)),
-            TemplateLang::Slim | TemplateLang::Skim => Some(slim_outline::folding_ranges(&text, &extra_engines)),
+            TemplateLang::Slim | TemplateLang::Skim => Some(outline::slim::folding_ranges(&text, &extra_engines)),
             TemplateLang::Erb if html => Some(outline::folding_ranges(&text)),
             TemplateLang::Erb | TemplateLang::Ruby | TemplateLang::Liquid => None,
         })
@@ -495,7 +498,7 @@ impl LanguageServer for Backend {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
                 TemplateLang::Haml => outline::haml_document_symbols(&text),
-                TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&text, &extra_engines),
+                TemplateLang::Slim | TemplateLang::Skim => outline::slim::document_symbols(&text, &extra_engines),
                 TemplateLang::Ruby | TemplateLang::Liquid => return None,
             };
             Some(DocumentSymbolResponse::Nested(symbols))
@@ -530,7 +533,7 @@ impl LanguageServer for Backend {
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
                 annotation_id: None,
             };
-            let shown = util::slash_path(target.strip_prefix(rails_paths::views_root(&path)?).ok()?);
+            let shown = util::slash_path(target.strip_prefix(paths::views_root(&path)?).ok()?);
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
                 kind: Some(CodeActionKind::QUICKFIX),
@@ -583,7 +586,7 @@ impl LanguageServer for Backend {
                 false => edit(start, end, new.clone()),
             });
         }
-        let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
+        let Some(views) = paths::views_root(&path) else { return Ok(None) };
         let (open, partial, old, renamed) = (self.open_texts(), path.clone(), name.clone(), new.clone());
         let (callers, unread) = off_server_task(move || {
             let sources = partial_rename::sources(&views, &open);
@@ -617,7 +620,7 @@ impl LanguageServer for Backend {
             i18n_key_at(&project, &doc, &path, pos, &extra_engines)
         };
         let declaration = p.context.include_declaration;
-        if let Some((key, app)) = i18n_key.zip(rails_paths::app_root(&path)) {
+        if let Some((key, app)) = i18n_key.zip(paths::app_root(&path)) {
             let declarations = if declaration { translation_locations(&self.locale_files(&path), &key) } else { vec![] };
             let open = self.open_texts();
             let mut locations = off_server_task(move || {
@@ -632,7 +635,7 @@ impl LanguageServer for Backend {
         if let Some(local) = self.strict_local_at(&uri, &doc, pos) {
             return Ok(Some(self.local_references(&path, &doc.text, &local, declaration).await?));
         }
-        let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
+        let Some(views) = paths::views_root(&path) else { return Ok(None) };
         let Some(files) = referenced_partials(&project, &path, &doc, pos) else { return Ok(None) };
         let declarations: Vec<Location> = if declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
         let open = self.open_texts();
@@ -660,9 +663,9 @@ impl LanguageServer for Backend {
     /// Partials and templates by their render name (`users/card`), matched like VS Code's fuzzy filter.
     async fn symbol(&self, p: WorkspaceSymbolParams) -> Result<Option<WorkspaceSymbolResponse>> {
         let query = p.query.to_lowercase();
-        let open = self.docs.iter().filter_map(|d| rails_paths::views_root(&util::file_path(d.key())?)).collect::<Vec<_>>();
+        let open = self.docs.iter().filter_map(|d| paths::views_root(&util::file_path(d.key())?)).collect::<Vec<_>>();
         let mut roots: Vec<PathBuf> =
-            self.roots.get().into_iter().flatten().map(|r| r.join(rails_paths::APP_VIEWS)).filter(|v| v.is_dir()).chain(open).collect();
+            self.roots.get().into_iter().flatten().map(|r| r.join(paths::APP_VIEWS)).filter(|v| v.is_dir()).chain(open).collect();
         roots.sort();
         roots.dedup();
         let mut out = Vec::new();
@@ -697,7 +700,7 @@ impl LanguageServer for Backend {
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
         // A gem's files are read-only: renaming one rewrites nothing.
         let renames: Vec<_> = renames.into_iter().filter(|(old, _)| !Project::for_template(old).is_gem_file(old)).collect();
-        let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| rails_paths::views_root(old)).collect();
+        let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| paths::views_root(old)).collect();
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
@@ -871,8 +874,8 @@ impl Backend {
     }
 
     fn template_files(&self, current: &Path) -> Arc<Vec<PathBuf>> {
-        let Some(views) = rails_paths::views_root(current) else {
-            return Arc::new(current.parent().map(|dir| rails_paths::files_under(dir, 1)).unwrap_or_default());
+        let Some(views) = paths::views_root(current) else {
+            return Arc::new(current.parent().map(|dir| paths::files_under(dir, 1)).unwrap_or_default());
         };
         self.views_files(&views)
     }
@@ -887,7 +890,7 @@ impl Backend {
     fn warm_caches(&self, uri: &Uri) {
         let Some(path) = util::file_path(uri) else { return };
         let claim = |root: &PathBuf, cached: bool| !cached && self.warming.insert(root.clone());
-        let views = rails_paths::views_root(&path).filter(|views| claim(views, self.templates.contains_key(views)));
+        let views = paths::views_root(&path).filter(|views| claim(views, self.templates.contains_key(views)));
         let locales = i18n::locales_dir(&path).filter(|dir| claim(dir, self.locales.contains_key(dir)));
         if views.is_none() && locales.is_none() {
             return;
@@ -920,7 +923,7 @@ impl Backend {
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
-        let root = rails_paths::rails_root(current);
+        let root = paths::rails_root(current);
         root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
     }
 
@@ -959,7 +962,7 @@ fn views_listing(templates: &DashMap<PathBuf, Arc<Vec<PathBuf>>>, views: &Path, 
     if let Some(files) = templates.get(views) {
         return Arc::clone(&files);
     }
-    fill(templates, views, generation, || Arc::new(rails_paths::files_under(views, usize::MAX)))
+    fill(templates, views, generation, || Arc::new(paths::files_under(views, usize::MAX)))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -1026,7 +1029,7 @@ fn file_link(range: Range, target: &Path, from: &Path) -> Option<DocumentLink> {
     Some(DocumentLink {
         range,
         target: Some(crate::util::file_uri(target)?),
-        tooltip: Some(rails_paths::rails_relative(target, from)),
+        tooltip: Some(paths::rails_relative(target, from)),
         data: None,
     })
 }
@@ -1036,7 +1039,7 @@ fn render_hover(project: &Project, path: &Path, r: &render_refs::RenderRef) -> S
     if found.is_empty() {
         return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
     }
-    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", rails_paths::rails_relative(f, path))).collect();
+    let list: Vec<String> = found.iter().map(|f| format!("- `{}`", paths::rails_relative(f, path))).collect();
     let mut md = format!("**{}** `{}`\n\n{}", r.kind.name(), r.name, list.join("\n"));
     if let Some(sig) = project.file_strict_locals(&found[0]) {
         md.push_str(&format!("\n\n```ruby\nlocals: ({})\n```", sig.params));
@@ -1114,7 +1117,7 @@ fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position)
         return Some(partials::resolve_model(project, path, name));
     }
     // On a component render the question isn't about this partial.
-    if render_refs::component_ref_at(line, col).is_some() || !rails_paths::is_partial_path(path) {
+    if render_refs::component_ref_at(line, col).is_some() || !paths::is_partial_path(path) {
         return None;
     }
     Some(vec![path.to_path_buf()])
@@ -1177,7 +1180,7 @@ mod tests {
 
     /// `file line:col new_text` for each edit, sorted.
     fn rename(renames: &[(PathBuf, PathBuf)]) -> Vec<String> {
-        let views = rails_paths::views_root(&renames[0].0).unwrap();
+        let views = paths::views_root(&renames[0].0).unwrap();
         let sources = partial_rename::sources(&views, &HashMap::new());
         let mut got: Vec<String> = partial_rename::render_edits(&Project::unknown(), renames, &sources, &[])
             .into_iter()

@@ -3,15 +3,17 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::code_context::render_filter;
-use crate::controller_classes::view_prefixes;
 use crate::lang::TemplateLang;
-use crate::partials::{first_folder_only, matching_templates, resolve, resolve_model, split_render_name};
-use crate::project::Project;
-use crate::rails_paths::{app_root, app_views, template_stem, views_root};
-use crate::render_call::HamlPipes;
-use crate::render_refs::{local_key_span, model_renders, passed_locals, render_calls_in, RenderCall, RenderKind, RenderRef};
+use crate::outline;
+use crate::rails::controller_classes::view_prefixes;
+use crate::rails::i18n;
+use crate::rails::partials::{first_folder_only, matching_templates, resolve, resolve_model, split_render_name};
+use crate::rails::paths::{app_root, app_views, template_stem, views_root};
+use crate::rails::project::Project;
+use crate::rails::render_call::HamlPipes;
+use crate::rails::render_refs::{local_key_span, model_renders, passed_locals, render_calls_in, RenderCall, RenderKind, RenderRef};
+use crate::ruby;
 use crate::util::{lines_with_offsets, slash_path, LineIndex};
-use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -81,7 +83,7 @@ fn code_refs<'s, T>(
     let pipes = HamlPipes::new(source.lang.unwrap_or(TemplateLang::Ruby));
     let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
-        let spans = slim_outline::code_spans(&source.text, extra_engines);
+        let spans = outline::slim::code_spans(&source.text, extra_engines);
         return spans
             .into_iter()
             .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], &pipes).into_iter().filter(|(r, _)| want(r)).map(shift(s)))
@@ -835,10 +837,10 @@ mod tests {
         let text = "<%= render \"card\", user: u %>\n".repeat(renders);
         let sources = [t.source("app/views/users/index.html.erb", ERB, &text)];
         let card = t.path("app/views/users/_card.html.erb");
-        crate::prism::PARSES.with(|parses| parses.set(0));
+        crate::ruby::prism::PARSES.with(|parses| parses.set(0));
         let (edits, _) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
         assert_eq!(edits.len(), renders);
-        assert_eq!(crate::prism::PARSES.with(|parses| parses.get()), renders);
+        assert_eq!(crate::ruby::prism::PARSES.with(|parses| parses.get()), renders);
     }
 
     #[test]

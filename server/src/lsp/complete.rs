@@ -8,12 +8,12 @@ use crate::completion::{
     ivar_completions, local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions,
     stimulus_completions,
 };
-use crate::haml_indent::LineRole;
+use crate::haml::indent::LineRole;
 use crate::lang::TemplateLang;
-use crate::project::Project;
-use crate::{
-    erb, erb_complete, haml, i18n, rails_paths, render_refs, routes, ruby, schema, slim_complete, slim_parser, slots, stimulus, util,
-};
+use crate::rails::project::Project;
+use crate::rails::{i18n, paths, render_refs, routes, schema, slots, stimulus};
+use crate::slim;
+use crate::{erb, haml, ruby, util};
 use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,7 +30,7 @@ impl Backend {
     ) -> Result<Vec<CompletionItem>> {
         let project = self.project_of(path).await?;
         // Gem roots are left out: their listing can be large, and the app's own roots are what it edits.
-        let engine_roots: Vec<PathBuf> = rails_paths::views_root(path)
+        let engine_roots: Vec<PathBuf> = paths::views_root(path)
             .zip(project.view_roots())
             .map(|(own, roots)| roots.other_app_roots(&own).into_iter().map(Path::to_path_buf).collect())
             .unwrap_or_default();
@@ -89,9 +89,9 @@ impl Backend {
         let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
         if doc.lang == TemplateLang::Erb && doc.html_host(uri) && !code_here() {
             let offset = line_start + col;
-            if let Some(context) = erb_complete::context(&doc.text, offset) {
-                let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
-                return Some(erb_complete::items(context, &doc.text, offset, || stimulus_attributes(tag)));
+            if let Some(context) = erb::complete::context(&doc.text, offset) {
+                let tag = erb::complete::start_tag(&doc.text[..offset]).unwrap_or_default();
+                return Some(erb::complete::items(context, &doc.text, offset, || stimulus_attributes(tag)));
             }
         }
         if let Some(typed) = schema::attribute_prefix(before).filter(|_| code_here()) {
@@ -131,14 +131,14 @@ impl Backend {
         // Rails helpers, only when we're in a Ruby context.
         let in_code = match (doc.lang, role) {
             (TemplateLang::Slim, _) => {
-                let parsed = slim_parser::parse(&doc.text, engines);
+                let parsed = slim::parser::parse(&doc.text, engines);
                 let offset = util::position_to_offset(&doc.text, pos)?;
-                if let Some(markup) = slim_complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element()))
+                if let Some(markup) = slim::complete::items(&doc.text, offset, &parsed, engines, || stimulus_attributes(indented_element()))
                 {
                     return Some(markup);
                 }
                 // An unclosed `#{` being typed is Ruby too, for completion only.
-                slim_parser::in_ruby(&doc.text, &parsed, offset) || slim_parser::in_open_interpolation(&doc.text, &parsed, offset)
+                slim::parser::in_ruby(&doc.text, &parsed, offset) || slim::parser::in_open_interpolation(&doc.text, &parsed, offset)
             }
             // Ruby LSP completes Ruby files; offering view helpers on every identifier would duplicate it.
             (TemplateLang::Ruby, _) => false,

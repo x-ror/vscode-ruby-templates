@@ -1,11 +1,15 @@
 //! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace and the final
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
+pub mod erb;
+pub mod haml;
+pub mod slim;
+
 use crate::checks::{language_diagnostics, ruby_context, Doc};
 use crate::lang::{html_host, is_partial, TemplateLang};
-use crate::project::Projects;
-use crate::strict_locals::RubyContext;
-use crate::{erb_format, haml_format, haml_parser, slim_format, slim_indent, slim_ruby, util};
+use crate::rails::project::Projects;
+use crate::ruby::strict_locals::RubyContext;
+use crate::util;
 use std::fmt;
 use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Uri};
 
@@ -154,7 +158,7 @@ fn format_once(
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
         TemplateLang::Erb if !html_host(uri, plain_erb, text) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
-        TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
+        TemplateLang::Erb => erb::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
         TemplateLang::Liquid => return skip(SkipKind::NotHandled, "Liquid has no formatter here"),
@@ -172,25 +176,26 @@ pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
 }
 
 fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: ruby_prism::Version) -> Result<Indented, Skipped> {
-    let rejected = slim_indent::diagnostics(text, extra_engines, ruby).iter().any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
+    let rejected =
+        crate::slim::indent::diagnostics(text, extra_engines, ruby).iter().any(|d| d.severity == Some(DiagnosticSeverity::ERROR));
     if rejected {
         return skip(SkipKind::Doubt, "Slim would reject the file");
     }
     let original = text;
-    let Some(text) = slim_format::format(text, settings.indent_size, extra_engines) else {
+    let Some(text) = slim::format(text, settings.indent_size, extra_engines) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
-    if !slim_ruby::same_compilation(original, &text, extra_engines) {
+    if !crate::slim::ruby::same_compilation(original, &text, extra_engines) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
     Ok(Indented { text, notes: vec![] })
 }
 
 fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
-    let Some(formatted) = haml_format::format(text, settings.indent_size) else {
+    let Some(formatted) = haml::format(text, settings.indent_size) else {
         return skip(SkipKind::Doubt, "Haml would reject the file");
     };
-    if !haml_parser::same_compilation(text, &formatted) {
+    if !crate::haml::parser::same_compilation(text, &formatted) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
     Ok(Indented { text: formatted, notes: vec![] })

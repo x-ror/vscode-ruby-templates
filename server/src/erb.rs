@@ -1,9 +1,13 @@
-//! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves.
+//! ERB diagnostics: the Ruby syntax errors of `erb::ruby` and the HTML errors Erubi's text leaves.
 
-use crate::erb_ruby;
-use crate::generated_ruby::RUBY_SYNTAX;
+pub mod complete;
+pub mod html_lint;
+pub mod ruby;
+pub mod tags;
+
 use crate::html::TOKENIZED_AS_TEXT;
-use crate::strict_locals::RubyContext;
+use crate::ruby::generated::RUBY_SYNTAX;
+use crate::ruby::strict_locals::RubyContext;
 use crate::util::{coded, warning, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
@@ -15,7 +19,7 @@ pub mod code {
 /// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
 pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
-    for tag in erb_ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
+    for tag in ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
         let source = &text[tag.code.clone()];
         if source.contains('\n') || source.trim().is_empty() {
             continue;
@@ -29,16 +33,13 @@ pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
 }
 
 pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<Diagnostic> {
-    erb_ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref())
-        .into_iter()
-        .map(|d| coded(d, RUBY_SYNTAX))
-        .collect()
+    ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref()).into_iter().map(|d| coded(d, RUBY_SYNTAX)).collect()
 }
 
 /// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
 /// when the tokenizer is in the data state. Complete tags are invisible to it.
 pub fn html_diagnostics(text: &str) -> Vec<Diagnostic> {
-    let (texts, tail_at) = erb_ruby::rendered_texts(text);
+    let (texts, tail_at) = ruby::rendered_texts(text);
     let mut html = Html::default();
     for rendered in &texts {
         html.feed(rendered);

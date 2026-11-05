@@ -1,7 +1,7 @@
 //! Which template language a document is, and whether its output is HTML.
 
 use crate::html;
-use crate::rails_paths::{is_known_format, is_locale, template_format, views_root};
+use crate::rails::paths::{is_known_format, is_locale, template_format, views_root};
 use crate::util;
 use std::path::Path;
 use tower_lsp_server::ls_types::Uri;
