@@ -3,7 +3,7 @@
 use crate::erb::truncate;
 use crate::project::Project;
 use crate::rails_paths::{app_root, template_stem, views_root};
-use crate::util::inline_code;
+use crate::util::{inline_code, slash_path};
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,7 +50,7 @@ pub fn completion_prefix(line: &str, col: usize) -> Option<(usize, usize, &str)>
 pub fn lazy_scope(project: &Project, current: &Path) -> Option<String> {
     let rel = current.strip_prefix(views_root(current)?).ok()?;
     let stem = template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?);
-    let virtual_path = rel.with_file_name(stem).to_str()?.replace('\\', "/");
+    let virtual_path = slash_path(&rel.with_file_name(stem));
     Some(format!("/{virtual_path}").replace("/_", "/").replace('/', ".")[1..].to_string())
 }
 

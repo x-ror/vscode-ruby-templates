@@ -1053,7 +1053,7 @@ impl LanguageServer for Backend {
                 options: Some(CreateFileOptions { overwrite: Some(false), ignore_if_exists: Some(true) }),
                 annotation_id: None,
             };
-            let shown = target.strip_prefix(rails_paths::views_root(&path)?).ok()?.to_string_lossy().replace('\\', "/");
+            let shown = util::slash_path(target.strip_prefix(rails_paths::views_root(&path)?).ok()?);
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Create {} `{shown}`", r.kind.name().to_lowercase()),
                 kind: Some(CodeActionKind::QUICKFIX),

@@ -4,6 +4,7 @@
 use crate::partials::{matching_templates, split_render_name};
 use crate::project::Project;
 use crate::rails_paths::app_root;
+use crate::util::slash_path;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -17,7 +18,7 @@ static RENDER: LazyLock<Regex> =
 /// `app/controllers/admin/users_controller.rb` → `admin/users`.
 pub fn controller_path(file: &Path) -> Option<String> {
     let rel = file.strip_prefix(app_root(file)?.join("controllers")).ok()?;
-    let rel = rel.to_str()?.replace('\\', "/");
+    let rel = slash_path(rel);
     rel.strip_suffix("_controller.rb").filter(|p| !p.is_empty()).map(str::to_string)
 }
 
@@ -74,7 +75,7 @@ mod tests {
             targets(&Project::unknown(), &file, line, col)
                 .into_iter()
                 .map(|(s, e, found)| {
-                    let rel = found.iter().map(|f| f.strip_prefix(root.join("app/views")).unwrap().to_string_lossy().replace('\\', "/"));
+                    let rel = found.iter().map(|f| slash_path(f.strip_prefix(root.join("app/views")).unwrap()));
                     (line[s..e].to_string(), rel.collect())
                 })
                 .collect()

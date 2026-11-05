@@ -2,6 +2,7 @@
 //! language server (`Settings::with_editor`). Every other property is ignored and listed in the notes.
 
 use crate::format::Settings;
+use crate::util::slash_path;
 use regex::Regex;
 use std::path::Path;
 
@@ -35,7 +36,7 @@ fn editorconfig_indent_size(path: &Path, notes: &mut Vec<String>) -> Option<usiz
     let mut properties: Vec<(String, String)> = Vec::new();
     for (dir, file, text) in files.iter().rev() {
         let Ok(relative) = path.strip_prefix(dir) else { continue };
-        let relative = relative.to_string_lossy().replace('\\', "/");
+        let relative = slash_path(relative);
         let mut applies = false;
         let mut read = false;
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with(['#', ';'])) {
