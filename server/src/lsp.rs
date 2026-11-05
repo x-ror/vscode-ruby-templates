@@ -138,9 +138,9 @@ fn convention_targets(
     models.chain(controllers).chain(assets).filter(|(_, _, found)| !found.is_empty()).collect()
 }
 
-/// The partials whose callers references at `pos` of the template `uri` look for: the ones the `render` under it names,
+/// The partials whose callers references at `pos` of the template at `path` look for: the ones the `render` under it names,
 /// else the partial itself; `None` on a component render or in a template that isn't a partial.
-fn referenced_partials(project: &Project, uri: &Uri, path: &Path, doc: &Doc, pos: Position) -> Option<Vec<PathBuf>> {
+fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position) -> Option<Vec<PathBuf>> {
     let (line_start, line, col) = util::line_at(&doc.text, pos);
     if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang == TemplateLang::Haml, project.prism_version(), col) {
         return Some(partials::first_folder_only(partials::resolve(project, path, &r)));
@@ -149,7 +149,9 @@ fn referenced_partials(project: &Project, uri: &Uri, path: &Path, doc: &Doc, pos
         return Some(partials::resolve_model(project, path, name));
     }
     // On a component render the question isn't about this partial.
-    if partials::component_ref_at(line, col).is_some() || !file_name(uri).starts_with('_') {
+    if partials::component_ref_at(line, col).is_some()
+        || !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
+    {
         return None;
     }
     Some(vec![path.to_path_buf()])
@@ -645,8 +647,15 @@ impl Backend {
     }
 
     /// Completions at `pos` outside a `render` string: the first cursor context that applies answers, in this order.
-    fn completions_at(&self, uri: &Uri, doc: &Doc, path: Option<&Path>, pos: Position) -> Option<Vec<CompletionItem>> {
-        let (line_start, line, col) = util::line_at(&doc.text, pos);
+    /// `at` is `util::line_at(&doc.text, pos)`.
+    fn completions_at(
+        &self,
+        uri: &Uri,
+        doc: &Doc,
+        path: Option<&Path>,
+        pos: Position,
+        (line_start, line, col): (usize, &str, usize),
+    ) -> Option<Vec<CompletionItem>> {
         let before = &line[..col.min(line.len())];
         // Read from disk (lockfile, initializers), so built once per request and only when a branch needs it.
         let project_cell = OnceCell::new();
@@ -1350,7 +1359,7 @@ impl LanguageServer for Backend {
             return Ok(Some(self.local_references(&path, &doc.text, &local, declaration).await?));
         }
         let Some(views) = rails_paths::views_root(&path) else { return Ok(None) };
-        let Some(files) = referenced_partials(&project, &uri, &path, &doc, pos) else { return Ok(None) };
+        let Some(files) = referenced_partials(&project, &path, &doc, pos) else { return Ok(None) };
         let declarations: Vec<Location> = if declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
         let open = self.open_texts();
         let mut locations = off_server_task(move || {
@@ -1451,14 +1460,14 @@ impl LanguageServer for Backend {
         let pos = p.text_document_position.position;
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let path = util::file_path(&uri);
-        let (_, line, col) = util::line_at(&doc.text, pos);
+        let at @ (_, line, col) = util::line_at(&doc.text, pos);
         if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
             let Some(path) = path else { return Ok(None) };
             // The guard would block the next `did_change` while the work below waits.
             drop(doc);
             return Ok(Some(CompletionResponse::Array(self.render_path_completions(&path, kind, &prefix).await?)));
         }
-        Ok(self.completions_at(&uri, &doc, path.as_deref(), pos).map(CompletionResponse::Array))
+        Ok(self.completions_at(&uri, &doc, path.as_deref(), pos, at).map(CompletionResponse::Array))
     }
 }
 
