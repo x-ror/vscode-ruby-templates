@@ -322,9 +322,11 @@ impl<'a> Symbols<'a> {
         self.items.push((range.0, range.1, symbol));
     }
 
-    /// A symbol for each `render` call in `code`, which starts at byte `code_start`, but those behind a Ruby comment.
+    /// A symbol for each `render` call in `code`, which starts at byte `code_start`, but those behind a Ruby comment
+    /// on their line.
     pub fn add_render_refs(&mut self, code: &str, code_start: usize) {
-        for r in render_refs(code).into_iter().filter(|r| !ruby::comment_before(&code[..r.start])) {
+        let line_before = |at: usize| &code[code[..at].rfind('\n').map_or(0, |i| i + 1)..at];
+        for r in render_refs(code).into_iter().filter(|r| !ruby::comment_before(line_before(r.start))) {
             let name_range = (code_start + r.start, code_start + r.end);
             self.add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
         }
@@ -563,6 +565,8 @@ mod tests {
     fn render_behind_a_ruby_comment_is_no_symbol() {
         let text = "<% # render \"old\" %>\n<%= render \"card\" %>\n<% x = 1 # render \"note\" %>\n";
         assert_eq!(outline(&document_symbols(text, false)), ["render \"card\""]);
+        let after_comment_line = "<%\n  # the card\n  render \"card\"\n%>\n";
+        assert_eq!(outline(&document_symbols(after_comment_line, false)), ["render \"card\""]);
     }
 
     #[test]
