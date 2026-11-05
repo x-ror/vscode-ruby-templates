@@ -2,7 +2,7 @@
 //! physical lines start a Slim line, which belong to another line's block or continuation, and
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
-use crate::ruby::comment_before;
+use crate::ruby::{comment_before, REGEXP_SPACE};
 use crate::util::closing_bracket;
 use std::borrow::Cow;
 use std::ops::Range;
@@ -227,9 +227,8 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
     p.out
 }
 
-/// Ruby's `\s`.
 fn is_space(c: char) -> bool {
-    matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r')
+    REGEXP_SPACE.contains(&c)
 }
 
 fn is_word(c: char) -> bool {

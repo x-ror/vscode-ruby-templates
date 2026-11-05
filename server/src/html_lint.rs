@@ -256,7 +256,7 @@ fn branch_between(text: &str, spans: &[(usize, usize)], from: usize, to: usize) 
     let first = spans.partition_point(|&(s, _)| s <= from);
     spans[first..].iter().take_while(|&&(s, _)| s < to).any(|&(s, e)| {
         let code = &text[s..e.min(text.len())];
-        !matches!(analyze(code).0, BlockEffect::Neutral)
+        !matches!(analyze(code), BlockEffect::Neutral)
             || code.split_whitespace().next().is_some_and(|w| matches!(w, "else" | "elsif" | "when" | "in"))
     })
 }

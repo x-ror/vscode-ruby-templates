@@ -176,7 +176,7 @@ pub(crate) fn analyzed(text: &str) -> Vec<(erb_ruby::ErbTag<'_>, BlockEffect)> {
     erb_ruby::tags(text)
         .into_iter()
         .map(|t| {
-            let effect = if t.is_literal() || t.is_comment() { BlockEffect::Neutral } else { analyze(&text[t.code.clone()]).0 };
+            let effect = if t.is_literal() || t.is_comment() { BlockEffect::Neutral } else { analyze(&text[t.code.clone()]) };
             (t, effect)
         })
         .collect()

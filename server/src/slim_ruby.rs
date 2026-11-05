@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 // Slim::EndInserter, Slim::DoInserter and Slim::Controls decide where blocks open and close.
 static OPENS_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)\A(if|begin|unless|else|elsif|when|in|rescue|ensure)\b|\bdo\s*(\|[^|]*\|)?\s*$").unwrap());
-static CONTINUES_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A(else|elsif|when|in|rescue|ensure)\b").unwrap());
+static CONTINUES_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"\A({})\b", crate::ruby::CONTINUERS.join("|"))).unwrap());
 static NEEDS_NO_DO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\A(if|unless|else|elsif|when|in|begin|rescue|ensure|case)\b|\bdo\s*(\|[^|]*\|\s*)?\n?\z").unwrap());
 static CAPTURES_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)\A(if|unless)\b|\bdo\s*(\|[^|]*\|)?\s*$").unwrap());
