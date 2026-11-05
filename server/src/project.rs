@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::ivars::ControllerScan;
 use crate::rails_paths::{app_root, files_under, is_known_format};
+use crate::view_roots;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +58,10 @@ pub struct Project {
     controller_scan: Arc<Mutex<HashMap<PathBuf, Arc<ControllerScan>>>>,
     /// Does the app add view folders for every controller (`prepend_view_path` in its config, an engine or path gem with views)?
     pub adds_view_paths: bool,
+    /// Gems from the lockfile that could ship views (`view_roots::view_capable_gems`).
+    view_capable_gems: Vec<(String, String)>,
+    /// Every view root (`None`: a gem's install wasn't found), searched on first use.
+    view_roots: OnceLock<Option<view_roots::ViewRoots>>,
 }
 
 impl Project {
@@ -72,6 +77,8 @@ impl Project {
             view_prefixes: Arc::default(),
             controller_scan: Arc::default(),
             adds_view_paths: false,
+            view_capable_gems: Vec::new(),
+            view_roots: OnceLock::new(),
         }
     }
 
@@ -165,6 +172,8 @@ impl Project {
             view_prefixes: Arc::default(),
             controller_scan: Arc::default(),
             adds_view_paths: false,
+            view_capable_gems: view_roots::view_capable_gems(lock),
+            view_roots: OnceLock::new(),
         }
     }
 
@@ -183,6 +192,18 @@ impl Project {
         let Some(ruby) = &self.ruby else { return ruby_prism::Version::Latest };
         // Prism 2.1.0 has no grammar before 3.3, which stands in for older Rubies.
         PRISM_GRAMMARS.iter().rfind(|(since, _)| ruby.at_least(since)).map_or(ruby_prism::Version::CRuby3_3, |&(_, grammar)| grammar)
+    }
+
+    /// Is `dir` (`users/card`) certainly no view folder: every view root is known, and none has it?
+    pub fn lacks_view_folder(&self, dir: &str) -> bool {
+        let top = dir.split('/').next().unwrap_or(dir);
+        let possible = !self.adds_view_paths && !view_roots::FRAMEWORK_VIEW_FOLDERS.contains(&top) && !self.has_gem_family(top);
+        let Some(root) = self.root.as_deref().filter(|_| possible) else {
+            return false;
+        };
+        let roots = self.view_roots.get_or_init(|| view_roots::find(root, &self.view_capable_gems, &view_roots::GemEnv::from_process()));
+        // Reading the app's code is costly; a folder found in some root settles it first.
+        roots.as_ref().is_some_and(|roots| !roots.has_folder(dir) && !roots.app_code_adds_view_paths())
     }
 
     /// Does a gem named `name` or `name_*` / `name-*` exist (a gem's own view folder, `spree/` from `spree_core`)?
@@ -251,7 +272,7 @@ fn turns_off_partial_prefix(text: &str) -> bool {
 }
 
 /// Does the Ruby `text` call `*_view_path(s)` or touch `paths["app/views"]`?
-fn adds_view_paths(text: &str) -> bool {
+pub(crate) fn adds_view_paths(text: &str) -> bool {
     let mut code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
     code.any(|line| line.contains("view_path") || line.contains(r#"paths["app/views"]"#) || line.contains("paths['app/views']"))
 }
@@ -282,7 +303,7 @@ fn registered_format(line: &str) -> Option<&str> {
 }
 
 /// `    name (1.2.3)` or `    name (1.2.3-x86_64-linux)`; the 6-space dependency lines don't match.
-fn spec_line(line: &str) -> Option<(&str, &str)> {
+pub(crate) fn spec_line(line: &str) -> Option<(&str, &str)> {
     let rest = line.strip_prefix("    ").filter(|r| !r.starts_with(' '))?;
     let (name, version) = rest.split_once(" (")?;
     let version = version.strip_suffix(')')?;

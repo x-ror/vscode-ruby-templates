@@ -48,5 +48,6 @@ mod stimulus;
 mod strict_locals;
 mod tags;
 mod util;
+mod view_roots;
 
 pub use lsp::serve;

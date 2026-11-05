@@ -138,7 +138,7 @@ Requires VS Code 1.100 or newer, on Linux (x64, arm64), macOS (Apple silicon, In
 - **Ruby LSP** and this extension both register the `erb` language id and work side by side: Ruby LSP for `.rb` files, this extension for templates.
 - **Other Haml or Slim extensions**: VS Code picks one grammar per language, so disable the other extension to avoid surprises. To let another extension format, turn off `rubyTemplates.<lang>.format.enabled`.
 - **Emmet** works in ERB out of the box (`"emmet.includeLanguages": { "erb": "html" }` is a default); VS Code's Emmet expands to Slim syntax in Slim and Skim.
-- **Partials and formats**: partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`.
+- **Partials and formats**: partials resolve by Rails' default formats plus the ones your app registers with `Mime::Type.register` in `config/initializers`; renders into a gem's views (`devise/…`) aren't flagged when the gem is in `Gemfile.lock`, and a folder that exists nowhere (`uesrs/card`) is flagged only once every view root, gems included, is known. Gems are found in `vendor/bundle`, `BUNDLE_PATH` (env, `.bundle/config`, `~/.bundle/config`) or `GEM_HOME`/`GEM_PATH`; with Ruby elsewhere (rbenv, asdf) the check stays off.
 - **Generator templates** (`lib/templates/**/*.tt`, `lib/generators/**/templates/**`) open in their template language, without diagnostics or formatting, since the generator's own ERB is mixed in.
 - **Slim options set per app** aren't reflected in highlighting: custom shortcuts and attribute delimiters, smart text's implicit text lines, logic-less mode.
 
