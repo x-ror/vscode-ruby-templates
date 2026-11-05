@@ -4,6 +4,7 @@
 use crate::helpers::DATA_KEYS;
 use crate::html::{ATTRIBUTES, BOOLEAN_ATTRIBUTES, TAGS};
 use crate::slim_parser::{Parsed, SLIM_ENGINES};
+use crate::util::completion_item;
 use tower_lsp_server::ls_types::{CompletionItem, CompletionItemKind, InsertTextFormat};
 
 /// Items for the word ending at byte `offset`; `None` when it is neither a tag nor an attribute name. `stimulus` gives the
@@ -19,18 +20,8 @@ pub fn items(
     let tag = word_start(before, |c| c.is_alphanumeric() || matches!(c, '_' | '-' | ':'));
     if parsed.tag_slots.contains(&(offset - tag.len())) && may_start(before, tag) {
         let engines = SLIM_ENGINES.iter().copied().chain(extra_engines.iter().map(String::as_str));
-        let engines = engines.map(|name| CompletionItem {
-            label: format!("{name}:"),
-            kind: Some(CompletionItemKind::MODULE),
-            detail: Some("Slim embedded engine".into()),
-            ..Default::default()
-        });
-        let tags = TAGS.iter().map(|name| CompletionItem {
-            label: name.to_string(),
-            kind: Some(CompletionItemKind::PROPERTY),
-            detail: Some("HTML element".into()),
-            ..Default::default()
-        });
+        let engines = engines.map(|name| completion_item(format!("{name}:"), CompletionItemKind::MODULE, "Slim embedded engine"));
+        let tags = TAGS.iter().map(|&name| completion_item(name, CompletionItemKind::PROPERTY, "HTML element"));
         return Some(tags.chain(engines).collect());
     }
     let attr = word_start(before, |c| !c.is_whitespace() && !"\"'<>/=()[]{}".contains(c));
