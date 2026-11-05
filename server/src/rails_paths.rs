@@ -43,6 +43,9 @@ const KNOWN_FORMATS: [&str; 35] = [
     "turbo_stream",
 ];
 
+/// A Rails app's views folder, from its root.
+pub const APP_VIEWS: &str = "app/views";
+
 pub fn is_known_format(segment: &str) -> bool {
     KNOWN_FORMATS.contains(&segment)
 }

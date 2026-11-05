@@ -6,10 +6,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::controller_classes::ControllerScan;
-use crate::rails_paths::{files_under, is_known_format, rails_root};
+use crate::rails_paths::{files_under, is_known_format, rails_root, APP_VIEWS};
 use crate::strict_locals::{self, Close, RubyContext};
 use crate::view_roots::{self, adds_view_paths, spec_line};
 use walkdir::WalkDir;
+
+/// Bundler's lockfile, whose folder is the project root.
+pub const LOCKFILE: &str = "Gemfile.lock";
+const RUBY_VERSION_FILE: &str = ".ruby-version";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
@@ -33,9 +37,9 @@ pub struct ProjectKey {
 impl ProjectKey {
     pub(crate) fn of(template: &Path) -> Self {
         ProjectKey {
-            lock_dir: template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file()).map(Path::to_path_buf),
+            lock_dir: template.ancestors().skip(1).find(|dir| dir.join(LOCKFILE).is_file()).map(Path::to_path_buf),
             template_app: rails_root(template),
-            ruby_version: template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file()),
+            ruby_version: template.ancestors().skip(1).map(|dir| dir.join(RUBY_VERSION_FILE)).find(|file| file.is_file()),
         }
     }
 }
@@ -136,7 +140,7 @@ impl Project {
 
     fn load(key: &ProjectKey) -> Self {
         let lock_dir = key.lock_dir.as_deref();
-        let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok());
+        let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join(LOCKFILE)).ok());
         let project = lock_text.as_deref().map_or_else(Self::unknown, Self::from_lockfile);
         let configs: Vec<AppConfig> =
             key.template_app.iter().map(PathBuf::as_path).chain(lock_dir).map(|app| read_app_config(&app.join("config"))).collect();
@@ -304,7 +308,7 @@ impl Project {
         let root = self.root.as_deref()?;
         let app_dir = own.parent()?.parent()?;
         let own_app = || app_dir.ancestors().take_while(|dir| *dir != root).any(|dir| dir.join("config/application.rb").is_file());
-        (app_dir.starts_with(root) && !own_app()).then(|| root.join("app/views"))
+        (app_dir.starts_with(root) && !own_app()).then(|| root.join(APP_VIEWS))
     }
 
     /// Is `file` in a gem's install folder? Those are read-only.
@@ -386,7 +390,7 @@ fn path_gem_has_views(lock: &str, lock_dir: &Path) -> bool {
             return false;
         }
         let remote = line.trim().strip_prefix("remote:").map(str::trim).filter(|remote| !remote.trim_matches(['.', '/']).is_empty());
-        in_path && remote.is_some_and(|remote| lock_dir.join(remote).join("app/views").is_dir())
+        in_path && remote.is_some_and(|remote| lock_dir.join(remote).join(APP_VIEWS).is_dir())
     })
 }
 

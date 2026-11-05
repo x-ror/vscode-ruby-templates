@@ -10,7 +10,7 @@ use crate::util::{file_location, line_location};
 use crate::{
     assets, config, controller_classes, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars,
     model_columns, outline, partial_rename, partials,
-    project::{Project, Projects},
+    project::{self, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
     routes, ruby, schema, semantic_tokens, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus, strict_locals, tags,
@@ -64,6 +64,10 @@ struct Backend {
 }
 
 const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
+const SERVER_NAME: &str = "ruby-templates-ls";
+/// The client's notification with the app's routes.
+const ROUTES_NOTIFICATION: &str = "rubyTemplates/routes";
+const SLIM_FORMATTING_REGISTRATION: &str = "slim-formatting";
 
 fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> String {
     let found = partials::resolve(project, path, r);
@@ -223,7 +227,7 @@ fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, rea
 
 /// A created or deleted file may add or remove a view root; a changed one only when it is the lockfile that names the gems.
 fn may_change_view_roots(events: &[(PathBuf, FileChangeType)]) -> bool {
-    events.iter().any(|(path, kind)| *kind != FileChangeType::CHANGED || path.ends_with("Gemfile.lock"))
+    events.iter().any(|(path, kind)| *kind != FileChangeType::CHANGED || path.ends_with(project::LOCKFILE))
 }
 
 /// tower-lsp polls every handler in one task, so a scan of the whole app here would hold up all other requests.
@@ -822,7 +826,7 @@ impl LanguageServer for Backend {
         let _ = self.dynamic_formatting.set(dynamic_formatting);
         Ok(InitializeResult {
             offset_encoding: None,
-            server_info: Some(ServerInfo { name: "ruby-templates-ls".into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
+            server_info: Some(ServerInfo { name: SERVER_NAME.into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::INCREMENTAL)),
                 definition_provider: Some(OneOf::Left(true)),
@@ -877,13 +881,16 @@ impl LanguageServer for Backend {
     async fn initialized(&self, _: InitializedParams) {
         if self.dynamic_formatting.get() == Some(&true) && self.options().format_enabled(TemplateLang::Slim) {
             let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
-            let registration =
-                Registration { id: "slim-formatting".into(), method: "textDocument/formatting".into(), register_options: Some(selector) };
+            let registration = Registration {
+                id: SLIM_FORMATTING_REGISTRATION.into(),
+                method: "textDocument/formatting".into(),
+                register_options: Some(selector),
+            };
             if let Err(e) = self.client.register_capability(vec![registration]).await {
                 self.client.log_message(MessageType::WARNING, format!("Slim formatting not registered: {e}")).await;
             }
         }
-        self.client.log_message(MessageType::INFO, "ruby-templates-ls ready").await;
+        self.client.log_message(MessageType::INFO, format!("{SERVER_NAME} ready")).await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -1389,7 +1396,7 @@ impl LanguageServer for Backend {
         let query = p.query.to_lowercase();
         let open = self.docs.iter().filter_map(|d| rails_paths::views_root(&util::file_path(d.key())?)).collect::<Vec<_>>();
         let mut roots: Vec<PathBuf> =
-            self.roots.get().into_iter().flatten().map(|r| r.join("app/views")).filter(|v| v.is_dir()).chain(open).collect();
+            self.roots.get().into_iter().flatten().map(|r| r.join(rails_paths::APP_VIEWS)).filter(|v| v.is_dir()).chain(open).collect();
         roots.sort();
         roots.dedup();
         let mut out = Vec::new();
@@ -1499,7 +1506,7 @@ pub async fn serve() {
         publishes: Arc::default(),
         next_publish: AtomicU64::new(0),
     })
-    .custom_method("rubyTemplates/routes", Backend::set_routes)
+    .custom_method(ROUTES_NOTIFICATION, Backend::set_routes)
     .finish();
     Server::new(stdin, stdout, socket).serve(service).await;
 }

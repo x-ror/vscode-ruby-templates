@@ -1,7 +1,7 @@
 //! Every `app/views` folder a Rails app can render from: its own and its engines', packs' and components' under the
 //! Rails root, and those of the installed gems that could ship views.
 
-use crate::rails_paths::{is_app_views, ruby_files_under};
+use crate::rails_paths::{is_app_views, ruby_files_under, APP_VIEWS};
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -17,7 +17,9 @@ const ENGINE_SEARCH_DEPTH: usize = 3;
 const MAX_DEPTH: usize = 6;
 const NOT_SEARCHED: [&str; 7] = ["node_modules", ".git", "tmp", "log", "public", "coverage", "storage"];
 /// Installed and cached gems; their views come from the lockfile, not from walking.
-const NOT_SEARCHED_PATHS: [&str; 2] = ["vendor/bundle", "vendor/cache"];
+const NOT_SEARCHED_PATHS: [&str; 2] = [VENDOR_BUNDLE, "vendor/cache"];
+/// The conventional Bundler install path inside an app.
+const VENDOR_BUNDLE: &str = "vendor/bundle";
 /// Rails' own gems; their views live in these folders.
 const FRAMEWORK_GEMS: [&str; 9] =
     ["rails", "railties", "actionpack", "actionview", "actionmailer", "actioncable", "actionmailbox", "actiontext", "activestorage"];
@@ -231,7 +233,7 @@ fn installed_gem_views(root: &Path, gems: &[(String, String)], env: &GemEnv) -> 
                 let prefix = format!("{name}-");
                 git_installed.iter().find(|dir| folder_name(dir).and_then(|n| n.strip_prefix(&prefix)).is_some_and(is_commit_hash))
             };
-            Some(release.or_else(git)?.join("app/views"))
+            Some(release.or_else(git)?.join(APP_VIEWS))
         })
         .collect()
 }
@@ -303,7 +305,7 @@ fn gem_homes(root: &Path, env: &GemEnv) -> Vec<PathBuf> {
         Some(root.join(value.trim().trim_matches(['"', '\''])))
     });
     let from_env = env.bundle_path.as_ref().map(|path| root.join(path));
-    let bundles = [root.join("vendor/bundle")].into_iter().chain(from_env).chain(configured);
+    let bundles = [root.join(VENDOR_BUNDLE)].into_iter().chain(from_env).chain(configured);
     let by_ruby_version = bundles.flat_map(|bundle| subfolders(&bundle.join("ruby")).into_iter().map(|ruby| ruby.join("gems")));
     by_ruby_version.chain(rubygems_homes(env)).collect()
 }

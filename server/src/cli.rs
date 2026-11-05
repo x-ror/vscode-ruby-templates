@@ -51,7 +51,9 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 
 /// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
 fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[]));
+    let formatted = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| crate::slim_format::format(&text, crate::format::Settings::default().indent_size, &[]));
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;
