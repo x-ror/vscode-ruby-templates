@@ -1,7 +1,7 @@
 //! Folding ranges and document symbols for Slim (and Skim): indentation blocks over logical lines.
 
 use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
-use crate::partials::render_refs;
+use crate::render_refs::render_refs;
 use crate::slim_parser::SLIM_ENGINES;
 use crate::util::LineIndex;
 use regex::Regex;

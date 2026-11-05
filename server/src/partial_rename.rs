@@ -5,13 +5,11 @@
 use crate::code_context::render_filter;
 use crate::controller_classes::view_prefixes;
 use crate::lang::TemplateLang;
-use crate::partials::{
-    first_folder_only, local_key_span, matching_templates, model_renders, passed_locals, render_calls_in, resolve, resolve_model,
-    split_render_name, RenderCall, RenderKind, RenderRef,
-};
+use crate::partials::{first_folder_only, matching_templates, resolve, resolve_model, split_render_name};
 use crate::project::Project;
 use crate::rails_paths::{app_root, app_views, template_stem, views_root};
 use crate::render_call::HamlPipes;
+use crate::render_refs::{local_key_span, model_renders, passed_locals, render_calls_in, RenderCall, RenderKind, RenderRef};
 use crate::util::{lines_with_offsets, slash_path, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;

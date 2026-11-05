@@ -37,6 +37,7 @@ mod prism;
 mod project;
 mod rails_paths;
 mod render_call;
+mod render_refs;
 mod routes;
 mod ruby;
 mod schema;

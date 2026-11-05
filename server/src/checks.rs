@@ -8,7 +8,7 @@ use crate::{
     project::{Framework, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
-    slim_indent,
+    render_refs, slim_indent,
     strict_locals::{self, RubyContext},
     tags, util,
 };
@@ -128,7 +128,7 @@ pub(crate) const STRICT_LOCALS: &str = "strict-locals";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 /// Line index, line, the call as read, and the render.
-type CheckedRender<'a> = (usize, &'a str, partials::RenderCall<'a>, partials::RenderRef);
+type CheckedRender<'a> = (usize, &'a str, render_refs::RenderCall<'a>, render_refs::RenderRef);
 
 /// The render checks of a Rails template in app/views: unresolved renders, then strict-locals mismatches.
 fn render_diagnostics(
@@ -136,7 +136,7 @@ fn render_diagnostics(
     project: &Project,
     text: &str,
     lang: TemplateLang,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+    in_code: impl Fn(usize, usize, &render_refs::RenderRef) -> bool,
 ) -> Vec<Diagnostic> {
     if project.framework != Framework::Rails || project.is_gem_file(path) {
         return vec![];
@@ -159,7 +159,7 @@ fn checked_renders<'a>(
     views: &Path,
     text: &'a str,
     lang: TemplateLang,
-    in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
+    in_code: impl Fn(usize, usize, &render_refs::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
     let bare_names_known =
@@ -172,7 +172,7 @@ fn checked_renders<'a>(
     let pipes = HamlPipes::new(lang);
     let mut out = Vec::new();
     for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
-        let refs = partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
+        let refs = render_refs::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| {
             in_code(i, line_start, r) && checkable(&r.name)
         });
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
@@ -189,12 +189,12 @@ fn is_gem_root(root: &Path) -> bool {
 struct Partials<'a> {
     project: &'a Project,
     path: &'a Path,
-    resolved: HashMap<(partials::RenderKind, String, partials::Lookup), Vec<PathBuf>>,
+    resolved: HashMap<(render_refs::RenderKind, String, render_refs::Lookup), Vec<PathBuf>>,
     signatures: HashMap<PathBuf, Option<strict_locals::Signature>>,
 }
 
 impl Partials<'_> {
-    fn resolve(&mut self, r: &partials::RenderRef) -> &[PathBuf] {
+    fn resolve(&mut self, r: &render_refs::RenderRef) -> &[PathBuf] {
         let (project, path) = (self.project, self.path);
         self.resolved.entry((r.kind, r.name.clone(), r.lookup.clone())).or_insert_with(|| partials::resolve(project, path, r))
     }
@@ -225,9 +225,9 @@ fn searched_folders(project: &Project, view: &Path) -> Vec<String> {
 
 /// Rails' MissingTemplate message up to ` with {…}.`, which lists the request's formats and paths; they vary.
 /// A bare name lists each folder in `searched`.
-fn missing_message(r: &partials::RenderRef, searched: &[String]) -> String {
+fn missing_message(r: &render_refs::RenderRef, searched: &[String]) -> String {
     let (dir, name) = partials::split_render_name(&r.name);
-    let (kind, prefix) = if r.kind == partials::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
+    let (kind, prefix) = if r.kind == render_refs::RenderKind::Partial { ("partial", "_") } else { ("template", "") };
     let paths = match dir {
         Some(dir) => format!("{dir}/{prefix}{name}"),
         None => searched.iter().map(|folder| format!("{folder}/{prefix}{name}")).collect::<Vec<_>>().join(", "),
@@ -251,7 +251,7 @@ fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partia
     let mut out = Vec::new();
     // A partial's layout gets the partial's locals, which this check can't see.
     for (i, line, call, r) in renders.iter().filter(|(.., r)| !r.from_layout) {
-        let Some(passed) = partials::passed_locals(call, r) else { continue };
+        let Some(passed) = render_refs::passed_locals(call, r) else { continue };
         // Several variants/formats: which one Rails picks depends on the request.
         let [file] = partials.resolve(r) else { continue };
         let file = file.clone();
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn missing_message_names_each_searched_folder_only_for_bare_names() {
         let message = |text: &str, searched: &[&str]| {
-            let refs = partials::render_refs(text);
+            let refs = render_refs::render_refs(text);
             let searched: Vec<String> = searched.iter().map(|s| s.to_string()).collect();
             missing_message(&refs[0], &searched)
         };
@@ -623,7 +623,7 @@ mod tests {
                 "Missing partial users/_p2",
             ]
         );
-        let card = partials::render_refs(r#"<%= render layout: "card" do %>"#);
+        let card = render_refs::render_refs(r#"<%= render layout: "card" do %>"#);
         assert_eq!(partials::resolve(&Project::unknown(), &file, &card[0]), vec![users.join("_card.html.erb")]);
         assert!(diags.iter().all(|d| d.severity == Some(DiagnosticSeverity::WARNING)));
 
@@ -769,9 +769,8 @@ mod tests {
         let view = root.join("app/views/api/index.html.erb");
         let found = unresolved(TemplateLang::Erb, &view, "<%= render \"crad\" %>");
         assert_eq!(found.into_iter().map(|d| d.message).collect::<Vec<_>>(), ["Missing partial api/_crad"]);
-        assert!(
-            crate::partials::resolve(&Project::for_template(&view), &view, &crate::partials::render_refs("render \"crad\"")[0]).is_empty()
-        );
+        assert!(crate::partials::resolve(&Project::for_template(&view), &view, &crate::render_refs::render_refs("render \"crad\"")[0])
+            .is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

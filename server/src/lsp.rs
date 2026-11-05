@@ -15,8 +15,8 @@ use crate::{
     project::{self, Project, Projects},
     rails_paths,
     render_call::HamlPipes,
-    routes, ruby, schema, semantic_tokens, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus, strict_locals, tags,
-    util, view_roots,
+    render_refs, routes, ruby, schema, semantic_tokens, slim_complete, slim_hover, slim_outline, slim_parser, slots, stimulus,
+    strict_locals, tags, util, view_roots,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
@@ -71,7 +71,7 @@ const SERVER_NAME: &str = "ruby-templates-ls";
 const ROUTES_NOTIFICATION: &str = "rubyTemplates/routes";
 const SLIM_FORMATTING_REGISTRATION: &str = "slim-formatting";
 
-fn render_hover(project: &Project, path: &Path, r: &partials::RenderRef) -> String {
+fn render_hover(project: &Project, path: &Path, r: &render_refs::RenderRef) -> String {
     let found = partials::resolve(project, path, r);
     if found.is_empty() {
         return format!("**{}** `{}`\n\nNo matching template found.", r.kind.name(), r.name);
@@ -125,7 +125,7 @@ fn local_hover(name: &str, default: Option<&str>, passes: usize) -> String {
 /// With `col`, only the ones under it are resolved.
 fn convention_targets(project: &Project, path: &Path, text: &str, line_start: usize, line: &str, col: Option<usize>) -> Vec<Target> {
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
-    let models = partials::model_renders(line).into_iter().filter(|&(s, e, _)| at(s, e)).map(|(start, end, name)| Target {
+    let models = render_refs::model_renders(line).into_iter().filter(|&(s, e, _)| at(s, e)).map(|(start, end, name)| Target {
         start,
         end,
         files: partials::resolve_model(project, path, name),
@@ -147,14 +147,14 @@ fn convention_targets(project: &Project, path: &Path, text: &str, line_start: us
 /// else the partial itself; `None` on a component render or in a template that isn't a partial.
 fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position) -> Option<Vec<PathBuf>> {
     let (line_start, line, col) = util::line_at(&doc.text, pos);
-    if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
+    if let Some(r) = render_refs::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
         return Some(partials::first_folder_only(partials::resolve(project, path, &r)));
     }
-    if let Some((_, _, name)) = partials::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col)) {
+    if let Some((_, _, name)) = render_refs::model_renders(line).into_iter().find(|&(s, e, _)| (s..=e).contains(&col)) {
         return Some(partials::resolve_model(project, path, name));
     }
     // On a component render the question isn't about this partial.
-    if partials::component_ref_at(line, col).is_some() || !rails_paths::is_partial_path(path) {
+    if render_refs::component_ref_at(line, col).is_some() || !rails_paths::is_partial_path(path) {
         return None;
     }
     Some(vec![path.to_path_buf()])
@@ -522,11 +522,11 @@ impl Backend {
         let (line_start, line, start) = util::line_at(text, d.range.start);
         let pipes = HamlPipes::new(doc.lang);
         let Some((r, call)) =
-            partials::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()
+            render_refs::render_calls_in(text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()
         else {
             return vec![];
         };
-        let Some(passed) = partials::passed_locals(&call, &r) else { return vec![] };
+        let Some(passed) = render_refs::passed_locals(&call, &r) else { return vec![] };
         // Several variants or formats: which one Rails picks depends on the request, as the check says.
         let Ok([partial]) = <[PathBuf; 1]>::try_from(partials::resolve(project, path, &r)) else { return vec![] };
         let (Some(uri), Some(partial_uri)) = (crate::util::file_uri(path), crate::util::file_uri(&partial)) else { return vec![] };
@@ -539,7 +539,7 @@ impl Backend {
         let unknown = sig.unknown(&passed);
         let base = call.base(line_start);
         let at = |text: &str, offset: usize| util::offset_to_position(text, offset);
-        let here = |(range, new): partials::ByteEdit| {
+        let here = |(range, new): render_refs::ByteEdit| {
             let range = Range::new(at(text, base + range.start), at(text, base + range.end));
             HashMap::from([(uri.clone(), vec![TextEdit::new(range, new)])])
         };
@@ -553,16 +553,16 @@ impl Backend {
         };
         let quoted = |names: &[&str]| names.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
         let mut out = Vec::new();
-        if let Some(edit) = (!missing.is_empty()).then(|| partials::add_locals_edit(&call, &r, &missing)).flatten() {
+        if let Some(edit) = (!missing.is_empty()).then(|| render_refs::add_locals_edit(&call, &r, &missing)).flatten() {
             // Not preferred: `nil` silences the warning without passing what the partial needs.
             out.push(action(format!("Pass {} to the render", quoted(&missing)), here(edit), false));
         }
         let shown = partial.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
         for name in unknown {
-            if let Some(edit) = partials::remove_local_edit(&call, &r, name) {
+            if let Some(edit) = render_refs::remove_local_edit(&call, &r, name) {
                 out.push(action(format!("Remove `{name}` from the render"), here(edit), false));
             }
-            let (range, new) = comment.declare(name, partials::NEW_LOCAL_VALUE);
+            let (range, new) = comment.declare(name, render_refs::NEW_LOCAL_VALUE);
             let range = Range::new(at(&partial_text, range.start), at(&partial_text, range.end));
             let changes = HashMap::from([(partial_uri.clone(), vec![TextEdit::new(range, new)])]);
             out.push(action(format!("Declare `{name}` in the locals of `{shown}`"), changes, false));
@@ -605,7 +605,7 @@ impl Backend {
     }
 
     /// The partials and templates a `render` string in `path` can name, this app's and its engines'.
-    async fn render_path_completions(&self, path: &Path, kind: partials::RenderKind, prefix: &str) -> Result<Vec<CompletionItem>> {
+    async fn render_path_completions(&self, path: &Path, kind: render_refs::RenderKind, prefix: &str) -> Result<Vec<CompletionItem>> {
         let project = self.project_of(path).await?;
         // Gem roots are left out: their listing can be large, and the app's own roots are what it edits.
         let engine_roots: Vec<PathBuf> = rails_paths::views_root(path)
@@ -638,7 +638,7 @@ impl Backend {
 
         let engines = &self.options().extra_engines;
         let ruby = || path.map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
-        let render_key = partials::local_key_before(&doc.text, line_start + col, doc.lang, ruby)
+        let render_key = render_refs::local_key_before(&doc.text, line_start + col, doc.lang, ruby)
             .filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
         if let (Some((r, passed, typed)), Some(path)) = (render_key, path) {
             let found = render_local_completions(project(path), path, &r, &passed, typed);
@@ -979,9 +979,9 @@ impl LanguageServer for Backend {
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
         let targets: Vec<PathBuf> =
-            if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
+            if let Some(r) = render_refs::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
                 partials::resolve(&project, &path, &r)
-            } else if let Some(c) = partials::component_ref_at(line, col) {
+            } else if let Some(c) = render_refs::component_ref_at(line, col) {
                 partials::resolve_component(&project, &path, &c)
             } else {
                 convention_targets(&project, &path, &doc.text, line_start, line, Some(col))
@@ -1047,7 +1047,7 @@ impl LanguageServer for Backend {
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
             // Same renders as diagnostics and references: code only, and the file Rails would pick.
             let renders =
-                partials::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| in_code(i, line_start, r))
+                render_refs::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| in_code(i, line_start, r))
                     .into_iter()
                     .map(|r| Target {
                         start: r.start,
@@ -1086,7 +1086,7 @@ impl LanguageServer for Backend {
             }
         }
         if let Some((project, path)) = &file {
-            if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
+            if let Some(r) = render_refs::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
             }
             if let Some(md) = i18n_key_at(project, &doc, path, pos, &self.options().extra_engines)
@@ -1240,7 +1240,8 @@ impl LanguageServer for Backend {
         let pipes = HamlPipes::new(doc.lang);
         let quick_fixes = unresolved.filter_map(|d| {
             let (line_start, line, start) = util::line_at(&doc.text, d.range.start);
-            let r = partials::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()?;
+            let r =
+                render_refs::render_refs_in(&doc.text, line_start, line, &pipes, project.prism_version(), |r| r.start == start).pop()?;
             let target = partials::new_template_path(&project, &path, &r)?;
             let create = CreateFile {
                 uri: crate::util::file_uri(&target)?,
@@ -1465,7 +1466,7 @@ impl LanguageServer for Backend {
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let path = util::file_path(&uri);
         let at @ (_, line, col) = util::line_at(&doc.text, pos);
-        if let Some((kind, prefix)) = partials::render_string_prefix(line, col) {
+        if let Some((kind, prefix)) = render_refs::render_string_prefix(line, col) {
             let Some(path) = path else { return Ok(None) };
             // The guard would block the next `did_change` while the work below waits.
             drop(doc);
@@ -1652,14 +1653,14 @@ mod tests {
         let md = render_hover(
             &Project::unknown(),
             &file,
-            &partials::render_ref_at(line, 0, line, TemplateLang::Erb, ruby_prism::Version::Latest, 22).unwrap(),
+            &render_refs::render_ref_at(line, 0, line, TemplateLang::Erb, ruby_prism::Version::Latest, 22).unwrap(),
         );
         assert!(md.ends_with("```ruby\nlocals: (user:, size: :md)\n```"), "{md}");
         assert!(md.contains("- `app/views/users/_card.html.erb`"), "a path from the Rails root: {md}");
         assert!(!render_hover(
             &Project::unknown(),
             &file,
-            &partials::render_ref_at(r#"render "plain""#, 0, r#"render "plain""#, TemplateLang::Erb, ruby_prism::Version::Latest, 9)
+            &render_refs::render_ref_at(r#"render "plain""#, 0, r#"render "plain""#, TemplateLang::Erb, ruby_prism::Version::Latest, 9)
                 .unwrap()
         )
         .contains("locals:"));

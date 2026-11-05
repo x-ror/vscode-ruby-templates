@@ -2,8 +2,8 @@
 //! instance variables, component slots and classes, receivers' methods, helpers and partial locals.
 
 use crate::lang::TemplateLang;
-use crate::partials::RenderRef;
 use crate::project::Project;
+use crate::render_refs::{self, RenderRef};
 use crate::strict_locals::{self, Close};
 use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ fn local_item(name: String, default: Option<String>) -> CompletionItem {
 pub(crate) fn render_completions(
     project: &Project,
     path: &Path,
-    kind: partials::RenderKind,
+    kind: render_refs::RenderKind,
     prefix: &str,
     templates: &[PathBuf],
     other_roots: &[(&Path, &[PathBuf])],
