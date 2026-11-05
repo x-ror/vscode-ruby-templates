@@ -13,6 +13,7 @@ src = $stdin.read
 percent = ARGV[1] == "percent"
 code = begin
   raise LoadError if percent
+
   require "erubi"
   Erubi::Engine.new(src, escape: true).src
 rescue LoadError

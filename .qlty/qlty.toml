@@ -52,6 +52,8 @@ file_patterns = [
   "**/*.md",
   # rustfmt owns Rust layout; the 2-space lines are Ruby and JS inside raw-string fixtures.
   "**/*.rs",
+  # Line 5 is indented by one space on purpose: an indented % line stays text.
+  "test/sample.percent.erb",
 ]
 
 # The demo app and the test oracles are tooling around the extension; the demo's dependencies stay
