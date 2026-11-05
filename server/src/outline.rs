@@ -24,7 +24,7 @@ static CONTENT_FOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*content_
 static FORM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:form_with|form_for)\b").unwrap());
 static TURBO_FRAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*turbo_frame_tag\s*\(?\s*("[^"]*"|'[^']*'|[^\s,]+)"#).unwrap());
 static BLOCK_TAIL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+do\s*(\|[^|]*\|)?\s*$").unwrap());
-pub(crate) static ID_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
+static ID_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\sid\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).unwrap());
 
 pub(crate) const LANDMARKS: &[&str] = &["header", "nav", "main", "section", "aside", "footer", "form"];
 
@@ -160,21 +160,15 @@ pub(crate) fn indent_level(line: &str) -> Option<i64> {
 
 /// Outline: `content_for`, forms, Turbo Frames, `render` calls and, with an HTML host, landmark/`id` elements.
 pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
-    let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
     let index = LineIndex::new(text);
-    let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
-    };
+    let mut symbols = Symbols::new(&index);
 
     // One entry per open Ruby block: the symbol it will become once its `end` is seen.
     let mut open: Vec<Option<(String, SymbolKind, usize, usize)>> = Vec::new();
     let analyzed = tags::analyzed(text);
     for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal() && !t.is_comment()) {
         let code = &text[tag.code.clone()];
-        for r in render_refs(code) {
-            let name_range = (tag.code.start + r.start, tag.code.start + r.end);
-            add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
-        }
+        symbols.add_render_refs(code, tag.code.start);
         let named = erb_symbol(code);
         match *effect {
             BlockEffect::Open(n) => {
@@ -183,31 +177,31 @@ pub fn document_symbols(text: &str, html: bool) -> Vec<DocumentSymbol> {
             }
             BlockEffect::Close(n) => {
                 for (name, kind, start, end) in (0..n).filter_map(|_| open.pop()).flatten() {
-                    add(name, kind, (start, tag.end), (start, end));
+                    symbols.add(name, kind, (start, tag.end), (start, end));
                 }
             }
             _ => {
                 if let Some((name, kind)) = named {
-                    add(name, kind, (tag.start, tag.end), (tag.start, tag.end));
+                    symbols.add(name, kind, (tag.start, tag.end), (tag.start, tag.end));
                 }
             }
         }
     }
     for (name, kind, start, end) in open.into_iter().flatten() {
-        add(name, kind, (start, end), (start, end));
+        symbols.add(name, kind, (start, end), (start, end));
     }
 
     if html {
         for e in tags::elements_of(text, &analyzed) {
-            let id = ID_ATTR.captures(&text[e.start..e.open_end]).and_then(|c| c.iter().skip(1).flatten().next()).map(|m| m.as_str());
+            let id = id_attr(&text[e.start..e.open_end]);
             if id.is_none() && !LANDMARKS.contains(&e.name.as_str()) {
                 continue;
             }
             let name = id.map_or_else(|| e.name.clone(), |id| format!("{}#{id}", e.name));
-            add(name, SymbolKind::FIELD, (e.start, e.end), (e.start, e.open_end));
+            symbols.add(name, SymbolKind::FIELD, (e.start, e.end), (e.start, e.open_end));
         }
     }
-    nest(items)
+    symbols.finish()
 }
 
 pub(crate) fn erb_symbol(code: &str) -> Option<(String, SymbolKind)> {
@@ -226,10 +220,7 @@ pub fn haml_document_symbols(text: &str) -> Vec<DocumentSymbol> {
     let lines: Vec<&str> = text.split('\n').collect();
     let index = LineIndex::new(text);
     let line_end = |i: usize| index.line_start(i) + lines[i].trim_end().len();
-    let mut items: Vec<(usize, usize, DocumentSymbol)> = Vec::new();
-    let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
-    };
+    let mut symbols = Symbols::new(&index);
     for (i, span) in haml_structure(text) {
         let line = lines[i];
         let line_start = index.line_start(i);
@@ -238,19 +229,16 @@ pub fn haml_document_symbols(text: &str) -> Vec<DocumentSymbol> {
         let range = (content_start, line_end(block_end(&lines, i, span)));
         if let Some(code_start) = haml_code_start(line) {
             let code = &line[code_start..];
-            for r in render_refs(code).into_iter().filter(|r| !ruby::comment_before(&code[..r.start])) {
-                let name_range = (line_start + code_start + r.start, line_start + code_start + r.end);
-                add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
-            }
+            symbols.add_render_refs(code, line_start + code_start);
             if let Some((name, kind)) = erb_symbol(code) {
-                add(name, kind, range, selection);
+                symbols.add(name, kind, range, selection);
             }
         }
         if let Some(name) = haml_element_name(&line[leading_ws(line).len()..]) {
-            add(name, SymbolKind::FIELD, range, selection);
+            symbols.add(name, SymbolKind::FIELD, range, selection);
         }
     }
-    nest(items)
+    symbols.finish()
 }
 
 /// Last line of the block a structural line opens: its own span, then every following line indented deeper
@@ -300,29 +288,53 @@ fn haml_attribute_id(mut attrs: &str) -> Option<&str> {
     None
 }
 
-pub(crate) fn symbol(
-    index: &LineIndex,
-    name: String,
-    kind: SymbolKind,
-    range: (usize, usize),
-    selection: (usize, usize),
-) -> DocumentSymbol {
-    let to_range = |(start, end)| index.range(start, end);
-    #[allow(deprecated)]
-    DocumentSymbol {
-        name,
-        detail: None,
-        kind,
-        tags: None,
-        deprecated: None,
-        range: to_range(range),
-        selection_range: to_range(selection),
-        children: None,
+/// The literal `id` in a start tag's attributes.
+pub(crate) fn id_attr(attributes: &str) -> Option<&str> {
+    ID_ATTR.captures(attributes).and_then(|c| c.iter().skip(1).flatten().next()).map(|m| m.as_str())
+}
+
+/// A document's symbols by byte range, nested once all are in.
+pub(crate) struct Symbols<'a> {
+    index: &'a LineIndex<'a>,
+    items: Vec<(usize, usize, DocumentSymbol)>,
+}
+
+impl<'a> Symbols<'a> {
+    pub fn new(index: &'a LineIndex<'a>) -> Self {
+        Symbols { index, items: Vec::new() }
+    }
+
+    pub fn add(&mut self, name: String, kind: SymbolKind, range: (usize, usize), selection: (usize, usize)) {
+        let to_range = |(start, end)| self.index.range(start, end);
+        #[allow(deprecated)]
+        let symbol = DocumentSymbol {
+            name,
+            detail: None,
+            kind,
+            tags: None,
+            deprecated: None,
+            range: to_range(range),
+            selection_range: to_range(selection),
+            children: None,
+        };
+        self.items.push((range.0, range.1, symbol));
+    }
+
+    /// A symbol for each `render` call in `code`, which starts at byte `code_start`, but those behind a Ruby comment.
+    pub fn add_render_refs(&mut self, code: &str, code_start: usize) {
+        for r in render_refs(code).into_iter().filter(|r| !ruby::comment_before(&code[..r.start])) {
+            let name_range = (code_start + r.start, code_start + r.end);
+            self.add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
+        }
+    }
+
+    pub fn finish(self) -> Vec<DocumentSymbol> {
+        nest(self.items)
     }
 }
 
 /// Nest symbols by byte-range containment; partially overlapping ones become siblings.
-pub(crate) fn nest(mut items: Vec<(usize, usize, DocumentSymbol)>) -> Vec<DocumentSymbol> {
+fn nest(mut items: Vec<(usize, usize, DocumentSymbol)>) -> Vec<DocumentSymbol> {
     items.sort_by_key(|&(start, end, _)| (start, std::cmp::Reverse(end)));
     let mut roots = Vec::new();
     let mut stack: Vec<(usize, DocumentSymbol)> = Vec::new();
@@ -543,6 +555,12 @@ mod tests {
             haml_folds(text),
             vec![(0, 1, None), (3, 8, Some(FoldingRangeKind::Region)), (4, 5, None), (6, 7, None), (9, 11, None),]
         );
+    }
+
+    #[test]
+    fn render_behind_a_ruby_comment_is_no_symbol() {
+        let text = "<% # render \"old\" %>\n<%= render \"card\" %>\n<% x = 1 # render \"note\" %>\n";
+        assert_eq!(outline(&document_symbols(text, false)), ["render \"card\""]);
     }
 
     #[test]

@@ -1,7 +1,6 @@
 //! Folding ranges and document symbols for Slim (and Skim): indentation blocks over logical lines.
 
-use crate::outline::{erb_symbol, indent_level, nest, symbol, ID_ATTR, LANDMARKS};
-use crate::partials::render_refs;
+use crate::outline::{erb_symbol, id_attr, indent_level, Symbols, LANDMARKS};
 use crate::slim_parser::SLIM_ENGINES;
 use crate::util::{raw_lines, LineIndex};
 use regex::Regex;
@@ -320,48 +319,39 @@ pub fn document_symbols(text: &str, extra_engines: &[String]) -> Vec<DocumentSym
     let lines = line_spans(text);
     let entries = entries(text, &lines, extra_engines);
     let ends = block_ends(&entries);
-    let mut items = Vec::new();
     let index = LineIndex::new(text);
-    let mut add = |name: String, kind, range: (usize, usize), selection: (usize, usize)| {
-        items.push((range.0, range.1, symbol(&index, name, kind, range, selection)));
-    };
+    let mut symbols = Symbols::new(&index);
     for (e, end) in entries.iter().zip(ends) {
         let block = (e.start, line_end(&lines, end));
         let first_line = (e.start, line_end(&lines, e.first));
         if e.verbatim == Some(Verbatim::Engine) {
             let engine = engine_name(&text[e.start..], extra_engines).unwrap_or_default();
-            add(format!("{engine}:"), SymbolKind::PACKAGE, block, first_line);
+            symbols.add(format!("{engine}:"), SymbolKind::PACKAGE, block, first_line);
         }
         let tail_end = e.code.unwrap_or_else(|| line_end(&lines, e.last));
         let attr_ends = e.heads.iter().skip(1).map(|h| h.0).chain(std::iter::once(tail_end));
         for (&(head_start, head_end), attrs_end) in e.heads.iter().zip(attr_ends) {
             let head = &text[head_start..head_end];
-            let id = ID_ATTR
-                .captures(&text[head_end..attrs_end.max(head_end)])
-                .and_then(|c| c.iter().skip(1).flatten().next())
-                .map(|m| m.as_str());
+            let id = id_attr(&text[head_end..attrs_end.max(head_end)]);
             let name = match id {
                 _ if head.contains(['.', '#']) => Some(head.to_string()),
                 Some(id) => Some(format!("{head}#{id}")),
                 None => LANDMARKS.contains(&head).then(|| head.to_string()),
             };
             if let Some(name) = name {
-                add(name, SymbolKind::FIELD, block, (head_start, head_end));
+                symbols.add(name, SymbolKind::FIELD, block, (head_start, head_end));
             }
         }
         let Some(code_start) = e.code else { continue };
         let code = &text[code_start..line_end(&lines, e.last)];
-        for r in render_refs(code) {
-            let name_range = (code_start + r.start, code_start + r.end);
-            add(format!("render \"{}\"", r.name), SymbolKind::FILE, name_range, name_range);
-        }
+        symbols.add_render_refs(code, code_start);
         let branch =
             || (e.control && BRANCH.is_match(code)).then(|| (code.split_whitespace().collect::<Vec<_>>().join(" "), SymbolKind::OPERATOR));
         if let Some((name, kind)) = erb_symbol(code).or_else(branch) {
-            add(name, kind, block, first_line);
+            symbols.add(name, kind, block, first_line);
         }
     }
-    nest(items)
+    symbols.finish()
 }
 
 #[cfg(test)]
@@ -529,5 +519,10 @@ mod tests {
         let syms = document_symbols("😀\n.é#a\n  p x\n\n", &[]);
         assert_eq!(syms[0].range, Range::new(Position::new(1, 0), Position::new(2, 5)));
         assert_eq!(syms[0].selection_range, Range::new(Position::new(1, 0), Position::new(1, 4)));
+    }
+
+    #[test]
+    fn render_behind_a_ruby_comment_is_no_symbol() {
+        assert_eq!(symbols("- # render \"old\"\n= render \"card\"\n- x = 1 # render \"note\"\n"), ["render \"card\""]);
     }
 }
