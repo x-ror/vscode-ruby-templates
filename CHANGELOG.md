@@ -3,8 +3,20 @@
 ## Unreleased
 
 - The strict-locals check also runs when a `render` matches several files (a variant next to the base file, or two handlers): a local is reported missing when every file requires it and unknown when none takes it, and a file without a `locals:` comment still skips the call. With actionview 8 or newer the message names the first file and the count of the others (`for _badge.html.erb and 1 other`). "Declare in the locals" adds the local to all of the files.
+
+## 0.10.0
+
+- Documentation now lives at https://x-ror.github.io/vscode-ruby-templates/: guides, examples in ERB, Haml and Slim, a reference of every diagnostic code with an example and the exact message, and this changelog. The README is a short overview.
 - _Extract Selection to Partial_ works the same in ERB, Haml and Slim: the partial and the `render` call are one edit (a single undo, and a failed create leaves the template alone), the partial keeps the template's line endings (CRLF files no longer get an LF partial), an existing partial is overwritten only after confirming, the name must be a Ruby identifier optionally prefixed by folders (`shared/card`), and the render path is qualified (`render "users/card"`) in Slim too. A name that points at the partial being edited is refused.
 - New `liquid` language for `.liquid` and `.html.liquid` files: highlighting of `{{ }}` outputs (filters, strings, numbers, ranges, operators), `{% %}` tags, `{% comment %}` and `{% # %}` comments, `{% raw %}` and multi-line `{% liquid %}` tags over HTML, JavaScript and CSS, plus comment toggling, auto-closing and indentation. The server accepts these files and answers nothing for them (no Rails lookups, checks or formatting). Plain `.html` files are not claimed; map Jekyll includes with `files.associations`.
+- Slim completion offers the same HTML tags and attributes as ERB and Haml; 32 tags such as `<kbd>` and `<wbr>` were missing.
+- The outline leaves out a `render` behind a Ruby comment (`<% # render "old" %>`, Slim `- # render "old"`), as Haml's already did, and keeps a `render` that follows a comment line inside a multi-line ERB tag.
+- When a `render` passes a key twice that the partial's strict locals don't take, the quick fix offers one _Remove_ or _Declare_ action instead of one per copy.
+- A Ruby syntax error at the very end of an ERB code tag is marked at its place instead of over the whole line.
+- An app checked out under a folder named `controllers` no longer loses partial references and renames from its helpers and models.
+- HTML checks read the content of `<title>` as text, and custom elements such as `<title-bar>` or `<style-guide>` as markup: before, everything up to their end tag was skipped by the checks and by ERB completion.
+- A view created or deleted while the server lists `app/views` is no longer missed until the next change.
+- Routes are read for an app whose whole `bin/` folder was moved into the workspace, without reloading the window.
 
 ## 0.9.0
 
