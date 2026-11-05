@@ -304,7 +304,7 @@ fn subfolders(dir: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::write_files;
+    use crate::util::{slash_path, write_files};
 
     #[test]
     fn view_capable_gems_follow_dependencies_transitively() {
@@ -341,12 +341,8 @@ mod tests {
         write_files(&root, &files.map(|file| (file, "")));
         write_files(&root, &[(".bundle/config", "---\nBUNDLE_PATH: \"vendor/bundle\"\n")]);
         let relative = |roots: ViewRoots| {
-            let mut names: Vec<String> = roots
-                .app_roots()
-                .iter()
-                .chain(&roots.gems)
-                .map(|r| r.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))
-                .collect();
+            let mut names: Vec<String> =
+                roots.app_roots().iter().chain(&roots.gems).map(|r| slash_path(r.strip_prefix(&root).unwrap())).collect();
             names.sort();
             names
         };
@@ -470,9 +466,7 @@ mod tests {
         let gem = |name: &str| (name.to_string(), "1.0".to_string());
         let gems_list = [gem("eng"), gem("plain"), gem("inline")];
         let found = find_in(&root, &gems_list);
-        let names = |roots: Vec<&Path>| {
-            roots.iter().map(|r| r.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/")).collect::<Vec<_>>()
-        };
+        let names = |roots: Vec<&Path>| roots.iter().map(|r| slash_path(r.strip_prefix(&root).unwrap())).collect::<Vec<_>>();
         assert_eq!(
             names(found.roots_after(&[])),
             ["app/views", &format!("{gems}/eng-1.0/app/views"), &format!("{gems}/inline-1.0/app/views")],

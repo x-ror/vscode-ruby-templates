@@ -130,6 +130,7 @@ fn describe(current: &Path, file: &Path, line: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::slash_path;
 
     #[test]
     fn hover_shows_signature_source_and_comment() {
@@ -213,10 +214,7 @@ mod tests {
         );
         let view = root.join("app/views/orders/index.html.erb");
         let rel = |name: &str| -> Vec<(String, usize)> {
-            definitions(&view, name)
-                .into_iter()
-                .map(|(f, line)| (f.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"), line))
-                .collect()
+            definitions(&view, name).into_iter().map(|(f, line)| (slash_path(f.strip_prefix(&root).unwrap()), line)).collect()
         };
         assert_eq!(rel("format_price"), [("app/helpers/orders_helper.rb".to_string(), 1)]);
         assert_eq!(rel("current_user"), [("app/controllers/application_controller.rb".to_string(), 3)]);

@@ -1,6 +1,7 @@
 //! Stimulus identifiers in `data-*` attributes → app/javascript/controllers files.
 
 use crate::rails_paths::app_root;
+use crate::util::slash_path;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -267,7 +268,7 @@ pub fn controllers(current: &Path) -> Vec<String> {
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
-            let rel = e.path().strip_prefix(&dir).ok()?.to_str()?.replace('\\', "/");
+            let rel = slash_path(e.path().strip_prefix(&dir).ok()?);
             let stem = ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].iter().find_map(|s| rel.strip_suffix(s))?;
             Some(stem.replace('/', "--").replace('_', "-"))
         })

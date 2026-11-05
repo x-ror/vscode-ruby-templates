@@ -5,6 +5,11 @@ use tower_lsp_server::ls_types::{
     Uri,
 };
 
+/// `path` with `/` separators on every platform, the form render names and Rails paths take.
+pub fn slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
     let offset = char_floor(text, offset);
