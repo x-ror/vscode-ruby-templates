@@ -1,21 +1,16 @@
-/* The omakase card's materials, shared by the landing page and the docs. */
+/* The menu card's materials, shared by the landing page and the docs. */
 :root,
 :root[data-theme="light"] {
-  --rt-counter: #141317;
-  --rt-counter-ink: #f1f0f4;
   --rt-card: #fcfcfa;
   --rt-ink: #1a1a1f;
   --rt-ink-muted: #55545c;
   --rt-hairline: #dcdbe1;
-  --rt-noren: #263463;
-  --rt-noren-ink: #f4f5fb;
-  --rt-noren-ink-muted: #c3c9e4;
   --rt-seal: #c21f39;
   --rt-seal-ink: #ffffff;
   --rt-seal-shadow: rgb(70 6 18 / 0.45);
   --rt-fault: #b3172f;
-  --rt-link: #263463;
-  --rt-focus: #263463;
+  --rt-link: #34405f;
+  --rt-focus: #34405f;
   --rt-code-bg: #f4f4f1;
   --rt-selection: #d6dcf3;
 
@@ -27,21 +22,16 @@
 }
 
 :root[data-theme="dark"] {
-  --rt-counter: #0b0a0d;
-  --rt-counter-ink: #ecebef;
   --rt-card: #1c1b20;
   --rt-ink: #ecebef;
   --rt-ink-muted: #a9a8b1;
   --rt-hairline: #34333b;
-  --rt-noren: #1f2b54;
-  --rt-noren-ink: #f4f5fb;
-  --rt-noren-ink-muted: #b8c0e3;
   --rt-seal: #c21f39;
   --rt-seal-ink: #ffffff;
   --rt-seal-shadow: rgb(0 0 0 / 0.6);
   --rt-fault: #ff8696;
-  --rt-link: #a9b6ff;
-  --rt-focus: #a9b6ff;
+  --rt-link: #b9c1dc;
+  --rt-focus: #b9c1dc;
   --rt-code-bg: #22272e;
   --rt-selection: #34407a;
 
@@ -51,14 +41,13 @@
 /* Before the theme script runs, or without it. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --rt-counter: #0b0a0d;
     --rt-card: #1c1b20;
     --rt-ink: #ecebef;
     --rt-ink-muted: #a9a8b1;
     --rt-hairline: #34333b;
     --rt-fault: #ff8696;
-    --rt-link: #a9b6ff;
-    --rt-focus: #a9b6ff;
+    --rt-link: #b9c1dc;
+    --rt-focus: #b9c1dc;
     --rt-code-bg: #22272e;
     color-scheme: dark;
   }

@@ -1,4 +1,4 @@
-/* The landing page: one omakase menu card on the black counter, under the indigo noren. */
+/* The landing page: one omakase menu card, its courses ruled like a printed menu. */
 
 *,
 *::before,
@@ -27,33 +27,30 @@ body {
   border-radius: 2px;
 }
 
-/* ---- counter: the page ground ---- */
+/* ---- page ---- */
 
-.counter {
+.page {
   min-height: 100vh;
-  background: var(--rt-counter);
-  color: var(--rt-counter-ink);
+  background: var(--rt-card);
+  color: var(--rt-ink);
   font-family: var(--rt-font);
   font-size: 1.0625rem;
   line-height: 1.6;
   font-optical-sizing: auto;
 }
 
-.counter__footer {
+.page__footer {
   max-width: 78rem;
   margin: 0 auto;
-  padding: 0 clamp(1rem, 4vw, 2rem) 3rem;
+  padding: 1.5rem clamp(1.25rem, 5vw, 4.5rem) 3rem;
   font-size: 0.9375rem;
-  color: var(--rt-counter-ink);
+  color: var(--rt-ink-muted);
+  border-top: 1px solid var(--rt-hairline);
 }
 
-.counter__link {
-  color: inherit;
+.page__link {
+  color: var(--rt-link);
   text-underline-offset: 0.2em;
-}
-
-.counter__link:focus-visible {
-  outline-color: var(--rt-counter-ink);
 }
 
 .skip-link {
@@ -71,37 +68,36 @@ body {
   top: 1rem;
 }
 
-/* ---- noren: top navigation ---- */
+/* ---- site header ---- */
 
-.noren {
-  --rt-focus: var(--rt-noren-ink);
+.site-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem 2rem;
-  padding: 0.875rem clamp(1rem, 4vw, 2.5rem);
-  background: var(--rt-noren);
-  color: var(--rt-noren-ink);
-  border-bottom: 0.375rem solid var(--rt-counter);
+  max-width: 78rem;
+  margin: 0 auto;
+  padding: 1rem clamp(1.25rem, 5vw, 4.5rem);
+  border-bottom: 1px solid var(--rt-hairline);
 }
 
-.noren__brand {
+.site-header__brand {
   display: inline-flex;
   align-items: center;
   gap: 0.625rem;
-  color: inherit;
+  color: var(--rt-ink);
   font-weight: 750;
   font-size: 1.125rem;
   letter-spacing: -0.01em;
   text-decoration: none;
 }
 
-.noren__icon {
+.site-header__icon {
   border-radius: 6px;
 }
 
-.noren__list {
+.site-header__list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 1.5rem;
@@ -110,10 +106,10 @@ body {
   list-style: none;
 }
 
-.noren__link {
+.site-header__link {
   display: inline-block;
   padding-block: 0.375rem;
-  color: var(--rt-noren-ink-muted);
+  color: var(--rt-ink-muted);
   font-weight: 550;
   text-decoration: none;
   border-bottom: 2px solid transparent;
@@ -122,8 +118,8 @@ body {
     border-color 150ms var(--rt-ease-out);
 }
 
-.noren__link:hover {
-  color: var(--rt-noren-ink);
+.site-header__link:hover {
+  color: var(--rt-ink);
   border-bottom-color: currentColor;
 }
 
@@ -131,27 +127,15 @@ body {
 
 .menu-card {
   max-width: 78rem;
-  margin: clamp(1rem, 2.5vw, 1.75rem) auto clamp(2rem, 4vw, 3rem);
-  padding: clamp(1.5rem, 3.5vw, 2.75rem) clamp(1.25rem, 5vw, 4.5rem);
-  background: var(--rt-card);
-  color: var(--rt-ink);
-  border-radius: 3px;
-  box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.04) inset,
-    0 18px 40px -18px rgb(0 0 0 / 0.65);
-}
-
-@media (min-width: 79rem) {
-  .menu-card {
-    margin-inline: auto;
-  }
+  margin: 0 auto;
+  padding: clamp(1.75rem, 4vw, 3rem) clamp(1.25rem, 5vw, 4.5rem)
+    clamp(2rem, 4vw, 3rem);
 }
 
 .menu-card__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 1.5rem;
-  padding-bottom: 1.75rem;
 }
 
 @media (min-width: 56rem) {
@@ -242,6 +226,7 @@ body {
   padding: 0;
   list-style: none;
   border-top: 1px solid var(--rt-hairline);
+  border-bottom: 1px solid var(--rt-hairline);
 }
 
 .course-index__item + .course-index__item {
@@ -335,6 +320,9 @@ body {
   grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem 2.5rem;
   padding-block: 2.25rem 2.5rem;
+}
+
+.course + .course {
   border-top: 3px double var(--rt-hairline);
 }
 

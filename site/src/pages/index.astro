@@ -2,7 +2,7 @@
 import "../styles/fonts.css";
 import "../styles/tokens.css";
 import "../styles/landing.css";
-import Noren from "../components/Noren.astro";
+import SiteHeader from "../components/SiteHeader.astro";
 import Seal from "../components/Seal.astro";
 import Course from "../components/Course.astro";
 import Listing from "../components/Listing.astro";
@@ -123,9 +123,9 @@ npx ruby-templates format --write app/views   # format them
       document.documentElement.dataset.theme = light ? "light" : "dark";
     </script>
   </head>
-  <body class="counter">
+  <body class="page">
     <a class="skip-link" href="#menu">Skip to content</a>
-    <Noren base={base} />
+    <SiteHeader base={base} />
 
     <main class="menu-card" id="menu">
       <header class="menu-card__head">
@@ -240,9 +240,9 @@ npx ruby-templates format --write app/views   # format them
       </footer>
     </main>
 
-    <footer class="counter__footer">
+    <footer class="page__footer">
       <p>
-        MIT licensed. <a class="counter__link" href="https://github.com/x-ror/vscode-ruby-templates">Source on GitHub</a>.
+        MIT licensed. <a class="page__link" href="https://github.com/x-ror/vscode-ruby-templates">Source on GitHub</a>.
       </p>
     </footer>
   </body>

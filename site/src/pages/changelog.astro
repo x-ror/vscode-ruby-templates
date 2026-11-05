@@ -1,11 +1,13 @@
 ---
 import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
-import { Content, getHeadings } from "../../../CHANGELOG.md";
+import { compiledContent, getHeadings } from "../../../CHANGELOG.md";
 
-// The repository's CHANGELOG.md, so the site and the release notes never disagree.
+// The repository's CHANGELOG.md, so the site and the release notes never disagree. Its own `# Changelog` gives way
+// to the page title, so the page keeps one h1.
+const html = (await compiledContent()).replace(/^\s*<h1[^>]*>[\s\S]*?<\/h1>/, "");
 const headings = getHeadings().filter(({ depth }) => depth > 1);
 ---
 
 <StarlightPage frontmatter={{ title: "Changelog" }} headings={headings}>
-  <Content />
+  <Fragment set:html={html} />
 </StarlightPage>

@@ -14,7 +14,7 @@ sidebar:
 | Other ERB grammars                                                       | Grammar for `erb`                                                          |
 | Other Haml or Slim extensions (e.g. `karunamurti.haml`, `sianglim.slim`) | Grammar, snippets and often a formatter for `haml` / `slim`                |
 
-Symptoms are doubled diagnostics or completions, a formatter that asks which one to use, or different colours than the screenshots.
+Symptoms are doubled diagnostics or completions, a formatter that asks which one to use, or different colours than the examples on this site.
 
 ### Formatter
 

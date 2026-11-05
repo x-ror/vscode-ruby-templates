@@ -13,24 +13,24 @@ const links = [
 ];
 ---
 
-<header class="noren">
-  <a class="noren__brand" href={`${base}/`}>
-    <img class="noren__icon" src={icon.src} alt="" width="32" height="32" />
+<header class="site-header">
+  <a class="site-header__brand" href={`${base}/`}>
+    <img class="site-header__icon" src={icon.src} alt="" width="32" height="32" />
     Ruby Templates
   </a>
-  <nav class="noren__nav" aria-label="Site">
-    <ul class="noren__list">
+  <nav class="site-header__nav" aria-label="Site">
+    <ul class="site-header__list">
       {
         links.map(({ href, label }) => (
           <li>
-            <a class="noren__link" href={href}>
+            <a class="site-header__link" href={href}>
               {label}
             </a>
           </li>
         ))
       }
       <li>
-        <a class="noren__link" href="https://github.com/x-ror/vscode-ruby-templates">GitHub</a>
+        <a class="site-header__link" href="https://github.com/x-ror/vscode-ruby-templates">GitHub</a>
       </li>
     </ul>
   </nav>
