@@ -10,11 +10,17 @@ import { TEMPLATE_LANGS, engineOf } from "./render.js";
 
 const routesEnabled = () => settings().get("routes.enabled", true);
 
+/** The app holding `dir`; the disk is searched once per folder, as views open often. */
+function railsRootOf({ roots }, dir) {
+  if (!roots.has(dir)) roots.set(dir, findUp(dir, RAILS_BIN));
+  return roots.get(dir);
+}
+
 // Booting runs the app's own code: only for an app inside a trusted workspace folder, never for a file
 // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
-function trustedRailsRoot(file) {
+function trustedRailsRoot(state, file) {
   if (!routesEnabled() || !vscode.workspace.isTrusted) return undefined;
-  const root = findUp(path.dirname(file), RAILS_BIN);
+  const root = railsRootOf(state, path.dirname(file));
   const folder =
     root && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
   return folder && !path.relative(folder.uri.fsPath, root).startsWith("..")
@@ -73,14 +79,14 @@ async function refreshRoutes(state, root) {
 function viewOpened(state, doc) {
   if (doc.uri.scheme !== "file") return;
   if (!TEMPLATE_LANGS.has(engineOf(doc.languageId))) return;
-  const root = trustedRailsRoot(doc.uri.fsPath);
+  const root = trustedRailsRoot(state, doc.uri.fsPath);
   const { cache, failed, busy } = state;
   if (root && !cache.has(root) && !failed.has(root) && !busy.has(root))
     void refreshRoutes(state, root);
 }
 
 function routesFileChanged(state, uri) {
-  const root = trustedRailsRoot(uri.fsPath);
+  const root = trustedRailsRoot(state, uri.fsPath);
   if (root && (state.cache.has(root) || state.failed.has(root)))
     void refreshRoutes(state, root);
 }
@@ -112,13 +118,19 @@ function registerRoutes(context, output) {
     failed: new Set(),
     busy: new Set(),
     again: new Set(),
+    roots: new Map(), // folder → nearest Rails root above it, or undefined
   };
   const opened = (doc) => viewOpened(state, doc);
   const routesChanged = (uri) => routesFileChanged(state, uri);
   const watcher = vscode.workspace.createFileSystemWatcher(
     "**/config/{routes.rb,routes/**/*.rb}",
   );
+  const appsWatcher = vscode.workspace.createFileSystemWatcher("**/bin/rails");
+  const appsChanged = () => state.roots.clear();
   context.subscriptions.push(
+    appsWatcher,
+    appsWatcher.onDidCreate(appsChanged),
+    appsWatcher.onDidDelete(appsChanged),
     watcher,
     watcher.onDidChange(routesChanged),
     watcher.onDidCreate(routesChanged),
