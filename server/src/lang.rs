@@ -216,6 +216,7 @@ mod tests {
     fn host_specific_erb_ids() {
         let untitled = "untitled:Untitled-1".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-js")), Some(TemplateLang::Erb));
+        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erb-percent")), Some(TemplateLang::Erb));
         assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("erbx")), None);
         let js_erb = "file:///app/views/users/index.js.erb".parse::<Uri>().unwrap();
         assert_eq!(TemplateLang::from_uri_or_id(&js_erb, None), Some(TemplateLang::Erb));
