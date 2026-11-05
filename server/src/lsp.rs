@@ -203,19 +203,27 @@ fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> b
     events.iter().any(|(path, kind)| (contents || *kind != FileChangeType::CHANGED) && (path.starts_with(root) || root.starts_with(path)))
 }
 
-/// Stores `read()` under `root` unless the entry is filled meanwhile; reads again when a watched-file event came in
+/// The entry under `root`, from `read()` unless it is filled meanwhile; reads again when a watched-file event came in
 /// while it read, since what it read may predate the change. The generation is checked under the entry's lock,
 /// which the event's invalidation (`retain`, after the bump) takes too.
-fn fill<T>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, read: impl Fn() -> T) {
+fn fill<T: Clone>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, read: impl Fn() -> T) -> T {
     loop {
         let started = generation.load(Ordering::SeqCst);
         let value = read();
-        let Entry::Vacant(slot) = cache.entry(root.to_path_buf()) else { return };
-        if generation.load(Ordering::SeqCst) == started {
-            slot.insert(value);
-            return;
+        match cache.entry(root.to_path_buf()) {
+            Entry::Occupied(entry) => return entry.get().clone(),
+            Entry::Vacant(slot) if generation.load(Ordering::SeqCst) == started => return slot.insert(value).clone(),
+            Entry::Vacant(_) => {}
         }
     }
+}
+
+/// Every file under the app/views root `views`, from `templates` or read into it.
+fn views_listing(templates: &DashMap<PathBuf, Arc<Vec<PathBuf>>>, views: &Path, generation: &AtomicU64) -> Arc<Vec<PathBuf>> {
+    if let Some(files) = templates.get(views) {
+        return Arc::clone(&files);
+    }
+    fill(templates, views, generation, || Arc::new(rails_paths::files_under(views, usize::MAX)))
 }
 
 /// A created or deleted file may add or remove a view root; a changed one only when it is the lockfile that names the gems.
@@ -396,12 +404,8 @@ impl Backend {
         if let Some(files) = self.templates.get(&views) {
             return Ok(Arc::clone(&files));
         }
-        let templates = Arc::clone(&self.templates);
-        off_server_task(move || {
-            let files = rails_paths::files_under(&views, usize::MAX);
-            Arc::clone(&*templates.entry(views).or_insert_with(|| Arc::new(files)))
-        })
-        .await
+        let (templates, generation) = (Arc::clone(&self.templates), Arc::clone(&self.cache_generation));
+        off_server_task(move || views_listing(&templates, &views, &generation)).await
     }
 
     fn template_files(&self, current: &Path) -> Arc<Vec<PathBuf>> {
@@ -413,7 +417,7 @@ impl Backend {
 
     /// Every file under an app/views root, cached until a watched-file event says otherwise.
     fn views_files(&self, views: &Path) -> Arc<Vec<PathBuf>> {
-        self.templates.entry(views.to_path_buf()).or_insert_with(|| Arc::new(rails_paths::files_under(views, usize::MAX))).clone()
+        views_listing(&self.templates, views, &self.cache_generation)
     }
 
     /// Fills the app/views and locale caches of `uri`'s app in the background, so the first render or i18n request
@@ -430,7 +434,7 @@ impl Backend {
             (Arc::clone(&self.templates), Arc::clone(&self.locales), Arc::clone(&self.cache_generation), Arc::clone(&self.warming));
         tokio::task::spawn_blocking(move || {
             if let Some(views) = views {
-                fill(&templates, &views, &generation, || Arc::new(rails_paths::files_under(&views, usize::MAX)));
+                views_listing(&templates, &views, &generation);
                 warming.remove(&views);
             }
             if let Some(dir) = locales {
@@ -1661,5 +1665,22 @@ mod tests {
         .contains("locals:"));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_listing_read_across_a_watched_file_event_is_read_again() {
+        let (cache, generation, reads) = (DashMap::new(), AtomicU64::new(0), AtomicU64::new(0));
+        let root = Path::new("/app/views");
+        let read = || {
+            // The first read sees the tree before the event that comes in while it runs.
+            if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                generation.fetch_add(1, Ordering::SeqCst);
+                return "before";
+            }
+            "after"
+        };
+        assert_eq!(fill(&cache, root, &generation, read), "after");
+        assert_eq!(*cache.get(root).unwrap(), "after");
+        assert_eq!(fill(&cache, root, &generation, || "other"), "after", "a filled entry is kept");
     }
 }
