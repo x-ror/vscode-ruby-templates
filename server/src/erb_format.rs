@@ -587,6 +587,7 @@ mod tests {
         for rigid in [
             lines(&["<div>", "<% sql = <<~SQL", "  select 1", "SQL", "%>", "</div>"]),
             lines(&["<div>", "<%= t(\"a", "  b\") %>", "</div>"]),
+            lines(&["<div>", "<%= <<~HTML.html_safe", "  <b>x</b>", "HTML", "%>", "</div>"]),
         ] {
             assert_eq!(fmt(&rigid), rigid.replacen("\n<%", "\n  <%", 1));
         }

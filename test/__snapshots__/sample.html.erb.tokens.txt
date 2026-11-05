@@ -330,4 +330,48 @@
    "/"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.begin.html
    "style"                     meta.embedded.block.html > meta.tag.metadata.style.end.html > entity.name.tag.html
    ">"                         meta.embedded.block.html > meta.tag.metadata.style.end.html > punctuation.definition.tag.end.html
+"<% sql = <<~SQL"
+   "<%"                        meta.embedded.block > punctuation.section.embedded.begin
+   " sql "                     meta.embedded.block > source.ruby
+   "="                         meta.embedded.block > source.ruby > keyword.operator.assignment.ruby
+   "<<~SQL"                    meta.embedded.block > source.ruby > meta.embedded.block.sql > string.definition.begin.ruby
+"  SELECT * FROM users WHERE id = #{id}"
+   "SELECT"                    meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > keyword.other.DML.sql
+   "*"                         meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > keyword.operator.star.sql
+   "FROM"                      meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > keyword.other.DML.sql
+   " users "                   meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql
+   "WHERE"                     meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > keyword.other.DML.sql
+   " id "                      meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql
+   "="                         meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > keyword.operator.comparison.sql
+   "#{"                        meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > meta.embedded.line.ruby > punctuation.section.embedded.begin.ruby
+   "id"                        meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > meta.embedded.line.ruby > source.ruby
+   "}"                         meta.embedded.block > source.ruby > meta.embedded.block.sql > source.sql > meta.embedded.line.ruby > punctuation.section.embedded.end.ruby
+"SQL"
+   "SQL"                       meta.embedded.block > source.ruby > meta.embedded.block.sql > string.definition.end.ruby
+"%>"
+   "%>"                        meta.embedded.block > punctuation.section.embedded.end
+"<%= <<~HTML.html_safe"
+   "<%="                       meta.embedded.line > punctuation.section.embedded.begin
+   "<<~HTML"                   meta.embedded.line > source.ruby > meta.embedded.block.html > string.definition.begin.ruby
+   ".html_safe"                meta.embedded.line > source.ruby > meta.embedded.block.html > text.html
+"  <b>x</b>"
+   "<"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.start.html > punctuation.definition.tag.begin.html
+   "b"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.start.html > entity.name.tag.html
+   ">"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.start.html > punctuation.definition.tag.end.html
+   "x"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html
+   "</"                        meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.end.html > punctuation.definition.tag.begin.html
+   "b"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.end.html > entity.name.tag.html
+   ">"                         meta.embedded.line > source.ruby > meta.embedded.block.html > text.html > meta.tag.inline.b.end.html > punctuation.definition.tag.end.html
+"HTML"
+   "HTML"                      meta.embedded.line > source.ruby > meta.embedded.block.html > string.definition.end.ruby
+"%>"
+   "%>"                        meta.embedded.line > punctuation.section.embedded.end
+"<p>after heredoc</p>"
+   "<"                         meta.tag.structure.p.start.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.start.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.start.html > punctuation.definition.tag.end.html
+   "after heredoc"             
+   "</"                        meta.tag.structure.p.end.html > punctuation.definition.tag.begin.html
+   "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
+   ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
 ""
