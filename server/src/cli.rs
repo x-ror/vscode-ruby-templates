@@ -4,14 +4,15 @@ use crate::checks::{diagnostics_in, Doc, Options};
 use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
-use crate::project::Projects;
+use crate::project::{Project, ProjectKey, Projects};
 use crate::util;
+use crate::view_roots;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Uri};
 
 const OK: i32 = 0;
@@ -174,17 +175,18 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
     let files = template_files(paths);
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
     let next = AtomicUsize::new(0);
+    let view_roots = Arc::new(view_roots::Cache::default());
     let (sender, results) = mpsc::channel();
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            let (sender, next, files) = (sender.clone(), &next, &files);
+            let (sender, next, files, view_roots) = (sender.clone(), &next, &files, &view_roots);
             let work = move || {
                 let mut projects = Projects::new();
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(index) else { break };
                     // The printer hung up (stdout closed): nothing left to do.
-                    if sender.send((index, check_file(&file.path, fail_at, bad_file, &mut projects))).is_err() {
+                    if sender.send((index, check_file(&file.path, fail_at, bad_file, &mut projects, view_roots))).is_err() {
                         break;
                     }
                 }
@@ -205,11 +207,19 @@ struct Checked {
     code: i32,
 }
 
-fn check_file(path: &Path, fail_at: DiagnosticSeverity, bad_file: i32, projects: &mut Projects) -> Checked {
+fn check_file(
+    path: &Path,
+    fail_at: DiagnosticSeverity,
+    bad_file: i32,
+    projects: &mut Projects,
+    view_roots: &Arc<view_roots::Cache>,
+) -> Checked {
     let shown = path.display();
     let failed = |stderr| Checked { stdout: String::new(), stderr, code: bad_file };
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
+    // Every worker's projects of one app share its view roots.
+    projects.entry(ProjectKey::of(path)).or_insert_with(|| Project::for_template(path).with_view_cache(Arc::clone(view_roots)));
     let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
     for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &Options::default(), projects) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);

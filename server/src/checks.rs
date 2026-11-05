@@ -119,6 +119,7 @@ impl Options {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
     diagnostics_in(uri, doc, options, &mut Projects::new())
 }
@@ -254,7 +255,7 @@ fn render_diagnostics(
     haml: bool,
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<Diagnostic> {
-    if project.framework != Framework::Rails {
+    if project.framework != Framework::Rails || project.is_gem_file(path) {
         return vec![];
     }
     let Some(views) = rails_paths::views_root(path) else { return vec![] };
