@@ -35,13 +35,13 @@ const styleOf = (style: Record<string, string> | undefined) =>
 
 <figure class:list={["listing", { "listing--notes-beside": notesBeside && faults.length }]}>
   <figcaption class="listing__file">{file}</figcaption>
-  <pre class="listing__code" tabindex="0"><code>{lines.map((tokens, i) => {
+  <pre class="listing__code" tabindex="0" role="region" aria-label={`${file}, source`}><code>{lines.map((tokens, i) => {
     const line = i + 1;
     const marks = faultsByLine.get(line) ?? [];
     return (
       <span class:list={["listing__line", { "listing__line--fault": marks.length }]} id={`${id}-L${line}`}><span class="listing__number" aria-hidden="true">{line}</span><span class="listing__gutter">{marks.map((m) => (
         <a class="fault-mark" href={`#${id}-fault-${m.n}`} aria-label={`Problem ${m.n} on line ${line}`}><span class="fault-mark__number">{m.n}</span></a>
-      ))}</span><span class="listing__text">{tokens.map((t) => <span style={styleOf(t.htmlStyle)}>{t.content}</span>)}</span>{"\n"}</span>
+      ))}</span><span class="listing__text">{tokens.map((t) => <span class="listing__token" style={styleOf(t.htmlStyle)}>{t.content}</span>)}</span>{"\n"}</span>
     );
   })}</code></pre>
   {faults.length > 0 && (

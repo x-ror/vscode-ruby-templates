@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-05T12:00:00Z",
+  "title": "Design System: Ruby Templates",
+  "extensions": {
+    "colorMeta": {
+      "seal": {
+        "role": "primary",
+        "displayName": "Chef's Seal Crimson",
+        "canonical": "#c21f39",
+        "tonalRamp": [
+          "#36161b",
+          "#601f2a",
+          "#8e2435",
+          "#c1253e",
+          "#da4e64",
+          "#de929e",
+          "#e9c9ce",
+          "#f6eeef"
+        ]
+      },
+      "fault": {
+        "role": "primary",
+        "displayName": "Fault Crimson",
+        "canonical": "#b3172f",
+        "tonalRamp": [
+          "#37151a",
+          "#621d28",
+          "#922132",
+          "#c61f39",
+          "#df4960",
+          "#e08f9c",
+          "#eac8cd",
+          "#f7eeef"
+        ]
+      },
+      "fault-dark": {
+        "role": "primary",
+        "displayName": "Fault Crimson (dark theme)",
+        "canonical": "#ff8696"
+      },
+      "seal-ink": {
+        "role": "neutral",
+        "displayName": "Seal Ink",
+        "canonical": "#ffffff"
+      },
+      "link": {
+        "role": "secondary",
+        "displayName": "Quiet Slate Indigo",
+        "canonical": "#34405f",
+        "tonalRamp": [
+          "#20232d",
+          "#333a4d",
+          "#44506f",
+          "#536592",
+          "#7887b0",
+          "#a8b1c7",
+          "#d2d6df",
+          "#f1f1f4"
+        ]
+      },
+      "link-dark": {
+        "role": "secondary",
+        "displayName": "Quiet Slate Indigo (dark theme)",
+        "canonical": "#b9c1dc"
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "Menu Card",
+        "canonical": "#fcfcfa",
+        "tonalRamp": [
+          "#121216",
+          "#24232a",
+          "#3a3940",
+          "#55545c",
+          "#85848c",
+          "#c9c8ce",
+          "#ebeaee",
+          "#f5f5f3"
+        ]
+      },
+      "card-dark": {
+        "role": "neutral",
+        "displayName": "Menu Card (dark theme)",
+        "canonical": "#1c1b20"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1a1a1f",
+        "tonalRamp": [
+          "#121216",
+          "#24232a",
+          "#3a3940",
+          "#55545c",
+          "#85848c",
+          "#c9c8ce",
+          "#ebeaee",
+          "#f5f5f3"
+        ]
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Ink (dark theme)",
+        "canonical": "#ecebef"
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#55545c"
+      },
+      "ink-muted-dark": {
+        "role": "neutral",
+        "displayName": "Muted Ink (dark theme)",
+        "canonical": "#a9a8b1"
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#dcdbe1"
+      },
+      "hairline-dark": {
+        "role": "neutral",
+        "displayName": "Hairline (dark theme)",
+        "canonical": "#34333b"
+      },
+      "code-bg": {
+        "role": "neutral",
+        "displayName": "Code Ground",
+        "canonical": "#f4f4f1"
+      },
+      "code-bg-dark": {
+        "role": "neutral",
+        "displayName": "Code Ground (dark theme)",
+        "canonical": "#22272e"
+      },
+      "selection": {
+        "role": "neutral",
+        "displayName": "Selection",
+        "canonical": "#d6dcf3"
+      },
+      "selection-dark": {
+        "role": "neutral",
+        "displayName": "Selection (dark theme)",
+        "canonical": "#34407a"
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The landing page's one h1."
+      },
+      "docs-title": {
+        "displayName": "Docs Page Title",
+        "purpose": "Starlight page titles (h1) in the display voice."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Course headings; self-link to the course anchor."
+      },
+      "numeral": {
+        "displayName": "Course Numeral",
+        "purpose": "Course numbers beside their heading, muted and tabular."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Diagnostics roster section titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Landing text; course text at 68ch, ledes at 62ch."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Table heads, roster terms, fault locations; sentence case."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Listings, file names, diagnostic codes, settings."
+      }
+    },
+    "shadows": [
+      {
+        "name": "seal-rest",
+        "value": "0 6px 14px -4px var(--rt-seal-shadow)",
+        "purpose": "The install seal at rest; the only shadow in the system."
+      },
+      {
+        "name": "seal-hover",
+        "value": "0 3px 8px -3px var(--rt-seal-shadow)",
+        "purpose": "The seal settling under the pointer."
+      },
+      {
+        "name": "seal-active",
+        "value": "0 1px 2px -1px var(--rt-seal-shadow)",
+        "purpose": "The seal pressed."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "All state transitions (--rt-ease-out)."
+      },
+      {
+        "name": "link-state",
+        "value": "150ms",
+        "purpose": "Header link colour and underline, course-index hover ground."
+      },
+      {
+        "name": "seal-press",
+        "value": "180ms",
+        "purpose": "Seal transform and shadow; disabled under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "40rem",
+        "purpose": "Course index becomes one horizontally scrolling row; header link gap tightens to 0.25rem 1rem."
+      },
+      {
+        "name": "roster-fields",
+        "value": "50rem"
+      },
+      {
+        "name": "course-columns",
+        "value": "56rem"
+      },
+      {
+        "name": "listings-two-up",
+        "value": "64rem"
+      }
+    ],
+    "focusRing": {
+      "value": "outline: 2px solid var(--rt-focus); outline-offset: 2px",
+      "purpose": "One focus ring everywhere, offset 2px; -2px inside scrolling code blocks."
+    },
+    "codeThemes": {
+      "source": "site/src/lib/themes.mjs",
+      "light": "github-light with reds (#d73a49, #b31d28) to #6f42c1, green to #1d7332, grey to #5d656e, orange to #a34706",
+      "dark": "github-dark-dimmed with reds (#f47067, #ff938a) to #dcbdfb, grey to #949ea8",
+      "purpose": "No syntax token is red and every token reaches 4.5:1 on the code ground and a fault line's tint; shared by Expressive Code and the landing listings."
+    }
+  },
+  "components": [
+    {
+      "name": "Install Seal",
+      "kind": "button",
+      "refersTo": "seal",
+      "description": "The one primary action: the chef's stamp, pressed rather than bounced.",
+      "html": "<a class=\"ds-seal\" href=\"#\"><span class=\"ds-seal__glyph\" aria-hidden=\"true\">&lt;%=</span><span>Install for VS Code</span></a>",
+      "css": ".ds-seal { display: inline-flex; align-items: center; gap: 0.875rem; padding: 0.75rem 1.375rem 0.75rem 0.75rem; background: var(--rt-seal, #c21f39); color: var(--rt-seal-ink, #fff); border-radius: 10px; font-family: var(--rt-font, 'Schibsted Grotesk Variable', system-ui, sans-serif); font-weight: 700; font-size: 1.0625rem; text-decoration: none; box-shadow: 0 6px 14px -4px rgb(70 6 18 / 0.45); transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-seal__glyph { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border: 2px solid rgb(255 255 255 / 0.85); border-radius: 7px; font-family: var(--rt-font-mono, 'JetBrains Mono Variable', ui-monospace, monospace); font-weight: 800; font-size: 0.9375rem; letter-spacing: -0.04em; } .ds-seal:hover { transform: translateY(1px); box-shadow: 0 3px 8px -3px rgb(70 6 18 / 0.45); } .ds-seal:active { transform: translateY(2px) scale(0.985); box-shadow: 0 1px 2px -1px rgb(70 6 18 / 0.45); } .ds-seal:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; } @media (prefers-reduced-motion: reduce) { .ds-seal, .ds-seal:hover, .ds-seal:active { transition: none; transform: none; } }"
+    },
+    {
+      "name": "Fault Mark",
+      "kind": "custom",
+      "refersTo": "fault-mark",
+      "description": "The one sign every diagnostic wears: a 24px target with a rotated square drawn behind the upright problem number, linked to its entry.",
+      "html": "<a class=\"ds-fault-mark\" href=\"#\" aria-label=\"Problem 1 on line 4\"><span class=\"ds-fault-mark__number\">1</span></a>",
+      "css": ".ds-fault-mark { position: relative; display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; color: var(--rt-card, #fcfcfa); font-family: var(--rt-font, 'Schibsted Grotesk Variable', system-ui, sans-serif); font-size: 0.6875rem; font-weight: 800; line-height: 1; text-decoration: none; } .ds-fault-mark::before { content: \"\"; position: absolute; inset: 0; width: 1.0625rem; height: 1.0625rem; margin: auto; rotate: 45deg; background: var(--rt-fault, #b3172f); border-radius: 3px; } .ds-fault-mark__number { position: relative; } .ds-fault-mark:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; }"
+    },
+    {
+      "name": "Listing",
+      "kind": "card",
+      "refersTo": "listing",
+      "description": "A template file: caption, numbered anchored lines, fault gutter, and the numbered problem list.",
+      "html": "<figure class=\"ds-listing\"><figcaption class=\"ds-listing__file\">app/views/users/index.html.erb</figcaption><pre class=\"ds-listing__code\" tabindex=\"0\" role=\"region\" aria-label=\"app/views/users/index.html.erb, source\"><code><span class=\"ds-listing__line\" id=\"u-L1\"><span class=\"ds-listing__number\" aria-hidden=\"true\">1</span><span class=\"ds-listing__gutter\"></span><span class=\"ds-listing__token\" style=\"color: #6f42c1\">&lt;%</span><span class=\"ds-listing__token\"> @users.each </span><span class=\"ds-listing__token\" style=\"color: #6f42c1\">do</span><span class=\"ds-listing__token\"> |user| </span><span class=\"ds-listing__token\" style=\"color: #6f42c1\">%&gt;</span></span>\n<span class=\"ds-listing__line ds-listing__line--fault\" id=\"u-L2\"><span class=\"ds-listing__number\" aria-hidden=\"true\">2</span><span class=\"ds-listing__gutter\"><a class=\"ds-fault-mark\" href=\"#u-fault-1\" aria-label=\"Problem 1 on line 2\"><span class=\"ds-fault-mark__number\">1</span></a></span><span class=\"ds-listing__token\" style=\"color: #6f42c1\">  &lt;%=</span><span class=\"ds-listing__token\"> render user </span><span class=\"ds-listing__token\" style=\"color: #6f42c1\">%&gt;</span></span></code></pre><ol class=\"ds-fault-list\" aria-label=\"Problems in app/views/users/index.html.erb\"><li class=\"ds-fault-list__item\" id=\"u-fault-1\"><span class=\"ds-fault-mark\" aria-hidden=\"true\"><span class=\"ds-fault-mark__number\">1</span></span><a class=\"ds-fault-list__location\" href=\"#u-L2\">Line 2, column 3</a><span class=\"ds-fault-list__message\">unexpected end-of-input</span><code class=\"ds-fault-list__code\">erb-syntax</code></li></ol></figure>",
+      "css": ".ds-listing { margin: 0; background: var(--rt-code-bg, #f4f4f1); border: 1px solid var(--rt-hairline, #dcdbe1); border-radius: 6px; overflow: hidden; color: var(--rt-ink, #1a1a1f); } .ds-listing__file { padding: 0.5rem 1rem; font-family: var(--rt-font-mono, 'JetBrains Mono Variable', monospace); font-size: 0.8125rem; color: var(--rt-ink-muted, #55545c); border-bottom: 1px solid var(--rt-hairline, #dcdbe1); } .ds-listing__code { margin: 0; padding: 0.75rem 0; overflow-x: auto; font-family: var(--rt-font-mono, 'JetBrains Mono Variable', monospace); font-size: 0.875rem; line-height: 1.75; } .ds-listing__code:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: -2px; } .ds-listing__line { display: grid; grid-template-columns: 2.75rem 1.75rem max-content; } .ds-listing__line--fault { background: color-mix(in srgb, var(--rt-fault, #b3172f) 9%, transparent); } .ds-listing__line:target { background: color-mix(in srgb, var(--rt-focus, #34405f) 16%, transparent); } .ds-listing__number { padding-right: 0.75rem; text-align: right; color: var(--rt-ink-muted, #55545c); font-variant-numeric: tabular-nums; user-select: none; } .ds-listing__gutter { display: flex; align-items: center; } .ds-fault-mark { position: relative; display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; color: var(--rt-card, #fcfcfa); font-family: var(--rt-font, system-ui, sans-serif); font-size: 0.6875rem; font-weight: 800; line-height: 1; text-decoration: none; } .ds-fault-mark::before { content: \"\"; position: absolute; inset: 0; width: 1.0625rem; height: 1.0625rem; margin: auto; rotate: 45deg; background: var(--rt-fault, #b3172f); border-radius: 3px; } .ds-fault-mark__number { position: relative; } .ds-fault-list { margin: 0; padding: 0.25rem 1rem 0.75rem; list-style: none; border-top: 1px solid var(--rt-hairline, #dcdbe1); background: var(--rt-card, #fcfcfa); font-family: var(--rt-font, system-ui, sans-serif); } .ds-fault-list__item { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); column-gap: 0.75rem; padding-block: 0.75rem; } .ds-fault-list__item:target { background: color-mix(in srgb, var(--rt-focus, #34405f) 12%, transparent); } .ds-fault-list__item > .ds-fault-mark { grid-row: span 3; margin-top: 0.25rem; } .ds-fault-list__location { font-size: 0.875rem; font-weight: 650; color: var(--rt-link, #34405f); text-underline-offset: 0.2em; } .ds-fault-list__message { font-size: 1rem; } .ds-fault-list__code { justify-self: start; font-family: var(--rt-font-mono, monospace); font-size: 0.8125rem; color: var(--rt-ink-muted, #55545c); }"
+    },
+    {
+      "name": "Course",
+      "kind": "custom",
+      "refersTo": "course",
+      "description": "A numbered section of the card: numeral beside a self-linking heading, double rule between courses.",
+      "html": "<section class=\"ds-course\" id=\"checks\" aria-labelledby=\"checks-title\"><p class=\"ds-course__numeral\" aria-hidden=\"true\">01</p><div><h2 class=\"ds-course__title\" id=\"checks-title\"><a class=\"ds-course__anchor\" href=\"#checks\">Errors as you type, in Rails' own words</a></h2><p class=\"ds-course__text\">The server reports what Erubi, Haml and Slim would, at the same line and column.</p><p class=\"ds-course__more\"><a class=\"ds-course__link\" href=\"#\">Every diagnostic, with how to turn it off</a></p></div></section>",
+      "css": ".ds-course { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); gap: 0.25rem 2.5rem; padding-block: 2.25rem 2.5rem; border-top: 3px double var(--rt-hairline, #dcdbe1); font-family: var(--rt-font, 'Schibsted Grotesk Variable', system-ui, sans-serif); color: var(--rt-ink, #1a1a1f); } .ds-course__numeral { margin: 0; font-size: clamp(2rem, 1.5rem + 2vw, 3.25rem); font-weight: 300; line-height: 1; letter-spacing: -0.03em; color: var(--rt-ink-muted, #55545c); font-variant-numeric: tabular-nums; } .ds-course__title { max-width: 28ch; margin: 0 0 0.75rem; font-size: clamp(1.625rem, 1.25rem + 1.4vw, 2.375rem); font-weight: 760; line-height: 1.12; letter-spacing: -0.025em; } .ds-course__anchor { color: inherit; text-decoration: none; } .ds-course__anchor:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.15em; } .ds-course__anchor:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; border-radius: 2px; } .ds-course__text { max-width: 68ch; margin: 0; color: var(--rt-ink-muted, #55545c); line-height: 1.6; } .ds-course__more { margin: 1.5rem 0 0; font-weight: 600; } .ds-course__link { color: var(--rt-link, #34405f); text-underline-offset: 0.2em; } .ds-course__link:hover { text-decoration-thickness: 2px; }"
+    },
+    {
+      "name": "Course Index",
+      "kind": "nav",
+      "refersTo": "course-index-link",
+      "description": "The card's list of courses: hairline-ruled cells with a muted numeral and the course name.",
+      "html": "<nav aria-label=\"Courses\"><ol class=\"ds-course-index\"><li class=\"ds-course-index__item\"><a class=\"ds-course-index__link\" href=\"#checks\"><span class=\"ds-course-index__numeral\" aria-hidden=\"true\">01</span>Errors as you type</a></li><li class=\"ds-course-index__item\"><a class=\"ds-course-index__link\" href=\"#rails\"><span class=\"ds-course-index__numeral\" aria-hidden=\"true\">02</span>It knows your app</a></li></ol></nav>",
+      "css": ".ds-course-index { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); margin: 0; padding: 0; list-style: none; border-block: 1px solid var(--rt-hairline, #dcdbe1); font-family: var(--rt-font, system-ui, sans-serif); } .ds-course-index__item + .ds-course-index__item { border-left: 1px solid var(--rt-hairline, #dcdbe1); } .ds-course-index__link { display: flex; align-items: baseline; gap: 0.625rem; height: 100%; padding: 0.75rem 1rem; color: var(--rt-ink, #1a1a1f); font-weight: 600; text-decoration: none; transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-course-index__link:hover { background: var(--rt-code-bg, #f4f4f1); } .ds-course-index__link:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; } .ds-course-index__numeral { color: var(--rt-ink-muted, #55545c); font-variant-numeric: tabular-nums; font-weight: 400; } @media (max-width: 40rem) { .ds-course-index { grid-auto-flow: column; grid-template-columns: none; overflow-x: auto; } .ds-course-index__link { white-space: nowrap; } }"
+    },
+    {
+      "name": "Site Header",
+      "kind": "nav",
+      "refersTo": "site-header-link",
+      "description": "Wordmark and plain links on the card ground, divided from the page by one hairline.",
+      "html": "<header class=\"ds-site-header\"><a class=\"ds-site-header__brand\" href=\"#\">Ruby Templates</a><nav aria-label=\"Site\"><ul class=\"ds-site-header__list\"><li><a class=\"ds-site-header__link\" href=\"#\">Docs</a></li><li><a class=\"ds-site-header__link\" href=\"#\">Examples</a></li><li><a class=\"ds-site-header__link\" href=\"#\">Diagnostics</a></li><li><a class=\"ds-site-header__link\" href=\"#\">Changelog</a></li></ul></nav></header>",
+      "css": ".ds-site-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem 2rem; padding: 1rem clamp(1.25rem, 5vw, 4.5rem); background: var(--rt-card, #fcfcfa); border-bottom: 1px solid var(--rt-hairline, #dcdbe1); font-family: var(--rt-font, system-ui, sans-serif); } .ds-site-header__brand { color: var(--rt-ink, #1a1a1f); font-weight: 750; font-size: 1.125rem; letter-spacing: -0.01em; text-decoration: none; } .ds-site-header__list { display: flex; flex-wrap: wrap; gap: 0.25rem 1.5rem; margin: 0; padding: 0; list-style: none; } .ds-site-header__link { display: inline-block; padding-block: 0.375rem; color: var(--rt-ink-muted, #55545c); font-weight: 550; text-decoration: none; border-bottom: 2px solid transparent; transition: color 150ms cubic-bezier(0.16, 1, 0.3, 1), border-color 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-site-header__link:hover { color: var(--rt-ink, #1a1a1f); border-bottom-color: currentColor; } .ds-site-header__link:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; border-radius: 2px; } @media (max-width: 40rem) { .ds-site-header__list { gap: 0.25rem 1rem; } }"
+    },
+    {
+      "name": "Text Link",
+      "kind": "custom",
+      "refersTo": "text-link",
+      "description": "Quiet slate-indigo link: 1px underline thickening to 2px on hover; also the seal's companion links.",
+      "html": "<p class=\"ds-prose\">Also on <a class=\"ds-link\" href=\"#\">Open VSX</a> and as the <a class=\"ds-link\" href=\"#\">npm CLI</a>.</p>",
+      "css": ".ds-prose { font-family: var(--rt-font, system-ui, sans-serif); color: var(--rt-ink, #1a1a1f); font-size: 1.0625rem; line-height: 1.6; } .ds-link { color: var(--rt-link, #34405f); font-weight: 600; text-underline-offset: 0.2em; text-decoration-thickness: 1px; } .ds-link:hover { text-decoration-thickness: 2px; } .ds-link:focus-visible { outline: 2px solid var(--rt-focus, #34405f); outline-offset: 2px; border-radius: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Omakase Menu Card",
+    "overview": "The site is the chef's printed tasting card: one extension, the menu already chosen. Every page, landing and docs alike, is a single card-coloured reading surface ruled with hairlines, the way a printed menu is ruled. The header is the card itself, divided from the content by one rule. Sections are courses, numbered in a light numeral beside a heavy grotesk heading, and each course is a real Rails template served with what the language server says about it.\n\nColour is almost absent. Ink, a muted ink and a hairline carry the structure; a quiet slate-indigo carries links and focus; crimson appears in exactly two places, the install seal and the fault mark. Proof is typographic and literal: code is highlighted with the extension's own TextMate grammars in GitHub's light and dark-dimmed themes, recoloured so no syntax token is red, and diagnostics are the server's real messages, each pinned to its line by a numbered mark.\n\nDensity is that of a reference document, not a marketing page: generous measure limits, tight headings, tabular numbers, no panels, no gradients, no decorative imagery. The dark theme turns the card charcoal and keeps every rule the same.",
+    "keyCharacteristics": [
+      "One card-coloured surface for landing and docs; the header shares it, separated by a 1px hairline.",
+      "Hairline single rules inside a section, a triple-line double rule between courses.",
+      "Crimson only on the seal and fault marks.",
+      "Numbered courses with the numeral beside the heading.",
+      "Every course, code line, problem and diagnostic code is deep-linkable by anchor.",
+      "Two self-hosted variable faces: Schibsted Grotesk for text, JetBrains Mono for code."
+    ],
+    "rules": [
+      {
+        "name": "The Reserved Crimson Rule",
+        "body": "Crimson (seal, fault) appears only on the install seal and on fault marks, including the faint tint of a faulted code line. No crimson headings, borders, links, badges or hover states.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Link Rule",
+        "body": "The slate indigo is a link and focus colour only. It never fills a surface, a band or a button.",
+        "section": "colors"
+      },
+      {
+        "name": "The Target Wash Rule",
+        "body": "A targeted line or problem (`:target`) is washed with the focus colour (16% on a line, 12% on a problem), never with crimson.",
+        "section": "colors"
+      },
+      {
+        "name": "The Red-Free Code Rule",
+        "body": "Syntax highlighting never uses red: GitHub's reds become purple (#6f42c1 light, #dcbdfb dark), and muted tokens are darkened or lightened to 4.5:1, so a red thing in a listing is always a fault.",
+        "section": "colors"
+      },
+      {
+        "name": "The Weight Not Case Rule",
+        "body": "Emphasis comes from weight (550 to 820) and negative tracking on headings, never from uppercase or letter-spaced labels.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Count Rule",
+        "body": "Line numbers, course numerals and docs tables use tabular figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Raised Thing Rule",
+        "body": "Only the install seal casts a shadow. Panels, listings, nav and pagination are flat.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep landing and docs on the one card ground, with the header separated by a single 1px hairline.",
+      "Do mark every diagnostic with the numbered fault mark plus a numbered problem list entry giving line, column, message and code; never by colour alone.",
+      "Do give every course, code line, problem and diagnostic code an anchor id, and link marks to problems and problems back to lines.",
+      "Do number courses and put the numeral beside the heading, in the left column.",
+      "Do use the one focus ring: 2px solid slate indigo (focus), offset 2px everywhere and -2px inside scrolling code blocks.",
+      "Do name custom CSS in BEM (`block__element--modifier`) and build with semantic HTML: `section` labelled by its heading, `figure`/`figcaption` for listings, `ol` for ordered things, `dl` for roster furniture, captioned tables with scoped headers.",
+      "Do meet WCAG 2.2 AA in both themes, including every syntax token at 4.5:1 on the code ground and on a fault line's tint, 24px fault-mark targets, and scrolling code blocks that are focusable named regions (`tabindex=\"0\" role=\"region\" aria-label`).",
+      "Do highlight template code with the extension's own grammars and quote the server's real messages."
+    ],
+    "donts": [
+      "Don't use crimson anywhere but the install seal and fault marks.",
+      "Don't put an eyebrow, kicker or uppercase label above a heading; the course numeral beside it is the only marker.",
+      "Don't reintroduce a dark counter frame, a coloured navigation band or a coloured surface behind the card.",
+      "Don't fill surfaces or buttons with the link colour.",
+      "Don't add shadows to anything but the seal, or card-style panels around content.",
+      "Don't load display or text faces from a third-party CDN; both faces are self-hosted."
+    ]
+  }
+}

@@ -1,7 +1,8 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import { LANGS, THEMES } from "./src/lib/grammars.mjs";
+import { LANGS } from "./src/lib/grammars.mjs";
+import { THEMES } from "./src/lib/themes.mjs";
 
 export default defineConfig({
   site: "https://x-ror.github.io",

@@ -25,8 +25,6 @@ const EMBEDDED = {
   "text.html.markdown": "markdown",
 };
 
-export const THEMES = { light: "github-light", dark: "github-dark-dimmed" };
-
 function grammarOf({ language, path: file }) {
   const grammar = JSON.parse(fs.readFileSync(path.join(repo, file), "utf8"));
   const scopes = [
