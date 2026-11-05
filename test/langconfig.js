@@ -67,4 +67,67 @@ for (const line of [
 ])
   assert(decrease.test(line), line);
 
-console.log(`langconfig: ${cases.length + inside.length + 9} ok`);
+// Each erb-* host comments in its own syntax; only markup hosts keep the HTML pairs, indent rules and `<!--` folding.
+const readJson = (file) =>
+  JSON.parse(fs.readFileSync(new URL(file, import.meta.url), "utf8"));
+const { contributes } = readJson("../package.json");
+const erbConfig = readJson("../language-configuration/erb.json");
+const comments = {
+  "erb-js": { lineComment: "//", blockComment: ["/*", "*/"] },
+  "erb-scss": { lineComment: "//", blockComment: ["/*", "*/"] },
+  "erb-css": { blockComment: ["/*", "*/"] },
+  "erb-ruby": { lineComment: "#" },
+  "erb-yaml": { lineComment: "#" },
+  "erb-xml": { blockComment: ["<!--", "-->"] },
+  "erb-markdown": { blockComment: ["<!--", "-->"] },
+  "erb-json": erbConfig.comments,
+  "erb-text": erbConfig.comments,
+};
+const regionLine = {
+  "erb-js": "// #region",
+  "erb-scss": "// #region",
+  "erb-css": "/* #region */",
+  "erb-ruby": "# region",
+  "erb-yaml": "#region",
+};
+const hasAngle = (config) =>
+  config.brackets.some(([open]) => open === "<") ||
+  config.surroundingPairs.some(([open]) => open === "<") ||
+  config.autoClosingPairs.some(({ open }) => open === "<!--");
+for (const { id, configuration } of contributes.languages) {
+  if (!id.startsWith("erb-")) continue;
+  const config = readJson(`../${configuration}`);
+  assert.deepStrictEqual(config.comments, comments[id], id);
+  assert(
+    config.autoClosingPairs.some(({ open }) => open === "<%"),
+    `${id} closes <%`,
+  );
+  assert(
+    config.brackets.some(([open]) => open === "<%"),
+    id,
+  );
+  assert.deepStrictEqual(config.onEnterRules, erbConfig.onEnterRules, id);
+  assert.strictEqual(config.wordPattern, erbConfig.wordPattern, id);
+  const start = new RegExp(config.folding.markers.start);
+  assert(start.test("<%# region"), `${id} folds <%# region`);
+  if (regionLine[id]) {
+    assert(start.test(regionLine[id]), `${id} folds ${regionLine[id]}`);
+    assert(!hasAngle(config), `${id} has HTML pairs`);
+    assert(
+      !new RegExp(config.indentationRules.increaseIndentPattern).test("<div>"),
+      `${id} indents <div>`,
+    );
+  } else {
+    assert.deepStrictEqual(config.folding, erbConfig.folding, id);
+    assert.deepStrictEqual(
+      config.indentationRules,
+      erbConfig.indentationRules,
+      id,
+    );
+    assert(hasAngle(config), `${id} keeps HTML pairs`);
+  }
+}
+
+console.log(
+  `langconfig: ${cases.length + inside.length + 9 + Object.keys(comments).length * 5} ok`,
+);
