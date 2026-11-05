@@ -93,7 +93,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     let range = |start: usize, end: usize| index.range(start, end);
     let mut out = Vec::new();
     for tag in tags.iter().filter(|t| t.name == "img") {
-        let tag_range = range(tag.start, tag.start + 4);
+        let tag_range = range(tag.start, tag.start + "<img".len());
         let has_alt = tag.attrs.iter().any(|a| a.name == "alt" || (a.name == NO_ALT_AVAILABLE && a.value.is_none_or(|(s, e)| s == e)));
         if !tag.dynamic && !has_alt {
             out.push(coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT));

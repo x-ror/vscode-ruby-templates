@@ -121,10 +121,10 @@ impl Html {
         if let Some(comment) = after.strip_prefix("!--") {
             // `<!-->` and `<!--->` are empty comments.
             let empty = if comment.starts_with("->") { 2 } else { usize::from(comment.starts_with('>')) };
-            return (4 + empty, if empty > 0 { State::Data } else { State::Comment });
+            return ("<!--".len() + empty, if empty > 0 { State::Data } else { State::Comment });
         }
         if self.foreign_depth > 0 && after.starts_with("![CDATA[") {
-            return (9, State::Cdata);
+            return ("<![CDATA[".len(), State::Cdata);
         }
         let (closing, name_text) = after.strip_prefix('/').map_or((false, after), |name| (true, name));
         if name_text.starts_with(|c: char| c.is_ascii_alphabetic()) {

@@ -201,28 +201,10 @@ impl Erubi {
             let (code_text, code_at) = (&template[tag.code.clone()], tag.code.start);
             let tail = tag.tail;
             let mut rspace = tag.rspace;
-            let mut text = &template[pos..tag.whole.start];
+            let text = &template[pos..tag.whole.start];
             pos = tag.whole.end;
             let kind = indicator.and_then(|i| i.chars().next());
-
-            let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
-            let mut lspace = None;
-            if kind != Some('=') {
-                if text.is_empty() {
-                    lspace = is_bol.then_some("");
-                } else if text.ends_with('\n') {
-                    lspace = Some("");
-                } else if let Some(newline) = text.rfind('\n') {
-                    let line = &text[newline + 1..];
-                    if blank(line) {
-                        lspace = Some(line);
-                        text = &text[..=newline];
-                    }
-                } else if is_bol && blank(text) {
-                    lspace = Some(text);
-                    text = "";
-                }
-            }
+            let (lspace, text) = if kind == Some('=') { (None, text) } else { leading_space(text, is_bol) };
 
             is_bol = rspace.is_some();
             self.add_rendered_text(text);
@@ -271,6 +253,24 @@ impl Erubi {
         }
         self.flush_newline_if_pending();
         self.src.push_str(OUTPUT_BUFFER.trim_start());
+    }
+}
+
+/// Erubi's `lspace` for a tag that isn't output: the blanks the tag's line starts with when nothing else comes before
+/// the tag on it, and `text`, the text before the tag, without them.
+fn leading_space(text: &str, is_bol: bool) -> (Option<&str>, &str) {
+    let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
+    if text.is_empty() {
+        return (is_bol.then_some(""), text);
+    }
+    if text.ends_with('\n') {
+        return (Some(""), text);
+    }
+    match text.rfind('\n') {
+        Some(newline) if blank(&text[newline + 1..]) => (Some(&text[newline + 1..]), &text[..=newline]),
+        Some(_) => (None, text),
+        None if is_bol && blank(text) => (Some(text), ""),
+        None => (None, text),
     }
 }
 

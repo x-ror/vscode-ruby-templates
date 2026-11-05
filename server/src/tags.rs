@@ -287,7 +287,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
         tokens.extend(std::iter::from_fn(|| events.next_if(|e| e.at < start)).map(Token::Erb));
         i = start + 1;
         if html[start..].starts_with(b"<!--") {
-            i = find(&html, start + 4, b"-->").map_or(html.len(), |p| p + 3);
+            i = find(&html, start + "<!--".len(), b"-->").map_or(html.len(), |p| p + "-->".len());
             tokens.push(Token::Comment { start, end: i });
             continue;
         }
