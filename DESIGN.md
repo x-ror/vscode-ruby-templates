@@ -27,6 +27,12 @@ typography:
     fontWeight: 820
     lineHeight: 0.98
     letterSpacing: "-0.035em"
+  docs-title:
+    fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
+    fontSize: "clamp(2.25rem, 1.6rem + 2.4vw, 3.25rem)"
+    fontWeight: 800
+    lineHeight: 1.12
+    letterSpacing: "-0.03em"
   headline:
     fontFamily: "Schibsted Grotesk Variable, system-ui, sans-serif"
     fontSize: "clamp(1.625rem, 1.25rem + 1.4vw, 2.375rem)"
@@ -58,7 +64,7 @@ typography:
   code:
     fontFamily: "JetBrains Mono Variable, ui-monospace, monospace"
     fontSize: "0.875rem"
-    lineHeight: 1.7
+    lineHeight: 1.75
 rounded:
   focus: "2px"
   mark: "3px"
@@ -87,7 +93,7 @@ components:
     backgroundColor: "{colors.fault}"
     textColor: "{colors.card}"
     rounded: "{rounded.mark}"
-    size: "1.25rem"
+    size: "1.5rem"
   listing:
     backgroundColor: "{colors.code-bg}"
     textColor: "{colors.ink}"
@@ -109,6 +115,8 @@ components:
     textColor: "{colors.ink-muted}"
   site-header-link-hover:
     textColor: "{colors.ink}"
+  course-link:
+    textColor: "{colors.link}"
   text-link:
     textColor: "{colors.link}"
 ---
@@ -121,7 +129,7 @@ components:
 
 The site is the chef's printed tasting card: one extension, the menu already chosen. Every page, landing and docs alike, is a single card-coloured reading surface ruled with hairlines, the way a printed menu is ruled. The header is the card itself, divided from the content by one rule. Sections are courses, numbered in a light numeral beside a heavy grotesk heading, and each course is a real Rails template served with what the language server says about it.
 
-Colour is almost absent. Ink, a muted ink and a hairline carry the structure; a quiet slate-indigo carries links and focus; crimson appears in exactly two places, the install seal and the fault mark. Proof is typographic and literal: code is highlighted with the extension's own TextMate grammars (Shiki themes github-light and github-dark-dimmed), and diagnostics are the server's real messages, each pinned to its line by a numbered mark.
+Colour is almost absent. Ink, a muted ink and a hairline carry the structure; a quiet slate-indigo carries links and focus; crimson appears in exactly two places, the install seal and the fault mark. Proof is typographic and literal: code is highlighted with the extension's own TextMate grammars in GitHub's light and dark-dimmed themes, recoloured so no syntax token is red, and diagnostics are the server's real messages, each pinned to its line by a numbered mark.
 
 Density is that of a reference document, not a marketing page: generous measure limits, tight headings, tabular numbers, no panels, no gradients, no decorative imagery. The dark theme turns the card charcoal and keeps every rule the same.
 
@@ -164,6 +172,8 @@ A near-monochrome card in ink and hairline, one quiet slate-indigo for links and
 
 **The Target Wash Rule.** A targeted line or problem (`:target`) is washed with the focus colour (16% on a line, 12% on a problem), never with crimson.
 
+**The Red-Free Code Rule.** Syntax highlighting never uses red: GitHub's reds become purple (#6f42c1 light, #dcbdfb dark), and muted tokens are darkened or lightened to 4.5:1, so a red thing in a listing is always a fault.
+
 ## Typography
 
 **Display Font:** Schibsted Grotesk Variable (with system-ui, sans-serif)
@@ -175,12 +185,12 @@ A near-monochrome card in ink and hairline, one quiet slate-indigo for links and
 ### Hierarchy
 
 - **Display** (820, fluid 2.75 to 4.5rem, 0.98): the landing page's one h1, balanced.
-- **Headline** (760, fluid 1.625 to 2.375rem, 1.12): course headings, max 28ch unless the course is wide. Docs h1 maps to Starlight at fluid 2.25 to 3.25rem with 1.12 headings.
+- **Headline** (760, fluid 1.625 to 2.375rem, 1.12): course headings, max 28ch unless the course is wide. Docs page titles (Starlight's h1) take the display voice at 800, -0.03em, fluid 2.25 to 3.25rem, 1.12.
 - **Numeral** (300, fluid 2 to 3.25rem, tabular, muted): course numbers beside their heading.
 - **Title** (760, fluid 1.5 to 2rem): diagnostics roster section titles; diagnostic codes themselves in mono 700 at 1.25rem.
 - **Body** (400, 1.0625rem, 1.6): landing text; course text at max 68ch, ledes at 62ch, `text-wrap: pretty`.
 - **Label** (650, 0.875rem): table column heads, roster terms, fault locations. Sentence case; no uppercase, no tracking.
-- **Code** (mono, 0.875rem, 1.7): listings; file captions and fault codes at 0.8125rem muted.
+- **Code** (mono, 0.875rem, 1.75): listings; file captions and fault codes at 0.8125rem muted.
 
 ### Named Rules
 
@@ -190,7 +200,7 @@ A near-monochrome card in ink and hairline, one quiet slate-indigo for links and
 
 ## Layout
 
-Single column, max 78rem, centred, with a fluid gutter (clamp 1.25rem, 5vw, 4.5rem) shared by the header, card and footer. At 56rem the card head splits into intro and the seal column, and each course becomes a two-column grid: a 5.5rem numeral column and the body. Courses pad 2.25rem above and 2.5rem below. At 64rem listings with problems may set the problem list beside the code (1.35fr to 1fr), and paired listings (the tasting, before/after) go two-up. Below 40rem the course index stacks with horizontal rules instead of vertical ones, and table row heads wrap. Roster fields go label-beside-detail (8rem) from 50rem.
+Single column, max 78rem, centred, with a fluid gutter (clamp 1.25rem, 5vw, 4.5rem) shared by the header, card and footer. At 56rem the card head splits into intro and the seal column, and each course becomes a two-column grid: a 5.5rem numeral column and the body. Courses pad 2.25rem above and 2.5rem below. At 64rem listings with problems may set the problem list beside the code (1.35fr to 1fr), and paired listings (the tasting, before/after) go two-up. Below 40rem the course index stays one row that scrolls horizontally (labels do not wrap) so the first course stays in view, the header links tighten to a 0.25rem by 1rem gap, and table row heads wrap. Roster fields go label-beside-detail (8rem) from 50rem.
 
 Anchored elements set `scroll-margin` so a deep link lands below the header (6rem for lines and problems; nav height plus 1.5rem in the docs). Smooth scrolling only without reduced motion.
 
@@ -209,7 +219,7 @@ Flat. Depth is conveyed by rules and the code ground, not by shadow. The single 
 
 ## Shapes
 
-Mostly square. Small radii only where an object is a thing in itself: listings and setting snippets (6px), the header icon (6px), the fault mark (3px), the seal (10px) with its inner glyph frame (7px). Rules are 1px hairlines; between courses and roster sections the rule is a 3px double hairline, the printed-menu divider. The fault mark is a rounded square rotated 45 degrees, its number counter-rotated upright.
+Mostly square. Small radii only where an object is a thing in itself: listings and setting snippets (6px), the header icon (6px), the fault mark (3px), the seal (10px) with its inner glyph frame (7px). Rules are 1px hairlines; between courses and roster sections the rule is a 3px double hairline, the printed-menu divider. The fault mark is a rounded square rotated 45 degrees, drawn behind an upright number inside an unrotated 24px target.
 
 ## Components
 
@@ -219,14 +229,14 @@ The chef's stamp: the one primary action on the landing page.
 
 - **Shape:** gently rounded (10px), with a 2.75rem framed glyph (`<%=` in mono 800, 2px white frame, 7px radius) before the label.
 - **Colour:** crimson ground, white label at 700, 1.0625rem.
-- **Press:** with motion allowed, hover lowers it 1px and shrinks the shadow; active lowers 2px and scales to 0.985 (180ms, ease-out-expo). Static under reduced motion. Focus ring offset 4px.
+- **Press:** with motion allowed, hover lowers it 1px and shrinks the shadow; active lowers 2px and scales to 0.985 (180ms, ease-out-expo). Static under reduced motion. Same focus ring as everything else.
 - **Companions:** Open VSX and npm as quiet text links beneath, never as secondary buttons.
 
 ### Fault Mark
 
 The one sign every diagnostic wears.
 
-- **Shape:** 1.25rem rounded square (3px) rotated 45 degrees, its number upright inside in the grotesk at 800, 0.6875rem.
+- **Shape:** an unrotated 1.5rem (24px) target; behind its number a 1.0625rem rounded square (3px) rotated 45 degrees is drawn as a pseudo-element. The number stays upright, in the grotesk at 800, 0.6875rem.
 - **Colour:** fault ground, card-coloured number.
 - **Behaviour:** in a listing's gutter it is a link to its problem (`aria-label` "Problem n on line m"); in the problem list it is decorative and the location links back to the line.
 
@@ -234,16 +244,16 @@ The one sign every diagnostic wears.
 
 A template file with line numbers, highlighting and its problems.
 
-- **Container:** code ground, 1px hairline border, 6px radius; a figure whose caption is the file name in muted mono.
+- **Container:** code ground, 1px hairline border, 6px radius; a figure whose caption is the file name in muted mono. The scrolling code is a focusable region named after the file.
 - **Lines:** a 2.75rem line-number column, a 1.75rem fault gutter, then the code; every line has an anchor id. A faulted line takes a 9% fault tint; a targeted line a 16% focus wash.
 - **Problem list:** an ordered list on the card ground under the code (or beside it from 64rem): mark, linked "Line n, column m", the server's message, and the diagnostic code in muted mono, rows divided by hairlines.
-- **Highlighting:** the extension's own grammars through Shiki, github-light and github-dark-dimmed, switched by theme.
+- **Highlighting:** the extension's own grammars through Shiki. The themes are GitHub light and dark-dimmed, recoloured by one shared module that both Expressive Code and the landing listings use. Each token carries both theme colours and switches with the theme.
 
 ### Course
 
 A numbered section of the card.
 
-- **Structure:** a `section` labelled by its h2; the numeral sits in the left column (aria-hidden), the heading is a self-link to the section anchor, then muted course text, the proof, and a single "more" link in slate indigo.
+- **Structure:** a `section` labelled by its h2; the numeral sits in the left column (aria-hidden), the heading is a self-link to the section anchor, then muted course text, the proof, and a single "more" link in slate indigo (1px underline, 2px on hover).
 - **Divider:** a 3px double hairline between consecutive courses.
 
 ### Course Index
@@ -271,9 +281,9 @@ A finite roster with fixed furniture per code: an index of every code grouped by
 - **Do** mark every diagnostic with the numbered fault mark plus a numbered problem list entry giving line, column, message and code; never by colour alone.
 - **Do** give every course, code line, problem and diagnostic code an anchor id, and link marks to problems and problems back to lines.
 - **Do** number courses and put the numeral beside the heading, in the left column.
-- **Do** use the one focus ring: 2px solid slate indigo (focus), offset outward (inset by 2px inside scrolling code blocks).
+- **Do** use the one focus ring: 2px solid slate indigo (focus), offset 2px everywhere and -2px inside scrolling code blocks.
 - **Do** name custom CSS in BEM (`block__element--modifier`) and build with semantic HTML: `section` labelled by its heading, `figure`/`figcaption` for listings, `ol` for ordered things, `dl` for roster furniture, captioned tables with scoped headers.
-- **Do** meet WCAG 2.2 AA in both themes, including the fault mark's number on its ground and focusable scrolling code blocks (`tabindex="0"`).
+- **Do** meet WCAG 2.2 AA in both themes, including every syntax token at 4.5:1 on the code ground and on a fault line's tint, 24px fault-mark targets, and scrolling code blocks that are focusable named regions (`tabindex="0" role="region" aria-label`).
 - **Do** highlight template code with the extension's own grammars and quote the server's real messages.
 
 ### Don't:
