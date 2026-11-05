@@ -33,6 +33,11 @@ pub fn block_locals(text: &str, parsed: &Parsed, offset: usize) -> Vec<String> {
     compile_template(text, parsed, None).block_locals(offset)
 }
 
+/// The template's local variables; `comment`, the strict locals, makes the method's parameters.
+pub fn local_tokens(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Vec<crate::prism::LocalToken> {
+    compile_template(text, parsed, comment).local_tokens()
+}
+
 fn compile_template(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Compiled {
     let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
     // Haml drops the blank lines at the end, so the source ends on the last line that holds something.
