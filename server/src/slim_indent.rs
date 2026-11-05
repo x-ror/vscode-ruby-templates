@@ -146,7 +146,12 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
         }
 
         // Classify the line and gather continuation lines.
-        let (kind, consumed) = classify(&lines, i, &mut out);
+        let (kind, consumed) = classify(&lines, i);
+        // Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
+        if content.strip_prefix('-').is_some_and(is_explicit_end) {
+            let range = span_range(line_no, raw, ws.len(), raw.len());
+            out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
+        }
         stack.push(Frame { indent, kind, line: line_no, has_child: false });
         i += consumed.max(1);
     }
@@ -173,10 +178,8 @@ fn syntax_diagnostic(lines: &[&str], syntax: &slim_parser::SyntaxError) -> Diagn
 }
 
 /// Returns the line kind and how many physical lines it spans.
-fn classify(lines: &[&str], i: usize, out: &mut Vec<Diagnostic>) -> (LineKind, usize) {
+fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let raw = lines[i];
-    let ws_len = leading_ws(raw).len();
-    let content_range = span_range(i, raw, ws_len, raw.len());
     let c = raw.trim_start();
 
     // Doctype
@@ -200,14 +203,8 @@ fn classify(lines: &[&str], i: usize, out: &mut Vec<Diagnostic>) -> (LineKind, u
         return (LineKind::Verbatim, 1);
     }
     // Ruby lines
-    let ruby_prefix: Option<(&str, bool)> =
-        if let Some(rest) = c.strip_prefix('-') { Some((rest, true)) } else { strip_output_prefix(c).map(|rest| (rest, false)) };
-    if let Some((code, is_control)) = ruby_prefix {
-        let (_, consumed) = join_continuation(lines, i, code);
-        if is_control {
-            check_explicit_end(code, content_range, out);
-        }
-        return (LineKind::Other, consumed);
+    if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
+        return (LineKind::Other, continuation_lines(lines, i, code));
     }
     // Tags
     let is_tag = c.starts_with('.') || c.starts_with('#') || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic());
@@ -242,35 +239,24 @@ fn strip_output_prefix(s: &str) -> Option<&str> {
     Some(t.trim_start_matches(['<', '>', '\'']))
 }
 
-/// Join Ruby continuation lines (`,` or `\` at end).
-fn join_continuation(lines: &[&str], i: usize, first: &str) -> (String, usize) {
-    let mut code = first.to_string();
+/// Physical lines of the Ruby line `first` at line `i` and the lines that continue it (`,` or `\` at the end).
+fn continuation_lines(lines: &[&str], i: usize, first: &str) -> usize {
+    let mut code = first.trim_end().to_string();
     let mut consumed = 1;
-    loop {
-        let t = code.trim_end();
-        if !(t.ends_with(',') || t.ends_with('\\')) {
-            break;
-        }
-        let Some(next) = lines.get(i + consumed) else {
-            break;
-        };
-        let next_t = next.trim();
-        code = format!("{} {}", t.trim_end_matches('\\'), next_t);
+    while code.ends_with(',') || code.ends_with('\\') {
+        let Some(next) = lines.get(i + consumed) else { break };
         consumed += 1;
+        code.truncate(code.trim_end_matches('\\').len());
+        code.push(' ');
+        code.push_str(next.trim());
+        code.truncate(code.trim_end().len());
     }
-    (code, consumed)
+    consumed
 }
 
 /// Slim::EndInserter's `/\Aend\b/` on a `-` line.
 fn is_explicit_end(code: &str) -> bool {
     code.trim_start().strip_prefix("end").is_some_and(|after| after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_')))
-}
-
-/// Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
-fn check_explicit_end(code: &str, range: tower_lsp_server::ls_types::Range, out: &mut Vec<Diagnostic>) {
-    if is_explicit_end(code) {
-        out.push(coded(error(range, "Explicit end statements are forbidden"), code::EXPLICIT_END));
-    }
 }
 
 /// Skip over `tag.class#id attr=val (...)`, validating bracket balance (possibly across lines).

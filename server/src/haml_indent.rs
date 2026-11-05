@@ -179,7 +179,7 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     }
     // Ruby lines
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
-        return (LineKind::Ruby, continuation_len(lines, i, code));
+        return (LineKind::Ruby, continuation_lines(lines, i, code));
     }
     // Tags
     if is_haml_tag(c) {
@@ -190,7 +190,7 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
         let rest_t = rest.trim();
         let last_head_line = i + head_lines - 1;
         let tail_lines = match strip_output_prefix(rest_t) {
-            Some(code) => continuation_len(lines, last_head_line, code),
+            Some(code) => continuation_lines(lines, last_head_line, code),
             None => multiline_len(lines, last_head_line),
         };
         return (LineKind::Tag, head_lines - 1 + tail_lines);
@@ -272,7 +272,7 @@ fn multiline_len(lines: &[&str], i: usize) -> usize {
 }
 
 /// Physical lines of a Ruby line with its continuations (`,` or `\` at end, Haml `|` multiline).
-fn continuation_len(lines: &[&str], i: usize, first: &str) -> usize {
+fn continuation_lines(lines: &[&str], i: usize, first: &str) -> usize {
     let group = multiline_len(lines, i);
     if group > 1 {
         return group;
@@ -281,7 +281,9 @@ fn continuation_len(lines: &[&str], i: usize, first: &str) -> usize {
     let mut code = first.trim_end().to_string();
     while is_ruby_multiline(&code) || code.ends_with('\\') {
         let Some(next) = lines.get(i + consumed) else { break };
-        code = format!("{} {}", code.trim_end_matches('\\'), next.trim());
+        code.truncate(code.trim_end_matches('\\').len());
+        code.push(' ');
+        code.push_str(next.trim());
         consumed += 1;
     }
     consumed
