@@ -177,6 +177,19 @@ fs.writeFileSync(phoneFile, '\n\n= render "card"\n');
 const phoneText = '= render "card"\n';
 const phoneUri = fileUri(phoneFile).replace("+", "%2B");
 
+const enginePartial = path.join(
+  root,
+  "engines",
+  "blog",
+  "app",
+  "views",
+  "blog",
+  "_post.html.erb",
+);
+fs.mkdirSync(path.dirname(enginePartial), { recursive: true });
+fs.writeFileSync(enginePartial, "<article></article>\n");
+const engineUri = fileUri(path.join(views, "users", "engine.html.erb"));
+
 const startServer = () => {
   const proc = cp.spawn(bin);
   let id = 0,
@@ -262,6 +275,23 @@ const check = (label, actual, expected) => {
     "definition component",
     targets(await req("textDocument/definition", uri, 2, 14)),
     component,
+  );
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: engineUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= render "blog/post" %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "definition: render in an in-repo engine",
+    targets(await req("textDocument/definition", engineUri, 0, 14)),
+    ["/engines/blog/app/views/blog/_post.html.erb"],
   );
   check(
     "hover",

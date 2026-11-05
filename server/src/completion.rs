@@ -57,8 +57,9 @@ pub(crate) fn render_completions(
     kind: partials::RenderKind,
     prefix: &str,
     templates: &[PathBuf],
+    other_roots: &[(&Path, &[PathBuf])],
 ) -> Vec<CompletionItem> {
-    partials::render_candidates(project, path, kind, templates)
+    partials::render_candidates(project, path, kind, templates, other_roots)
         .into_iter()
         .filter(|(name, _)| name.starts_with(prefix))
         .map(|(name, file)| {
