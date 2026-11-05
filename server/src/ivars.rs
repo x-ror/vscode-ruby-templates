@@ -2,7 +2,7 @@
 //! callbacks that run for it. A partial has no action of its own, so it gets every action's.
 
 use crate::controllers::controller_path;
-use crate::partials::snake_case;
+use crate::inflect::{constant_path, snake_case};
 use crate::project::Project;
 use crate::rails_paths::{app_root, files_under, rails_relative, template_stem, views_root};
 use crate::ruby::logical_lines;
@@ -161,7 +161,7 @@ fn ancestry(app: &Path, first: PathBuf) -> Vec<(PathBuf, String)> {
         next = PARENT.captures(&text).and_then(|cap| {
             let candidates = parent_names(&text[..cap.get(0)?.start()], &cap[1]);
             candidates.iter().find_map(|name| {
-                let rel: PathBuf = name.split("::").map(snake_case).collect();
+                let rel = constant_path(name);
                 ["controllers", "mailers"].iter().map(|dir| app.join(dir).join(&rel).with_extension("rb")).find(|f| f.is_file())
             })
         });
@@ -247,7 +247,7 @@ fn included_modules_change_lookup(autoload: &[PathBuf], text: &str, seen: &mut H
 }
 
 fn module_file(autoload: &[PathBuf], constant: &str) -> Option<PathBuf> {
-    let relative: PathBuf = constant.split("::").map(snake_case).collect();
+    let relative = constant_path(constant);
     autoload.iter().map(|dir| dir.join(&relative).with_extension("rb")).find(|file| file.is_file())
 }
 

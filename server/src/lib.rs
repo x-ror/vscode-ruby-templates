@@ -23,6 +23,7 @@ mod helpers;
 mod html;
 mod html_lint;
 mod i18n;
+mod inflect;
 mod ivars;
 mod lang;
 mod lsp;

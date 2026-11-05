@@ -2,8 +2,8 @@
 //! assigns from `Model.find(…)`, or the block variable of `@relation.each do |record|` where `@relation` is
 //! `Model.where(…)`. Anything less plain answers nothing.
 
+use crate::inflect::{pluralize, snake_case};
 use crate::ivars::{self, Assignment};
-use crate::partials::{pluralize, snake_case};
 use crate::project::Project;
 use crate::rails_paths::{self, app_root};
 use crate::schema::{self, Column};
