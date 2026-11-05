@@ -152,6 +152,15 @@ impl Project {
         }
     }
 
+    /// The strict locals `text` declares, read as this project's Rails and Ruby do.
+    pub fn strict_locals(&self, text: &str) -> Option<strict_locals::Signature> {
+        strict_locals::signature(text, self.strict_locals_close(), self.prism_version())
+    }
+
+    pub fn file_strict_locals(&self, file: &Path) -> Option<strict_locals::Signature> {
+        strict_locals::file_signature(file, self.strict_locals_close(), self.prism_version())
+    }
+
     /// How Rails evals `template` of this project.
     pub(crate) fn ruby_context(&self, template: &Path) -> RubyContext {
         RubyContext {

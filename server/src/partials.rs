@@ -7,7 +7,6 @@ use crate::project::Project;
 use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
 use crate::render_call::{self, Call, HamlPipes, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
-use crate::strict_locals::{self, Close};
 use crate::util::slash_path;
 use regex::{Captures, Regex};
 use std::borrow::Cow;
@@ -832,28 +831,6 @@ pub fn render_string_prefix(line: &str, col: usize) -> Option<(RenderKind, Strin
     let probe = format!("{before}{PLACEHOLDER}\" do");
     let r = refs_without_lookups(&probe).into_iter().find(|r| r.end == before.len() + PLACEHOLDER.len())?;
     Some((r.kind, r.name.strip_suffix(PLACEHOLDER)?.to_string()))
-}
-
-/// A template's `locals: (…)` magic comment.
-#[derive(Debug, PartialEq)]
-pub struct StrictLocals {
-    /// The parameter list as written, without the parentheses.
-    pub params: String,
-    /// `(name, default)`; no default means required.
-    pub locals: Vec<(String, Option<String>)>,
-    /// `**rest` accepts any other local.
-    pub rest: bool,
-}
-
-pub fn strict_locals(text: &str, close: Close, ruby: ruby_prism::Version) -> Option<StrictLocals> {
-    let comment = strict_locals::find(text, close)?;
-    let params = if comment.blank() { "" } else { comment.parameters.trim() };
-    let (locals, rest) = prism::keyword_parameters(params, ruby)?;
-    Some(StrictLocals { params: params.to_string(), locals, rest })
-}
-
-pub fn file_strict_locals(file: &Path, close: Close, ruby: ruby_prism::Version) -> Option<StrictLocals> {
-    strict_locals(&std::fs::read_to_string(file).ok()?, close, ruby)
 }
 
 /// A `render` call read with Prism, once, from the text that starts at its line; offsets are into that text.
@@ -1984,49 +1961,6 @@ mod tests {
         let passed = |ruby| passed_locals(&read_call_with_lookup(text, r, false, ruby).0, r);
         assert_eq!(passed(LATEST), Some(vec!["a", "b"]));
         assert_eq!(passed(ruby_prism::Version::CRuby3_3), None);
-    }
-
-    #[test]
-    fn strict_locals_signature_follows_the_ruby_version() {
-        let text = "<%# locals: (a: (1\n && 2)) %>";
-        let signature = |ruby| strict_locals(text, Close::default(), ruby);
-        assert!(signature(LATEST).is_some());
-        assert!(signature(ruby_prism::Version::CRuby3_3).is_none());
-    }
-
-    #[test]
-    fn strict_locals_signature() {
-        let sig =
-            strict_locals("<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>", Close::default(), LATEST).unwrap();
-        assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
-        assert_eq!(
-            sig.locals,
-            vec![
-                ("title".to_string(), None),
-                ("items".to_string(), Some("[1, 2]".to_string())),
-                ("label".to_string(), Some("t(\"a, b\")".to_string())),
-            ]
-        );
-        assert!(sig.rest);
-        let none = strict_locals("<%# locals: () -%>", Close::default(), LATEST).unwrap();
-        assert!(none.locals.is_empty() && !none.rest);
-        assert_eq!(
-            strict_locals("-# locals: (user: nil)", Close::default(), LATEST).unwrap().locals,
-            vec![("user".to_string(), Some("nil".to_string()))]
-        );
-        assert_eq!(
-            strict_locals("<%# locals: (a: ')') %>", Close::default(), LATEST).unwrap().locals,
-            vec![("a".to_string(), Some("')'".to_string()))]
-        );
-        let no_rest = strict_locals("<%# locals: (**nil) %>", Close::default(), LATEST).unwrap();
-        assert_eq!((no_rest.locals.len(), no_rest.rest), (0, false));
-        // Lazy: stops at the `)` that closes the tag, not the last one on the line.
-        assert_eq!(strict_locals("<%# locals: (a:) %> <%= f(1) %>", Close::default(), LATEST).unwrap().params, "a:");
-        let multi = strict_locals("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>", Close::default(), LATEST).unwrap();
-        assert_eq!(multi.locals, vec![("a".to_string(), None), ("b".to_string(), Some("[1,\n 2]".to_string()))]);
-        // ActionView needs whitespace before the parenthesis.
-        assert!(strict_locals("<%# locals:(a:) %>", Close::default(), LATEST).is_none());
-        assert!(strict_locals("<%# just a comment %>", Close::default(), LATEST).is_none());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use crate::lang::TemplateLang;
 use crate::partials::RenderRef;
 use crate::project::Project;
-use crate::strict_locals::Close;
+use crate::strict_locals::{self, Close};
 use crate::{helpers, i18n, ivars, partials, slots, stimulus, util};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -20,7 +20,7 @@ pub(crate) fn block_local_completions(names: Vec<String>, typed: &str) -> Vec<Co
 
 /// The current template's own strict locals, as completions.
 pub(crate) fn local_completions(text: &str, typed: &str, close: Close, ruby: ruby_prism::Version) -> Vec<CompletionItem> {
-    let Some(sig) = partials::strict_locals(text, close, ruby) else { return vec![] };
+    let Some(sig) = strict_locals::signature(text, close, ruby) else { return vec![] };
     sig.locals.into_iter().filter(|(name, _)| name.starts_with(typed)).map(|(name, default)| local_item(name, default)).collect()
 }
 
@@ -32,10 +32,7 @@ pub(crate) fn render_local_completions(
     passed: &[String],
     typed: &str,
 ) -> Vec<CompletionItem> {
-    let close = project.strict_locals_close();
-    let Some(sig) =
-        partials::resolve(project, path, r).first().and_then(|file| partials::file_strict_locals(file, close, project.prism_version()))
-    else {
+    let Some(sig) = partials::resolve(project, path, r).first().and_then(|file| project.file_strict_locals(file)) else {
         return vec![];
     };
     sig.locals

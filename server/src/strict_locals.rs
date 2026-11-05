@@ -6,6 +6,7 @@ use crate::util::{error, line_text_range, offset_to_position};
 use regex::Regex;
 use std::collections::HashSet;
 use std::ops::Range as ByteRange;
+use std::path::Path;
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::{Diagnostic, Range};
 
@@ -95,6 +96,54 @@ fn closes_comment(rest: &str) -> bool {
     after_tag_space.strip_prefix('-').unwrap_or(after_tag_space).starts_with("%>")
         || after_line_space.is_empty()
         || after_line_space.starts_with('\n')
+}
+
+/// The parameters a template's `locals: (…)` comment declares.
+#[derive(Debug, PartialEq)]
+pub struct Signature {
+    /// The parameter list as written, without the parentheses.
+    pub params: String,
+    /// `(name, default)`; no default means required.
+    pub locals: Vec<(String, Option<String>)>,
+    /// `**rest` accepts any other local.
+    pub rest: bool,
+}
+
+impl Signature {
+    pub fn declares(&self, name: &str) -> bool {
+        self.locals.iter().any(|(local, _)| local == name)
+    }
+
+    /// The required locals `passed` leaves out.
+    pub fn missing(&self, passed: &[&str]) -> Vec<&str> {
+        self.locals
+            .iter()
+            .filter(|(name, default)| default.is_none() && !passed.contains(&name.as_str()))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
+    /// The locals in `passed` the signature doesn't take, each once.
+    pub fn unknown<'a>(&self, passed: &[&'a str]) -> Vec<&'a str> {
+        let mut seen = HashSet::new();
+        passed.iter().copied().filter(|name| seen.insert(*name) && !self.rest && !self.declares(name)).collect()
+    }
+
+    pub fn takes_no_locals(&self) -> bool {
+        self.locals.is_empty() && !self.rest
+    }
+}
+
+/// The signature of `text`'s `locals:` comment, if it has one Prism parses.
+pub fn signature(text: &str, close: Close, ruby: ruby_prism::Version) -> Option<Signature> {
+    let comment = find(text, close)?;
+    let params = if comment.blank() { "" } else { comment.parameters.trim() };
+    let (locals, rest) = prism::keyword_parameters(params, ruby)?;
+    Some(Signature { params: params.to_string(), locals, rest })
+}
+
+pub fn file_signature(file: &Path, close: Close, ruby: ruby_prism::Version) -> Option<Signature> {
+    signature(&std::fs::read_to_string(file).ok()?, close, ruby)
 }
 
 /// The parameter list of the method Rails compiles a template into.
@@ -297,5 +346,61 @@ mod tests {
         assert!(diagnostics("-# locals: (a)\n", ruby_prism::Version::Latest, None).is_empty());
         // Rails' regexp needs the `)` at the end of the line; without it the line is a plain comment.
         assert_eq!(messages("-# locals: (a: 1\n%p\n"), []);
+    }
+
+    #[test]
+    fn signature_follows_the_ruby_version() {
+        let text = "<%# locals: (a: (1\n && 2)) %>";
+        let signature = |ruby| signature(text, Close::default(), ruby);
+        assert!(signature(ruby_prism::Version::Latest).is_some());
+        assert!(signature(ruby_prism::Version::CRuby3_3).is_none());
+    }
+
+    #[test]
+    fn signature_of_the_comment() {
+        let sig = signature(
+            "<%# locals: (title:, items: [1, 2], label: t(\"a, b\"), **options) -%>\n<p>",
+            Close::default(),
+            ruby_prism::Version::Latest,
+        )
+        .unwrap();
+        assert_eq!(sig.params, "title:, items: [1, 2], label: t(\"a, b\"), **options");
+        assert_eq!(
+            sig.locals,
+            vec![
+                ("title".to_string(), None),
+                ("items".to_string(), Some("[1, 2]".to_string())),
+                ("label".to_string(), Some("t(\"a, b\")".to_string())),
+            ]
+        );
+        assert!(sig.rest);
+        let none = signature("<%# locals: () -%>", Close::default(), ruby_prism::Version::Latest).unwrap();
+        assert!(none.locals.is_empty() && !none.rest);
+        assert_eq!(
+            signature("-# locals: (user: nil)", Close::default(), ruby_prism::Version::Latest).unwrap().locals,
+            vec![("user".to_string(), Some("nil".to_string()))]
+        );
+        assert_eq!(
+            signature("<%# locals: (a: ')') %>", Close::default(), ruby_prism::Version::Latest).unwrap().locals,
+            vec![("a".to_string(), Some("')'".to_string()))]
+        );
+        let no_rest = signature("<%# locals: (**nil) %>", Close::default(), ruby_prism::Version::Latest).unwrap();
+        assert_eq!((no_rest.locals.len(), no_rest.rest), (0, false));
+        // Lazy: stops at the `)` that closes the tag, not the last one on the line.
+        assert_eq!(signature("<%# locals: (a:) %> <%= f(1) %>", Close::default(), ruby_prism::Version::Latest).unwrap().params, "a:");
+        let multi = signature("<%# locals: (\n  a:,\n  b: [1,\n 2]\n) -%>", Close::default(), ruby_prism::Version::Latest).unwrap();
+        assert_eq!(multi.locals, vec![("a".to_string(), None), ("b".to_string(), Some("[1,\n 2]".to_string()))]);
+        // ActionView needs whitespace before the parenthesis.
+        assert!(signature("<%# locals:(a:) %>", Close::default(), ruby_prism::Version::Latest).is_none());
+        assert!(signature("<%# just a comment %>", Close::default(), ruby_prism::Version::Latest).is_none());
+    }
+
+    #[test]
+    fn missing_and_unknown_locals() {
+        let sig = signature("<%# locals: (title:, size: 1) %>", Close::default(), ruby_prism::Version::Latest).unwrap();
+        assert!(sig.declares("size") && !sig.declares("colour"));
+        assert_eq!(sig.missing(&["size"]), ["title"]);
+        assert_eq!(sig.unknown(&["colour", "title", "colour"]), ["colour"]);
+        assert!(!sig.takes_no_locals());
     }
 }

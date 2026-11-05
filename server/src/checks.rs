@@ -12,7 +12,7 @@ use crate::{
     tags, util,
 };
 use std::cell::LazyCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{Diagnostic, Uri};
 
@@ -292,7 +292,7 @@ struct Partials<'a> {
     project: &'a Project,
     path: &'a Path,
     resolved: HashMap<(partials::RenderKind, String, partials::Lookup), Vec<PathBuf>>,
-    signatures: HashMap<PathBuf, Option<partials::StrictLocals>>,
+    signatures: HashMap<PathBuf, Option<strict_locals::Signature>>,
 }
 
 impl Partials<'_> {
@@ -301,9 +301,9 @@ impl Partials<'_> {
         self.resolved.entry((r.kind, r.name.clone(), r.lookup.clone())).or_insert_with(|| partials::resolve(project, path, r))
     }
 
-    fn signature(&mut self, file: &Path) -> Option<&partials::StrictLocals> {
-        let (close, ruby) = (self.project.strict_locals_close(), self.project.prism_version());
-        self.signatures.entry(file.to_path_buf()).or_insert_with(|| partials::file_strict_locals(file, close, ruby)).as_ref()
+    fn signature(&mut self, file: &Path) -> Option<&strict_locals::Signature> {
+        let project = self.project;
+        self.signatures.entry(file.to_path_buf()).or_insert_with(|| project.file_strict_locals(file)).as_ref()
     }
 }
 
@@ -358,13 +358,9 @@ fn strict_locals_mismatches(project: &Project, renders: &[CheckedRender], partia
         let [file] = partials.resolve(r) else { continue };
         let file = file.clone();
         let Some(sig) = partials.signature(&file) else { continue };
-        let missing: Vec<&str> =
-            sig.locals.iter().filter(|(n, d)| d.is_none() && !passed.contains(&n.as_str())).map(|(n, _)| n.as_str()).collect();
-        let mut seen = HashSet::new();
-        let unknown: Vec<&str> =
-            passed.into_iter().filter(|p| seen.insert(*p) && !sig.rest && !sig.locals.iter().any(|(n, _)| n == p)).collect();
-        let no_locals = sig.locals.is_empty() && !sig.rest;
-        let Some(mut message) = strict_locals_message(&missing, &unknown, no_locals) else { continue };
+        let Some(mut message) = strict_locals_message(&sig.missing(&passed), &sig.unknown(&passed), sig.takes_no_locals()) else {
+            continue;
+        };
         if suffix_with_template {
             // Rails prints the absolute path; relative to the app folder is stable and readable.
             message.push_str(&format!(" for {}", rails_paths::rails_relative(&file, &file)));
