@@ -2,6 +2,7 @@
 import path from "path";
 
 import { leadingWhitespace } from "./text.js";
+import { viewsRoot } from "./views.js";
 
 // `/!` (HTML comment) and `/[` (conditional comment) are not code markers, nor is a `-#` Ruby comment.
 // Only output lines take `<`/`>` modifiers; a line-start `='x'` is Ruby `'x'` in Slim 5.
@@ -53,8 +54,8 @@ function partialPath(file, name) {
     /\.([^.+]+)(?:\+[^.]*)?\.slim$/.exec(path.basename(file))?.[1] ?? "html";
   const partial = `_${name.slice(slash + 1)}.${format}.slim`;
   if (slash < 0) return path.join(path.dirname(file), partial);
-  const views = /^(.*[/\\]app[/\\]views)[/\\]/.exec(file);
-  return views ? path.join(views[1], name.slice(0, slash), partial) : null;
+  const root = viewsRoot(file);
+  return root ? path.join(root, name.slice(0, slash), partial) : null;
 }
 
 export { toggleSlimMarker, inVerbatimBlock, wrapSlim, partialPath };

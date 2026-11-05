@@ -17,6 +17,7 @@ import {
   HTML_TAGS,
 } from "../src/autoClose.js";
 import { routesFromOutput, routesFromRun } from "../src/routes.js";
+import { viewsRoot } from "../src/views.js";
 import { engineOf, isTemplateLanguage, isErb } from "../src/languages.js";
 import {
   erbRubyArgs,
@@ -330,6 +331,19 @@ assert.strictEqual(engineOf("erb-js"), "erb");
 assert.strictEqual(engineOf("haml"), "haml");
 assert.ok(isTemplateLanguage("erb-percent") && !isTemplateLanguage("liquid"));
 assert.ok(isErb("erb") && isErb("erb-js") && !isErb("haml"));
+
+// viewsRoot: the innermost app/views, with either separator
+assert.strictEqual(
+  viewsRoot("/r/app/views/users/show.html.erb"),
+  "/r/app/views",
+);
+assert.strictEqual(
+  viewsRoot("/r/app/views/x/app/views/a/b.erb"),
+  "/r/app/views/x/app/views",
+);
+assert.strictEqual(viewsRoot("C:\\r\\app\\views\\a.erb"), "C:\\r\\app\\views");
+assert.strictEqual(viewsRoot("/r/app/views"), undefined);
+assert.strictEqual(viewsRoot("/r/myapp/views/a.erb"), undefined);
 
 // viewDir
 const appRoot = path.join(path.sep, "app-root");

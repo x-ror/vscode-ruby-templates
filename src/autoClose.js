@@ -1,4 +1,5 @@
 // Pure part of ERB tag auto-closing (no vscode dependency; tested in test/clientPure.js).
+import { viewsRoot } from "./views.js";
 
 const VOID = new Set([
   "area",
@@ -50,7 +51,6 @@ const HTML_TAGS = new Set(
     " ",
   ),
 );
-const VIEWS_DIR = /\/app\/views\//;
 const BARE_ERB_VIEW = /^[^./]+\.(erb|erubi|erubis)$/i;
 // A locale (`about.de.erb`) but not the `js` format, as the server's `is_locale` and `is_known_format` decide.
 const LOCALE_ERB_VIEW =
@@ -82,9 +82,10 @@ function isHtmlView(fileName, getText) {
     )
   )
     return true;
-  const path = fileName.replaceAll("\\", "/");
-  if (!VIEWS_DIR.test(path)) return false;
-  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (!viewsRoot(fileName)) return false;
+  const name = fileName.slice(
+    Math.max(fileName.lastIndexOf("/"), fileName.lastIndexOf("\\")) + 1,
+  );
   if (LOCALE_ERB_VIEW.test(name)) return true;
   return BARE_ERB_VIEW.test(name) && startsWithMarkup(getText());
 }
