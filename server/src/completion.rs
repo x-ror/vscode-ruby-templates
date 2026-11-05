@@ -66,33 +66,31 @@ pub(crate) fn render_completions(
         .collect()
 }
 
+/// An item whose `label` replaces `range`.
+fn replacing(range: Range, label: String, kind: CompletionItemKind, detail: impl Into<String>) -> CompletionItem {
+    CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
+        ..util::completion_item(label, kind, detail)
+    }
+}
+
 /// i18n keys for the `t("…")` string being typed; each replaces `range`.
 pub(crate) fn i18n_completions(project: &Project, locales: &i18n::Locales, path: &Path, prefix: &str, range: Range) -> Vec<CompletionItem> {
     i18n::completions(project, locales, path, prefix)
         .into_iter()
-        .map(|(key, value)| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, key.clone()))),
-            ..util::completion_item(key, CompletionItemKind::CONSTANT, value)
-        })
+        .map(|(key, value)| replacing(range, key, CompletionItemKind::CONSTANT, value))
         .collect()
 }
 
 /// Stimulus controllers, or a controller's action methods or targets, for a `data-*` value; each replaces `range`.
 pub(crate) fn stimulus_completions(path: &Path, typed: &str, slot: stimulus::Slot, range: Range) -> Vec<CompletionItem> {
-    let source = |id: &str| stimulus::resolve(path, id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
+    let source = |id: &str| stimulus::controller_source(path, id);
     let (names, kind, detail) = match slot {
         stimulus::Slot::Controller => (stimulus::controllers(path), CompletionItemKind::CLASS, "Stimulus controller".to_string()),
         stimulus::Slot::Method(id) => (stimulus::methods(&source(&id)), CompletionItemKind::METHOD, format!("{id} action")),
         stimulus::Slot::Target(id) => (stimulus::targets(&source(&id)), CompletionItemKind::FIELD, format!("{id} target")),
     };
-    names
-        .into_iter()
-        .filter(|name| name.starts_with(typed))
-        .map(|name| CompletionItem {
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, name.clone()))),
-            ..util::completion_item(name, kind, detail.clone())
-        })
-        .collect()
+    names.into_iter().filter(|name| name.starts_with(typed)).map(|name| replacing(range, name, kind, detail.clone())).collect()
 }
 
 /// `@name` for the instance variables the view's controller action assigns; each replaces `range`.
@@ -104,11 +102,8 @@ pub(crate) fn ivar_completions(project: &Project, path: &Path, typed: &str, rang
         .map(|a| {
             let label = format!("@{}", a.name);
             let from = a.file.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-            CompletionItem {
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(range, label.clone()))),
-                filter_text: Some(label.clone()),
-                ..util::completion_item(label, CompletionItemKind::VARIABLE, format!("assigned in {from}:{}", a.line + 1))
-            }
+            let detail = format!("assigned in {from}:{}", a.line + 1);
+            CompletionItem { filter_text: Some(label.clone()), ..replacing(range, label, CompletionItemKind::VARIABLE, detail) }
         })
         .collect()
 }
