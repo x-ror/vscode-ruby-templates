@@ -332,7 +332,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb_ruby::ErbTag<'a>, BlockEffect)]
 
 /// Track the tag stack and `p` state through ERB branches. When the branches disagree the blocks are closed anyway,
 /// and the stack is the one the last branch left.
-// ponytail: a block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
+// A block whose branches (including the implicit empty `else` of `if`/loops) leave different tags
 // open makes the stack path-dependent, so checking stops there. The exception is a conditional wrapper: an
 // `if`/`unless` chain that opens tags and a later chain with the same conditions at the same level that closes them.
 pub(crate) fn apply(event: &ErbEvent, stack: &mut Vec<Tag>, p: &mut PState, blocks: &mut Vec<Block>) -> Paths {

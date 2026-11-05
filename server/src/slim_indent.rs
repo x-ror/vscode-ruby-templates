@@ -114,7 +114,6 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             out.push(coded(error(span_range(line_no, raw, ws.len(), raw.len()), "Malformed indentation"), code::BAD_DEDENT));
         }
 
-        // Pop to the parent level.
         while stack.last().is_some_and(|top| top.indent >= indent) {
             stack.pop();
         }
@@ -145,7 +144,6 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
             }
         }
 
-        // Classify the line and gather continuation lines.
         let (kind, consumed) = classify(&lines, i);
         // Slim reports no line for an explicit `end`, so the diagnostic sits on its line.
         if content.strip_prefix('-').is_some_and(is_explicit_end) {
@@ -182,18 +180,15 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let raw = lines[i];
     let c = raw.trim_start();
 
-    // Doctype
     if c.starts_with("doctype") {
         return (LineKind::Doctype, 1);
     }
-    // Comments
     if is_conditional_comment(c) {
         return (LineKind::Tag { void: false, closed: false }, 1);
     }
     if c.starts_with('/') {
         return (LineKind::Verbatim, 1);
     }
-    // Embedded engines
     if let Some(name) = c.strip_suffix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
             return (LineKind::Verbatim, 1);
@@ -202,11 +197,9 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     if c.starts_with('|') || c.starts_with('\'') {
         return (LineKind::Verbatim, 1);
     }
-    // Ruby lines
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
         return (LineKind::Other, continuation_lines(lines, i, code));
     }
-    // Tags
     let is_tag = c.starts_with('.') || c.starts_with('#') || c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic());
     if is_tag {
         let (rest, consumed) = skip_tag_head(lines, i);
@@ -266,7 +259,6 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
-    // tag name / classes / ids
     let b = s.as_bytes();
     while pos < b.len() {
         let ch = b[pos] as char;

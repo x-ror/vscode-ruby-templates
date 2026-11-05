@@ -164,24 +164,20 @@ fn classify(lines: &[&str], i: usize) -> (LineKind, usize) {
     let ws_len = leading_ws(raw).len();
     let c = &raw[ws_len..];
 
-    // Comments
     if c.starts_with("-#") {
         return (LineKind::Verbatim, 1);
     }
     if c.starts_with('/') {
         return (LineKind::Other, 1);
     }
-    // Filters
     if let Some(name) = c.strip_prefix(':') {
         if !name.is_empty() && name.chars().all(|ch| ch.is_alphanumeric() || ch == '_') {
             return (LineKind::Verbatim, 1);
         }
     }
-    // Ruby lines
     if let Some(code) = c.strip_prefix('-').or_else(|| strip_output_prefix(c)) {
         return (LineKind::Ruby, continuation_lines(lines, i, code));
     }
-    // Tags
     if is_haml_tag(c) {
         let (rest, head_lines) = skip_tag_head(lines, i);
         if rest.trim_start_matches(['<', '>']).starts_with('/') {
