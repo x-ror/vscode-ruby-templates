@@ -560,7 +560,7 @@ const check = (label, actual, expected) => {
       slim_lines: ["data-hello-target", "data-hello-greeting-text-value"],
     },
   );
-  const columnChecks = { hover: {}, definition: {} };
+  const columnChecks = { hover: {}, definition: {}, tokens: {} };
   for (const [lang, text] of Object.entries({
     erb: "<% @reports.each do |report| %>\n  <p><%= report.title %></p>\n<% end %>\n",
     haml: "- @reports.each do |report|\n  %p= report.title\n",
@@ -578,6 +578,11 @@ const check = (label, actual, expected) => {
     columnChecks.hover[lang] = (
       await req("textDocument/hover", columnUri, 1, title)
     ).result?.contents.value;
+    columnChecks.tokens[lang] = (
+      await send("textDocument/semanticTokens/full", {
+        textDocument: { uri: columnUri },
+      })
+    ).result?.data;
     const found = (await req("textDocument/definition", columnUri, 1, title))
       .result;
     columnChecks.definition[lang] = found
@@ -589,6 +594,12 @@ const check = (label, actual, expected) => {
     erb: reportsHover,
     haml: reportsHover,
     slim: reportsHover,
+  });
+  // [line, column, length, type, modifiers] deltas: `report` twice, as a variable (type 1).
+  check("semantic tokens for block variables", columnChecks.tokens, {
+    erb: [0, 21, 6, 1, 0, 1, 9, 6, 1, 0],
+    haml: [0, 20, 6, 1, 0, 1, 6, 6, 1, 0],
+    slim: [0, 20, 6, 1, 0, 1, 6, 6, 1, 0],
   });
   const schemaTarget = "/db/schema.rb:7";
   check("definition on a model column", columnChecks.definition, {

@@ -1,7 +1,7 @@
 //! Whether an offset of a template, or a `render` call in it, is Ruby code rather than template text.
 
 use crate::lang::TemplateLang;
-use crate::prism::{LocalDefinition, LocalUses};
+use crate::prism::{LocalDefinition, LocalToken, LocalUses};
 use crate::strict_locals::{self, Close};
 use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
@@ -44,6 +44,16 @@ pub(crate) fn local_uses(lang: TemplateLang, text: &str, close: Close, name: &st
             haml_ruby::local_uses(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref(), name)
         }
         TemplateLang::Skim | TemplateLang::Ruby => LocalUses::default(),
+    }
+}
+
+/// The local variables the template declares or uses, from the Ruby it compiles to; a strict local is a parameter.
+pub(crate) fn local_tokens(lang: TemplateLang, text: &str, close: Close, extra_engines: &[String]) -> Vec<LocalToken> {
+    match lang {
+        TemplateLang::Erb => erb_ruby::local_tokens(text, close),
+        TemplateLang::Slim => slim_ruby::local_tokens(&slim_parser::parse(text, extra_engines)),
+        TemplateLang::Haml => haml_ruby::local_tokens(text, &haml_parser::parse_with_ruby(text), strict_locals::find(text, close).as_ref()),
+        TemplateLang::Skim | TemplateLang::Ruby => Vec::new(),
     }
 }
 

@@ -8,8 +8,8 @@ use crate::completion::{
 use crate::lang::{file_name, html_host, is_partial, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns, outline,
-    partial_rename, partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, slim_complete, slim_hover,
-    slim_outline, slim_parser, slots, stimulus, strict_locals, tags, util,
+    partial_rename, partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, semantic_tokens, slim_complete,
+    slim_hover, slim_outline, slim_parser, slots, stimulus, strict_locals, tags, util,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
@@ -574,6 +574,11 @@ impl LanguageServer for Backend {
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
+                    legend: semantic_tokens::legend(),
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    ..Default::default()
+                })),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 // Only a partial's strict locals rename; Ruby LSP renames Ruby.
@@ -911,6 +916,23 @@ impl LanguageServer for Backend {
             TemplateLang::Erb | TemplateLang::Ruby => None,
         })
         .await
+    }
+
+    async fn semantic_tokens_full(&self, p: SemanticTokensParams) -> Result<Option<SemanticTokensResult>> {
+        let uri = p.text_document.uri;
+        let Some((lang, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.text.clone())) else { return Ok(None) };
+        // Ruby LSP colours Jbuilder and Builder views; an empty answer here would blank them.
+        if !semantic_tokens::supports(lang) {
+            return Ok(None);
+        }
+        let path = util::file_path(&uri);
+        let extra_engines = self.options().extra_engines.clone();
+        let data = off_server_task(move || {
+            let close = path.map_or_else(Default::default, |path| strict_locals::Close::of(&Project::for_template(&path)));
+            semantic_tokens::tokens(lang, &text, close, &extra_engines)
+        })
+        .await?;
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data })))
     }
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
