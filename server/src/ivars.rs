@@ -26,6 +26,7 @@ static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s").unwr
 static CONDITION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:only|except|if|unless):|:(?:only|except|if|unless)\s*=>").unwrap());
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z_]\w*[?!]?").unwrap());
 static PARENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*class\s+[\w:]+\s*<\s*(?:::)?((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
+static INCLUDE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*include\s+\(?\s*((?:::)?[A-Z][\w:, ]*)").unwrap());
 static MODULE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*module\s+((?:[A-Z]\w*::)*[A-Z]\w*)").unwrap());
 /// Deep enough for `UsersController < Admin::BaseController < ApplicationController < ActionController::Base`.
 const MAX_ANCESTORS: usize = 4;
@@ -198,6 +199,56 @@ fn prefixes_of(project: &Project, view: &Path) -> Option<Vec<String>> {
         return None;
     }
     chain.iter().map(|(file, _)| controller_path(file)).collect()
+}
+
+/// Can a bare `render "x"` in `view` be checked: its folders are `view_prefixes`, and no module the controllers include
+/// nor installed gem adds folders (a gem's `app/views/<prefix>`, or gems not installed to look in) that Rails searches too.
+pub fn bare_lookup_is_certain(project: &Project, view: &Path) -> bool {
+    let Some(prefixes) = view_prefixes(project, view) else { return false };
+    let (Some((controller, _)), Some(app)) = (source_of(project, view), app_root(view)) else { return false };
+    let autoload = autoload_dirs(&app);
+    let mut seen = HashSet::new();
+    if ancestry(&app, controller).iter().any(|(_, text)| included_modules_change_lookup(&autoload, text, &mut seen)) {
+        return false;
+    }
+    project.view_roots().is_none_or(|roots| roots.gems_known && !prefixes.iter().any(|prefix| roots.gems_have_folder(prefix)))
+}
+
+/// The folders Zeitwerk autoloads from: each `app/*` (and its `concerns`), and `lib`.
+fn autoload_dirs(app: &Path) -> Vec<PathBuf> {
+    let app_folders = std::fs::read_dir(app).into_iter().flatten().flatten().map(|entry| entry.path());
+    let mut dirs: Vec<PathBuf> = app_folders
+        .filter(|dir| dir.is_dir() && dir.file_name().is_some_and(|name| name != "views"))
+        .flat_map(|dir| [dir.join("concerns"), dir])
+        .collect();
+    dirs.extend(app.parent().map(|root| root.join("lib")));
+    dirs
+}
+
+/// Does a module that `text` includes, found by Zeitwerk naming, or one of its own includes, change the lookup paths?
+fn included_modules_change_lookup(autoload: &[PathBuf], text: &str, seen: &mut HashSet<PathBuf>) -> bool {
+    let lines = logical_lines(text);
+    lines.iter().enumerate().filter_map(|(i, line)| Some((i, INCLUDE.captures(line)?))).any(|(i, cap)| {
+        let before = lines[..i].join("\n");
+        let mut names = cap[1].split(',').filter_map(|name| name.split_whitespace().next());
+        names.any(|name| {
+            let candidates = match name.strip_prefix("::") {
+                Some(rooted) => vec![rooted.to_string()],
+                None => parent_names(&before, name),
+            };
+            let Some(file) = candidates.iter().find_map(|candidate| module_file(autoload, candidate)) else { return false };
+            if !seen.insert(file.clone()) {
+                return false;
+            }
+            std::fs::read_to_string(&file)
+                .is_ok_and(|module| changes_lookup(&module) || included_modules_change_lookup(autoload, &module, seen))
+        })
+    })
+}
+
+fn module_file(autoload: &[PathBuf], constant: &str) -> Option<PathBuf> {
+    let relative: PathBuf = constant.split("::").map(snake_case).collect();
+    autoload.iter().map(|dir| dir.join(&relative).with_extension("rb")).find(|file| file.is_file())
 }
 
 fn changes_lookup(text: &str) -> bool {
@@ -489,6 +540,23 @@ end
             ["admin", "beta", "current_user", "early", "flag", "nested", "old", "second", "skipped", "user"],
             "a folder with a controller keeps its own lookup"
         );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn included_modules_are_found_by_name_across_lines_and_roots() {
+        let root = std::env::temp_dir().join(format!("rt-ivars-includes-{}", std::process::id()));
+        let changes = "module Themeable\n  included { prepend_view_path \"x\" }\nend\n";
+        crate::util::write_files(
+            &root,
+            &[("lib/themeable.rb", changes), ("app/models/admin/themeable.rb", "module Admin::Themeable\nend\n")],
+        );
+        let autoload = autoload_dirs(&root.join("app"));
+        let check = |text: &str| included_modules_change_lookup(&autoload, text, &mut HashSet::new());
+        assert!(check("class X\n  include Pagy::Backend,\n    Themeable\nend\n"), "a list over two lines");
+        assert!(!check("module Admin\n  class X\n    include Themeable\n  end\nend\n"), "Admin::Themeable comes first");
+        assert!(check("module Admin\n  class X\n    include ::Themeable\n  end\nend\n"), "rooted names skip the nesting");
+        assert!(!check("class X\n  include Pagy::Backend\nend\n"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
