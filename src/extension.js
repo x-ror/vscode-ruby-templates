@@ -16,7 +16,7 @@ import { toggleSlimTag, wrapInSlim } from "./slimCommands.js";
 import { extractPartial, extractSlimPartial } from "./extractPartial.js";
 import { switchRelated } from "./relatedFile.js";
 import { TEMPLATE_LANGS, engineOf } from "./render.js";
-import { cfg } from "./workspace.js";
+import { SECTION, settings } from "./workspace.js";
 import {
   openPreview,
   refreshPreviewOnSave,
@@ -29,16 +29,16 @@ import { registerErbAutoClose } from "./erbAutoClose.js";
 
 // The server reads these at startup, so a change restarts it.
 const SERVER_SETTINGS = [
-  "rubyTemplates.server",
-  "rubyTemplates.slim.extraEngines",
-  "rubyTemplates.slim.disabledDiagnostics",
-  "rubyTemplates.erb.disabledDiagnostics",
-  "rubyTemplates.haml.disabledDiagnostics",
-  "rubyTemplates.jbuilder.disabledDiagnostics",
-  "rubyTemplates.erb.format.alignComments",
+  `${SECTION}.server`,
+  `${SECTION}.slim.extraEngines`,
+  `${SECTION}.slim.disabledDiagnostics`,
+  `${SECTION}.erb.disabledDiagnostics`,
+  `${SECTION}.haml.disabledDiagnostics`,
+  `${SECTION}.jbuilder.disabledDiagnostics`,
+  `${SECTION}.erb.format.alignComments`,
   ...["erb", "haml", "slim"].flatMap((lang) => [
-    `rubyTemplates.${lang}.diagnostics.enabled`,
-    `rubyTemplates.${lang}.format.enabled`,
+    `${SECTION}.${lang}.diagnostics.enabled`,
+    `${SECTION}.${lang}.format.enabled`,
   ]),
 ];
 
@@ -121,7 +121,7 @@ function registerServerFormatting(context) {
   const registrations = new Map();
   const update = () => {
     for (const lang of ["erb", "haml"]) {
-      const enabled = cfg().get(`${lang}.format.enabled`, true);
+      const enabled = settings().get(`${lang}.format.enabled`, true);
       if (enabled === registrations.has(lang)) continue;
       if (!enabled) {
         registrations.get(lang).dispose();
@@ -148,8 +148,8 @@ function registerServerFormatting(context) {
     { dispose: () => registrations.forEach((r) => r.dispose()) },
     vscode.workspace.onDidChangeConfiguration(
       (e) =>
-        (e.affectsConfiguration("rubyTemplates.erb.format.enabled") ||
-          e.affectsConfiguration("rubyTemplates.haml.format.enabled")) &&
+        (e.affectsConfiguration(`${SECTION}.erb.format.enabled`) ||
+          e.affectsConfiguration(`${SECTION}.haml.format.enabled`)) &&
         update(),
     ),
   );

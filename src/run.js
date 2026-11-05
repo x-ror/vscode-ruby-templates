@@ -3,7 +3,7 @@ import cp from "child_process";
 import path from "path";
 import fs from "fs";
 
-import { cfg } from "./workspace.js";
+import { settings } from "./workspace.js";
 import { WINDOWS_COMMAND_NOT_FOUND, windowsShellCommand } from "./shell.js";
 
 // Rails boots slowly on big apps, but a hung runner shouldn't leave the preview waiting forever.
@@ -26,7 +26,7 @@ function findUp(dir, rel) {
 function run(
   cmd,
   args,
-  { useBundler = cfg().get("preview.useBundler", false), ...options },
+  { useBundler = settings().get("preview.useBundler", false), ...options },
   input,
 ) {
   return new Promise((resolve) => {

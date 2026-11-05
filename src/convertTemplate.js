@@ -3,12 +3,16 @@ import * as vscode from "vscode";
 import path from "path";
 
 import { CONVERTERS, convertedFileName } from "./convert.js";
-import { cfg, confirmOverwrite, workspaceFolderFor } from "./workspace.js";
+import {
+  commandPath,
+  confirmOverwrite,
+  workspaceFolderFor,
+} from "./workspace.js";
 import { run, firstLine } from "./run.js";
 
 /** The converted `src` of `doc`, or undefined after telling the user why the converter failed. */
 async function runConverter({ command, args, gem }, doc, src) {
-  const bin = cfg().get(`commands.${command}`, command);
+  const bin = commandPath(command);
   const r = await run(bin, args, { cwd: workspaceFolderFor(doc) }, src);
   const missingGem = r.stderr.includes(`cannot load such file -- ${gem}`);
   if (r.err?.code === "ENOENT" || missingGem) {

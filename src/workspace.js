@@ -2,9 +2,12 @@
 import * as vscode from "vscode";
 import path from "path";
 
-function cfg() {
-  return vscode.workspace.getConfiguration("rubyTemplates");
-}
+const SECTION = "rubyTemplates";
+
+const settings = () => vscode.workspace.getConfiguration(SECTION);
+
+/** The executable set in `rubyTemplates.commands.<name>`, else `name` itself. */
+const commandPath = (name) => settings().get(`commands.${name}`, name);
 
 async function exists(uri) {
   try {
@@ -35,4 +38,11 @@ function workspaceFolderFor(doc) {
   );
 }
 
-export { cfg, exists, confirmOverwrite, workspaceFolderFor };
+export {
+  SECTION,
+  settings,
+  commandPath,
+  exists,
+  confirmOverwrite,
+  workspaceFolderFor,
+};

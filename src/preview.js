@@ -2,7 +2,7 @@
 import * as vscode from "vscode";
 import path from "path";
 
-import { cfg, workspaceFolderFor } from "./workspace.js";
+import { settings, commandPath, workspaceFolderFor } from "./workspace.js";
 import {
   RAILS_RENDER_TIMEOUT_MS,
   findUp,
@@ -29,7 +29,9 @@ let previewUri;
 /** Slim's flags: pretty HTML for a render, `--rails` or plain Ruby for a compile. */
 function slimArgs(mode) {
   if (mode === "render") return ["--pretty"];
-  return cfg().get("slim.compileForRails", false) ? ["--rails"] : ["--compile"];
+  return settings().get("slim.compileForRails", false)
+    ? ["--rails"]
+    : ["--compile"];
 }
 
 /** Runs the template engine's CLI on the document, `mode` being "render" (HTML) or "compile" (Ruby source). */
@@ -38,25 +40,14 @@ function runEngine(doc, mode) {
   const cwd = workspaceFolderFor(doc);
   const src = doc.getText();
   if (lang === "slim")
-    return run(
-      cfg().get("commands.slimrb", "slimrb"),
-      slimArgs(mode),
-      { cwd },
-      src,
-    );
+    return run(commandPath("slimrb"), slimArgs(mode), { cwd }, src);
   if (lang === "haml") {
     const legacyArgs = mode === "compile" ? ["--debug"] : [];
-    return runHaml(
-      cfg().get("commands.haml", "haml"),
-      mode,
-      legacyArgs,
-      cwd,
-      src,
-    );
+    return runHaml(commandPath("haml"), mode, legacyArgs, cwd, src);
   }
   if (lang === "erb")
     return run(
-      cfg().get("commands.ruby", "ruby"),
+      commandPath("ruby"),
       erbRubyArgs(mode, doc.languageId === "erb-percent"),
       { cwd },
       src,
@@ -71,7 +62,7 @@ function runEngine(doc, mode) {
 /** Render a template document to HTML, inside the Rails app when the setting asks for it. */
 async function renderToHtml(doc) {
   const railsRoot =
-    cfg().get("preview.useRails", false) && doc.uri.scheme === "file"
+    settings().get("preview.useRails", false) && doc.uri.scheme === "file"
       ? findUp(path.dirname(doc.uri.fsPath), path.join("bin", "rails"))
       : undefined;
   if (!railsRoot) return runEngine(doc, "render");
@@ -86,7 +77,7 @@ async function renderToHtml(doc) {
 /** Render through the app's `bin/rails runner`, so helpers, routes and partials resolve. */
 async function renderInRails(root, dir, lang, src) {
   const r = await run(
-    cfg().get("commands.ruby", "ruby"),
+    commandPath("ruby"),
     [path.join("bin", "rails"), "runner", railsRenderScript(dir, lang)],
     { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS },
     src,
@@ -132,7 +123,7 @@ async function openPreview(context) {
 /** Re-renders the preview when the document it shows is saved. */
 function refreshPreviewOnSave(doc) {
   if (!previewPanel || !previewUri) return;
-  if (!cfg().get("preview.refreshOnSave", true)) return;
+  if (!settings().get("preview.refreshOnSave", true)) return;
   if (doc.uri.toString() === previewUri) renderPreview(doc);
 }
 

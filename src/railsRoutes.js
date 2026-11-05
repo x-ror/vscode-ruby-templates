@@ -4,11 +4,11 @@ import path from "path";
 
 import { notifyServer, onServerStarted } from "./client.js";
 import { ROUTES_SCRIPT, routesFromRun } from "./routes.js";
-import { cfg } from "./workspace.js";
+import { SECTION, settings, commandPath } from "./workspace.js";
 import { RAILS_RENDER_TIMEOUT_MS, findUp, run, firstLine } from "./run.js";
 import { TEMPLATE_LANGS, engineOf } from "./render.js";
 
-const routesEnabled = () => cfg().get("routes.enabled", true);
+const routesEnabled = () => settings().get("routes.enabled", true);
 
 // Booting runs the app's own code: only for an app inside a trusted workspace folder, never for a file
 // opened on its own (an empty window is trusted by default) or a bin/rails found above the folder.
@@ -34,7 +34,7 @@ async function sendRoutes({ output }, root, routes) {
 
 async function loadRoutes(state, root) {
   const r = await run(
-    cfg().get("commands.ruby", "ruby"),
+    commandPath("ruby"),
     [path.join("bin", "rails"), "runner", ROUTES_SCRIPT],
     { cwd: root, timeout: RAILS_RENDER_TIMEOUT_MS, useBundler: false },
   );
@@ -88,8 +88,8 @@ function routesFileChanged(state, uri) {
 
 function settingsChanged(state, e) {
   if (
-    !e.affectsConfiguration("rubyTemplates.routes") &&
-    !e.affectsConfiguration("rubyTemplates.commands.ruby")
+    !e.affectsConfiguration(`${SECTION}.routes`) &&
+    !e.affectsConfiguration(`${SECTION}.commands.ruby`)
   )
     return;
   state.failed.clear();

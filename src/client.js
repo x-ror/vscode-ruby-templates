@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import path from "path";
 import fs from "fs";
+import { SECTION, settings } from "./workspace.js";
 import {
   LanguageClient,
   State,
@@ -20,9 +21,7 @@ function serverBinaryName() {
 
 /** Locate the language server: setting → bundled per-platform binary → dev build → PATH. */
 function findServer(context) {
-  const configured = vscode.workspace
-    .getConfiguration("rubyTemplates")
-    .get("server.path", "");
+  const configured = settings().get("server.path", "");
   if (configured && fs.existsSync(configured)) return configured;
   const target = `${process.platform}-${process.arch}`;
   const candidates = [
@@ -39,7 +38,7 @@ function findServer(context) {
 }
 
 async function doStart(context, output) {
-  const config = vscode.workspace.getConfiguration("rubyTemplates");
+  const config = settings();
   if (!config.get("server.enabled", true)) return;
   const switches = (lang, format = {}) => ({
     diagnostics: { enabled: config.get(`${lang}.diagnostics.enabled`, true) },
@@ -62,7 +61,7 @@ async function doStart(context, output) {
     context.subscriptions.push(...watchers);
   }
   const started = new LanguageClient(
-    "rubyTemplates",
+    SECTION,
     "Ruby Templates Language Server",
     { command, transport: TransportKind.stdio },
     {
@@ -142,7 +141,7 @@ async function offerHelp(msg, output) {
   if (pick === "Open settings")
     vscode.commands.executeCommand(
       "workbench.action.openSettings",
-      "rubyTemplates.server",
+      `${SECTION}.server`,
     );
   if (pick === "Show log") output.show();
 }
