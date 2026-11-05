@@ -1356,6 +1356,42 @@ const check = (label, actual, expected) => {
     ],
     [["/app/helpers/users_helper.rb:1"], null],
   );
+  check(
+    "helper hover",
+    [
+      rel(
+        (await req("textDocument/hover", helperUri, 0, 6)).result?.contents
+          .value ?? "",
+      ),
+      (await req("textDocument/hover", helperUri, 0, 26)).result,
+    ],
+    [
+      "```ruby\ndef format_price(x)\n```\n\n[app/helpers/users_helper.rb:2](/app/helpers/users_helper.rb#L2)",
+      null,
+    ],
+  );
+  const shadowUri = fileUri(path.join(views, "users", "shadow.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: shadowUri,
+        languageId: "erb",
+        version: 1,
+        text: '<% [1].each do |format_price| %>\n<%= format_price %>\n<% end %>\n<%= "format_price" %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "no helper hover on a block parameter, its use or in a string",
+    [
+      (await req("textDocument/hover", shadowUri, 0, 22)).result,
+      (await req("textDocument/hover", shadowUri, 1, 6)).result,
+      (await req("textDocument/hover", shadowUri, 3, 8)).result,
+    ],
+    [null, null, null],
+  );
   const tagsUri = fileUri(path.join(views, "users", "tags.html.erb"));
   await send(
     "textDocument/didOpen",

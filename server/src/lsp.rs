@@ -869,7 +869,31 @@ impl LanguageServer for Backend {
             return Ok(markdown_hover(helper_hover(h)));
         }
         let routes = file.as_ref().map(|(_, path)| self.routes_for(path)).unwrap_or_default();
-        Ok(routes::hover(&routes, word).filter(|_| code_here).and_then(markdown_hover))
+        if let Some(md) = routes::hover(&routes, word).filter(|_| code_here) {
+            return Ok(markdown_hover(md));
+        }
+        // Ctrl+hover asks on every word: the cheap checks come first.
+        let name = helper_defs::name_at(line, col)
+            .filter(|name| code_here && !is_key(line, col) && !is_builtin_helper(name) && !ruby::KEYWORDS.contains(name));
+        // A quote opened earlier in the code makes the word text, as in `<%= "page_title" %>`.
+        let code_before = line[..col].rfind("<%").map_or(&line[..col], |tag| &line[tag + 2..col]);
+        let (Some(name), Some((_, path))) = (name.filter(|_| ruby::code_end(code_before) == ruby::CodeEnd::Code), file) else {
+            return Ok(None);
+        };
+        let (name, lang, text, offset, engines) =
+            (name.to_string(), doc.lang, doc.text.clone(), line_start + col, self.options().extra_engines.clone());
+        drop(doc);
+        off_server_task(move || {
+            // A block variable (also where it is declared) or a local the template assigns hides a helper of the same name.
+            let local = code_context::local_definition(lang, &text, offset, &engines).is_some()
+                || code_context::block_locals(lang, &text, offset, &engines).contains(&name);
+            if local {
+                return None;
+            }
+            helper_defs::hover(&path, &name)
+        })
+        .await
+        .map(|md| md.and_then(markdown_hover))
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {

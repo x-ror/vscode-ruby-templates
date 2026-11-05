@@ -62,7 +62,7 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 | `@user`                               | Completion, hover and go to definition from the action and its `before_action`s                       |
 | `users_path`, `edit_user_url`         | Completion, hover with the URL and `controller#action`, go to `config/routes.rb`                      |
 | `t(".title")`                         | Completion, hover with each locale's value, go to the locale file, find references                    |
-| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`                                          |
+| `format_price(…)`                     | Go to the helper's `def` in `app/helpers` or `helper_method`, hover with its signature and comment    |
 | `f.text_field :`                      | Form builder methods and model columns from `db/schema.rb`                                            |
 | `data-controller`, `data-action`      | Stimulus controller names, actions, targets, and the element's `-target`/`-value`/`-class` attributes |
 | `link_to`, `turbo_frame_tag`, …       | Rails helpers with snippet arguments and hover docs                                                   |
