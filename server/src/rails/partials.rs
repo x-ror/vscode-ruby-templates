@@ -162,6 +162,15 @@ pub fn first_folder_only(mut found: Vec<PathBuf>) -> Vec<PathBuf> {
     found
 }
 
+/// ` and 1 other` / ` and 2 others` after a file's name; nothing for none.
+pub fn and_others(count: usize) -> String {
+    match count {
+        0 => String::new(),
+        1 => " and 1 other".to_string(),
+        n => format!(" and {n} others"),
+    }
+}
+
 /// The formats Rails looks a partial up in for a view: its own, plus HTML from JS (`LookupContext#formats=`) and
 /// from turbo_stream (its request's Accept header is `text/vnd.turbo-stream.html, text/html`).
 fn lookup_formats(view: &str) -> impl Iterator<Item = &str> {
