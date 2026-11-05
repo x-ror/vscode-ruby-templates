@@ -1,11 +1,6 @@
 import * as vscode from "vscode";
 
-import {
-  startClient,
-  stopClient,
-  restartClient,
-  serverFormatEdits,
-} from "./client.js";
+import { registerServer, stopClient } from "./client.js";
 import {
   toggleErbTag,
   toggleErbLineComment,
@@ -16,7 +11,6 @@ import { toggleSlimTag, wrapInSlim } from "./slimCommands.js";
 import { extractPartial, extractSlimPartial } from "./extractPartial.js";
 import { switchRelated } from "./relatedFile.js";
 import { TEMPLATE_LANGS, engineOf } from "./render.js";
-import { SECTION, settings } from "./workspace.js";
 import {
   openPreview,
   refreshPreviewOnSave,
@@ -26,24 +20,6 @@ import {
 import { convert } from "./convertTemplate.js";
 import { registerRoutes } from "./railsRoutes.js";
 import { registerErbAutoClose } from "./erbAutoClose.js";
-
-// The server reads these at startup, so a change restarts it.
-const SERVER_SETTINGS = [
-  `${SECTION}.server`,
-  `${SECTION}.slim.extraEngines`,
-  `${SECTION}.slim.disabledDiagnostics`,
-  `${SECTION}.erb.disabledDiagnostics`,
-  `${SECTION}.haml.disabledDiagnostics`,
-  `${SECTION}.jbuilder.disabledDiagnostics`,
-  `${SECTION}.erb.format.alignComments`,
-  ...["erb", "haml", "slim"].flatMap((lang) => [
-    `${SECTION}.${lang}.diagnostics.enabled`,
-    `${SECTION}.${lang}.format.enabled`,
-  ]),
-];
-
-/** @type {vscode.LogOutputChannel | undefined} */
-let output;
 
 const COMMANDS = {
   "rubyTemplates.toggleErbTag": toggleErbTag,
@@ -69,21 +45,8 @@ function activate(context) {
   for (const [id, handler] of Object.entries(COMMANDS)) sub(id, handler);
   sub("rubyTemplates.preview", () => openPreview(context));
 
-  // Language server (Rust): diagnostics, go-to-partial, completions, hover.
-  output = vscode.window.createOutputChannel("Ruby Templates", {
-    log: true,
-  });
-  context.subscriptions.push(output);
-  registerServerFormatting(context);
+  const output = registerServer(context);
   registerErbAutoClose(context);
-  sub("rubyTemplates.restartServer", () => restartClient(context, output));
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (SERVER_SETTINGS.some((s) => e.affectsConfiguration(s)))
-        void restartClient(context, output);
-    }),
-  );
-  void startClient(context, output);
   registerRoutes(context, output);
 
   context.subscriptions.push(
@@ -111,53 +74,9 @@ function activate(context) {
   updateStatus();
 }
 
-// ---------------------------------------------------------------- formatting
-
-const formatWithServer = async (doc, options, range) =>
-  (await serverFormatEdits(doc, options, range)) ?? [];
-
-/** Offers the server's formatting for ERB and Haml only while `rubyTemplates.<lang>.format.enabled` is on, so another extension's formatter isn't shadowed. */
-function registerServerFormatting(context) {
-  const registrations = new Map();
-  const update = () => {
-    for (const lang of ["erb", "haml"]) {
-      const enabled = settings().get(`${lang}.format.enabled`, true);
-      if (enabled === registrations.has(lang)) continue;
-      if (!enabled) {
-        registrations.get(lang).dispose();
-        registrations.delete(lang);
-        continue;
-      }
-      registrations.set(
-        lang,
-        vscode.Disposable.from(
-          vscode.languages.registerDocumentFormattingEditProvider(lang, {
-            provideDocumentFormattingEdits: (doc, options) =>
-              formatWithServer(doc, options),
-          }),
-          vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
-            provideDocumentRangeFormattingEdits: (doc, range, options) =>
-              formatWithServer(doc, options, range),
-          }),
-        ),
-      );
-    }
-  };
-  update();
-  context.subscriptions.push(
-    { dispose: () => registrations.forEach((r) => r.dispose()) },
-    vscode.workspace.onDidChangeConfiguration(
-      (e) =>
-        (e.affectsConfiguration(`${SECTION}.erb.format.enabled`) ||
-          e.affectsConfiguration(`${SECTION}.haml.format.enabled`)) &&
-        update(),
-    ),
-  );
-}
-
 function deactivate() {
   closePreview();
-  return stopClient(output);
+  return stopClient();
 }
 
 export { activate, deactivate };

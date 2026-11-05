@@ -1,17 +1,25 @@
+// The Rust language server: diagnostics, go-to-partial, completions, hover and formatting.
 import * as vscode from "vscode";
 import path from "path";
 import fs from "fs";
-import { SECTION, settings } from "./workspace.js";
 import {
   LanguageClient,
   State,
   TransportKind,
 } from "vscode-languageclient/node";
 
+import { SECTION, settings } from "./workspace.js";
+
 /** @type {LanguageClient | undefined} */
 let client;
 /** @type {vscode.FileSystemWatcher[] | undefined} */
 let watchers;
+/** @type {vscode.LogOutputChannel | undefined} */
+let output;
+// A restarted server has lost what was sent to the previous one.
+const startListeners = new Set();
+
+const log = (msg) => output?.appendLine(`[ruby-templates] ${msg}`);
 
 function serverBinaryName() {
   return process.platform === "win32"
@@ -37,15 +45,54 @@ function findServer(context) {
   return serverBinaryName(); // hope it is on PATH
 }
 
-async function doStart(context, output) {
-  const config = settings();
-  if (!config.get("server.enabled", true)) return;
+/** The server's per-engine settings, read once at startup. */
+function initializationOptions(config) {
   const switches = (lang, format = {}) => ({
     diagnostics: { enabled: config.get(`${lang}.diagnostics.enabled`, true) },
     format: { enabled: config.get(`${lang}.format.enabled`, true), ...format },
   });
+  return {
+    slim: {
+      extraEngines: config.get("slim.extraEngines", []),
+      disabledDiagnostics: config.get("slim.disabledDiagnostics", []),
+      ...switches("slim"),
+    },
+    erb: {
+      disabledDiagnostics: config.get("erb.disabledDiagnostics", []),
+      ...switches("erb", {
+        alignComments: config.get("erb.format.alignComments", false),
+      }),
+    },
+    haml: {
+      disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
+      ...switches("haml"),
+    },
+    jbuilder: {
+      disabledDiagnostics: config.get("jbuilder.disabledDiagnostics", []),
+    },
+  };
+}
+
+// The server reads these at startup, so a change restarts it.
+const SERVER_SETTINGS = [
+  "server",
+  "slim.extraEngines",
+  "slim.disabledDiagnostics",
+  "erb.disabledDiagnostics",
+  "haml.disabledDiagnostics",
+  "jbuilder.disabledDiagnostics",
+  "erb.format.alignComments",
+  ...["erb", "haml", "slim"].flatMap((lang) => [
+    `${lang}.diagnostics.enabled`,
+    `${lang}.format.enabled`,
+  ]),
+].map((key) => `${SECTION}.${key}`);
+
+async function doStart(context) {
+  const config = settings();
+  if (!config.get("server.enabled", true)) return;
   const command = findServer(context);
-  output.appendLine(`[ruby-templates] starting language server: ${command}`);
+  log(`starting language server: ${command}`);
 
   // The server caches app/views listings and parsed locales, and a changed Gemfile.lock or .ruby-version changes its framework gates and the Ruby grammar; these events invalidate them. The folder globs
   // catch deleting/renaming a whole app/ or config/ tree, which VS Code reports as one event for the folder.
@@ -89,26 +136,7 @@ async function doStart(context, output) {
       outputChannel: output,
       // Our catch below reports the failure; returning false stops the client from also showing its own.
       initializationFailedHandler: () => false,
-      initializationOptions: {
-        slim: {
-          extraEngines: config.get("slim.extraEngines", []),
-          disabledDiagnostics: config.get("slim.disabledDiagnostics", []),
-          ...switches("slim"),
-        },
-        erb: {
-          disabledDiagnostics: config.get("erb.disabledDiagnostics", []),
-          ...switches("erb", {
-            alignComments: config.get("erb.format.alignComments", false),
-          }),
-        },
-        haml: {
-          disabledDiagnostics: config.get("haml.disabledDiagnostics", []),
-          ...switches("haml"),
-        },
-        jbuilder: {
-          disabledDiagnostics: config.get("jbuilder.disabledDiagnostics", []),
-        },
-      },
+      initializationOptions: initializationOptions(config),
       synchronize: { fileEvents: watchers },
     },
   );
@@ -122,17 +150,17 @@ async function doStart(context, output) {
     await started.start();
   } catch (e) {
     client = undefined;
-    await disposeQuietly(started, output);
+    await disposeQuietly(started);
     const msg =
       `Ruby Templates language server failed to start (${command}). ` +
-      "Install the package built for your platform, build the server from the repository with `npm run build:server`, or set rubyTemplates.server.path.";
-    output.appendLine(`[ruby-templates] ${msg}\n${e?.message || e}`);
-    void offerHelp(msg, output);
+      "Install the package built for your platform, build the server from the repository with `bun run build:server`, or set rubyTemplates.server.path.";
+    log(`${msg}\n${e?.message || e}`);
+    void offerHelp(msg);
   }
 }
 
 // Not awaited by callers: the restart queue must not wait for the notification to be dismissed.
-async function offerHelp(msg, output) {
+async function offerHelp(msg) {
   const pick = await vscode.window.showWarningMessage(
     msg,
     "Open settings",
@@ -146,38 +174,33 @@ async function offerHelp(msg, output) {
   if (pick === "Show log") output.show();
 }
 
-async function disposeQuietly(languageClient, output) {
+async function disposeQuietly(languageClient) {
   try {
     await languageClient.dispose();
   } catch (e) {
-    output.appendLine(`[ruby-templates] stopping language server: ${e}`);
+    log(`stopping language server: ${e}`);
   }
 }
 
-async function doStop(output) {
+async function doStop() {
   const old = client;
   client = undefined;
-  if (old) await disposeQuietly(old, output);
+  if (old) await disposeQuietly(old);
 }
 
 // stop() hands concurrent callers one shared promise, so overlapping restarts would each start a server.
 let queue = Promise.resolve();
-const serialize = (task, output) =>
-  (queue = queue
-    .then(task)
-    .catch((e) => output.appendLine(`[ruby-templates] ${e?.message ?? e}`)));
+const serialize = (task) =>
+  (queue = queue.then(task).catch((e) => log(e?.message ?? e)));
 
-const startClient = (context, output) =>
-  serialize(() => doStart(context, output), output);
-const stopClient = (output) => serialize(() => doStop(output), output);
-const restartClient = (context, output) =>
+const startClient = (context) => serialize(() => doStart(context));
+const stopClient = () => serialize(doStop);
+const restartClient = (context) =>
   serialize(async () => {
-    await doStop(output);
-    await doStart(context, output);
-  }, output);
+    await doStop();
+    await doStart(context);
+  });
 
-// A restarted server has lost what was sent to the previous one.
-const startListeners = new Set();
 const onServerStarted = (listener) => {
   startListeners.add(listener);
   return { dispose: () => startListeners.delete(listener) };
@@ -214,18 +237,77 @@ async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
       : await client.sendRequest("textDocument/formatting", params);
     return edits && (await client.protocol2CodeConverter.asTextEdits(edits));
   } catch (e) {
-    client.outputChannel.appendLine(
-      `[ruby-templates] formatting: ${e?.message ?? e}`,
-    );
+    log(`formatting: ${e?.message ?? e}`);
     return null;
   }
 }
 
+const FORMATTED_LANGS = ["erb", "haml"];
+const formatEnabledKey = (lang) => `${lang}.format.enabled`;
+
+/** Offers the server's formatting for ERB and Haml only while `rubyTemplates.<lang>.format.enabled` is on, so another extension's formatter isn't shadowed. */
+function registerServerFormatting(context) {
+  const registrations = new Map();
+  const update = () => {
+    for (const lang of FORMATTED_LANGS) {
+      const enabled = settings().get(formatEnabledKey(lang), true);
+      if (enabled === registrations.has(lang)) continue;
+      if (!enabled) {
+        registrations.get(lang).dispose();
+        registrations.delete(lang);
+        continue;
+      }
+      registrations.set(
+        lang,
+        vscode.Disposable.from(
+          vscode.languages.registerDocumentFormattingEditProvider(lang, {
+            provideDocumentFormattingEdits: async (doc, options) =>
+              (await serverFormatEdits(doc, options)) ?? [],
+          }),
+          vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
+            provideDocumentRangeFormattingEdits: async (doc, range, options) =>
+              (await serverFormatEdits(doc, options, range)) ?? [],
+          }),
+        ),
+      );
+    }
+  };
+  update();
+  context.subscriptions.push(
+    { dispose: () => registrations.forEach((r) => r.dispose()) },
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        FORMATTED_LANGS.some((lang) =>
+          e.affectsConfiguration(`${SECTION}.${formatEnabledKey(lang)}`),
+        )
+      )
+        update();
+    }),
+  );
+}
+
+/** Starts the server, restarting it on the restart command or a change to a setting it reads; returns its log. */
+function registerServer(context) {
+  output = vscode.window.createOutputChannel("Ruby Templates", { log: true });
+  context.subscriptions.push(
+    output,
+    vscode.commands.registerCommand("rubyTemplates.restartServer", () =>
+      restartClient(context),
+    ),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (SERVER_SETTINGS.some((s) => e.affectsConfiguration(s)))
+        void restartClient(context);
+    }),
+  );
+  registerServerFormatting(context);
+  void startClient(context);
+  return output;
+}
+
 export {
+  registerServer,
   serverFormatEdits,
-  startClient,
   stopClient,
-  restartClient,
   onServerStarted,
   notifyServer,
 };
