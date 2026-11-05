@@ -92,7 +92,7 @@ The file name picks the language id, which decides the comment syntax and the `[
 
 Every row gets the ERB and Ruby checks and, under `app/views`, the `render` checks (`unresolved-render`, `strict-locals`). Only HTML hosts add the HTML ones (unclosed or unbalanced tags, missing `alt`, duplicate `id`), linked tag renaming and attribute completion. Any other bare `.erb` (`nginx.conf.erb`) gets the ERB and Ruby checks only.
 
-The comment column applies to a line that starts outside a tag. A line inside a multi-line `<% %>` tag starts in Ruby, so <kbd>Ctrl+/</kbd> inserts `#` there; use _Toggle ERB Tag_ to comment a whole tag.
+The comment column applies to a line that starts outside a tag. On lines strictly inside a multi-line `<% %>` or `<%= %>` tag (not its `<%` or `%>` line), <kbd>Ctrl+/</kbd> toggles a Ruby `# ` instead; on the `<%` line it comments as usual, and _Toggle ERB Tag_ comments a whole tag.
 
 ### Formatting
 

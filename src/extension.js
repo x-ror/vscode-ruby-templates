@@ -12,7 +12,11 @@ import {
   serverFormatEdits,
 } from "./client.js";
 import { ROUTES_SCRIPT, routesFromOutput } from "./routes.js";
-import { toggleErbTagAt } from "./erbTags.js";
+import {
+  erbTagBodyLines,
+  toggleErbTagAt,
+  toggleRubyComment,
+} from "./erbTags.js";
 import { toggleHamlLines } from "./haml.js";
 import { extractBlock, partialFileName } from "./partial.js";
 import { convertedFileName } from "./convert.js";
@@ -71,6 +75,7 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand(cmd, fn));
 
   sub("rubyTemplates.toggleErbTag", toggleErbTag);
+  sub("rubyTemplates.toggleErbLineComment", toggleErbLineComment);
   sub("rubyTemplates.wrapInErb", wrapInErb);
   sub("rubyTemplates.preview", () => openPreview(context));
   sub("rubyTemplates.showRenderedSource", showCompiledSource);
@@ -154,6 +159,38 @@ async function toggleErbTag() {
         tag.replacement,
       );
     }
+  });
+}
+
+// The built-in toggle reads the language at column 1, which is the ERB host on an indented line.
+async function toggleErbLineComment() {
+  const ed = vscode.window.activeTextEditor;
+  if (!ed) return;
+  const doc = ed.document;
+  const lastLine = Math.max(...ed.selections.map((sel) => sel.end.line));
+  const body = erbTagBodyLines(doc.getText(), lastLine);
+  // One group per selection, like the built-in: each decides add or remove on its own.
+  const claimed = new Set();
+  const groups = ed.selections
+    .map((sel) =>
+      selectedLines(sel).filter(
+        (line) => !claimed.has(line) && claimed.add(line),
+      ),
+    )
+    .filter((group) => group.length);
+  if (!groups.length || !groups.flat().every((line) => body.has(line))) {
+    return vscode.commands.executeCommand("editor.action.commentLine");
+  }
+  const edits = toggleRubyComment(
+    groups.map((group) => group.map((line) => doc.lineAt(line).text)),
+  );
+  await ed.edit((eb) => {
+    groups.forEach((group, g) => {
+      for (const { index, start, end, text } of edits[g]) {
+        const line = group[index];
+        eb.replace(new vscode.Range(line, start, line, end), text);
+      }
+    });
   });
 }
 
