@@ -91,7 +91,7 @@ pub fn html_host(uri: &Uri, plain_erb: bool, text: &str) -> bool {
 /// Whether the first text outside ERB tags opens an HTML element (or custom element), a comment or a doctype; other
 /// XML (`<rss>`) isn't HTML.
 fn starts_with_markup(text: &str) -> bool {
-    let mut rest = text.trim_start();
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
     while let Some(after_open) = rest.strip_prefix("<%") {
         let Some((_, after_close)) = after_open.split_once("%>") else { return false };
         rest = after_close.trim_start();
@@ -186,6 +186,8 @@ mod tests {
         ] {
             assert!(!host(view, text), "{text}");
         }
+        assert!(host(view, "\u{feff}<div>"));
+        assert!(!host(view, "\u{feff}<rss>"));
         assert!(!host("/r/config/about.erb", "<div>"));
         assert!(!host("/r/app/views/pages/nginx.conf.erb", "<div>"));
     }

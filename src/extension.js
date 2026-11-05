@@ -1047,7 +1047,7 @@ function registerErbAutoClose(context) {
         );
         return;
       }
-      if (!isHtmlView(e.document.fileName)) return;
+      if (!isHtmlView(e.document.fileName, () => e.document.getText())) return;
       if (!cfg().get("erb.autoCloseTags", true)) return;
       const before = e.document.getText(
         new vscode.Range(0, 0, at.line, at.character),

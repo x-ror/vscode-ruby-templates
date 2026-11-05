@@ -45,6 +45,7 @@ write(
   "<span><%= content %></span>\n",
 );
 write("app/views/users/toggle.html.erb", "<% x %>\n");
+write("app/views/users/bare.erb", "<section>\n\n</section>\n");
 write(
   "app/views/users/unformatted.html.erb",
   "<div>\n<% if x %>\n<p>a</p>\n<% end %>\n</div>\n",
