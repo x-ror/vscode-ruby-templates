@@ -82,6 +82,7 @@ const comments = {
   "erb-markdown": { blockComment: ["<!--", "-->"] },
   "erb-json": erbConfig.comments,
   "erb-text": erbConfig.comments,
+  "erb-percent": erbConfig.comments,
 };
 const regionLine = {
   "erb-js": "// #region",

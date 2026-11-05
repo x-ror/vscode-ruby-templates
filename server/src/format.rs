@@ -216,7 +216,7 @@ fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String
         let code = util::code(d).unwrap_or_default().to_string();
         (code, d.message.chars().filter(|c| !c.is_ascii_digit()).collect())
     };
-    language_diagnostics(template.uri, template.lang, template.plain_erb, text, extra_engines, ruby).iter().map(key).collect()
+    language_diagnostics(template.uri, template.lang, template.plain_erb, false, text, extra_engines, ruby).iter().map(key).collect()
 }
 
 #[cfg(test)]

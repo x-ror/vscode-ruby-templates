@@ -375,3 +375,6 @@
    "p"                         meta.tag.structure.p.end.html > entity.name.tag.html
    ">"                         meta.tag.structure.p.end.html > punctuation.definition.tag.end.html
 ""
+"% complete (plain text in a Rails view, not Ruby)"
+   "% complete (plain text in a Rails view, not Ruby)"
+""

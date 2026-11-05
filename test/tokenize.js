@@ -56,6 +56,7 @@ const samples = {
   "sample.js.erb": "source.js.erb",
   "sample.json.erb": "source.json.erb",
   "sample.text.erb": "text.plain.erb",
+  "sample.percent.erb": "text.plain.erb-percent",
 };
 const snapshots = path.join(import.meta.dirname, "__snapshots__");
 const CONTEXT_LINES = 3;

@@ -57,7 +57,7 @@ type Ranges = Vec<(usize, usize)>;
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped.
 /// With `align_comments`, the lines inside a comment move with the line it opens on instead of keeping their bytes.
 pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
-    let doubt = crate::erb::diagnostics(text, ruby)
+    let doubt = crate::erb::diagnostics(text, ruby, false)
         .into_iter()
         .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
         .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())

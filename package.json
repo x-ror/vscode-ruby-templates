@@ -117,6 +117,13 @@
         "configuration": "./language-configuration/erb.json"
       },
       {
+        "id": "erb-percent",
+        "aliases": [
+          "Text (ERB, % lines)"
+        ],
+        "configuration": "./language-configuration/erb.json"
+      },
+      {
         "id": "erb-xml",
         "aliases": [
           "XML (ERB)"
@@ -263,6 +270,14 @@
         }
       },
       {
+        "language": "erb-percent",
+        "scopeName": "text.plain.erb-percent",
+        "path": "./syntaxes/erb-percent.tmLanguage.json",
+        "embeddedLanguages": {
+          "source.ruby": "ruby"
+        }
+      },
+      {
         "language": "erb-xml",
         "scopeName": "text.xml.erb",
         "path": "./syntaxes/erb-xml.tmLanguage.json",
@@ -359,6 +374,10 @@
       },
       {
         "language": "erb-text",
+        "path": "./snippets/erb.json"
+      },
+      {
+        "language": "erb-percent",
         "path": "./snippets/erb.json"
       },
       {

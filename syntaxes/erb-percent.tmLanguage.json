@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Text (ERB, % lines)",
+  "scopeName": "text.plain.erb-percent",
+  "patterns": [
+    {
+      "name": "constant.character.escape.erb",
+      "match": "^%%"
+    },
+    {
+      "name": "meta.embedded.line.erb",
+      "contentName": "source.ruby",
+      "begin": "^(%)",
+      "end": "$",
+      "beginCaptures": {
+        "1": {
+          "name": "punctuation.section.embedded.begin.erb"
+        }
+      },
+      "patterns": [
+        {
+          "include": "source.ruby"
+        }
+      ]
+    },
+    {
+      "include": "text.html.erb#erb"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ use crate::completion::{
     ivar_completions, local_completions, receiver_completions, render_completions, render_local_completions, slot_setter_completions,
     stimulus_completions,
 };
-use crate::lang::{file_name, html_host, is_partial, TemplateLang};
+use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::{
     assets, config, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars, model_columns, outline,
     partial_rename, partials, project::Project, rails_paths, render_call::HamlPipes, routes, ruby, schema, semantic_tokens, slim_complete,
@@ -278,7 +278,8 @@ impl Backend {
     /// and, unlogged, when formatting is switched off for its language.
     /// `lines_only` leaves out the steps that add or remove lines, which a range can't hold.
     async fn formatted(&self, uri: &Uri, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
-        let (lang, plain_erb, text) = self.docs.get(uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
+        let (lang, plain_erb, text) =
+            self.docs.get(uri).filter(|doc| !doc.percent_lines).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
         if !self.options().format_enabled(lang) {
             return None;
         }
@@ -636,7 +637,13 @@ impl LanguageServer for Backend {
         };
         self.docs.insert(
             p.text_document.uri.clone(),
-            Doc { lang, plain_erb: p.text_document.language_id == "erb", text: p.text_document.text, version: p.text_document.version },
+            Doc {
+                lang,
+                plain_erb: p.text_document.language_id == "erb",
+                percent_lines: p.text_document.language_id == "erb-percent",
+                text: p.text_document.text,
+                version: p.text_document.version,
+            },
         );
         self.local_callers.clear();
         self.warm_caches(&p.text_document.uri);
@@ -902,11 +909,12 @@ impl LanguageServer for Backend {
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
-        let Some((lang, plain_erb, text)) = self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))
+        let Some((lang, html, text)) =
+            self.docs.get(&p.text_document.uri).map(|doc| (doc.lang, doc.html_host(&p.text_document.uri), doc.text.clone()))
         else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&p.text_document.uri, plain_erb, &text), self.options().extra_engines.clone());
+        let extra_engines = self.options().extra_engines.clone();
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
@@ -937,10 +945,10 @@ impl LanguageServer for Backend {
 
     async fn document_symbol(&self, p: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         let uri = p.text_document.uri;
-        let Some((lang, plain_erb, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone())) else {
+        let Some((lang, html, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.html_host(&uri), doc.text.clone())) else {
             return Ok(None);
         };
-        let (html, extra_engines) = (html_host(&uri, plain_erb, &text), self.options().extra_engines.clone());
+        let extra_engines = self.options().extra_engines.clone();
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
@@ -1102,7 +1110,7 @@ impl LanguageServer for Backend {
 
     async fn linked_editing_range(&self, p: LinkedEditingRangeParams) -> Result<Option<LinkedEditingRanges>> {
         let uri = p.text_document_position_params.text_document.uri;
-        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && html_host(&uri, d.plain_erb, &d.text)) else {
+        let Some(doc) = self.docs.get(&uri).filter(|d| d.lang == TemplateLang::Erb && d.html_host(&uri)) else {
             return Ok(None);
         };
         let Some(offset) = util::position_to_offset(&doc.text, p.text_document_position_params.position) else { return Ok(None) };
@@ -1227,7 +1235,7 @@ impl LanguageServer for Backend {
         // The attributes the Stimulus controllers of the element being written read, from its start tag so far.
         let stimulus_attributes = |element: &str| path.as_deref().map(|p| stimulus::attributes(p, element)).unwrap_or_default();
         let indented_element = || stimulus::indented_element(&doc.text[..line_start + col]);
-        if doc.lang == TemplateLang::Erb && html_host(&uri, doc.plain_erb, &doc.text) && !code_here() {
+        if doc.lang == TemplateLang::Erb && doc.html_host(&uri) && !code_here() {
             let offset = line_start + col;
             if let Some(context) = erb_complete::context(&doc.text, offset) {
                 let tag = erb_complete::start_tag(&doc.text[..offset]).unwrap_or_default();
