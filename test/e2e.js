@@ -2251,7 +2251,7 @@ const check = (label, actual, expected) => {
   const where = (r) =>
     (r.result || []).map(
       (l) =>
-        `${path.relative(multiRoot, fileURLToPath(l.uri))}:${l.range.start.line}`,
+        `${path.relative(multiRoot, fileURLToPath(l.uri)).replaceAll(path.sep, "/")}:${l.range.start.line}`,
     );
   const lookups = [];
   for (const { name, route, page, text } of apps) {
