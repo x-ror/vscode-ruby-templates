@@ -130,6 +130,27 @@ pub fn file_uri(path: impl AsRef<Path>) -> Option<Uri> {
     }
 }
 
+/// `range` in `file`.
+pub fn file_range_location(file: impl AsRef<Path>, range: Range) -> Option<tower_lsp_server::ls_types::Location> {
+    Some(tower_lsp_server::ls_types::Location::new(file_uri(file)?, range))
+}
+
+/// The start of `file`.
+pub fn file_location(file: impl AsRef<Path>) -> Option<tower_lsp_server::ls_types::Location> {
+    line_location(file, 0)
+}
+
+/// The start of 0-based `line` in `file`.
+pub fn line_location(file: impl AsRef<Path>, line: usize) -> Option<tower_lsp_server::ls_types::Location> {
+    let start = Position::new(line as u32, 0);
+    file_range_location(file, Range::new(start, start))
+}
+
+/// The text of `path`: `open`, an open document's unsaved text, when there is one, else the file's.
+pub fn open_or_read(open: Option<String>, path: &Path) -> Option<String> {
+    open.or_else(|| std::fs::read_to_string(path).ok())
+}
+
 /// `file:///C%3A/…` as `file:///C:/…`; `None` for a URI without an escaped drive.
 fn drive_colon_unescaped(uri: &str) -> Option<String> {
     let rest = uri.strip_prefix("file:///")?;
@@ -229,7 +250,7 @@ pub fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 /// Byte index in `line` of UTF-16 column `character`, clamped to the line's end.
-pub fn byte_col(line: &str, character: u32) -> usize {
+fn byte_col(line: &str, character: u32) -> usize {
     let mut units = 0u32;
     for (idx, ch) in line.char_indices() {
         if units >= character {

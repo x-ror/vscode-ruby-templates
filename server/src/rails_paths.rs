@@ -43,6 +43,9 @@ const KNOWN_FORMATS: [&str; 35] = [
     "turbo_stream",
 ];
 
+/// A Rails app's views folder, from its root.
+pub const APP_VIEWS: &str = "app/views";
+
 pub fn is_known_format(segment: &str) -> bool {
     KNOWN_FORMATS.contains(&segment)
 }
@@ -93,17 +96,24 @@ pub fn template_variant(path: &Path) -> Option<&str> {
     rest.split('.').next().filter(|variant| !variant.is_empty())
 }
 
+/// Is `dir` an `app/views` folder?
+pub fn is_app_views(dir: &Path) -> bool {
+    dir.file_name().is_some_and(|name| name == "views") && dir.parent().and_then(Path::file_name).is_some_and(|name| name == "app")
+}
+
 /// Walk up from `file` to find the Rails `app/views` directory.
 pub fn views_root(file: &Path) -> Option<PathBuf> {
-    let mut dir = file.parent()?;
-    loop {
-        if dir.file_name().map(|n| n == "views").unwrap_or(false)
-            && dir.parent().and_then(|p| p.file_name()).map(|n| n == "app").unwrap_or(false)
-        {
-            return Some(dir.to_path_buf());
-        }
-        dir = dir.parent()?;
-    }
+    file.ancestors().skip(1).find(|dir| is_app_views(dir)).map(Path::to_path_buf)
+}
+
+/// `view` below its `app/views`: `users/_card.html.erb`.
+pub fn view_relative(view: &Path) -> Option<&Path> {
+    view.strip_prefix(views_root(view)?).ok()
+}
+
+/// Is `path` a partial's file (`_card.html.erb`)?
+pub fn is_partial_path(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
 }
 
 /// The Rails `app` folder of a file in app/views, app/components or any other app/ folder. Views come first:
@@ -115,10 +125,20 @@ pub fn app_root(file: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The `app/views` of the app `file` belongs to, which need not exist.
+pub fn app_views(file: &Path) -> Option<PathBuf> {
+    Some(app_root(file)?.join("views"))
+}
+
+/// The Rails root of `file`: the folder holding its `app`.
+pub fn rails_root(file: &Path) -> Option<PathBuf> {
+    Some(app_root(file)?.parent()?.to_path_buf())
+}
+
 /// `file` relative to the Rails root of `from`, the template asking (the folder holding its `app`), with `/`
 /// separators; the full path when `file` lies outside it, as a gem's file does.
 pub fn rails_relative(file: &Path, from: &Path) -> String {
-    let root = app_root(from).and_then(|app| app.parent().map(Path::to_path_buf));
+    let root = rails_root(from);
     let shown = root.and_then(|root| file.strip_prefix(root).ok()).unwrap_or(file);
     slash_path(shown)
 }
@@ -134,6 +154,13 @@ pub fn files_under(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         .filter(|e| e.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
         .collect()
+}
+
+/// Every `.rb` file under `root`, at any depth.
+pub fn ruby_files_under(root: &Path) -> Vec<PathBuf> {
+    let mut files = files_under(root, usize::MAX);
+    files.retain(|file| file.extension().is_some_and(|ext| ext == "rb"));
+    files
 }
 
 #[cfg(test)]

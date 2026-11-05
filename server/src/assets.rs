@@ -1,6 +1,6 @@
 //! Literal asset helper paths (`image_tag "logo.png"`, `stylesheet_link_tag "application"`) → files.
 
-use crate::rails_paths::app_root;
+use crate::rails_paths::rails_root;
 use crate::render_call::MAX_CALL_LINES;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -99,7 +99,7 @@ pub fn resolve(current: &Path, r: &AssetRef) -> Vec<PathBuf> {
     if r.path.starts_with("//") || r.path.contains(':') || r.path.split(['/', '\\']).any(|s| s == "..") {
         return vec![];
     }
-    let Some(rails) = app_root(current).and_then(|app| app.parent().map(Path::to_path_buf)) else { return vec![] };
+    let Some(rails) = rails_root(current) else { return vec![] };
     let (dirs, rel) = match r.path.strip_prefix('/') {
         Some(rel) => (vec![rails.join("public")], rel),
         None => (ASSET_DIRS.iter().map(|d| rails.join(d)).collect(), r.path),

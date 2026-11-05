@@ -5,10 +5,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use crate::ivars::ControllerScan;
-use crate::rails_paths::{app_root, files_under, is_known_format};
-use crate::view_roots;
+use crate::controller_classes::ControllerScan;
+use crate::rails_paths::{files_under, is_known_format, rails_root, APP_VIEWS};
+use crate::strict_locals::{self, Close, RubyContext};
+use crate::view_roots::{self, adds_view_paths, spec_line};
 use walkdir::WalkDir;
+
+/// Bundler's lockfile, whose folder is the project root.
+pub const LOCKFILE: &str = "Gemfile.lock";
+const RUBY_VERSION_FILE: &str = ".ruby-version";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
@@ -32,9 +37,9 @@ pub struct ProjectKey {
 impl ProjectKey {
     pub(crate) fn of(template: &Path) -> Self {
         ProjectKey {
-            lock_dir: template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file()).map(Path::to_path_buf),
-            template_app: app_root(template).and_then(|app| Some(app.parent()?.to_path_buf())),
-            ruby_version: template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file()),
+            lock_dir: template.ancestors().skip(1).find(|dir| dir.join(LOCKFILE).is_file()).map(Path::to_path_buf),
+            template_app: rails_root(template),
+            ruby_version: template.ancestors().skip(1).map(|dir| dir.join(RUBY_VERSION_FILE)).find(|file| file.is_file()),
         }
     }
 }
@@ -52,7 +57,7 @@ pub struct Project {
     root: Option<PathBuf>,
     /// Ruby files in namespace folders of `app/models` (relative paths), listed on first use: a Project is one app's.
     namespaced_models: OnceLock<Vec<PathBuf>>,
-    /// `ivars::view_prefixes` by view folder: read from controller files once per Project.
+    /// `controller_classes::view_prefixes` by view folder: read from controller files once per Project.
     view_prefixes: Arc<Mutex<HashMap<PathBuf, Option<Vec<String>>>>>,
     /// Each app's controllers (by app folder) read once, on first use.
     controller_scan: Arc<Mutex<HashMap<PathBuf, Arc<ControllerScan>>>>,
@@ -116,14 +121,26 @@ impl Project {
         Self::load(&ProjectKey::of(template))
     }
 
-    /// The project of `template`, loaded once per `ProjectKey` for a run over many templates.
-    pub fn memoized<'a>(projects: &'a mut Projects, template: &Path) -> &'a Self {
-        projects.entry(ProjectKey::of(template)).or_insert_with_key(Self::load)
+    /// The project of the templates in the views folder `views`.
+    pub fn for_views(views: &Path) -> Self {
+        Self::for_template(&views.join("_"))
+    }
+
+    /// The project of `template`, loaded once per `ProjectKey` for a run over many templates; it keeps its view roots
+    /// in `view_cache` when given one.
+    pub fn memoized<'a>(projects: &'a mut Projects, template: &Path, view_cache: Option<&Arc<view_roots::Cache>>) -> &'a Self {
+        projects.entry(ProjectKey::of(template)).or_insert_with_key(|key| {
+            let project = Self::load(key);
+            match view_cache {
+                Some(cache) => project.with_view_cache(Arc::clone(cache)),
+                None => project,
+            }
+        })
     }
 
     fn load(key: &ProjectKey) -> Self {
         let lock_dir = key.lock_dir.as_deref();
-        let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join("Gemfile.lock")).ok());
+        let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join(LOCKFILE)).ok());
         let project = lock_text.as_deref().map_or_else(Self::unknown, Self::from_lockfile);
         let configs: Vec<AppConfig> =
             key.template_app.iter().map(PathBuf::as_path).chain(lock_dir).map(|app| read_app_config(&app.join("config"))).collect();
@@ -136,6 +153,40 @@ impl Project {
         let ruby =
             key.ruby_version.as_ref().and_then(|file| std::fs::read_to_string(file).ok()).and_then(|text| ruby_version_file_version(&text));
         Project { formats, prefixes_partial_paths, adds_view_paths, ruby: ruby.or(project.ruby), root: key.lock_dir.clone(), ..project }
+    }
+
+    /// Strict locals exist from Rails 7.1; before, the `locals:` line is a plain comment.
+    pub fn supports_strict_locals(&self) -> bool {
+        self.framework == Framework::Rails && self.gem_version("actionview").is_some_and(|v| v.at_least(strict_locals::SINCE))
+    }
+
+    /// The latest `STRICT_LOCALS_REGEX` unless the lockfile names an older actionview.
+    pub fn strict_locals_close(&self) -> Close {
+        match self.gem_version("actionview") {
+            Some(version) if !version.at_least(strict_locals::LAZY_REGEXP_SINCE) => Close::LastOnLine,
+            _ => Close::BeforeTagOrLineEnd,
+        }
+    }
+
+    /// The strict locals `text` declares, read as this project's Rails and Ruby do.
+    pub fn strict_locals(&self, text: &str) -> Option<strict_locals::Signature> {
+        strict_locals::signature(text, self.strict_locals_close(), self.prism_version())
+    }
+
+    pub fn file_strict_locals(&self, file: &Path) -> Option<strict_locals::Signature> {
+        strict_locals::file_signature(file, self.strict_locals_close(), self.prism_version())
+    }
+
+    /// How Rails evals `template` of this project.
+    pub(crate) fn ruby_context(&self, template: &Path) -> RubyContext {
+        RubyContext {
+            grammar: self.prism_version(),
+            strict_locals: self
+                .supports_strict_locals()
+                .then(|| self.short_identifier(template))
+                .flatten()
+                .map(|identifier| strict_locals::Rails { close: self.strict_locals_close(), identifier }),
+        }
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
@@ -257,7 +308,7 @@ impl Project {
         let root = self.root.as_deref()?;
         let app_dir = own.parent()?.parent()?;
         let own_app = || app_dir.ancestors().take_while(|dir| *dir != root).any(|dir| dir.join("config/application.rb").is_file());
-        (app_dir.starts_with(root) && !own_app()).then(|| root.join("app/views"))
+        (app_dir.starts_with(root) && !own_app()).then(|| root.join(APP_VIEWS))
     }
 
     /// Is `file` in a gem's install folder? Those are read-only.
@@ -330,12 +381,6 @@ fn turns_off_partial_prefix(text: &str) -> bool {
     })
 }
 
-/// Does the Ruby `text` call `*_view_path(s)` or touch `paths["app/views"]`?
-pub(crate) fn adds_view_paths(text: &str) -> bool {
-    let mut code = text.lines().filter(|line| !line.trim_start().starts_with('#'));
-    code.any(|line| line.contains("view_path") || line.contains(r#"paths["app/views"]"#) || line.contains("paths['app/views']"))
-}
-
 /// Does a gem from the lockfile's `PATH` sections (an engine) ship `app/views`? The app itself (`remote: .`) doesn't count.
 fn path_gem_has_views(lock: &str, lock_dir: &Path) -> bool {
     let mut in_path = false;
@@ -345,7 +390,7 @@ fn path_gem_has_views(lock: &str, lock_dir: &Path) -> bool {
             return false;
         }
         let remote = line.trim().strip_prefix("remote:").map(str::trim).filter(|remote| !remote.trim_matches(['.', '/']).is_empty());
-        in_path && remote.is_some_and(|remote| lock_dir.join(remote).join("app/views").is_dir())
+        in_path && remote.is_some_and(|remote| lock_dir.join(remote).join(APP_VIEWS).is_dir())
     })
 }
 
@@ -359,14 +404,6 @@ fn registered_format(line: &str) -> Option<&str> {
     let symbol = after_type.trim_start().strip_prefix(',')?.trim_start().strip_prefix(':')?;
     let end = symbol.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(symbol.len());
     (end > 0).then(|| &symbol[..end])
-}
-
-/// `    name (1.2.3)` or `    name (1.2.3-x86_64-linux)`; the 6-space dependency lines don't match.
-pub(crate) fn spec_line(line: &str) -> Option<(&str, &str)> {
-    let rest = line.strip_prefix("    ").filter(|r| !r.starts_with(' '))?;
-    let (name, version) = rest.split_once(" (")?;
-    let version = version.strip_suffix(')')?;
-    Some((name, version.split_once('-').map_or(version, |(v, _platform)| v)))
 }
 
 /// A RubyGems version: dotted numbers, where a segment with letters (`rc1` → `rc`, `1`) marks a prerelease.
@@ -529,10 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn view_paths_added_app_wide() {
-        assert!(adds_view_paths("ActionController::Base.prepend_view_path Rails.root.join(\"themes\")\n"));
-        assert!(adds_view_paths("config.paths[\"app/views\"] << \"x\"\n"));
-        assert!(!adds_view_paths("# prepend_view_path \"x\"\nconfig.x = 1\n"));
+    fn path_gems_with_views_add_view_paths() {
         let root = std::env::temp_dir().join(format!("rt-project-pathgem-{}", std::process::id()));
         std::fs::create_dir_all(root.join("engines/admin/app/views")).unwrap();
         std::fs::create_dir_all(root.join("app/views")).unwrap();

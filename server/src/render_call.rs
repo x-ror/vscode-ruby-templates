@@ -2,6 +2,7 @@
 
 use crate::haml_indent::haml_structure;
 use crate::haml_parser::is_haml_multiline;
+use crate::lang::TemplateLang;
 use crate::ruby::RUBY_WHITESPACE;
 use ruby_prism::{ArgumentsNode, AssocNode, CallNode, InterpolatedStringNode, Location, Options, StringNode, Version, Visit};
 use std::borrow::Cow;
@@ -85,11 +86,12 @@ fn skip_string(chars: &mut Chars, quote: char) -> Option<()> {
 }
 
 /// The `render` or `json.…` call that starts at `call_at` in `text` and holds the name at `name_at`, read from the fewest
-/// lines that make Ruby; `None` when they don't (an unclosed call, or one that isn't the name's). In Haml (`haml`) the
-/// ` |` that ends the lines of a multiline group is not Ruby. `ruby`: the grammar to read with.
-pub fn read(text: &str, call_at: usize, name_at: usize, haml: bool, ruby: Version) -> Option<Call<'_>> {
+/// lines that make Ruby; `None` when they don't (an unclosed call, or one that isn't the name's). With `haml_multiline`
+/// (`HamlPipes::apply` of the call's line) the ` |` that ends the lines of a multiline group is not Ruby. `ruby`: the
+/// grammar to read with.
+pub fn read(text: &str, call_at: usize, name_at: usize, haml_multiline: bool, ruby: Version) -> Option<Call<'_>> {
     let end = window_end(text, call_at);
-    let window = haml_markers_blanked(text, call_at, end, haml);
+    let window = haml_markers_blanked(text, call_at, end, haml_multiline);
     let window = window.trim_end();
     // `-%>` and `=%>` trim the template's whitespace; they are not Ruby.
     let closed_by_tag = text[end..].starts_with("%>");
@@ -142,10 +144,10 @@ pub fn haml_group_joined(text: &str) -> Cow<'_, str> {
 
 /// `text[call_at..end]`, with the ` |` and line breaks of a Haml `|` multiline group blanked, as Haml joins its lines, so
 /// the group reads as one line of Ruby and offsets stay the text's. Only a call whose own line ends in a ` |` marker is one.
-fn haml_markers_blanked(text: &str, call_at: usize, end: usize, haml: bool) -> Cow<'_, str> {
+fn haml_markers_blanked(text: &str, call_at: usize, end: usize, haml_multiline: bool) -> Cow<'_, str> {
     let window = &text[call_at..end];
     let first_line = window.lines().next().unwrap_or_default();
-    if !haml || !is_haml_multiline(first_line) {
+    if !haml_multiline || !is_haml_multiline(first_line) {
         return Cow::Borrowed(window);
     }
     let mut in_group = true;
@@ -182,8 +184,8 @@ thread_local! {
     pub static STRUCTURE_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Whether `|` ends a multiline group on the lines of one Haml document (`haml`): not in a filter body (`:ruby`), which
-/// Haml leaves alone. The structure pass runs once, for the first line ending in ` |`.
+/// Whether `|` ends a multiline group on the lines of one document: only in Haml, and not in a filter body (`:ruby`),
+/// which Haml leaves alone. The structure pass runs once, for the first line ending in ` |`.
 pub struct HamlPipes {
     haml: bool,
     /// Per line: outside filter and comment bodies.
@@ -191,8 +193,8 @@ pub struct HamlPipes {
 }
 
 impl HamlPipes {
-    pub fn new(haml: bool) -> Self {
-        HamlPipes { haml, structural: OnceCell::new() }
+    pub fn new(lang: TemplateLang) -> Self {
+        HamlPipes { haml: lang == TemplateLang::Haml, structural: OnceCell::new() }
     }
 
     /// Does `|` end a multiline group on the line of `text` at `line_start`?

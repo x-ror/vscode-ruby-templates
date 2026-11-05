@@ -64,7 +64,7 @@ impl TemplateLang {
     }
 }
 
-pub const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
+const ERB_EXTENSIONS: [&str; 3] = [".erb", ".erubi", ".erubis"];
 
 /// `x.html.erb`, `x.html+phone.erb`, `x.turbo_stream.erb`, `x.html.erubi`, `x.rhtml`, and a localized view with no
 /// format (`app/views/pages/about.de.erb`), which is HTML in practice.

@@ -1,7 +1,8 @@
 //! ViewComponent slots: `renders_one :header` / `renders_many :items` in the class, set by callers with
 //! `c.with_header` inside `render(CardComponent.new) do |c|`, read in the component's template as `header`.
 
-use crate::partials::{resolve_component, singularize};
+use crate::inflect::singularize;
+use crate::partials::resolve_component;
 use crate::project::Project;
 use crate::rails_paths::template_stem;
 use regex::Regex;

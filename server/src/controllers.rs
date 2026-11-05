@@ -1,10 +1,10 @@
 //! Controllers → views: `layout "admin"`, an action's `def show`, and `render :edit` / `render "users/show"`.
 //! Controllers reach the server only for navigation; Ruby LSP owns everything else in them.
 
+use crate::controller_classes::controller_path;
 use crate::partials::{matching_templates, split_render_name};
 use crate::project::Project;
 use crate::rails_paths::app_root;
-use crate::util::slash_path;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -15,16 +15,16 @@ static ACTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*def\s+([a-z_]
 static RENDER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"\brender\s*\(?\s*(?::?(action|template|partial)\s*(?::|=>)\s*)?(?::(\w+)|["']([\w/]+)["'])"#).unwrap());
 
-/// `app/controllers/admin/users_controller.rb` → `admin/users`.
-pub fn controller_path(file: &Path) -> Option<String> {
-    let rel = file.strip_prefix(app_root(file)?.join("controllers")).ok()?;
-    let rel = slash_path(rel);
-    rel.strip_suffix("_controller.rb").filter(|p| !p.is_empty()).map(str::to_string)
+/// A byte range on a line that names files, and the files.
+pub struct Target {
+    pub start: usize,
+    pub end: usize,
+    pub files: Vec<PathBuf>,
 }
 
 /// Byte ranges on `line` of a controller that name views, with the files they name. `col` keeps only the
 /// reference under the cursor; links (`col` = None) leave out action names, which every `def` would carry.
-pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -> Vec<(usize, usize, Vec<PathBuf>)> {
+pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -> Vec<Target> {
     let (Some(app), Some(controller)) = (app_root(file), controller_path(file)) else { return vec![] };
     let views = app.join("views");
     let at = |s: usize, e: usize| col.is_none_or(|c| (s..=e).contains(&c));
@@ -37,22 +37,27 @@ pub fn targets(project: &Project, file: &Path, line: &str, col: Option<usize>) -
     };
     let mut out = Vec::new();
     if let Some(m) = LAYOUT.captures(line).and_then(|cap| cap.get(1)).filter(|m| at(m.start(), m.end())) {
-        out.push((m.start(), m.end(), matching_templates(project, &views.join("layouts"), m.as_str())));
+        out.push(Target { start: m.start(), end: m.end(), files: matching_templates(project, &views.join("layouts"), m.as_str()) });
     }
     if let Some(m) = ACTION.captures(line).and_then(|cap| cap.get(1)).filter(|m| col.is_some() && at(m.start(), m.end())) {
-        out.push((m.start(), m.end(), in_views(m.as_str(), false)));
+        out.push(Target { start: m.start(), end: m.end(), files: in_views(m.as_str(), false) });
     }
     for cap in RENDER.captures_iter(line) {
         let Some(m) = cap.get(2).or(cap.get(3)).filter(|m| at(m.start(), m.end())) else { continue };
-        out.push((m.start(), m.end(), in_views(m.as_str(), cap.get(1).is_some_and(|k| k.as_str() == "partial"))));
+        out.push(Target {
+            start: m.start(),
+            end: m.end(),
+            files: in_views(m.as_str(), cap.get(1).is_some_and(|k| k.as_str() == "partial")),
+        });
     }
-    out.retain(|(_, _, found)| !found.is_empty());
+    out.retain(|target| !target.files.is_empty());
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::slash_path;
 
     #[test]
     fn controller_views() {
@@ -74,7 +79,7 @@ mod tests {
         let names = |line: &str, col: Option<usize>| -> Vec<(String, Vec<String>)> {
             targets(&Project::unknown(), &file, line, col)
                 .into_iter()
-                .map(|(s, e, found)| {
+                .map(|Target { start: s, end: e, files: found }| {
                     let rel = found.iter().map(|f| slash_path(f.strip_prefix(root.join("app/views")).unwrap()));
                     (line[s..e].to_string(), rel.collect())
                 })

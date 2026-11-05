@@ -1,10 +1,11 @@
 //! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
 
-use crate::checks::{diagnostics_in, Doc, Options};
+use crate::checks::{diagnostics_in, Doc};
 use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
-use crate::project::{Project, ProjectKey, Projects};
+use crate::options::Options;
+use crate::project::{Project, Projects};
 use crate::util;
 use crate::view_roots;
 use std::collections::BTreeMap;
@@ -51,7 +52,9 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 
 /// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
 fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file).ok().and_then(|text| crate::slim_format::format(&text, 2, &[]));
+    let formatted = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| crate::slim_format::format(&text, crate::format::Settings::default().indent_size, &[]));
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;
@@ -160,7 +163,7 @@ fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
     entry.file_type().is_dir() && (name.starts_with('.') || name == "node_modules")
 }
 
-fn file_uri(path: &Path) -> Option<Uri> {
+fn absolute_file_uri(path: &Path) -> Option<Uri> {
     let absolute = std::fs::canonicalize(path).or_else(|_| std::path::absolute(path)).ok()?;
     crate::util::file_uri(absolute)
 }
@@ -217,9 +220,9 @@ fn check_file(
     let shown = path.display();
     let failed = |stderr| Checked { stdout: String::new(), stderr, code: bad_file };
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
-    let Some((uri, lang)) = file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
+    let Some((uri, lang)) = absolute_file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     // Every worker's projects of one app share its view roots.
-    projects.entry(ProjectKey::of(path)).or_insert_with(|| Project::for_template(path).with_view_cache(Arc::clone(view_roots)));
+    Project::memoized(projects, path, Some(view_roots));
     let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
     for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &Options::default(), projects) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
@@ -300,7 +303,7 @@ fn format_command(args: &FormatArgs) -> i32 {
 
 fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, projects: &mut Projects) -> i32 {
     let shown = path.display();
-    let result = match (file_uri(path), language(path)) {
+    let result = match (absolute_file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
             let mut resolved = config::settings_for(&util::file_path(&uri).unwrap_or_else(|| path.to_path_buf()));
             resolved.settings.align_comments = args.align_comments;

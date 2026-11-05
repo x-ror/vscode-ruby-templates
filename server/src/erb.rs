@@ -1,8 +1,8 @@
 //! ERB diagnostics: the Ruby syntax errors of `erb_ruby` and the HTML errors Erubi's text leaves.
 
-use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::html::TOKENIZED_AS_TEXT;
+use crate::strict_locals::RubyContext;
 use crate::util::{coded, warning, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 

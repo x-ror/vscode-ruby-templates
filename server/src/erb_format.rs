@@ -4,11 +4,11 @@
 //! quoted attribute value, every line after the first of an HTML comment and every line that starts inside an ERB tag
 //! (its Ruby) keep every byte.
 
-use crate::checks::RubyContext;
 use crate::erb_ruby;
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::html::NO_END_TAG;
 use crate::ruby::BlockEffect;
+use crate::strict_locals::RubyContext;
 use crate::tags::{self, Block, PState, Paths, Tag, Token, OPTIONAL_END};
 use crate::util::{leading_ws, raw_lines};
 use regex::Regex;

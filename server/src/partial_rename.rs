@@ -3,15 +3,13 @@
 //! `t("…")` calls of an i18n key.
 
 use crate::code_context::render_filter;
-use crate::ivars::view_prefixes;
+use crate::controller_classes::view_prefixes;
 use crate::lang::TemplateLang;
-use crate::partials::{
-    first_folder_only, local_key_span, matching_templates, model_renders, passed_locals, render_calls_in, resolve, resolve_model,
-    split_render_name, RenderCall, RenderKind, RenderRef,
-};
+use crate::partials::{first_folder_only, matching_templates, resolve, resolve_model, split_render_name};
 use crate::project::Project;
-use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::rails_paths::{app_root, app_views, template_stem, views_root};
 use crate::render_call::HamlPipes;
+use crate::render_refs::{local_key_span, model_renders, passed_locals, render_calls_in, RenderCall, RenderKind, RenderRef};
 use crate::util::{lines_with_offsets, slash_path, LineIndex};
 use crate::{i18n, ruby, slim_outline};
 use regex::Regex;
@@ -80,7 +78,7 @@ fn code_refs<'s, T>(
     find: impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, T)>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef, T)> {
-    let pipes = HamlPipes::new(source.lang == Some(TemplateLang::Haml));
+    let pipes = HamlPipes::new(source.lang.unwrap_or(TemplateLang::Ruby));
     let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
         let spans = slim_outline::code_spans(&source.text, extra_engines);
@@ -120,9 +118,9 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
             RenderKind::Partial => resolve(project, &source.path, &as_partial),
         };
     }
-    let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
+    let controller = app_root(&source.path).is_some_and(|app| source.path.starts_with(app.join("controllers")));
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
-    match app_root(&source.path).map(|app| app.join("views")) {
+    match app_views(&source.path) {
         Some(views) if partial && r.name.contains('/') => resolve(project, &views.join("_"), &as_partial),
         _ => vec![],
     }
@@ -135,7 +133,7 @@ fn inherited_folders(project: &Project, source: &Path, views: &Path) -> Vec<Path
 
 /// Whether `resolve` could look in `dir` for `r` from `source`: a cheap test before its directory listing.
 fn may_look_in(project: &Project, source: &Path, r: &RenderRef, dir: &Path) -> bool {
-    let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
+    let views = app_views(source);
     match (split_render_name(&r.name).0, views) {
         // The folders `resolve` lists, compared as paths: `./users` is `users` there too.
         (Some(d), Some(v)) => v.join(d) == dir,
@@ -209,7 +207,7 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
             source,
             extra_engines,
             |_, _, line, _| model_refs(line).into_iter().map(|r| (r, ())).collect(),
-            |r| may_name(&stems, &crate::partials::singularize(&r.name)),
+            |r| may_name(&stems, &crate::inflect::singularize(&r.name)),
         )
         .into_iter()
         .filter(|(_, _, r, _)| resolve_model(project, &source.path, &r.name).iter().any(|t| files.contains(t)))
@@ -229,7 +227,7 @@ pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[S
         .filter_map(|LocalKey { source, key, .. }| {
             let (start, end) = key?;
             let index = LineIndex::new(&source.text);
-            Some(Location::new(crate::util::file_uri(&source.path)?, index.range(start, end)))
+            crate::util::file_range_location(&source.path, index.range(start, end))
         })
         .collect()
 }
@@ -366,10 +364,7 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
                 Some(ext) if ext == "rb" => None,
                 _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None).filter(|&lang| lang != TemplateLang::Liquid)?),
             };
-            let text = match open.get(&path) {
-                Some(text) => text.clone(),
-                None => std::fs::read_to_string(&path).ok()?,
-            };
+            let text = crate::util::open_or_read(open.get(&path).cloned(), &path)?;
             keep(&text).then_some(Source { path, lang, text })
         })
         .collect()
@@ -586,6 +581,19 @@ mod tests {
             [("app/views/users/_card.html.erb", "app/views/_card.html.erb"), ("app/views/users/_row.html.erb", "app/views/_row.html.erb")];
         let got = t.edits(&renames, &sources);
         assert_eq!(got.iter().map(|e| (e.2, e.3.as_str())).collect::<Vec<_>>(), [(12, "/card"), (32, "/row")]);
+    }
+
+    #[test]
+    fn only_app_controllers_render_templates_by_default() {
+        let t = Tree::new("in-controllers", &["controllers/app/views/users/_card.html.erb"]);
+        let sources = [
+            t.source("controllers/app/helpers/cards_helper.rb", None, "render \"users/card\"\n"),
+            t.source("controllers/app/controllers/users_controller.rb", None, "render \"users/card\"\n"),
+        ];
+        let card = t.path("controllers/app/views/users/_card.html.erb");
+        let found: Vec<String> =
+            references(&Project::unknown(), &[card], &sources, &[]).iter().map(|l| t.rel(&l.uri.to_file_path().unwrap())).collect();
+        assert_eq!(found, ["controllers/app/helpers/cards_helper.rb"], "a folder named controllers above the app is no controller");
     }
 
     #[test]

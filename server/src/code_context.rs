@@ -4,7 +4,7 @@ use crate::generated_ruby::Compiled;
 use crate::lang::TemplateLang;
 use crate::prism::{LocalDefinition, LocalToken, LocalUses};
 use crate::strict_locals::{self, Close};
-use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, partials, ruby, slim_parser, slim_ruby, util};
+use crate::{erb, erb_ruby, haml, haml_indent, haml_parser, haml_ruby, render_refs, ruby, slim_parser, slim_ruby, util};
 use haml_indent::LineRole;
 
 /// `in_ruby_context`, with Slim asked through its parser: its line heuristic also takes `p See (docs)` as Ruby.
@@ -65,7 +65,7 @@ fn render_in_code(
     text: &str,
     spans: &[(usize, usize)],
     line_start: usize,
-    r: &partials::RenderRef,
+    r: &render_refs::RenderRef,
 ) -> bool {
     let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
     let in_ruby = || in_ruby_context(lang, text, spans, line_start + r.start);
@@ -95,7 +95,7 @@ pub(crate) fn render_filter<'a>(
     lang: TemplateLang,
     text: &'a str,
     extra_engines: &[String],
-) -> impl Fn(usize, usize, &partials::RenderRef) -> bool + 'a {
+) -> impl Fn(usize, usize, &render_refs::RenderRef) -> bool + 'a {
     let roles = line_roles(lang, text);
     let spans = erb::code_spans(text);
     let slim = (lang == TemplateLang::Slim).then(|| slim_parser::parse(text, extra_engines));
@@ -151,11 +151,11 @@ mod tests {
         let text = "{% render \"card\" %}\n";
         let refs = |keep: bool| {
             let in_code = render_filter(TemplateLang::Liquid, text, &[]);
-            partials::render_refs_in(text, 0, text.trim_end(), &HamlPipes::new(false), ruby_prism::Version::Latest, |r| {
+            render_refs::render_refs_in(text, 0, text.trim_end(), &HamlPipes::new(TemplateLang::Liquid), ruby_prism::Version::Latest, |r| {
                 !keep || in_code(0, 0, r)
             })
         };
-        let resolved: Vec<_> = refs(false).iter().flat_map(|r| partials::resolve(&Project::unknown(), &current, r)).collect();
+        let resolved: Vec<_> = refs(false).iter().flat_map(|r| crate::partials::resolve(&Project::unknown(), &current, r)).collect();
         let filtered = refs(true);
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(resolved, [views.join("_card.html.slim")]);

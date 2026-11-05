@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
+/// Where stimulus-loading finds the controllers, below `app`.
+const CONTROLLERS_DIR: &str = "javascript/controllers";
+/// The file name endings stimulus-loading registers as controllers.
+const CONTROLLER_SUFFIXES: [&str; 4] = ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"];
+
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
 static TARGET_ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"data-([\w-]+)-target\b").unwrap());
@@ -151,7 +156,7 @@ fn string_len(rest: &str, quote: char) -> usize {
 }
 
 /// The controllers of the element whose start tag `text` ends in: `data-controller="a b"`, or `controller:` in a `data:` hash.
-pub fn element_controllers(text: &str) -> Vec<String> {
+fn element_controllers(text: &str) -> Vec<String> {
     // ERB output names a controller only at runtime, and its quotes would cut the attribute value short.
     let text = &without_erb(text);
     let attributes = ATTR.captures_iter(text).filter(|cap| &cap[1] == "controller").map(|cap| cap[2].to_string());
@@ -210,7 +215,7 @@ fn unclosed(text: &str) -> bool {
 
 /// The attributes the controller `id` reads from its element, given its source: `data-id-target`, and a `-value`,
 /// `-class` or `-outlet` attribute for each name its class declares.
-pub fn element_attributes(id: &str, source: &str) -> Vec<String> {
+fn element_attributes(id: &str, source: &str) -> Vec<String> {
     let declared =
         [(static_values(source), "value"), (static_list(source, "classes"), "class"), (static_list(source, "outlets"), "outlet")];
     let named = declared.into_iter().flat_map(|(names, suffix)| names.into_iter().map(move |name| (name, suffix)));
@@ -223,10 +228,14 @@ pub fn element_attributes(id: &str, source: &str) -> Vec<String> {
 pub fn attributes(current: &Path, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for id in element_controllers(text) {
-        let source = resolve(current, &id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default();
-        out.extend(element_attributes(&id, &source));
+        out.extend(element_attributes(&id, &controller_source(current, &id)));
     }
     out
+}
+
+/// The source of controller `id` in `current`'s app; empty when there is none.
+pub fn controller_source(current: &Path, id: &str) -> String {
+    resolve(current, id).first().and_then(|file| std::fs::read_to_string(file).ok()).unwrap_or_default()
 }
 
 /// `fooBar` → `foo-bar`, as Stimulus maps a value or class name to its attribute.
@@ -262,14 +271,14 @@ pub fn methods(source: &str) -> Vec<String> {
 /// The identifiers stimulus-loading registers for the files under app/javascript/controllers.
 pub fn controllers(current: &Path) -> Vec<String> {
     let Some(app) = app_root(current) else { return vec![] };
-    let dir = app.join("javascript/controllers");
+    let dir = app.join(CONTROLLERS_DIR);
     let mut out: Vec<String> = WalkDir::new(&dir)
         .into_iter()
         .flatten()
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
             let rel = slash_path(e.path().strip_prefix(&dir).ok()?);
-            let stem = ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].iter().find_map(|s| rel.strip_suffix(s))?;
+            let stem = CONTROLLER_SUFFIXES.iter().find_map(|s| rel.strip_suffix(s))?;
             Some(stem.replace('/', "--").replace('_', "-"))
         })
         .collect();
@@ -333,13 +342,11 @@ pub fn resolve(current: &Path, identifier: &str) -> Vec<PathBuf> {
         return vec![];
     }
     let Some(app) = app_root(current) else { return vec![] };
-    let dir = app.join("javascript/controllers");
+    let dir = app.join(CONTROLLERS_DIR);
     let rel = identifier.replace("--", "/");
     let mut out = Vec::new();
     for name in [rel.replace('-', "_"), rel] {
-        for file in
-            ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"].map(|suffix| dir.join(format!("{name}{suffix}")))
-        {
+        for file in CONTROLLER_SUFFIXES.map(|suffix| dir.join(format!("{name}{suffix}"))) {
             if file.is_file() && !out.contains(&file) {
                 out.push(file);
             }
