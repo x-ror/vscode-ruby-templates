@@ -72,6 +72,27 @@ Built for Rails developers who work in `app/views` every day, and for teams that
 
 Plus: rename or move a partial in the Explorer and every `render` that points to it is updated; <kbd>F2</kbd> on a partial's strict local renames it in the partial and in every `render` that passes it; <kbd>Ctrl+T</kbd> finds templates by render name (`uscard` → `users/card`); outline and breadcrumbs for every template; Jbuilder and Builder views get partial navigation too.
 
+### File types
+
+The file name picks the language id, which decides the comment syntax and the `[erb-js]`-style editor settings; the server picks the checks by the same name.
+
+| Files                                                                                                                                               | Language id                      | Comment toggle | Highlighting      | Extra checks     | Formatting |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------------- | ----------------- | ---------------- | ---------- |
+| `.html.erb`, `.html+phone.erb`, `.turbo_stream.erb`, `.rhtml`, `.html.erubi`, `.html.erubis`, bare `.erb` under `app/views` with a locale or markup | `erb` (also `.erubi`, `.erubis`) | `<%# %>`       | HTML + Ruby       | HTML tags, links | yes        |
+| `.js.erb`                                                                                                                                           | `erb-js`                         | `//`, `/* */`  | JavaScript + Ruby | none             | no         |
+| `.scss.erb`                                                                                                                                         | `erb-scss`                       | `//`, `/* */`  | SCSS + Ruby       | none             | no         |
+| `.css.erb`                                                                                                                                          | `erb-css`                        | `/* */`        | CSS + Ruby        | none             | no         |
+| `.json.erb`                                                                                                                                         | `erb-json`                       | `<%# %>`       | JSON + Ruby       | none             | no         |
+| `.text.erb`, `.txt.erb`                                                                                                                             | `erb-text`                       | `<%# %>`       | Text + Ruby       | none             | no         |
+| `.xml.erb`, `.rss.erb`, `.atom.erb`, `.svg.erb`                                                                                                     | `erb-xml`                        | `<!-- -->`     | XML + Ruby        | none             | no         |
+| `.md.erb`                                                                                                                                           | `erb-markdown`                   | `<!-- -->`     | Markdown + Ruby   | none             | no         |
+| `.rb.erb`                                                                                                                                           | `erb-ruby`                       | `#`            | Ruby              | none             | no         |
+| `.yml.erb`, `.yaml.erb`                                                                                                                             | `erb-yaml`                       | `#`            | YAML + Ruby       | none             | no         |
+
+Every row gets the ERB and Ruby checks and, under `app/views`, the `render` checks (`unresolved-render`, `strict-locals`). Only HTML hosts add the HTML ones (unclosed or unbalanced tags, missing `alt`, duplicate `id`), linked tag renaming and attribute completion. Any other bare `.erb` (`nginx.conf.erb`) gets the ERB and Ruby checks only.
+
+The comment column applies to a line that starts outside a tag. A line inside a multi-line `<% %>` tag starts in Ruby, so <kbd>Ctrl+/</kbd> inserts `#` there; use _Toggle ERB Tag_ to comment a whole tag.
+
 ### Formatting
 
 _Format Document_, _Format Selection_ and format on save for HTML ERB views, Haml and Slim. The formatter changes **only whitespace**: leading indentation, trailing whitespace, blank lines and the final newline. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
