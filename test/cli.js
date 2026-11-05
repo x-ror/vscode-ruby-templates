@@ -67,20 +67,6 @@ try {
   assert.strictEqual(r.status, 2);
   assert.match(r.stderr, /notes\.txt: unknown template type/);
 
-  const liquid = path.join(root, "card.liquid");
-  fs.writeFileSync(
-    liquid,
-    '{% render "card" %}\n{% if a %}\n   x\n{% endif %}\n',
-  );
-  r = run(["check", liquid]);
-  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
-  assert.strictEqual(r.stdout + r.stderr, "", "Liquid has no checks");
-  r = run(["format", liquid]);
-  assert.strictEqual(r.status, 0, r.stderr);
-  assert.strictEqual(r.stdout, fs.readFileSync(liquid, "utf8"), "kept as is");
-  assert.match(r.stderr, /card\.liquid: left unchanged: /);
-  fs.unlinkSync(liquid);
-
   // Ruby 3.3 rejects a line that starts with `&&`; the latest grammar, used without a project Ruby, takes it.
   const ruby = file("ruby.html.erb", "<% x = a\n  && b %>\n");
   r = run(["check", ruby]);

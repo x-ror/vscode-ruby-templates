@@ -115,7 +115,6 @@ impl Options {
             TemplateLang::Erb => &self.disabled_erb,
             TemplateLang::Haml => &self.disabled_haml,
             TemplateLang::Ruby => &self.disabled_jbuilder,
-            TemplateLang::Liquid => &[],
         }
     }
 }
@@ -129,10 +128,7 @@ pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagno
 pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
-    if doc.lang == TemplateLang::Liquid
-        || uri.path().as_str().to_ascii_lowercase().ends_with(".tt")
-        || !options.diagnostics_enabled(doc.lang)
-    {
+    if uri.path().as_str().to_ascii_lowercase().ends_with(".tt") || !options.diagnostics_enabled(doc.lang) {
         return vec![];
     }
     let path = util::file_path(uri);
@@ -224,7 +220,6 @@ pub(crate) fn language_diagnostics(
             .collect(),
         // Syntax errors are Ruby LSP's job, but it doesn't know the `locals:` comment is code to Rails.
         TemplateLang::Ruby => locals_signature(text, ruby),
-        TemplateLang::Liquid => Vec::new(),
     };
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if lang == TemplateLang::Slim && !slim_html_host(uri) {

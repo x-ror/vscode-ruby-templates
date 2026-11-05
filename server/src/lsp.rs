@@ -321,11 +321,6 @@ impl Backend {
         }
     }
 
-    /// Liquid is highlighted only: every Rails lookup would misfire on it.
-    fn is_liquid(&self, uri: &Uri) -> bool {
-        self.docs.get(uri).is_some_and(|doc| doc.lang == TemplateLang::Liquid)
-    }
-
     fn options(&self) -> &Options {
         self.options.get_or_init(Options::default)
     }
@@ -764,9 +759,6 @@ impl LanguageServer for Backend {
     async fn goto_definition(&self, p: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = self.project_of(&path).await?;
         if let Some(text) = self.controllers.get(&uri) {
@@ -845,9 +837,6 @@ impl LanguageServer for Backend {
 
     async fn document_link(&self, p: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = p.text_document.uri;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = self.project_of(&path).await?;
         if let Some(text) = self.controllers.get(&uri) {
@@ -877,9 +866,6 @@ impl LanguageServer for Backend {
     async fn hover(&self, p: HoverParams) -> Result<Option<Hover>> {
         let uri = p.text_document_position_params.text_document.uri;
         let pos = p.text_document_position_params.position;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let file = match util::file_path(&uri) {
             Some(path) => Some((self.project_of(&path).await?, path)),
             None => None,
@@ -1000,7 +986,7 @@ impl LanguageServer for Backend {
             TemplateLang::Haml => Some(outline::haml_folding_ranges(&text)),
             TemplateLang::Slim | TemplateLang::Skim => Some(slim_outline::folding_ranges(&text, &extra_engines)),
             TemplateLang::Erb if html => Some(outline::folding_ranges(&text)),
-            TemplateLang::Erb | TemplateLang::Ruby | TemplateLang::Liquid => None,
+            TemplateLang::Erb | TemplateLang::Ruby => None,
         })
         .await
     }
@@ -1033,7 +1019,7 @@ impl LanguageServer for Backend {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
                 TemplateLang::Haml => outline::haml_document_symbols(&text),
                 TemplateLang::Slim | TemplateLang::Skim => slim_outline::document_symbols(&text, &extra_engines),
-                TemplateLang::Ruby | TemplateLang::Liquid => return None,
+                TemplateLang::Ruby => return None,
             };
             Some(DocumentSymbolResponse::Nested(symbols))
         })
@@ -1042,9 +1028,6 @@ impl LanguageServer for Backend {
 
     async fn code_action(&self, p: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = p.text_document.uri;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         // A copy, so no guard is held while the fixes below read the partial from the same map.
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
@@ -1088,9 +1071,6 @@ impl LanguageServer for Backend {
     }
 
     async fn prepare_rename(&self, p: TextDocumentPositionParams) -> Result<Option<PrepareRenameResponse>> {
-        if self.is_liquid(&p.text_document.uri) {
-            return Ok(None);
-        }
         // A copy, so no guard is held while the template compiles.
         let Some(doc) = self.docs.get(&p.text_document.uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(path) = util::file_path(&p.text_document.uri) else { return Ok(None) };
@@ -1105,9 +1085,6 @@ impl LanguageServer for Backend {
     async fn rename(&self, p: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = p.text_document_position.text_document.uri;
         let new = p.new_name;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let Some(doc) = self.docs.get(&uri).map(|doc| doc.clone()) else { return Ok(None) };
         let Some(local) = self.strict_local_at(&uri, &doc, p.text_document_position.position) else { return Ok(None) };
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
@@ -1153,9 +1130,6 @@ impl LanguageServer for Backend {
     async fn references(&self, p: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = self.project_of(&path).await?;
         let extra_engines = self.options().extra_engines.clone();
@@ -1230,10 +1204,7 @@ impl LanguageServer for Backend {
         roots.dedup();
         let mut out = Vec::new();
         for views in roots {
-            let is_template = |f: &&PathBuf| {
-                crate::util::file_uri(f)
-                    .is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some_and(|lang| lang != TemplateLang::Liquid))
-            };
+            let is_template = |f: &&PathBuf| crate::util::file_uri(f).is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some());
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
             let project = self.project_for(&views.join("_"));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
@@ -1298,9 +1269,6 @@ impl LanguageServer for Backend {
     async fn completion(&self, p: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = p.text_document_position.text_document.uri;
         let pos = p.text_document_position.position;
-        if self.is_liquid(&uri) {
-            return Ok(None);
-        }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
         let before = &line[..col.min(line.len())];

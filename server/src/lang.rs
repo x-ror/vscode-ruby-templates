@@ -14,8 +14,6 @@ pub enum TemplateLang {
     Skim,
     /// Jbuilder and Builder views: plain Ruby, attached through the `ruby` language id.
     Ruby,
-    /// Liquid (Rails `liquid` gem, Jekyll): highlighted only, none of the Rails features apply.
-    Liquid,
 }
 
 impl TemplateLang {
@@ -26,7 +24,6 @@ impl TemplateLang {
             Self::Haml => "haml",
             Self::Slim | Self::Skim => "slim",
             Self::Ruby => "ruby",
-            Self::Liquid => "liquid",
         }
     }
 
@@ -36,7 +33,6 @@ impl TemplateLang {
             Some("haml") => return Some(Self::Haml),
             Some("slim") => return Some(Self::Slim),
             Some("skim") => return Some(Self::Skim),
-            Some("liquid") => return Some(Self::Liquid),
             _ => {}
         }
         Self::from_file_name(uri.path().as_str())
@@ -56,8 +52,6 @@ impl TemplateLang {
             Some(Self::Slim)
         } else if path.ends_with(".skim") {
             Some(Self::Skim)
-        } else if path.ends_with(".liquid") {
-            Some(Self::Liquid)
         } else {
             None
         }
@@ -216,15 +210,6 @@ mod tests {
         assert!(html_host(&untitled, true, ""));
         assert!(!html_host(&untitled, false, ""));
         assert!(!html_host(&"file:///v/nginx.erb".parse::<Uri>().unwrap(), true, ""));
-    }
-
-    #[test]
-    fn liquid_by_id_or_extension() {
-        let untitled = "untitled:Untitled-1".parse::<Uri>().unwrap();
-        assert_eq!(TemplateLang::from_uri_or_id(&untitled, Some("liquid")), Some(TemplateLang::Liquid));
-        for name in ["file:///t/sections/header.liquid", "file:///t/page.html.LIQUID"] {
-            assert_eq!(TemplateLang::from_uri_or_id(&name.parse::<Uri>().unwrap(), None), Some(TemplateLang::Liquid), "{name}");
-        }
     }
 
     #[test]

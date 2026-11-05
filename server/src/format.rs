@@ -156,7 +156,6 @@ fn format_once(
         TemplateLang::Erb => erb_format::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
-        TemplateLang::Liquid => return skip(SkipKind::NotHandled, "Liquid has no formatter here"),
     };
     let mut formatted = indented.text;
     if settings.final_newline && !formatted.is_empty() && !formatted.ends_with('\n') {
