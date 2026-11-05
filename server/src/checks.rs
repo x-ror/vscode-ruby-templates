@@ -140,7 +140,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: 
     let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
-    let mut out = language_diagnostics(uri, doc.lang, doc.plain_erb, doc.percent_lines, &doc.text, &options.extra_engines, &ruby);
+    let mut out = language_diagnostics(uri, doc, &options.extra_engines, &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, &options.extra_engines)));
     }
@@ -158,17 +158,10 @@ pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
 }
 
 /// The template language's own checks, without the render checks that need app/views.
-pub(crate) fn language_diagnostics(
-    uri: &Uri,
-    lang: TemplateLang,
-    plain_erb: bool,
-    percent_lines: bool,
-    text: &str,
-    extra_engines: &[String],
-    ruby: &RubyContext,
-) -> Vec<Diagnostic> {
+pub(crate) fn language_diagnostics(uri: &Uri, doc: &Doc, extra_engines: &[String], ruby: &RubyContext) -> Vec<Diagnostic> {
+    let (lang, text) = (doc.lang, doc.text.as_str());
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text, ruby, percent_lines),
+        TemplateLang::Erb => erb::diagnostics(text, ruby, doc.percent_lines),
         TemplateLang::Haml => {
             let parsed = haml_parser::parse_with_ruby(text);
             let mut out = haml_indent::diagnostics(text, &parsed);
@@ -203,7 +196,7 @@ pub(crate) fn language_diagnostics(
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
         out.retain(|d| util::code(d) != Some(slim_indent::code::VOID_CHILDREN));
     }
-    if lang == TemplateLang::Erb && !percent_lines && html_host(uri, plain_erb, text) {
+    if lang == TemplateLang::Erb && doc.html_host(uri) {
         out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
         out.extend(html_lint::diagnostics(text));

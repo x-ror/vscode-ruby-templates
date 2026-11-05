@@ -161,15 +161,8 @@ fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position)
 }
 
 /// Full key of the `t("…")` literal under `col`, when the call is Ruby.
-fn i18n_key_at(
-    project: &Project,
-    doc: &Doc,
-    path: &Path,
-    line_start: usize,
-    line: &str,
-    col: usize,
-    extra_engines: &[String],
-) -> Option<String> {
+fn i18n_key_at(project: &Project, doc: &Doc, path: &Path, pos: Position, extra_engines: &[String]) -> Option<String> {
+    let (line_start, line, col) = util::line_at(&doc.text, pos);
     let (start, end) = i18n::key_at(line, col)?;
     if !code_at(doc.lang, &doc.text, line_start + start, extra_engines) {
         return None;
@@ -495,17 +488,10 @@ impl Backend {
         .await
     }
 
-    /// Where the template `uri` (`text`) defines the local `name` read at `offset`: a block variable or an assignment.
-    async fn local_definition_range(
-        &self,
-        uri: &Uri,
-        project: &Project,
-        text: &str,
-        lang: TemplateLang,
-        offset: usize,
-        name: &str,
-    ) -> Result<Option<Range>> {
-        let (source, engines) = (text.to_string(), self.options().extra_engines.clone());
+    /// Where the template `uri` (`doc`) defines the local `name` read at `offset`: a block variable or an assignment.
+    async fn local_definition_range(&self, uri: &Uri, project: &Project, doc: &Doc, offset: usize, name: &str) -> Result<Option<Range>> {
+        let text = doc.text.as_str();
+        let (lang, source, engines) = (doc.lang, text.to_string(), self.options().extra_engines.clone());
         let found = off_server_task(move || code_context::local_definition(lang, &source, offset, &engines)).await?;
         // A partial's strict local that the template also assigns (`user ||= …`) is defined by its callers.
         let strict_local = || is_partial(uri) && project.strict_locals(text).is_some_and(|sig| sig.declares(name));
@@ -984,7 +970,7 @@ impl LanguageServer for Backend {
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
 
-        if let Some(key) = i18n_key_at(&project, &doc, &path, line_start, line, col, &self.options().extra_engines) {
+        if let Some(key) = i18n_key_at(&project, &doc, &path, pos, &self.options().extra_engines) {
             let locs = translation_locations(&self.locale_files(&path), &key);
             return Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)));
         }
@@ -1012,12 +998,12 @@ impl LanguageServer for Backend {
         // Cheapest first: Ctrl+hover asks for a definition on every word the mouse crosses.
         let helper = helper_defs::name_at(line, col).map(str::to_string);
         let route = helper.as_deref().and_then(|name| routes::for_helper(&self.routes_for(&path), name)?.0.source.clone());
-        let (text, line, lang) = (doc.text.clone(), line.to_string(), doc.lang);
+        let (owned, line) = (Doc::clone(&doc), line.to_string());
         // The guard would block the next `did_change` while the work below waits.
         drop(doc);
         // A block variable or a local the template assigns hides a helper of the same name.
         if let Some(name) = helper.as_deref().filter(|name| !is_builtin_helper(name)) {
-            if let Some(range) = self.local_definition_range(&uri, &project, &text, lang, line_start + col, name).await? {
+            if let Some(range) = self.local_definition_range(&uri, &project, &owned, line_start + col, name).await? {
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(uri, range))));
             }
         }
@@ -1031,7 +1017,7 @@ impl LanguageServer for Backend {
             (None, None) => {}
         }
         if locs.is_empty() {
-            locs.extend(self.variable_definitions(&text, &path, &line, col).await?);
+            locs.extend(self.variable_definitions(&owned.text, &path, &line, col).await?);
         }
         Ok((!locs.is_empty()).then_some(GotoDefinitionResponse::Array(locs)))
     }
@@ -1095,7 +1081,7 @@ impl LanguageServer for Backend {
             if let Some(r) = partials::render_ref_at(&doc.text, line_start, line, doc.lang, project.prism_version(), col) {
                 return Ok(markdown_hover(render_hover(project, path, &r)));
             }
-            if let Some(md) = i18n_key_at(project, &doc, path, line_start, line, col, &self.options().extra_engines)
+            if let Some(md) = i18n_key_at(project, &doc, path, pos, &self.options().extra_engines)
                 .and_then(|key| i18n::hover(&self.locale_files(path), &key))
             {
                 return Ok(markdown_hover(md));
@@ -1344,8 +1330,7 @@ impl LanguageServer for Backend {
         let extra_engines = self.options().extra_engines.clone();
         let i18n_key = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-            let (line_start, line, col) = util::line_at(&doc.text, pos);
-            i18n_key_at(&project, &doc, &path, line_start, line, col, &extra_engines)
+            i18n_key_at(&project, &doc, &path, pos, &extra_engines)
         };
         let declaration = p.context.include_declaration;
         if let Some((key, app)) = i18n_key.zip(rails_paths::app_root(&path)) {

@@ -1,7 +1,7 @@
 //! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace and the final
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
-use crate::checks::{language_diagnostics, ruby_context};
+use crate::checks::{language_diagnostics, ruby_context, Doc};
 use crate::lang::{html_host, is_partial, TemplateLang};
 use crate::project::Projects;
 use crate::strict_locals::RubyContext;
@@ -218,7 +218,8 @@ fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String
         let code = util::code(d).unwrap_or_default().to_string();
         (code, d.message.chars().filter(|c| !c.is_ascii_digit()).collect())
     };
-    language_diagnostics(template.uri, template.lang, template.plain_erb, false, text, extra_engines, ruby).iter().map(key).collect()
+    let doc = Doc { lang: template.lang, plain_erb: template.plain_erb, percent_lines: false, text: text.to_string(), version: 0 };
+    language_diagnostics(template.uri, &doc, extra_engines, ruby).iter().map(key).collect()
 }
 
 #[cfg(test)]
