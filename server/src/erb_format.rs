@@ -54,45 +54,75 @@ struct Line<'a> {
 /// Inclusive ranges of line starts, or of line-end offsets.
 type Ranges = Vec<(usize, usize)>;
 
+/// Byte ranges read from the tokens; the lines that start in them get their role from them.
+struct Regions {
+    /// Lines that keep their leading whitespace.
+    fixed: Ranges,
+    /// Line-end offsets whose trailing whitespace stays.
+    keep_end: Ranges,
+    units: Vec<UnitSpan>,
+}
+
 /// `text` with every line re-indented by `unit`, and trailing whitespace dropped.
 /// With `align_comments`, the lines inside a comment move with the line it opens on instead of keeping their bytes.
 pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
-    let doubt = crate::erb::diagnostics(text, ruby, false)
-        .into_iter()
-        .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
-        .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())
-        .or_else(|| tags::diagnostics(text, partial).into_iter().next());
-    if let Some(d) = doubt {
-        return skip(SkipKind::Doubt, format!("line {}: {}", d.range.start.line + 1, d.message));
+    if let Some(reason) = doubt(text, partial, ruby) {
+        return skip(SkipKind::Doubt, reason);
     }
     let Some(tokens) = tags::tokens(text) else {
         return skip(SkipKind::Doubt, "a `javascript_tag`/`content_tag :script` block or unreadable ERB");
     };
     let lines = split(text);
     let starts: Vec<usize> = lines.iter().map(|l| l.start).collect();
-    let line_of = |offset: usize| starts.partition_point(|&s| s <= offset) - 1;
+    let Regions { fixed, keep_end, units: unit_spans } = regions(text, &tokens, &starts, align_comments)?;
+    let (roles, units) = assign_roles(&starts, unit_spans, &fixed);
+    let keeps_end = keeps_end(&lines, &keep_end);
 
+    let paired = paired_optional(&tokens);
+    let (levels, uncertain) = levels(text, Nesting::new(&tokens, &paired, partial), &lines, &roles);
+    let notes = uncertain
+        .map(|line| format!("line {}: indentation kept from here on: ERB branches leave different tags open, or tags overlap", line + 1))
+        .into_iter()
+        .collect();
+    let decided = decide(&lines, &roles, &units, &levels, unit);
+    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), notes })
+}
+
+/// Why `text` isn't safe to re-indent: its first ERB error, else its first HTML or tag problem.
+fn doubt(text: &str, partial: bool, ruby: &RubyContext) -> Option<String> {
+    let d = crate::erb::diagnostics(text, ruby, false)
+        .into_iter()
+        .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+        .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())
+        .or_else(|| tags::diagnostics(text, partial).into_iter().next())?;
+    Some(format!("line {}: {}", d.range.start.line + 1, d.message))
+}
+
+fn line_of(starts: &[usize], offset: usize) -> usize {
+    starts.partition_point(|&s| s <= offset) - 1
+}
+
+fn regions(text: &str, tokens: &[Token], starts: &[usize], align_comments: bool) -> Result<Regions, Skipped> {
     let mut fixed: Ranges = Vec::new();
     let mut keep_end: Ranges = Vec::new();
-    let mut unit_spans: Vec<UnitSpan> = Vec::new();
+    let mut units: Vec<UnitSpan> = Vec::new();
     let span = |first, last, owner| UnitSpan { first, last, owner, comment: false };
     let comment_span = |first, last, owner| UnitSpan { first, last, owner, comment: true };
-    let paired = paired_optional(&tokens);
     for (i, token) in tokens.iter().enumerate() {
         match token {
             Token::Erb(e) => {
                 if matches!(e.effect, BlockEffect::Open(_)) && PRE_BLOCK.is_match(erb_code(&text[e.at..e.end])) {
-                    return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(e.at) + 1));
+                    return skip(SkipKind::Doubt, format!("line {}: a `<pre>`/`<textarea>` helper block", line_of(starts, e.at) + 1));
                 }
                 if align_comments && e.comment {
-                    unit_spans.push(comment_span(e.at + 1, e.end - 1, e.at));
+                    units.push(comment_span(e.at + 1, e.end - 1, e.at));
                 } else {
                     fixed.push((e.at + 1, e.end - 1));
                 }
                 keep_end.push((e.at + 1, e.end - 1));
             }
             Token::Open { tag, quoted, .. } | Token::Close { tag, quoted } => {
-                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start));
+                units.push(span(tag.start + 1, tag.end - 1, tag.start));
                 for &(q, q_end) in quoted {
                     fixed.push((q + 1, q_end - 1));
                     keep_end.push((q + 1, q_end - 1));
@@ -100,7 +130,7 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
                 if let Token::Open { tag, .. } = token {
                     if tag.name == "pre" {
                         let Some(close) = closing(&tokens[i + 1..], "pre") else {
-                            return skip(SkipKind::Doubt, format!("line {}: `<pre>` is never closed", line_of(tag.start) + 1));
+                            return skip(SkipKind::Doubt, format!("line {}: `<pre>` is never closed", line_of(starts, tag.start) + 1));
                         };
                         fixed.push((tag.end, close.start));
                         keep_end.push((tag.end, close.start.saturating_sub(1)));
@@ -109,10 +139,10 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
             }
             Token::Raw { tag, close } => {
                 let Some((close_start, _)) = *close else {
-                    return skip(SkipKind::Doubt, format!("line {}: `<{}>` is never closed", line_of(tag.start) + 1, tag.name));
+                    return skip(SkipKind::Doubt, format!("line {}: `<{}>` is never closed", line_of(starts, tag.start) + 1, tag.name));
                 };
                 keep_end.push((tag.end, close_start.saturating_sub(1)));
-                unit_spans.push(span(tag.start + 1, tag.end - 1, tag.start));
+                units.push(span(tag.start + 1, tag.end - 1, tag.start));
                 fixed.push((tag.end, close_start));
             }
             Token::Comment { start, end } => {
@@ -121,7 +151,7 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
                 let Some(newline) = text[*start..*end].find('\n') else { continue };
                 // `<!DOCTYPE`, `<![CDATA[` and `<?…?>` are this token too; CDATA's text is the page's.
                 if align_comments && text[*start..].starts_with("<!--") {
-                    unit_spans.push(comment_span(start + newline + 1, end - 1, *start));
+                    units.push(comment_span(start + newline + 1, end - 1, *start));
                 } else {
                     fixed.push((start + newline + 1, end - 1));
                 }
@@ -136,24 +166,27 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
         fixed.push((tag.start + 1, tag.end - 1));
         keep_end.push((tag.start + 1, tag.end - 1));
     }
+    Ok(Regions { fixed, keep_end, units })
+}
 
-    let mut roles = vec![Role::Markup; lines.len()];
+fn assign_roles(starts: &[usize], mut unit_spans: Vec<UnitSpan>, fixed: &Ranges) -> (Vec<Role>, Vec<Unit>) {
+    let mut roles = vec![Role::Markup; starts.len()];
     let mut units = Vec::new();
     // Inner units start later; sorting by start lets them win over the unit around them.
     unit_spans.sort_by_key(|u| u.owner);
     for UnitSpan { first, last, owner, comment } in unit_spans {
-        let lines_inside = lines_starting_in(&starts, first, last);
+        let lines_inside = lines_starting_in(starts, first, last);
         if lines_inside.is_empty() {
             continue;
         }
         let index = units.len();
-        units.push(Unit { owner_line: line_of(owner), comment, lines: lines_inside.clone() });
+        units.push(Unit { owner_line: line_of(starts, owner), comment, lines: lines_inside.clone() });
         for line in lines_inside {
             roles[line] = Role::Unit(index);
         }
     }
-    for &(first, last) in &fixed {
-        for line in lines_starting_in(&starts, first, last) {
+    for &(first, last) in fixed {
+        for line in lines_starting_in(starts, first, last) {
             roles[line] = Role::Fixed;
         }
     }
@@ -163,20 +196,21 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
             unit.lines.clone().for_each(|i| roles[i] = Role::Fixed);
         }
     }
+    (roles, units)
+}
+
+/// Whether each line keeps its trailing whitespace.
+fn keeps_end(lines: &[Line], keep_end: &Ranges) -> Vec<bool> {
     let ends: Vec<usize> = lines.iter().map(|l| l.start + l.ws.len() + l.rest.len()).collect();
-    let mut keeps_end = vec![false; lines.len()];
-    for &(first, last) in &keep_end {
-        lines_starting_in(&ends, first, last).for_each(|line| keeps_end[line] = true);
+    let mut keeps = vec![false; lines.len()];
+    for &(first, last) in keep_end {
+        lines_starting_in(&ends, first, last).for_each(|line| keeps[line] = true);
     }
+    keeps
+}
 
-    let (levels, uncertain) = levels(text, &tokens, &paired, &lines, &roles, partial);
-    let notes = uncertain
-        .map(|line| format!("line {}: indentation kept from here on: ERB branches leave different tags open, or tags overlap", line + 1))
-        .into_iter()
-        .collect();
-    let decided = decide(&lines, &roles, &units, &levels, unit);
-
-    let mut out = String::with_capacity(text.len());
+fn render(capacity: usize, lines: &[Line], roles: &[Role], keeps_end: &[bool], decided: &[Option<String>]) -> String {
+    let mut out = String::with_capacity(capacity);
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
             out.push('\n');
@@ -191,7 +225,7 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
         out.push_str(content);
         out.push_str(line.cr);
     }
-    Ok(Indented { text: out, notes })
+    out
 }
 
 fn split(text: &str) -> Vec<Line<'_>> {
@@ -267,6 +301,8 @@ struct Nesting<'t> {
     blocks: Vec<Block>,
     /// False after an ERB block whose branches left different tags open.
     agreed: bool,
+    /// The first token not applied yet.
+    next: usize,
 }
 
 enum Kind {
@@ -277,7 +313,11 @@ enum Kind {
     Other,
 }
 
-impl Nesting<'_> {
+impl<'t> Nesting<'t> {
+    fn new(tokens: &'t [Token<'t>], paired: &'t HashSet<usize>, partial: bool) -> Self {
+        Nesting { tokens, paired, partial, stack: Vec::new(), p: PState::default(), blocks: Vec::new(), agreed: true, next: 0 }
+    }
+
     fn depth(&self) -> usize {
         self.stack.len() + self.blocks.len()
     }
@@ -296,8 +336,21 @@ impl Nesting<'_> {
         VOID.contains(&name) || (OPTIONAL_END.contains(&name) && !self.paired.contains(&i)) || (self.partial && self.stack.is_empty())
     }
 
-    /// Applies token `i`; false once an end tag doesn't match the stack.
-    fn step(&mut self, i: usize) -> bool {
+    /// `<% end %>` and `<% else %>` (token `i`) line up with their block's opening, under tags a branch left open.
+    fn block_level(&self, i: usize) -> Option<usize> {
+        let Token::Erb(e) = &self.tokens[i] else { return None };
+        let closed = match e.effect {
+            BlockEffect::Close(n) => n,
+            _ => 1,
+        };
+        let rest = self.blocks.len().checked_sub(closed)?;
+        Some(self.blocks[rest].entry.len() + rest)
+    }
+
+    /// Applies the next token; false once an end tag doesn't match the stack.
+    fn step(&mut self) -> bool {
+        let i = self.next;
+        self.next += 1;
         match &self.tokens[i] {
             // Branches that disagree (`<% if a %><div><% end %>`) go on with the tags the last one left open: the usual
             // conditional wrapper closes them under the same condition, and a guess that's wrong ends in a mismatch.
@@ -323,69 +376,67 @@ impl Nesting<'_> {
             _ => true,
         }
     }
-}
 
-/// The nesting level of each markup line, and the line from which the nesting is uncertain, if any.
-fn levels(
-    text: &str,
-    tokens: &[Token],
-    paired: &HashSet<usize>,
-    lines: &[Line],
-    roles: &[Role],
-    partial: bool,
-) -> (Vec<Option<usize>>, Option<usize>) {
-    let mut nesting = Nesting { tokens, paired, partial, stack: Vec::new(), p: PState::default(), blocks: Vec::new(), agreed: true };
-    let mut out = vec![None; lines.len()];
-    let mut next = 0;
-    for (l, line) in lines.iter().enumerate() {
-        while next < tokens.len() && span(&tokens[next]).0 < line.start {
-            if !nesting.step(next) {
-                return (out, Some(l));
+    /// Applies every token that starts before `offset`; false once an end tag doesn't match the stack.
+    fn advance_to(&mut self, offset: usize) -> bool {
+        while self.next < self.tokens.len() && span(&self.tokens[self.next]).0 < offset {
+            if !self.step() {
+                return false;
             }
-            next += 1;
         }
-        if roles[l] != Role::Markup || line.rest.is_empty() {
-            continue;
-        }
-        let line_end = line.start + line.ws.len() + line.rest.len();
-        let mut level = nesting.depth();
-        let mut at = line.start + line.ws.len();
-        while next < tokens.len() {
-            let (start, end) = span(&tokens[next]);
+        true
+    }
+
+    /// The level of the markup line running from `at` to `line_end`, after applying the end tags, `<% end %>` and
+    /// `<% else %>` that lead it; `None` once an end tag doesn't match the stack.
+    fn line_level(&mut self, text: &str, mut at: usize, line_end: usize) -> Option<usize> {
+        let mut level = self.depth();
+        while self.next < self.tokens.len() {
+            let i = self.next;
+            let (start, end) = span(&self.tokens[i]);
             // ERB inside a tag that leads the line (`</div <%= x %>>`) belongs to it.
             let Some(gap) = text.get(at..start) else {
-                if !nesting.step(next) {
-                    return (out, Some(l));
+                if !self.step() {
+                    return None;
                 }
-                next += 1;
                 continue;
             };
             if start >= line_end || !gap.trim_matches([' ', '\t']).is_empty() {
                 break;
             }
-            let kind = nesting.kind(next);
+            let kind = self.kind(i);
             if matches!(kind, Kind::Other) {
                 break;
             }
-            // `<% end %>` and `<% else %>` line up with their block's opening, under tags a branch left open.
-            let block_level = match &tokens[next] {
-                Token::Erb(e) => match e.effect {
-                    BlockEffect::Close(n) => nesting.blocks.len().checked_sub(n).map(|rest| nesting.blocks[rest].entry.len() + rest),
-                    _ => nesting.blocks.len().checked_sub(1).map(|rest| nesting.blocks[rest].entry.len() + rest),
-                },
-                _ => None,
-            };
-            if !nesting.step(next) {
-                return (out, Some(l));
+            let block_level = self.block_level(i);
+            if !self.step() {
+                return None;
             }
             if matches!(kind, Kind::Closer) {
                 // An `<% end %>` whose branches disagree has no single opening to line up with.
-                let aligned = block_level.filter(|_| nesting.agreed);
-                level = level.min(aligned.unwrap_or(nesting.depth()));
+                let aligned = block_level.filter(|_| self.agreed);
+                level = level.min(aligned.unwrap_or(self.depth()));
             }
             at = end;
-            next += 1;
         }
+        Some(level)
+    }
+}
+
+/// The nesting level of each markup line, and the line from which the nesting is uncertain, if any.
+fn levels(text: &str, mut nesting: Nesting, lines: &[Line], roles: &[Role]) -> (Vec<Option<usize>>, Option<usize>) {
+    let mut out = vec![None; lines.len()];
+    for (l, line) in lines.iter().enumerate() {
+        if !nesting.advance_to(line.start) {
+            return (out, Some(l));
+        }
+        if roles[l] != Role::Markup || line.rest.is_empty() {
+            continue;
+        }
+        let at = line.start + line.ws.len();
+        let Some(level) = nesting.line_level(text, at, at + line.rest.len()) else {
+            return (out, Some(l));
+        };
         out[l] = Some(level);
     }
     (out, None)
@@ -427,21 +478,17 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
         if stuck.is_empty() {
             return decided;
         }
-        for mut u in stuck {
+        for u in stuck {
+            moves[u] = false;
             if units[u].comment {
-                moves[u] = false;
                 continue;
             }
-            loop {
-                moves[u] = false;
-                match roles[units[u].owner_line] {
-                    Role::Unit(outer) => u = outer,
-                    _ => {
-                        pinned[units[u].owner_line] = true;
-                        break;
-                    }
-                }
+            let mut owner_line = units[u].owner_line;
+            while let Role::Unit(outer) = roles[owner_line] {
+                moves[outer] = false;
+                owner_line = units[outer].owner_line;
             }
+            pinned[owner_line] = true;
         }
     }
 }
