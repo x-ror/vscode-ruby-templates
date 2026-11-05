@@ -1,9 +1,10 @@
 //! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
 
-use crate::checks::{diagnostics_in, Doc, Options};
+use crate::checks::{diagnostics_in, Doc};
 use crate::config;
 use crate::format::{self, SkipKind};
 use crate::lang::TemplateLang;
+use crate::options::Options;
 use crate::project::{Project, Projects};
 use crate::util;
 use crate::view_roots;

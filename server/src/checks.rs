@@ -2,6 +2,7 @@
 
 use crate::code_context::render_filter;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
+use crate::options::Options;
 use crate::{
     controller_classes, erb, haml_indent, haml_parser, haml_ruby, html_lint, partials,
     project::{Framework, Project, Projects},
@@ -31,94 +32,6 @@ impl Doc {
     /// HTML ERB; a `%`-lines document is never HTML, since its `%` lines would read as text.
     pub fn html_host(&self, uri: &Uri) -> bool {
         !self.percent_lines && html_host(uri, self.plain_erb, &self.text)
-    }
-}
-
-/// `initializationOptions`, from the `rubyTemplates.{slim,erb,haml,jbuilder}.*` settings.
-#[derive(Default, Debug, PartialEq)]
-pub(crate) struct Options {
-    pub extra_engines: Vec<String>,
-    disabled_slim: Vec<String>,
-    disabled_erb: Vec<String>,
-    disabled_haml: Vec<String>,
-    disabled_jbuilder: Vec<String>,
-    diagnostics_off: Vec<TemplateLang>,
-    format_off: Vec<TemplateLang>,
-    /// `erb.format.alignComments`.
-    pub align_erb_comments: bool,
-}
-
-/// The settings sections that switch diagnostics and formatting on or off, and the languages each covers.
-const SWITCHED_SECTIONS: [(&str, &[TemplateLang]); 3] =
-    [("erb", &[TemplateLang::Erb]), ("haml", &[TemplateLang::Haml]), ("slim", &[TemplateLang::Slim, TemplateLang::Skim])];
-
-impl Options {
-    /// Reads each field on its own so one malformed field keeps the others; returns what was ignored.
-    pub(crate) fn from_init(init: Option<&serde_json::Value>) -> (Self, Vec<String>) {
-        let mut ignored = Vec::new();
-        let mut strings = |section: &str, name: &str| -> Vec<String> {
-            let Some(value) = init.and_then(|v| v.get(section)?.get(name)) else {
-                return vec![];
-            };
-            let Some(items) = value.as_array() else {
-                ignored.push(format!("{section}.{name}: expected an array, got {value}"));
-                return vec![];
-            };
-            items
-                .iter()
-                .filter_map(|item| {
-                    let s = item.as_str().map(String::from);
-                    if s.is_none() {
-                        ignored.push(format!("{section}.{name}: expected a string, got {item}"));
-                    }
-                    s
-                })
-                .collect()
-        };
-        let mut options = Self {
-            extra_engines: strings("slim", "extraEngines"),
-            disabled_slim: strings("slim", "disabledDiagnostics"),
-            disabled_erb: strings("erb", "disabledDiagnostics"),
-            disabled_haml: strings("haml", "disabledDiagnostics"),
-            disabled_jbuilder: strings("jbuilder", "disabledDiagnostics"),
-            ..Self::default()
-        };
-        for (section, langs) in SWITCHED_SECTIONS {
-            for (group, off) in [("diagnostics", &mut options.diagnostics_off), ("format", &mut options.format_off)] {
-                let Some(value) = init.and_then(|v| v.get(section)?.get(group)?.get("enabled")) else { continue };
-                match value.as_bool() {
-                    Some(false) => off.extend(langs),
-                    Some(true) => {}
-                    None => ignored.push(format!("{section}.{group}.enabled: expected a boolean, got {value}")),
-                }
-            }
-        }
-        if let Some(value) = init.and_then(|v| v.get("erb")?.get("format")?.get("alignComments")) {
-            match value.as_bool() {
-                Some(align) => options.align_erb_comments = align,
-                None => ignored.push(format!("erb.format.alignComments: expected a boolean, got {value}")),
-            }
-        }
-        (options, ignored)
-    }
-
-    fn diagnostics_enabled(&self, lang: TemplateLang) -> bool {
-        !self.diagnostics_off.contains(&lang)
-    }
-
-    pub(crate) fn format_enabled(&self, lang: TemplateLang) -> bool {
-        !self.format_off.contains(&lang)
-    }
-
-    /// Diagnostic codes turned off for `lang`; Skim shares Slim's setting.
-    fn disabled(&self, lang: TemplateLang) -> &[String] {
-        match lang {
-            TemplateLang::Slim | TemplateLang::Skim => &self.disabled_slim,
-            TemplateLang::Erb => &self.disabled_erb,
-            TemplateLang::Haml => &self.disabled_haml,
-            TemplateLang::Ruby => &self.disabled_jbuilder,
-            TemplateLang::Liquid => &[],
-        }
     }
 }
 
@@ -236,11 +149,6 @@ fn render_diagnostics(
     out
 }
 
-/// Is `root` a gem or engine, whose templates also render the host app's partials?
-fn is_gem_root(root: &Path) -> bool {
-    std::fs::read_dir(root).is_ok_and(|mut files| files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "gemspec"))))
-}
-
 /// Literal renders in code that can be checked, as (line index, line, call, render): `dir/name` with an existing
 /// app/views/dir or one no view root has (`view_roots`; a missing dir is usually a gem's or a pack's), and a bare name
 /// in an action template when its controller chain is in the app and the app isn't a gem or engine (a partial's
@@ -270,6 +178,11 @@ fn checked_renders<'a>(
         out.extend(refs.into_iter().map(|(r, call)| (i, line, call, r)));
     }
     out
+}
+
+/// Is `root` a gem or engine, whose templates also render the host app's partials?
+fn is_gem_root(root: &Path) -> bool {
+    std::fs::read_dir(root).is_ok_and(|mut files| files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "gemspec"))))
 }
 
 /// A template's partials, each resolved and read once per pass: a view renders the same few many times.
@@ -407,33 +320,13 @@ mod tests {
     }
 
     #[test]
-    fn options_keep_valid_fields() {
-        let init = serde_json::json!({
-            "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] },
-            "erb": { "disabledDiagnostics": ["unclosed-element"] },
-            "haml": { "disabledDiagnostics": "illegal-nesting" }
-        });
-        let (options, ignored) = Options::from_init(Some(&init));
-        let expected =
-            Options { disabled_slim: vec!["bad-dedent".into()], disabled_erb: vec!["unclosed-element".into()], ..Options::default() };
-        assert_eq!(options, expected);
-        assert_eq!(ignored.len(), 3, "{ignored:?}");
-        assert_eq!(Options::from_init(None), (Options::default(), vec![]));
-    }
-
-    #[test]
-    fn languages_switch_diagnostics_and_formatting_off() {
+    fn switched_off_languages_get_no_diagnostics() {
         let init = serde_json::json!({
             "erb": { "diagnostics": { "enabled": false } },
-            "slim": { "format": { "enabled": false }, "diagnostics": { "enabled": "no" } },
+            "slim": { "format": { "enabled": false } },
             "haml": { "diagnostics": { "enabled": true }, "format": {} }
         });
-        let (options, ignored) = Options::from_init(Some(&init));
-        assert_eq!(ignored.len(), 1, "{ignored:?}");
-        assert!(!options.align_erb_comments);
-        let align = |value| Options::from_init(Some(&serde_json::json!({ "erb": { "format": { "alignComments": value } } })));
-        assert!(align(serde_json::json!(true)).0.align_erb_comments);
-        assert_eq!(align(serde_json::json!("yes")).1.len(), 1);
+        let options = Options::from_init(Some(&init)).0;
         let count = |lang, text: &str, options: &Options| {
             let uri = "file:///v/show.html.erb".parse::<Uri>().unwrap();
             diagnostics(&uri, &Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 }, options).len()
@@ -444,12 +337,13 @@ mod tests {
         assert_eq!(count(TemplateLang::Haml, haml, &options), count(TemplateLang::Haml, haml, &Options::default()));
         let slim = "p\n   a\n  b\n";
         assert_ne!(count(TemplateLang::Slim, slim, &options), 0);
-        let formats = |lang| options.format_enabled(lang);
-        assert!(formats(TemplateLang::Erb) && formats(TemplateLang::Haml) && formats(TemplateLang::Ruby));
-        assert!(!formats(TemplateLang::Slim) && !formats(TemplateLang::Skim));
         // Skim follows Slim.
         let off = Options::from_init(Some(&serde_json::json!({ "slim": { "diagnostics": { "enabled": false } } }))).0;
         assert_eq!(count(TemplateLang::Skim, slim, &off), 0);
+    }
+
+    fn disabling_haml(code: &str) -> Options {
+        Options::from_init(Some(&serde_json::json!({ "haml": { "disabledDiagnostics": [code] } }))).0
     }
 
     #[test]
@@ -474,11 +368,11 @@ mod tests {
         for (text, code) in erb_cases {
             assert_eq!(codes(erb_path, TemplateLang::Erb, text, &all), [code]);
         }
-        let options = Options {
-            disabled_erb: vec![erb::code::RUBY_SYNTAX.into(), tags::code::UNCLOSED_ELEMENT.into(), erb::code::UNCLOSED_TAG.into()],
-            disabled_haml: vec![haml_indent::code::ILLEGAL_NESTING.into()],
-            ..Options::default()
-        };
+        let options = Options::from_init(Some(&serde_json::json!({
+            "erb": { "disabledDiagnostics": [erb::code::RUBY_SYNTAX, tags::code::UNCLOSED_ELEMENT, erb::code::UNCLOSED_TAG] },
+            "haml": { "disabledDiagnostics": [haml_indent::code::ILLEGAL_NESTING] }
+        })))
+        .0;
         assert!(erb_cases.iter().all(|(text, _)| codes(erb_path, TemplateLang::Erb, text, &options).is_empty()));
         // Text that is not HTML has no `<` to misparse.
         assert!(codes("file:///v/show.text.erb", TemplateLang::Erb, "hi <% foo", &all).is_empty());
@@ -489,12 +383,12 @@ mod tests {
         // Turning one code off leaves the others.
         let void = "%br\n  %p\n";
         assert_eq!(codes(haml_path, TemplateLang::Haml, void, &all), [haml_indent::code::VOID_CHILDREN]);
-        let quiet = Options { disabled_haml: vec![haml_indent::code::VOID_CHILDREN.into()], ..Options::default() };
+        let quiet = disabling_haml(haml_indent::code::VOID_CHILDREN);
         assert!(codes(haml_path, TemplateLang::Haml, void, &quiet).is_empty());
         // Haml's Ruby is parsed once Haml itself accepts the template.
         let ruby = codes(haml_path, TemplateLang::Haml, "= foo(\n", &all);
         assert!(!ruby.is_empty() && ruby.iter().all(|c| c == RUBY_SYNTAX), "{ruby:?}");
-        let ruby_off = Options { disabled_haml: vec![RUBY_SYNTAX.into()], ..Options::default() };
+        let ruby_off = disabling_haml(RUBY_SYNTAX);
         assert!(codes(haml_path, TemplateLang::Haml, "= foo(\n", &ruby_off).is_empty());
         let after_error = codes(haml_path, TemplateLang::Haml, "- if x\n  %p\n- end\n= foo(\n", &all);
         assert_eq!(after_error, [haml_indent::code::EXPLICIT_END]);

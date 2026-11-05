@@ -29,6 +29,7 @@ mod ivars;
 mod lang;
 mod lsp;
 mod model_columns;
+mod options;
 mod outline;
 mod partial_rename;
 mod partials;

@@ -1,4 +1,4 @@
-use crate::checks::{diagnostics_in, Doc, Options, STRICT_LOCALS, UNRESOLVED_RENDER};
+use crate::checks::{diagnostics_in, Doc, STRICT_LOCALS, UNRESOLVED_RENDER};
 use crate::code_context::{self, block_locals, code_at, in_ruby_context, line_roles, render_filter};
 use crate::completion::{
     block_local_completions, component_completions, component_prefix, has_arguments, helper_item, helpers_for, i18n_completions,
@@ -7,6 +7,7 @@ use crate::completion::{
 };
 use crate::controllers::Target;
 use crate::lang::{file_name, is_partial, TemplateLang};
+use crate::options::Options;
 use crate::util::{file_location, line_location};
 use crate::{
     assets, config, controller_classes, controllers, erb, erb_complete, format, haml, haml_indent, helper_defs, helpers, i18n, ivars,
