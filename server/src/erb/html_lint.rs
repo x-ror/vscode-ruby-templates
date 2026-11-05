@@ -40,7 +40,7 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
             let end = till("-->", i + "<!--".len());
             out.push((i, end));
             at = end;
-        } else if let Some(name) = TEXT_ELEMENTS.iter().find(|n| rest.get(1..=n.len()).is_some_and(|r| r.eq_ignore_ascii_case(n))) {
+        } else if let Some(name) = TEXT_ELEMENTS.iter().find(|n| names_tag(&rest[1..], n)) {
             // The body starts after the start tag's `>`, skipping ERB in its attributes.
             let mut body = i + 1;
             while let Some(gt) = text[body..].find(['>', '<']).map(|e| body + e) {
@@ -51,11 +51,8 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
                 body = gt + 1;
                 break;
             }
-            let close = text[body..]
-                .match_indices("</")
-                .map(|(e, _)| body + e)
-                .find(|&e| text.get(e + 2..e + 2 + name.len()).is_some_and(|n| n.eq_ignore_ascii_case(name)))
-                .unwrap_or(text.len());
+            let close =
+                text[body..].match_indices("</").map(|(e, _)| body + e).find(|&e| names_tag(&text[e + 2..], name)).unwrap_or(text.len());
             out.push((body, close));
             at = close.max(i + 1);
         } else {
@@ -66,6 +63,12 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// Is byte `at` inside one of `regions` (sorted, as `non_markup` returns them)?
+/// Whether `after`, the text after `<` or `</`, starts with the tag name `name` itself, not a longer one (`title-bar`).
+fn names_tag(after: &str, name: &str) -> bool {
+    after.get(..name.len()).is_some_and(|n| n.eq_ignore_ascii_case(name))
+        && after[name.len()..].chars().next().is_none_or(|c| c.is_ascii_whitespace() || c == '>' || c == '/')
+}
+
 pub fn inside(regions: &[(usize, usize)], at: usize) -> bool {
     let next = regions.partition_point(|&(start, _)| start <= at);
     next > 0 && at < regions[next - 1].1
@@ -277,6 +280,8 @@ mod tests {
         assert!(codes("<%= image_tag \"a.png\", alt: \"A\" %><%= image_tag(x, **opts) %>").is_empty());
         assert!(codes("<script>const s = '<img src=x>'</script>").is_empty());
         assert!(codes("<title><img src=x></title>").is_empty(), "a title's content is text");
+        assert_eq!(codes("<title-bar><img src=x></title-bar>").len(), 1, "a custom element is markup");
+        assert!(codes("<style>a{}</style-guide><img src=x></style>").is_empty(), "only </style> ends a style");
         assert!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt>").is_empty());
         assert_eq!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"x\">").len(), 1);
         // A no-break or ideographic space after the name is part of an attribute name, not a crash.
