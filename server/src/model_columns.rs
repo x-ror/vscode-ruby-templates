@@ -242,10 +242,7 @@ fn tables(view: &Path, model: &str) -> Vec<String> {
 /// Does the view's controller namespace (`views/admin/reports/` → `Admin`) have its own `last`, which Ruby's lexical lookup
 /// would pick over the top-level one?
 fn namespace_shadows(view: &Path, models: &Path, last: &str) -> bool {
-    let Some(folder) = rails_paths::views_root(view).and_then(|views| view.parent()?.strip_prefix(views).ok().map(Path::to_path_buf))
-    else {
-        return false;
-    };
+    let Some(folder) = rails_paths::view_relative(view).and_then(Path::parent) else { return false };
     let mut scope = PathBuf::new();
     let mut parents: Vec<PathBuf> = Vec::new();
     for part in folder.components().take(folder.components().count().saturating_sub(1)) {

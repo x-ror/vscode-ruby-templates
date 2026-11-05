@@ -4,7 +4,9 @@ use crate::controller_classes::{self, controller_file};
 use crate::inflect::{self, pluralize, singularize};
 use crate::prism;
 use crate::project::Project;
-use crate::rails_paths::{app_root, template_format, template_stem, template_suffix, template_variant, views_root};
+use crate::rails_paths::{
+    app_root, is_partial_path, template_format, template_stem, template_suffix, template_variant, view_relative, views_root,
+};
 use crate::render_call::{self, Call, HamlPipes, Pair, MAX_CALL_LINES};
 use crate::ruby::{self, CodeEnd};
 use crate::util::slash_path;
@@ -487,13 +489,13 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
     let Some(views) = views_root(current) else { return vec![] };
     let singular = singularize(name);
     let plural = pluralize(&singular);
-    let view_dir = current.parent().and_then(|dir| dir.strip_prefix(&views).ok()).unwrap_or(Path::new(""));
+    let view_dir = view_relative(current).and_then(Path::parent).unwrap_or(Path::new(""));
     let mut namespaces = model_namespaces(project, &views, current, &singular);
     namespaces.push(PathBuf::new());
     for namespace in namespaces {
         let prefixed = views.join(prefixed_with_view_namespace(view_dir, &namespace)).join(&plural);
         // Rails raises MissingTemplate rather than trying the model's own folder, but only for a controller's action views.
-        let dirs = if project.prefixes_partial_paths && !is_partial_file(current) && is_controller_folder(&views, view_dir) {
+        let dirs = if project.prefixes_partial_paths && !is_partial_path(current) && is_controller_folder(&views, view_dir) {
             vec![prefixed]
         } else {
             vec![prefixed, views.join(namespace.join(&plural))]
@@ -510,10 +512,6 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
         }
     }
     vec![]
-}
-
-fn is_partial_file(path: &Path) -> bool {
-    path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
 }
 
 /// Is `views/<view_dir>` the folder of an existing controller (`admin/users` for `admin/users_controller.rb`)?
@@ -546,7 +544,7 @@ fn model_namespaces(project: &Project, views: &Path, current: &Path, singular: &
         .filter(|path| path.file_name().is_some_and(|name| name == file.as_str()))
         .filter_map(|path| Some(path.parent()?.to_path_buf()))
         .collect();
-    let view_dir = current.parent().and_then(|dir| dir.strip_prefix(views).ok());
+    let view_dir = view_relative(current).and_then(Path::parent);
     let outside_view = |namespace: &Path| !view_dir.is_some_and(|dir| dir.starts_with(namespace));
     namespaces.sort_by(|a, b| (outside_view(a), a).cmp(&(outside_view(b), b)));
     namespaces

@@ -10,7 +10,7 @@ use crate::partials::{
     split_render_name, RenderCall, RenderKind, RenderRef,
 };
 use crate::project::Project;
-use crate::rails_paths::{app_root, template_stem, views_root};
+use crate::rails_paths::{app_views, template_stem, views_root};
 use crate::render_call::HamlPipes;
 use crate::util::{lines_with_offsets, slash_path, LineIndex};
 use crate::{i18n, ruby, slim_outline};
@@ -122,7 +122,7 @@ fn targets(project: &Project, source: &Source, r: &RenderRef, explicit_partial: 
     }
     let controller = source.path.components().any(|c| c.as_os_str() == "controllers");
     let partial = if controller { explicit_partial } else { r.kind == RenderKind::Partial };
-    match app_root(&source.path).map(|app| app.join("views")) {
+    match app_views(&source.path) {
         Some(views) if partial && r.name.contains('/') => resolve(project, &views.join("_"), &as_partial),
         _ => vec![],
     }
@@ -135,7 +135,7 @@ fn inherited_folders(project: &Project, source: &Path, views: &Path) -> Vec<Path
 
 /// Whether `resolve` could look in `dir` for `r` from `source`: a cheap test before its directory listing.
 fn may_look_in(project: &Project, source: &Path, r: &RenderRef, dir: &Path) -> bool {
-    let views = views_root(source).or_else(|| Some(app_root(source)?.join("views")));
+    let views = app_views(source);
     match (split_render_name(&r.name).0, views) {
         // The folders `resolve` lists, compared as paths: `./users` is `users` there too.
         (Some(d), Some(v)) => v.join(d) == dir,

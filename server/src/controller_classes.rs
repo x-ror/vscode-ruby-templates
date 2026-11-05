@@ -3,7 +3,7 @@
 
 use crate::inflect::{constant_path, snake_case};
 use crate::project::Project;
-use crate::rails_paths::{app_root, files_under, template_stem, views_root};
+use crate::rails_paths::{app_root, files_under, template_stem, view_relative};
 use crate::ruby::logical_lines;
 use crate::util::slash_path;
 use regex::Regex;
@@ -89,7 +89,7 @@ pub fn controller_file(app: &Path, dir: &str) -> PathBuf {
 
 /// The folder of `view` below `views/` and its template name without formats.
 pub(crate) fn folder_and_name(project: &Project, view: &Path) -> Option<(String, String)> {
-    let rel = view.strip_prefix(views_root(view)?).ok()?;
+    let rel = view_relative(view)?;
     let dir = slash_path(rel.parent()?);
     Some((dir, template_stem(|f| project.is_format(f), rel.file_name()?.to_str()?).to_string()))
 }

@@ -1,7 +1,7 @@
 //! Every `app/views` folder a Rails app can render from: its own and its engines', packs' and components' under the
 //! Rails root, and those of the installed gems that could ship views.
 
-use crate::rails_paths::files_under;
+use crate::rails_paths::{files_under, is_app_views};
 use dashmap::DashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -276,8 +276,7 @@ pub(crate) fn adds_view_paths(text: &str) -> bool {
 /// Sorted, so which root wins is the same on every run.
 fn under_root(root: &Path) -> Vec<PathBuf> {
     let walk = WalkDir::new(root).max_depth(MAX_DEPTH).into_iter().filter_entry(|entry| entry.depth() == 0 || !not_searched(entry));
-    let views =
-        walk.flatten().filter(|e| e.file_name() == "views" && e.path().parent().and_then(Path::file_name).is_some_and(|n| n == "app"));
+    let views = walk.flatten().filter(|e| is_app_views(e.path()));
     let mut roots: Vec<PathBuf> = views.map(DirEntry::into_path).collect();
     roots.sort();
     roots

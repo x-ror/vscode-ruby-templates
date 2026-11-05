@@ -267,10 +267,8 @@ fn checked_renders<'a>(
     in_code: impl Fn(usize, usize, &partials::RenderRef) -> bool,
 ) -> Vec<CheckedRender<'a>> {
     let in_engine = LazyCell::new(|| views.parent().and_then(Path::parent).is_some_and(is_gem_root));
-    let bare_names_known = LazyCell::new(|| {
-        let is_partial = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'));
-        !*in_engine && !is_partial && controller_classes::bare_lookup_is_certain(project, path)
-    });
+    let bare_names_known =
+        LazyCell::new(|| !*in_engine && !rails_paths::is_partial_path(path) && controller_classes::bare_lookup_is_certain(project, path));
     let mut dirs: HashMap<String, bool> = HashMap::new();
     let mut checkable = |name: &str| {
         let Some(dir) = partials::split_render_name(name).0 else { return *bare_names_known };

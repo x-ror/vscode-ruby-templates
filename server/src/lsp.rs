@@ -149,9 +149,7 @@ fn referenced_partials(project: &Project, path: &Path, doc: &Doc, pos: Position)
         return Some(partials::resolve_model(project, path, name));
     }
     // On a component render the question isn't about this partial.
-    if partials::component_ref_at(line, col).is_some()
-        || !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with('_'))
-    {
+    if partials::component_ref_at(line, col).is_some() || !rails_paths::is_partial_path(path) {
         return None;
     }
     Some(vec![path.to_path_buf()])
@@ -478,7 +476,7 @@ impl Backend {
                 .filter_map(|a| line_location(&a.file, a.line))
                 .collect());
         }
-        let is_partial = path.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with('_'));
+        let is_partial = rails_paths::is_partial_path(path);
         // `link_to` or `t` is never a local; the scan below reads every view.
         let Some(name) = helper_defs::name_at(line, col).filter(|name| is_partial && !is_builtin_helper(name)) else { return Ok(vec![]) };
         let project = self.project_for(path);
@@ -807,7 +805,7 @@ impl Backend {
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
-        let root = rails_paths::app_root(current).and_then(|app| app.parent().map(Path::to_path_buf));
+        let root = rails_paths::rails_root(current);
         root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
     }
 

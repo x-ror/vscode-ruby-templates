@@ -1,7 +1,7 @@
 //! Model attributes from `db/schema.rb`, for `f.text_field :` completion inside a `form_with model:` block.
 
 use crate::inflect::{pluralize, singularize, snake_case};
-use crate::rails_paths::app_root;
+use crate::rails_paths::rails_root;
 use crate::util::leading_ws;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -51,7 +51,7 @@ pub struct Column {
 }
 
 fn schema_file(current: &Path) -> Option<PathBuf> {
-    Some(app_root(current)?.parent()?.join("db/schema.rb"))
+    Some(rails_root(current)?.join("db/schema.rb"))
 }
 
 /// `(column, type)` of `table` in the app's `db/schema.rb`.

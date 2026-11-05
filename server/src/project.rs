@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::controller_classes::ControllerScan;
-use crate::rails_paths::{app_root, files_under, is_known_format};
+use crate::rails_paths::{files_under, is_known_format, rails_root};
 use crate::strict_locals::{self, Close, RubyContext};
 use crate::view_roots::{self, adds_view_paths, spec_line};
 use walkdir::WalkDir;
@@ -34,7 +34,7 @@ impl ProjectKey {
     pub(crate) fn of(template: &Path) -> Self {
         ProjectKey {
             lock_dir: template.ancestors().skip(1).find(|dir| dir.join("Gemfile.lock").is_file()).map(Path::to_path_buf),
-            template_app: app_root(template).and_then(|app| Some(app.parent()?.to_path_buf())),
+            template_app: rails_root(template),
             ruby_version: template.ancestors().skip(1).map(|dir| dir.join(".ruby-version")).find(|file| file.is_file()),
         }
     }
