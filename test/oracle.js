@@ -111,7 +111,7 @@ const projectRubyRelease = (file) => {
     : undefined;
 };
 
-// Prism 2.0.0's grammars: 3.3 (also for older Rubies), 3.4, 3.5 (also 4.0), 4.1; newer is the latest.
+// Prism 2.1.0's grammars: 3.3 (also for older Rubies), 3.4, 3.5 (also 4.0), 4.1; newer is the latest.
 const prismVersion = (release) => {
   if (!release) return "latest";
   const [major, minor] = release.split(".").map(Number);
@@ -177,9 +177,9 @@ const languages = {
         expression: "ActionView::VERSION::STRING",
         require: "action_view",
       },
-      { gem: "prism", version: "2.0.0", expression: "Prism::VERSION" },
+      { gem: "prism", version: "2.1.0", expression: "Prism::VERSION" },
     ],
-    title: "erb (Erubi 1.13.1, Rails 8.1.4 handler, Prism 2.0.0)",
+    title: "erb (Erubi 1.13.1, Rails 8.1.4 handler, Prism 2.1.0)",
     extension: ".erb",
     officialScript: "erb.rb",
     // The name picks the format (.html.erb, .text.erb, ...) and appears in Rails' messages.
