@@ -19,12 +19,22 @@ Today the formatter and the checks run without configuration. [Formatting](/vsco
 
 ## Planned configuration
 
-Planned rules are configured in a `.ruby-templates.yml` at the project root, keyed by rule name as RuboCop does. This file is not read yet; the extension ignores it.
+Planned rules are configured in a `.ruby-templates.toml` at the project root. This file is not read yet; the extension ignores it. Each rule is a table named after it, with the department and the rule joined by a dot:
 
-```yaml
-Layout/EmptyLines:
-  Enabled: true
-  Max: 1
+```toml
+[Layout.EmptyLines]
+enabled = true
+max = 1
 ```
+
+A rule has one name in every language it applies to: `Layout/EmptyLines` covers ERB, Haml and Slim. To change it for some files only, give it `include` or `exclude` globs, as RuboCop does:
+
+```toml
+[Layout.EmptyLinesAroundElementBody]
+enabled = true
+exclude = ["**/*.haml", "app/views/legacy/**"]
+```
+
+A `.ruby-templates.toml` in a subfolder applies to the templates below it and overrides the one above for the rules it names. The same file is read in the editor and by `ruby-templates check` and `format`; settings in VS Code still apply on top.
 
 <RuleRoster />

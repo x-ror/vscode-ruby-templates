@@ -61,7 +61,7 @@ export interface Rule {
   code?: string;
   /** JSON for the setting that controls it today. */
   setting?: { label: string; json: string };
-  /** The planned `.ruby-templates.yml` section, for rules with options. */
+  /** The planned `.ruby-templates.toml` table, for rules with options. */
   config?: string;
   examples: Example[];
 }
@@ -100,7 +100,7 @@ export const rules: Rule[] = [
       "Browsers collapse the whitespace between elements, so a shorter run of blank lines renders the same. Content where whitespace counts (`<pre>`, `<textarea>`, filters) is left alone, as the formatter does today.",
     status: "planned",
     phase: 1,
-    config: text("Layout/EmptyLines:", "  Enabled: true", "  Max: 1"),
+    config: text("[Layout.EmptyLines]", "enabled = true", "max = 1"),
     examples: [
       {
         lang: "erb",
@@ -141,9 +141,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 1,
     config: text(
-      "Layout/EmptyLinesAroundBlockBody:",
-      "  Enabled: true",
-      "  EnforcedStyle: no_empty_lines # or empty_lines, or keep",
+      "[Layout.EmptyLinesAroundBlockBody]",
+      "enabled = true",
+      'style = "no_empty_lines" # or empty_lines, or keep',
     ),
     examples: [
       {
@@ -224,9 +224,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 1,
     config: text(
-      "Layout/EmptyLinesAroundElementBody:",
-      "  Enabled: true",
-      "  EnforcedStyle: no_empty_lines # or empty_lines, or keep",
+      "[Layout.EmptyLinesAroundElementBody]",
+      "enabled = true",
+      'style = "no_empty_lines" # or empty_lines, or keep',
     ),
     examples: [
       {
@@ -298,9 +298,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 1,
     config: text(
-      "Layout/EmptyLinesAroundBranches:",
-      "  Enabled: true",
-      "  EnforcedStyle: no_empty_lines # or empty_lines, or keep",
+      "[Layout.EmptyLinesAroundBranches]",
+      "enabled = true",
+      'style = "no_empty_lines" # or empty_lines, or keep',
     ),
     examples: [
       {
@@ -457,9 +457,9 @@ export const rules: Rule[] = [
     today:
       "The width is available: the editor's tab size, then `.editorconfig` (`indent_size`, or `tab_width` for `indent_size = tab`), then 2. The formatter always writes spaces; choosing tabs is the planned part.",
     config: text(
-      "Layout/IndentationStyle:",
-      "  Enabled: true",
-      "  EnforcedStyle: tabs # or spaces, or keep",
+      "[Layout.IndentationStyle]",
+      "enabled = true",
+      'style = "tabs" # or spaces, or keep',
     ),
     examples: [
       {
@@ -479,7 +479,7 @@ export const rules: Rule[] = [
           "\t<% end %>",
           "</ul>",
         ),
-        note: "With `EnforcedStyle: tabs`.",
+        note: 'With `style = "tabs"`.',
       },
     ],
   },
@@ -578,9 +578,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 3,
     config: text(
-      "Layout/ElementContentOnOwnLine:",
-      "  Enabled: true",
-      "  Tags: [div, section, article, header, footer, ul, ol]",
+      "[Layout.ElementContentOnOwnLine]",
+      "enabled = true",
+      'tags = ["div", "section", "article", "header", "footer", "ul", "ol"]',
     ),
     examples: [
       {
@@ -619,9 +619,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 4,
     config: text(
-      "Layout/AttributesPerLine:",
-      "  Enabled: true",
-      "  MaxLineLength: 100",
+      "[Layout.AttributesPerLine]",
+      "enabled = true",
+      "max_line_length = 100",
     ),
     examples: [
       {
@@ -651,7 +651,7 @@ export const rules: Rule[] = [
     safe: true,
     status: "planned",
     phase: 3,
-    config: text("Layout/LineLength:", "  Enabled: true", "  Max: 100"),
+    config: text("[Layout.LineLength]", "enabled = true", "max = 100"),
     examples: [
       {
         lang: "erb",
@@ -727,9 +727,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 3,
     config: text(
-      "Style/AttributeQuotes:",
-      "  Enabled: true",
-      "  EnforcedStyle: double_quotes # or single_quotes",
+      "[Style.AttributeQuotes]",
+      "enabled = true",
+      'style = "double_quotes" # or single_quotes',
     ),
     examples: [
       {
@@ -779,9 +779,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 3,
     config: text(
-      "Style/VoidTagClosing:",
-      "  Enabled: true",
-      "  EnforcedStyle: no_slash # or slash",
+      "[Style.VoidTagClosing]",
+      "enabled = true",
+      'style = "no_slash" # or slash',
     ),
     examples: [
       {
@@ -885,9 +885,9 @@ export const rules: Rule[] = [
     status: "planned",
     phase: 3,
     config: text(
-      "Style/HashAttributes:",
-      "  Enabled: true",
-      "  EnforcedStyle: html # or ruby_hash",
+      "[Style.HashAttributes]",
+      "enabled = true",
+      'style = "html" # or ruby_hash',
     ),
     examples: [
       {
@@ -895,7 +895,7 @@ export const rules: Rule[] = [
         file: HAML_FILE,
         before: text('%a.btn{href: "/users", target: "_blank"} Users'),
         after: text('%a.btn(href="/users" target="_blank") Users'),
-        note: "With `EnforcedStyle: html`; `ruby_hash` converts the other way.",
+        note: 'With `style = "html"`; `"ruby_hash"` converts the other way.',
       },
     ],
   },

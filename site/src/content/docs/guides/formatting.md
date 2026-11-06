@@ -49,7 +49,7 @@ ul
 
 A file Haml or Slim would reject is left unchanged, and so is any result that wouldn't compile to the same output.
 
-The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which will be configured in a `.ruby-templates.yml`.
+The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which will be configured in a `.ruby-templates.toml`.
 
 ## Safe by construction
 
