@@ -18,6 +18,7 @@ mod outline;
 mod partial_rename;
 mod rails;
 mod ruby;
+mod rules;
 mod semantic_tokens;
 mod slim;
 mod util;

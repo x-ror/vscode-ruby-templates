@@ -26,7 +26,7 @@ app/views/users/index.html.erb:4:3: error: unexpected end-of-input, assuming it 
 app/views/users/index.html.erb:3:5: warning: `<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)
 ```
 
-It exits with 1 if there are any. The checks are the ones described in [Errors as you type](/vscode-ruby-templates/guides/checks/); the command line checker reads ERB as Erubi does, so `erb-percent` `%` lines are not modelled.
+It exits with 1 if there are any, or if a `.ruby-templates.toml` has a problem (printed the same way, once per file). The checks are the ones described in [Errors as you type](/vscode-ruby-templates/guides/checks/); the command line checker reads ERB as Erubi does, so `erb-percent` `%` lines are not modelled.
 
 ## Format templates
 
@@ -39,18 +39,22 @@ Without `--check` or `--write`, the result goes to standard output. A file whose
 
 ### Options
 
-| Option                    | What it does                                                                       |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| `--check`                 | Lists the files that would change; exits with 1 if any                             |
-| `--write`                 | Writes the formatted files                                                         |
-| `--verbose`               | Also prints the settings and `.editorconfig` files used                            |
-| `--align-comments`        | Moves the lines inside ERB comments with the line the comment opens on             |
-| `--stdin-filepath <path>` | Formats the template read from standard input as the file at `<path>`, for editors |
+| Option                    | What it does                                                                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--check`                 | Lists the files that would change; exits with 1 if any                                                                                     |
+| `--write`                 | Writes the formatted files                                                                                                                 |
+| `--verbose`               | Also prints the settings, and the `.editorconfig` and `.ruby-templates.toml` files used                                                    |
+| `--align-comments`        | Moves the lines inside ERB comments with the line the comment opens on; it can only turn this on, over `format.align_comments` in the file |
+| `--stdin-filepath <path>` | Formats the template read from standard input as the file at `<path>`, for editors                                                         |
 
 ```sh
 npx ruby-templates format --stdin-filepath show.html.erb < show.html.erb   # from stdin, for editors
 npx ruby-templates format --verbose --check app/views   # also the settings and .editorconfig files used
 ```
+
+## Configuration
+
+Both commands read the `.ruby-templates.toml` files above each template, as the editor does: rules turned off, files excluded, `[erb] format.enabled = false`, `format.align_comments`, `extra_engines`. The [rules reference](/vscode-ruby-templates/reference/rules/#configuration) describes the file. `format --verbose` also prints each file read and its problems; an excluded file is reported as `left unchanged: excluded by <file>`.
 
 ## Files and folders
 
@@ -58,11 +62,11 @@ Pass files or folders. Folders are walked for template files, skipping hidden fo
 
 ## Exit codes
 
-| Code | Meaning                                                                                  |
-| ---- | ---------------------------------------------------------------------------------------- |
-| `0`  | OK                                                                                       |
-| `1`  | Diagnostics (errors or warnings), or files that would change                             |
-| `2`  | Usage or I/O error, a formatter bug, or (for `check`) a named file that isn't a template |
+| Code | Meaning                                                                                             |
+| ---- | --------------------------------------------------------------------------------------------------- |
+| `0`  | OK                                                                                                  |
+| `1`  | Diagnostics (errors or warnings), a problem in a `.ruby-templates.toml`, or files that would change |
+| `2`  | Usage or I/O error, a formatter bug, or (for `check`) a named file that isn't a template            |
 
 ## GitHub Actions
 

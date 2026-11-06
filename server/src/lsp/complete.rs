@@ -58,7 +58,7 @@ impl Backend {
         let project_cell = OnceCell::new();
         let project = |path: &Path| project_cell.get_or_init(|| self.project_for(path));
 
-        let engines = &self.options().extra_engines;
+        let engines = &self.engines(uri);
         let ruby = || path.map_or(ruby_prism::Version::Latest, |path| project(path).prism_version());
         let render_key = render_refs::local_key_before(&doc.text, line_start + col, doc.lang, ruby)
             .filter(|(r, ..)| code_at(doc.lang, &doc.text, r.call, engines));
@@ -158,12 +158,13 @@ impl Backend {
         if typed.is_empty() {
             return None;
         }
-        Some(self.identifier_completions(doc, path.map(|p| (p, project(p))), line_start + col, &line[col..], typed))
+        Some(self.identifier_completions(uri, doc, path.map(|p| (p, project(p))), line_start + col, &line[col..], typed))
     }
 
     /// Block variables, strict locals, helpers, the template's own slots and route helpers that start with `typed`.
     fn identifier_completions(
         &self,
+        uri: &Uri,
         doc: &Doc,
         file: Option<(&Path, &Project)>,
         offset: usize,
@@ -173,7 +174,7 @@ impl Backend {
         let (close, ruby) = file
             .map(|(_, project)| (project.strict_locals_close(), project.prism_version()))
             .unwrap_or((Default::default(), ruby_prism::Version::Latest));
-        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, offset, &self.options().extra_engines), typed);
+        let mut found = block_local_completions(block_locals(doc.lang, &doc.text, offset, &self.engines(uri)), typed);
         // A block variable shadows the strict local of the same name.
         let locals: Vec<_> =
             local_completions(&doc.text, typed, close, ruby).into_iter().filter(|l| found.iter().all(|b| b.label != l.label)).collect();

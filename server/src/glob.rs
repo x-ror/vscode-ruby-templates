@@ -4,6 +4,7 @@ use regex::Regex;
 
 /// A compiled glob. One without `/` matches the file name in any folder (an implicit `**/` prefix); a leading or inner `/`
 /// anchors it to the start of the path.
+#[derive(Debug)]
 pub struct Glob {
     regex: Regex,
     ranges: Vec<(i64, i64)>,

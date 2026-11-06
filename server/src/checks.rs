@@ -4,13 +4,13 @@ use crate::code_context::render_filter;
 use crate::erb::{html_lint, tags};
 use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
-use crate::options::Options;
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
 use crate::rails::{controller_classes, partials, paths, render_refs};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
+use crate::rules::resolve::ResolvedRules;
 use crate::slim;
 use crate::{erb, util};
 use std::cell::LazyCell;
@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{Diagnostic, Uri};
 
 /// Diagnostic codes every language shares, with `ruby::generated::RUBY_SYNTAX`.
-pub(crate) const UNRESOLVED_RENDER: &str = "unresolved-render";
-pub(crate) const STRICT_LOCALS: &str = "strict-locals";
+pub(crate) const UNRESOLVED_RENDER: &str = "Rails/MissingPartial";
+pub(crate) const STRICT_LOCALS: &str = "Rails/StrictLocals";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 #[derive(Clone)]
@@ -42,29 +42,26 @@ impl Doc {
 }
 
 #[cfg(test)]
-pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &Options) -> Vec<Diagnostic> {
-    diagnostics_in(uri, doc, options, &mut Projects::new())
+pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &crate::options::Options) -> Vec<Diagnostic> {
+    let rules = crate::rules::resolve::resolve(uri, doc.lang, options, &mut Default::default());
+    diagnostics_in(uri, doc, &rules, &mut Projects::new())
 }
 
 /// `diagnostics`, taking the template's project from `projects` when a run already loaded it.
-pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, options: &Options, projects: &mut Projects) -> Vec<Diagnostic> {
+pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projects: &mut Projects) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
-    if doc.lang == TemplateLang::Liquid
-        || uri.path().as_str().to_ascii_lowercase().ends_with(".tt")
-        || !options.diagnostics_enabled(doc.lang)
-    {
+    if doc.lang == TemplateLang::Liquid || uri.path().as_str().to_ascii_lowercase().ends_with(".tt") || !rules.diagnostics_enabled() {
         return vec![];
     }
     let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
-    let mut out = language_diagnostics(uri, doc, &options.extra_engines, &ruby);
+    let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, &options.extra_engines)));
+        out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
-    let disabled = options.disabled(doc.lang);
-    out.retain(|d| !util::code(d).is_some_and(|c| disabled.iter().any(|off| off == c)));
+    out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
     for d in &mut out {
         d.source = Some(doc.lang.diagnostic_source().into());
     }
@@ -295,6 +292,7 @@ fn strict_locals_message(missing: &[&str], unknown: &[&str], no_locals: bool) ->
 mod tests {
     use super::*;
     use crate::code_context::in_ruby_context;
+    use crate::options::Options;
     use crate::util::write_files;
     use std::collections::BTreeSet;
     use tower_lsp_server::ls_types::{DiagnosticSeverity, NumberOrString, Position, Range};
@@ -407,22 +405,45 @@ mod tests {
     }
 
     #[test]
-    fn settings_list_every_diagnostic_code() {
+    fn a_rule_turned_off_in_the_config_file_reports_nothing() {
+        let root = std::env::temp_dir().join(format!("rt-rule-off-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                (".ruby-templates.toml", "root = true\n[Html.UnclosedElement]\nenabled = false\n"),
+                ("quiet/show.html.erb", ""),
+                ("loud/.ruby-templates.toml", "[Html]\nenabled = true\n"),
+                ("loud/show.html.erb", ""),
+            ],
+        );
+        let codes = |file: &str| -> Vec<String> {
+            let doc = Doc { lang: TemplateLang::Erb, text: "<div>\n<%= x %>\n".into(), plain_erb: false, percent_lines: false, version: 0 };
+            let found = diagnostics(&util::file_uri(root.join(file)).unwrap(), &doc, &Options::default());
+            found.iter().filter_map(|d| util::code(d).map(String::from)).collect()
+        };
+        assert!(codes("quiet/show.html.erb").is_empty());
+        // The nearer file's department switch decides over the rule's switch in the file above.
+        assert_eq!(codes("loud/show.html.erb"), [tags::code::UNCLOSED_ELEMENT]);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(codes("quiet/show.html.erb"), [tags::code::UNCLOSED_ELEMENT]);
+    }
+
+    #[test]
+    fn settings_list_every_rule_and_accept_the_old_codes() {
         let manifest: serde_json::Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
-        let setting = |lang: &str| -> BTreeSet<String> {
-            let key = format!("rubyTemplates.{lang}.disabledDiagnostics");
-            let items = &manifest["contributes"]["configuration"]["properties"][&key]["items"]["enum"];
-            items.as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect()
+        let items = |lang: &str| {
+            manifest["contributes"]["configuration"]["properties"][format!("rubyTemplates.{lang}.disabledDiagnostics")]["items"].clone()
         };
-        let declared = |sources: &[&str]| -> BTreeSet<String> {
-            let re = regex::Regex::new(r#"pub const [A-Z_]+: &str = "([a-z0-9-]+)""#).unwrap();
-            let shared = [UNRESOLVED_RENDER, STRICT_LOCALS, RUBY_SYNTAX].map(String::from);
-            sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c[1].to_string()).collect::<Vec<_>>()).chain(shared).collect()
-        };
-        assert_eq!(setting("erb"), declared(&[include_str!("erb.rs"), include_str!("erb/tags.rs"), include_str!("erb/html_lint.rs")]));
-        assert_eq!(setting("haml"), declared(&[include_str!("haml/indent.rs")]));
-        assert_eq!(setting("slim"), declared(&[include_str!("slim/indent.rs")]));
-        assert_eq!(setting("jbuilder"), declared(&[]));
+        for (section, lang) in
+            [("erb", TemplateLang::Erb), ("haml", TemplateLang::Haml), ("slim", TemplateLang::Slim), ("jbuilder", TemplateLang::Ruby)]
+        {
+            let items = items(section);
+            let listed: BTreeSet<&str> = items["anyOf"][0]["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+            let rules: BTreeSet<&str> = crate::rules::RULES.iter().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
+            assert_eq!(listed, rules, "{section}");
+            let old_codes = regex::Regex::new(items["anyOf"][1]["pattern"].as_str().unwrap()).unwrap();
+            assert!(crate::rules::RULES.iter().all(|rule| old_codes.is_match(rule.alias)), "{section}");
+        }
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
         for src in [
@@ -1130,7 +1151,7 @@ mod tests {
             found.iter().filter_map(|d| util::code(d).map(String::from)).collect()
         };
         let lock = root.join("Gemfile.lock");
-        let (both, unresolved_only) = (vec![STRICT_LOCALS, UNRESOLVED_RENDER], vec![UNRESOLVED_RENDER]);
+        let (both, unresolved_only) = (vec![UNRESOLVED_RENDER, STRICT_LOCALS], vec![UNRESOLVED_RENDER]);
         assert!(codes().is_empty(), "no lockfile");
         for (specs, expected) in [
             ("sinatra (4.0.0)", vec![]),
@@ -1197,7 +1218,7 @@ mod tests {
                 .collect();
             let expected =
                 format!("`user` set as non-keyword argument for app/views/users/_card.{ext}. Locals can only be set as keyword arguments.");
-            assert_eq!(found, [(0, Some("ruby-syntax".to_string()), expected)], "{ext}");
+            assert_eq!(found, [(0, Some("Syntax/Ruby".to_string()), expected)], "{ext}");
         }
         std::fs::remove_dir_all(&root).unwrap();
     }

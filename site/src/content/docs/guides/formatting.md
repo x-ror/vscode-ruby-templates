@@ -49,13 +49,15 @@ ul
 
 A file Haml or Slim would reject is left unchanged, and so is any result that wouldn't compile to the same output.
 
-The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which will be configured in a `.ruby-templates.toml`.
+The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which are configured in a `.ruby-templates.toml`.
 
 ## Safe by construction
 
 Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel.
 
 ## Indentation width and line endings
+
+`format.enabled` and `format.align_comments` under `[erb]`, `[haml]` and `[slim]` in a `.ruby-templates.toml` turn formatting off or on and align comments, and win over the `rubyTemplates.*` settings; its global `exclude` leaves files unformatted.
 
 The indentation width comes from the editor's tab size, then `.editorconfig` (`indent_size`; `tab_width` for `indent_size = tab`), then 2. Indentation is always written in spaces and each line keeps its ending.
 

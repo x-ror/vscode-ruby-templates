@@ -8,13 +8,15 @@ use crate::lang::TemplateLang;
 use crate::options::Options;
 use crate::rails::project::{Project, Projects};
 use crate::rails::view_roots;
+use crate::rules::file::ConfigFile;
+use crate::rules::resolve::{resolve, Configs, ResolvedRules};
 use crate::util;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Uri};
 
 const OK: i32 = 0;
@@ -35,8 +37,9 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         on stderr. Without --check or --write the result goes to stdout. --align-comments moves the
         lines inside ERB comments with the line the comment opens on.
 
-Exit codes: 0 ok, 1 diagnostics (errors or warnings) or files that would change, 2 usage or I/O error, a formatter
-bug, or (for check) a named file that isn't a template.
+Both read .ruby-templates.toml files, from the file's folder up. Exit codes: 0 ok, 1 diagnostics (errors or
+warnings), a problem in a .ruby-templates.toml, or files that would change, 2 usage or I/O error, a formatter bug,
+or (for check) a named file that isn't a template.
 ";
 
 /// `ruby-templates-ls --check <file>...` and `--format <file.slim>`: the exit code, or `None` to start the server.
@@ -180,17 +183,19 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
     let next = AtomicUsize::new(0);
     let view_roots = Arc::new(view_roots::Cache::default());
+    let reported = Mutex::new(HashSet::new());
     let (sender, results) = mpsc::channel();
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            let (sender, next, files, view_roots) = (sender.clone(), &next, &files, &view_roots);
+            let (sender, next, files, view_roots, reported) = (sender.clone(), &next, &files, &view_roots, &reported);
             let work = move || {
-                let mut projects = Projects::new();
+                let (mut projects, mut configs) = (Projects::new(), Configs::new());
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(index) else { break };
                     // The printer hung up (stdout closed): nothing left to do.
-                    if sender.send((index, check_file(&file.path, fail_at, bad_file, &mut projects, view_roots))).is_err() {
+                    let checked = check_file(&file.path, fail_at, bad_file, (&mut projects, &mut configs), view_roots, reported);
+                    if sender.send((index, checked)).is_err() {
                         break;
                     }
                 }
@@ -215,8 +220,9 @@ fn check_file(
     path: &Path,
     fail_at: DiagnosticSeverity,
     bad_file: i32,
-    projects: &mut Projects,
+    (projects, configs): (&mut Projects, &mut Configs),
     view_roots: &Arc<view_roots::Cache>,
+    reported: &Mutex<HashSet<PathBuf>>,
 ) -> Checked {
     let shown = path.display();
     let failed = |stderr| Checked { stdout: String::new(), stderr, code: bad_file };
@@ -225,7 +231,17 @@ fn check_file(
     // Every worker's projects of one app share its view roots.
     Project::memoized(projects, path, Some(view_roots));
     let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
-    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &Options::default(), projects) {
+    let rules = resolve(&uri, lang, &Options::default(), configs);
+    for file in rules.files() {
+        // Each file's problems print once, with the first template it applies to.
+        if !file.problems.is_empty() && reported.lock().is_ok_and(|mut seen| seen.insert(file.path.clone())) {
+            print_problems(file, &mut checked.stdout);
+            if DiagnosticSeverity::WARNING <= fail_at {
+                checked.code = FINDINGS;
+            }
+        }
+    }
+    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &rules, projects) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
         let name = match severity {
             DiagnosticSeverity::ERROR => "error",
@@ -240,6 +256,19 @@ fn check_file(
         }
     }
     checked
+}
+
+/// `path` from the current folder when it is below it, as the template paths are given.
+fn shown_path(path: &Path) -> &Path {
+    let here = std::fs::canonicalize(".").ok();
+    here.and_then(|here| path.strip_prefix(here).ok()).unwrap_or(path)
+}
+
+fn print_problems(file: &ConfigFile, out: &mut String) {
+    for problem in &file.problems {
+        let (line, col) = (problem.range.start.line + 1, problem.range.start.character + 1);
+        let _ = writeln!(out, "{}:{line}:{col}: warning: {}", shown_path(&file.path).display(), problem.message);
+    }
 }
 
 /// Prints each file's result in walk order as it arrives; the worst exit code, `USAGE` once stdout is closed.
@@ -279,7 +308,7 @@ fn format_command(args: &FormatArgs) -> i32 {
             eprintln!("cannot read stdin: {e}");
             return USAGE;
         }
-        return format_text(path, true, &text, args, &mut Projects::new());
+        return format_text(path, true, &text, args, (&mut Projects::new(), &mut Configs::new()));
     }
     let files = template_files(&args.paths);
     // Several files on stdout would run together.
@@ -287,7 +316,7 @@ fn format_command(args: &FormatArgs) -> i32 {
         return usage(&format!("printing to stdout takes one file, not {}; use --check or --write", files.len()));
     }
     let mut code = OK;
-    let mut projects = Projects::new();
+    let (mut projects, mut configs) = (Projects::new(), Configs::new());
     for File { path, named } in files {
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
@@ -297,22 +326,41 @@ fn format_command(args: &FormatArgs) -> i32 {
                 continue;
             }
         };
-        code = code.max(format_text(&path, named, &text, args, &mut projects));
+        code = code.max(format_text(&path, named, &text, args, (&mut projects, &mut configs)));
     }
     code
 }
 
-fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, projects: &mut Projects) -> i32 {
+/// The settings in force for `shown`, what was read to get them, and the config files' problems.
+fn print_verbose(shown: &str, lang: TemplateLang, settings: &format::Settings, notes: &[String], rules: &ResolvedRules) {
+    eprintln!("{shown}: {:?}", format::effective_settings(lang, settings));
+    notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
+    for file in rules.files() {
+        eprintln!("{shown}: read {}", shown_path(&file.path).display());
+        let mut problems = String::new();
+        print_problems(file, &mut problems);
+        eprint!("{problems}");
+    }
+}
+
+fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, (projects, configs): (&mut Projects, &mut Configs)) -> i32 {
     let shown = path.display();
     let result = match (absolute_file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
-            let mut resolved = config::settings_for(&util::file_path(&uri).unwrap_or_else(|| path.to_path_buf()));
-            resolved.settings.align_comments = args.align_comments;
+            let rules = resolve(&uri, lang, &Options::default(), configs);
+            let resolved = config::settings_for(&util::file_path(&uri).unwrap_or_else(|| path.to_path_buf()));
+            let mut settings = rules.format_settings(resolved.settings);
+            settings.align_comments |= args.align_comments;
             if args.verbose {
-                eprintln!("{shown}: {:?}", format::effective_settings(lang, &resolved.settings));
-                resolved.notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
+                print_verbose(&shown.to_string(), lang, &settings, &resolved.notes, &rules);
             }
-            format::format_in(&uri, lang, false, text, &resolved.settings, &[], projects)
+            if let Some(by) = rules.excluded_by() {
+                format::skip(SkipKind::NotHandled, format!("excluded by {}", by.display()))
+            } else if !rules.format_enabled() {
+                format::skip(SkipKind::NotHandled, "formatting is turned off in .ruby-templates.toml")
+            } else {
+                format::format_in(&uri, lang, false, text, &settings, rules.extra_engines(), projects)
+            }
         }
         _ => format::skip(SkipKind::NotHandled, "not an ERB, Haml or Slim template"),
     };

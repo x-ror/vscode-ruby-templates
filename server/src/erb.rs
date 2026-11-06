@@ -13,7 +13,7 @@ use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
 pub mod code {
-    pub const UNCLOSED_TAG: &str = "unclosed-tag";
+    pub const UNCLOSED_TAG: &str = "Syntax/UnclosedErbTag";
 }
 
 /// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.

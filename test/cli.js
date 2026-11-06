@@ -215,6 +215,69 @@ try {
   );
   fs.rmSync(lock);
 
+  // .ruby-templates.toml: rules, switches, nesting, exclusions and its own problems.
+  const project = path.join(root, "toml");
+  fs.mkdirSync(path.join(project, "vendor"), { recursive: true });
+  fs.mkdirSync(path.join(project, "sub"));
+  const toml = path.join(project, ".ruby-templates.toml");
+  const write = (name, text) => {
+    const p = path.join(project, name);
+    fs.writeFileSync(p, text);
+    return p;
+  };
+  const noAlt = write("img.html.erb", '<img src="/a.png">\n');
+  const vendored = write("vendor/img.html.erb", '<img src="/a.png">\n');
+  const inner = write("sub/img.html.erb", '<img src="/a.png">\n');
+  const messyErb = write("messy.html.erb", "<div>\n<p>a</p>\n</div>\n");
+  assert.match(run(["check", noAlt]).stdout, /without `alt`/, "no file");
+  fs.writeFileSync(toml, "[Html.ImgAlt]\nenabled = false\n");
+  r = run(["check", noAlt]);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.strictEqual(r.stdout, "", "a rule turned off in the file");
+  write("sub/.ruby-templates.toml", "[Html.ImgAlt]\nenabled = true\n");
+  assert.match(run(["check", inner]).stdout, /without `alt`/, "nested file");
+  assert.strictEqual(run(["check", noAlt]).stdout, "");
+  fs.writeFileSync(toml, 'exclude = ["vendor/**"]\n');
+  assert.strictEqual(run(["check", vendored]).stdout, "", "global exclude");
+  assert.match(run(["check", noAlt]).stdout, /without `alt`/);
+  r = run(["format", vendored]);
+  assert.match(
+    r.stderr,
+    /left unchanged: excluded by .*\.ruby-templates\.toml/,
+  );
+  fs.writeFileSync(toml, "[erb]\nformat.align_comments = true\n");
+  const comments = write(
+    "comment.html.erb",
+    "<div>\n<!-- a\n  b -->\n</div>\n",
+  );
+  assert.match(
+    run(["format", comments]).stdout,
+    /<!-- a\n {4}b -->/,
+    "align_comments",
+  );
+  fs.writeFileSync(toml, "[erb]\nformat.enabled = false\n");
+  r = run(["format", messyErb]);
+  assert.strictEqual(r.stdout, fs.readFileSync(messyErb, "utf8"));
+  assert.match(r.stderr, /left unchanged: formatting is turned off/);
+
+  fs.writeFileSync(toml, "[Html.ImgAltt]\nenabled = false\n");
+  r = run(["check", noAlt, inner]);
+  assert.strictEqual(r.status, 1);
+  const problem =
+    /\.ruby-templates\.toml:1:7: warning: unknown rule `Html\/ImgAltt`/g;
+  assert.strictEqual(r.stdout.match(problem)?.length, 1, "printed once");
+  fs.writeFileSync(toml, "[Html.ImgAlt\n");
+  r = run(["check", clean, path.join(project, "messy.html.erb")]);
+  assert.strictEqual(r.status, 1, "invalid TOML is a finding");
+  assert.match(
+    r.stdout,
+    /\.ruby-templates\.toml:\d+:\d+: warning: invalid TOML/,
+  );
+  fs.writeFileSync(toml, "[Html.ImgAltt]\nenabled = false\n");
+  r = run(["format", "--verbose", messyErb]);
+  assert.match(r.stderr, /read .*\.ruby-templates\.toml/);
+  assert.match(r.stderr, /\.ruby-templates\.toml:1:7: warning: unknown rule/);
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

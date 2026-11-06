@@ -1,0 +1,3 @@
+# Rules for this app; the file beats the VS Code settings. See the rules reference on the docs site.
+[Html.ImgAlt]
+exclude = ["app/views/playground/rules/**"]

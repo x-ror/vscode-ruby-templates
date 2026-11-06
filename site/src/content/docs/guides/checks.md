@@ -77,14 +77,24 @@ The [rules reference](/vscode-ruby-templates/reference/rules/) also covers the c
 
 ## Turning checks off
 
-Turn single checks off by code, per language, in your user or workspace settings:
+Turn single checks off in a `.ruby-templates.toml` at the project root, by rule name. The editor and `ruby-templates check` read it, and it wins over the settings:
+
+```toml
+[Html.ImgAlt]
+enabled = false
+
+[Html.DuplicateId]
+exclude = ["app/views/legacy/**"]
+```
+
+Or by code, per language, in your user or workspace settings (the kebab-case codes of earlier versions, such as `img-missing-alt`, still work):
 
 ```json
 {
-  "rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt", "duplicate-id"],
-  "rubyTemplates.haml.disabledDiagnostics": ["unknown-filter"],
-  "rubyTemplates.slim.disabledDiagnostics": ["unknown-engine"],
-  "rubyTemplates.jbuilder.disabledDiagnostics": ["unresolved-render"]
+  "rubyTemplates.erb.disabledDiagnostics": ["Html/ImgAlt", "Html/DuplicateId"],
+  "rubyTemplates.haml.disabledDiagnostics": ["Syntax/UnknownFilter"],
+  "rubyTemplates.slim.disabledDiagnostics": ["Syntax/UnknownEngine"],
+  "rubyTemplates.jbuilder.disabledDiagnostics": ["Rails/MissingPartial"]
 }
 ```
 

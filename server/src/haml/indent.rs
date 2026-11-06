@@ -7,19 +7,19 @@ use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.haml.disabledDiagnostics` refers to these.
 pub mod code {
-    pub const INCONSISTENT_INDENT: &str = "inconsistent-indent";
-    pub const TOP_LEVEL_INDENT: &str = "top-level-indent";
-    pub const ILLEGAL_NESTING: &str = "illegal-nesting";
-    pub const DOCTYPE_CHILDREN: &str = "doctype-children";
-    pub const UNMATCHED_BRANCH: &str = "unmatched-branch";
-    pub const VOID_CHILDREN: &str = "void-children";
-    pub const EXPLICIT_END: &str = "explicit-end";
+    pub const INCONSISTENT_INDENT: &str = "Syntax/InconsistentIndent";
+    pub const TOP_LEVEL_INDENT: &str = "Syntax/TopLevelIndent";
+    pub const ILLEGAL_NESTING: &str = "Syntax/IllegalNesting";
+    pub const DOCTYPE_CHILDREN: &str = "Syntax/DoctypeChildren";
+    pub const UNMATCHED_BRANCH: &str = "Syntax/UnmatchedBranch";
+    pub const VOID_CHILDREN: &str = "Html/VoidChildren";
+    pub const EXPLICIT_END: &str = "Syntax/ExplicitEnd";
     /// Haml's parser errors that belong to no other code (`Invalid tag`, `There's no Ruby code…`).
-    pub const SYNTAX_ERROR: &str = "syntax-error";
-    pub const ILLEGAL_ELEMENT: &str = "illegal-element";
-    pub const UNKNOWN_FILTER: &str = "unknown-filter";
-    pub const SELF_CLOSING_CONTENT: &str = "self-closing-content";
-    pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
+    pub const SYNTAX_ERROR: &str = "Syntax/Template";
+    pub const ILLEGAL_ELEMENT: &str = "Syntax/IllegalElement";
+    pub const UNKNOWN_FILTER: &str = "Syntax/UnknownFilter";
+    pub const SELF_CLOSING_CONTENT: &str = "Syntax/SelfClosingContent";
+    pub const UNCLOSED_ATTRIBUTE: &str = "Syntax/UnclosedAttribute";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

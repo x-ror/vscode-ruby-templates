@@ -6,9 +6,9 @@ tableOfContents: false
 
 import RuleRoster from "../../../components/RuleRoster.astro";
 
-This page is the catalogue of rules, and a public roadmap. Rules marked _Available_ or _Partial_ work in the extension today. Rules marked _Planned_ do not exist yet; they are listed with a phase number, and lower phases come first. The rule names, their options and the config file shown here are a draft and may still change.
+This page is the catalogue of rules, and a public roadmap. Rules marked _Available_ or _Partial_ work in the extension today. Rules marked _Planned_ do not exist yet; they are listed with a phase number, and lower phases come first. Rule names are the diagnostic codes, and the config file described below is read for the rules that exist.
 
-Today the formatter and the checks run without configuration. [Formatting](/vscode-ruby-templates/guides/formatting/) describes what the formatter does, and the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists every code the checks report.
+The formatter and the checks work without configuration, and a `.ruby-templates.toml` changes them. [Formatting](/vscode-ruby-templates/guides/formatting/) describes what the formatter does, and the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists every code the checks report.
 
 ## How to read an entry
 
@@ -17,24 +17,60 @@ Today the formatter and the checks run without configuration. [Formatting](/vsco
 - **Examples.** An autofix shows the template before and after. A warning shows a flagged template and a fine one. The examples of available rules were produced by `ruby-templates format` and `ruby-templates check`; the ones of planned rules are written by hand.
 - **Defaults.** The planned formatting rules are off until you turn them on, so a file is never changed unless you ask. The planned Rails checks are on.
 
-## Planned configuration
+## Configuration
 
-Planned rules are configured in a `.ruby-templates.toml` at the project root. This file is not read yet; the extension ignores it. Each rule is a table named after it, with the department and the rule joined by a dot:
+Rules, and the switches that VS Code has as settings, are configured in a `.ruby-templates.toml`. The editor, `ruby-templates check` and `ruby-templates format` read the same file. A rule is a table named after it, with the department and the rule joined by a dot (`["Html/ImgAlt"]` in quotes is an error, and the message says how to write it):
 
 ```toml
-[Layout.EmptyLines]
-enabled = true
-max = 1
+[Html.ImgAlt]
+enabled = false
 ```
 
-A rule has one name in every language it applies to: `Layout/EmptyLines` covers ERB, Haml and Slim. To change it for some files only, give it `include` or `exclude` globs, as RuboCop does:
+A department table with only `enabled` switches all its rules; a rule's own `enabled` beats it:
 
 ```toml
-[Layout.EmptyLinesAroundElementBody]
+[Html]
+enabled = false
+
+[Html.DuplicateId]
 enabled = true
+```
+
+To change a rule for some files only, give it `include` or `exclude` globs. They follow the EditorConfig syntax (`*`, `**`, `?`, `[abc]`, `{a,b}`): a pattern without `/` matches in any folder, one with a leading or inner `/` is anchored to the folder of the file that holds it.
+
+```toml
+[Html.ImgAlt]
 exclude = ["**/*.haml", "app/views/legacy/**"]
 ```
 
-A `.ruby-templates.toml` in a subfolder applies to the templates below it and overrides the one above for the rules it names. The same file is read in the editor and by `ruby-templates check` and `format`; settings in VS Code still apply on top.
+### All keys
+
+```toml
+root = true                        # stop looking in the folders above
+exclude = ["vendor/**", "tmp/**"]  # no checks and no formatting for these files
+
+[erb]
+format.enabled = false             # no formatting for ERB
+format.align_comments = true       # same as --align-comments
+diagnostics.enabled = true         # false: no diagnostics for ERB
+disabled_diagnostics = ["Html/ImgAlt", "unclosed-element"]  # rule names, or the codes of 0.10 and earlier
+
+[haml]                             # format.enabled, diagnostics.enabled, disabled_diagnostics
+[slim]                             # the same, and: extra_engines = ["mjml"]; Skim files too
+[jbuilder]                         # disabled_diagnostics, for Jbuilder and Builder views
+```
+
+The language tables take the keys of the `rubyTemplates.<language>.*` settings, in snake case. A key under the wrong table (`extra_engines` under `[erb]`) is reported.
+
+### Which file applies
+
+- The file looks for `.ruby-templates.toml` in the template's folder and every folder above it, nearest first, and stops at one with `root = true`.
+- The files merge key by key: the nearest file that sets a key wins. A list (`exclude`, `include`, `disabled_diagnostics`, `extra_engines`) is replaced, not extended. Globs are relative to the folder of the file that holds them.
+- The file is stronger than VS Code: precedence is the nearest file, then the VS Code settings (where no file says anything), then `.editorconfig` for the indentation width, then the defaults.
+- A rule is on unless the nearest file that sets either its `enabled` or its department's `enabled` says `false`; within that one file, the rule's own `enabled` beats the department's. A root file with `[Html.ImgAlt] enabled = true` and a `legacy/` file with `[Html] enabled = false` therefore leave `Html/ImgAlt` off under `legacy/`. Then the rule's `include` and `exclude` apply, and the rule must exist for the file's language. A file in the global `exclude` gets no diagnostics and is not formatted.
+
+### Problems in the file
+
+A key or a value the server can't read is dropped, and the rest of the file is used. A file that exists but can't be read (not UTF-8, no permission, a folder with that name) is one problem at its first line. Problems show on the `.ruby-templates.toml` itself in the Problems panel, and in the _Ruby Templates_ output, once a template it applies to is open or formatted; they refresh when the file is saved. A `.ruby-templates.toml` above the workspace folders is watched too, if the editor allows it. `ruby-templates check` prints a problem as `file:line:column: warning: message` and exits with 1 (the legacy `ruby-templates-ls --check` prints it but doesn't fail on it), and `format --verbose` prints it too. A file that isn't valid TOML is ignored whole.
 
 <RuleRoster />

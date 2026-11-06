@@ -10,9 +10,9 @@ use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {
-    pub const UNEXPECTED_CLOSE_TAG: &str = "unexpected-close-tag";
-    pub const MISMATCHED_CLOSE_TAG: &str = "mismatched-close-tag";
-    pub const UNCLOSED_ELEMENT: &str = "unclosed-element";
+    pub const UNEXPECTED_CLOSE_TAG: &str = "Html/UnexpectedCloseTag";
+    pub const MISMATCHED_CLOSE_TAG: &str = "Html/MismatchedCloseTag";
+    pub const UNCLOSED_ELEMENT: &str = "Html/UnclosedElement";
 }
 
 // End tags HTML lets you omit; never tracked, so they can't be reported.

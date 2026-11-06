@@ -701,82 +701,114 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "unclosed-tag",
-              "ruby-syntax",
-              "unexpected-close-tag",
-              "mismatched-close-tag",
-              "unclosed-element",
-              "img-missing-alt",
-              "duplicate-id",
-              "unresolved-render",
-              "strict-locals"
+            "anyOf": [
+              {
+                "enum": [
+                  "Syntax/Ruby",
+                  "Syntax/UnclosedErbTag",
+                  "Html/UnexpectedCloseTag",
+                  "Html/MismatchedCloseTag",
+                  "Html/UnclosedElement",
+                  "Html/ImgAlt",
+                  "Html/DuplicateId",
+                  "Rails/MissingPartial",
+                  "Rails/StrictLocals"
+                ]
+              },
+              {
+                "pattern": "^[a-z]+(-[a-z]+)*$",
+                "deprecationMessage": "A code from before 0.11; use the rule name, such as Html/ImgAlt."
+              }
             ]
           },
           "default": [],
           "uniqueItems": true,
-          "description": "Built-in ERB diagnostics to turn off, by code."
+          "description": "Built-in ERB diagnostics to turn off, by rule name (`Department/Name`). The `.ruby-templates.toml` file overrides this list."
         },
         "rubyTemplates.haml.disabledDiagnostics": {
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "inconsistent-indent",
-              "top-level-indent",
-              "illegal-nesting",
-              "doctype-children",
-              "unmatched-branch",
-              "explicit-end",
-              "illegal-element",
-              "unknown-filter",
-              "self-closing-content",
-              "unclosed-attribute",
-              "syntax-error",
-              "void-children",
-              "ruby-syntax",
-              "unresolved-render",
-              "strict-locals"
+            "anyOf": [
+              {
+                "enum": [
+                  "Syntax/Ruby",
+                  "Syntax/Template",
+                  "Syntax/InconsistentIndent",
+                  "Syntax/TopLevelIndent",
+                  "Syntax/IllegalNesting",
+                  "Syntax/DoctypeChildren",
+                  "Syntax/UnmatchedBranch",
+                  "Syntax/ExplicitEnd",
+                  "Syntax/IllegalElement",
+                  "Syntax/UnknownFilter",
+                  "Syntax/SelfClosingContent",
+                  "Syntax/UnclosedAttribute",
+                  "Html/VoidChildren",
+                  "Rails/MissingPartial",
+                  "Rails/StrictLocals"
+                ]
+              },
+              {
+                "pattern": "^[a-z]+(-[a-z]+)*$",
+                "deprecationMessage": "A code from before 0.11; use the rule name, such as Html/ImgAlt."
+              }
             ]
           },
           "default": [],
           "uniqueItems": true,
-          "description": "Built-in Haml diagnostics to turn off, by code."
+          "description": "Built-in Haml diagnostics to turn off, by rule name (`Department/Name`). The `.ruby-templates.toml` file overrides this list."
         },
         "rubyTemplates.jbuilder.disabledDiagnostics": {
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "ruby-syntax",
-              "unresolved-render",
-              "strict-locals"
+            "anyOf": [
+              {
+                "enum": [
+                  "Syntax/Ruby",
+                  "Rails/MissingPartial",
+                  "Rails/StrictLocals"
+                ]
+              },
+              {
+                "pattern": "^[a-z]+(-[a-z]+)*$",
+                "deprecationMessage": "A code from before 0.11; use the rule name, such as Html/ImgAlt."
+              }
             ]
           },
           "default": [],
           "uniqueItems": true,
-          "description": "Built-in diagnostics to turn off in Jbuilder and Builder views, by code."
+          "description": "Built-in diagnostics to turn off in Jbuilder and Builder views, by rule name (`Department/Name`). The `.ruby-templates.toml` file overrides this list."
         },
         "rubyTemplates.slim.disabledDiagnostics": {
           "type": "array",
           "items": {
             "type": "string",
-            "enum": [
-              "bad-dedent",
-              "doctype-children",
-              "void-children",
-              "unknown-engine",
-              "syntax-error",
-              "unclosed-attribute",
-              "ruby-syntax",
-              "explicit-end",
-              "unresolved-render",
-              "strict-locals"
+            "anyOf": [
+              {
+                "enum": [
+                  "Syntax/Ruby",
+                  "Syntax/Template",
+                  "Syntax/DoctypeChildren",
+                  "Syntax/ExplicitEnd",
+                  "Syntax/UnclosedAttribute",
+                  "Syntax/BadDedent",
+                  "Syntax/UnknownEngine",
+                  "Html/VoidChildren",
+                  "Rails/MissingPartial",
+                  "Rails/StrictLocals"
+                ]
+              },
+              {
+                "pattern": "^[a-z]+(-[a-z]+)*$",
+                "deprecationMessage": "A code from before 0.11; use the rule name, such as Html/ImgAlt."
+              }
             ]
           },
           "default": [],
           "uniqueItems": true,
-          "description": "Built-in Slim diagnostics to turn off, by code."
+          "description": "Built-in Slim diagnostics to turn off, by rule name (`Department/Name`). The `.ruby-templates.toml` file overrides this list."
         },
         "rubyTemplates.erb.diagnostics.enabled": {
           "type": "boolean",
@@ -796,7 +828,7 @@
         "rubyTemplates.erb.format.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Let the language server format ERB files (Format Document and Format Selection with the built-in formatter). Turn off for no edits."
+          "description": "Let the language server format ERB files (Format Document and Format Selection with the built-in formatter). Turn off for no edits. A `.ruby-templates.toml` overrides it."
         },
         "rubyTemplates.erb.format.alignComments": {
           "type": "boolean",
@@ -806,12 +838,12 @@
         "rubyTemplates.haml.format.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Let the language server format Haml files (Format Document and Format Selection). Turn off for no edits."
+          "description": "Let the language server format Haml files (Format Document and Format Selection). Turn off for no edits. A `.ruby-templates.toml` overrides it."
         },
         "rubyTemplates.slim.format.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Let the language server format Slim and Skim files (Format Document and Format Selection). Turn off for no edits."
+          "description": "Let the language server format Slim and Skim files (Format Document and Format Selection). Turn off for no edits. A `.ruby-templates.toml` overrides it."
         },
         "rubyTemplates.routes.enabled": {
           "type": "boolean",

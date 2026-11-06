@@ -481,7 +481,7 @@ const check = (label, actual, expected) => {
     range: ghost,
     context: {
       diagnostics: [
-        { range: ghost, code: "unresolved-render", message: "not found" },
+        { range: ghost, code: "Rails/MissingPartial", message: "not found" },
       ],
     },
   });
@@ -534,7 +534,7 @@ const check = (label, actual, expected) => {
       symbols: replies[0].result?.length > 0,
       definition: replies[2].result ?? null,
       diagnostics: published().length > 0,
-      unclosed: published().includes("unclosed-element"),
+      unclosed: published().includes("Html/UnclosedElement"),
     };
   }
   const untitledOk = {
@@ -599,7 +599,7 @@ const check = (label, actual, expected) => {
   for (let waited = 0; waited < 2000 && !jsCodes().length; waited += 50) {
     await new Promise((r) => setTimeout(r, 50));
   }
-  check("untitled erb-js gets no HTML diagnostics", jsCodes(), ["ruby-syntax"]);
+  check("untitled erb-js gets no HTML diagnostics", jsCodes(), ["Syntax/Ruby"]);
   // The latest diagnostics as `line:code` for a document opened with `languageId`; empty when none are published.
   const diagnosticsFor = async (uri, languageId, text) => {
     await send(
@@ -642,7 +642,7 @@ const check = (label, actual, expected) => {
         ),
       ),
     ],
-    ["1:ruby-syntax"],
+    ["1:Syntax/Ruby"],
   );
   const stimulusAttributes = {};
   for (const [lang, text] of Object.entries({
@@ -939,7 +939,7 @@ const check = (label, actual, expected) => {
       textDocument: { uri: u },
       range: at,
       context: {
-        diagnostics: [{ range: at, code: "strict-locals", message: "" }],
+        diagnostics: [{ range: at, code: "Rails/StrictLocals", message: "" }],
       },
     });
     return result
@@ -1192,11 +1192,11 @@ const check = (label, actual, expected) => {
         )
       : [],
     [
-      "3:3 ruby-syntax",
-      "4:1 ruby-syntax",
-      "5:3 void-children",
-      "8:1 ruby-syntax",
-      "8:1 ruby-syntax",
+      "3:3 Syntax/Ruby",
+      "4:1 Syntax/Ruby",
+      "5:3 Html/VoidChildren",
+      "8:1 Syntax/Ruby",
+      "8:1 Syntax/Ruby",
     ],
   );
   check("slim diagnostics source", sources(slimUri), ["slim"]);
@@ -1228,10 +1228,10 @@ const check = (label, actual, expected) => {
         `${d.range.start.line + 1}:${d.range.start.character + 1} ${d.code}`,
     ),
     [
-      "2:11 ruby-syntax",
-      "5:5 ruby-syntax",
-      "4:3 ruby-syntax",
-      "5:3 ruby-syntax",
+      "2:11 Syntax/Ruby",
+      "5:5 Syntax/Ruby",
+      "4:3 Syntax/Ruby",
+      "5:3 Syntax/Ruby",
     ],
   );
 
@@ -1411,7 +1411,7 @@ const check = (label, actual, expected) => {
     range: missing,
     context: {
       diagnostics: [
-        { range: missing, code: "unresolved-render", message: "not found" },
+        { range: missing, code: "Rails/MissingPartial", message: "not found" },
       ],
     },
   });
@@ -2490,6 +2490,136 @@ const check = (label, actual, expected) => {
     alignedRange ?? [],
     [],
   );
+  // .ruby-templates.toml: rules and switches per folder, and its own problems.
+  const rulesRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "rt-rules-")),
+  );
+  fs.mkdirSync(path.join(rulesRoot, "sub"));
+  const rulesToml = path.join(rulesRoot, ".ruby-templates.toml");
+  const quiet =
+    "[Html.UnclosedElement]\nenabled = false\n[erb]\nformat.enabled = false\n";
+  fs.writeFileSync(rulesToml, quiet);
+  fs.writeFileSync(
+    path.join(rulesRoot, "sub", ".ruby-templates.toml"),
+    "[Html.UnclosedElement]\nenabled = true\n[erb]\nformat.enabled = true\n",
+  );
+  const unclosed = "<div>\n<%= x %>\n";
+  const rulesServer = startServer();
+  await rulesServer.send("initialize", {
+    processId: null,
+    rootUri: fileUri(rulesRoot),
+    capabilities: {},
+  });
+  await rulesServer.send("initialized", {}, true);
+  const rulesOpen = (name, text) =>
+    rulesServer.send(
+      "textDocument/didOpen",
+      {
+        textDocument: {
+          uri: fileUri(path.join(rulesRoot, name)),
+          languageId: "erb",
+          version: 1,
+          text,
+        },
+      },
+      true,
+    );
+  const rulesPublished = (u) =>
+    rulesServer.notes
+      .filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" && n.params.uri === u,
+      )
+      .at(-1)?.params.diagnostics;
+  const until = async (label, ready) => {
+    for (let i = 0; i < 60; i++) {
+      if (ready()) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    failures++;
+    console.log(`FAIL timed out waiting for ${label}`);
+  };
+  await rulesOpen("a.html.erb", unclosed);
+  await rulesOpen("sub/b.html.erb", unclosed);
+  await until(
+    "the first diagnostics",
+    () =>
+      rulesPublished(fileUri(path.join(rulesRoot, "a.html.erb"))) &&
+      rulesPublished(fileUri(path.join(rulesRoot, "sub/b.html.erb"))),
+  );
+  const rulesCodes = (name) =>
+    rulesPublished(fileUri(path.join(rulesRoot, name)))?.map((d) => d.code);
+  check("toml: rule off", rulesCodes("a.html.erb"), []);
+  check("toml: nearest file wins", rulesCodes("sub/b.html.erb"), [
+    "Html/UnclosedElement",
+  ]);
+  const reindent = "<div>\n<p>a</p>\n</div>\n";
+  const rulesFormat = async (name, text) =>
+    (
+      await rulesServer.send("textDocument/formatting", {
+        textDocument: { uri: fileUri(path.join(rulesRoot, name)) },
+        options: { tabSize: 2, insertSpaces: true },
+      })
+    ).result;
+  await rulesOpen("c.html.erb", reindent);
+  await rulesOpen("sub/d.html.erb", reindent);
+  check("toml: format off", await rulesFormat("c.html.erb"), null);
+  check(
+    "toml: format on in the subfolder",
+    (await rulesFormat("sub/d.html.erb"))?.[0]?.newText,
+    "<div>\n  <p>a</p>\n</div>\n",
+  );
+  fs.writeFileSync(rulesToml, "[Html.UnclosedElement]\nenabeld = false\n");
+  await rulesServer.send(
+    "workspace/didChangeWatchedFiles",
+    { changes: [{ uri: fileUri(rulesToml), type: 2 }] },
+    true,
+  );
+  const tomlUri = fileUri(rulesToml);
+  await until(
+    "the toml problems",
+    () =>
+      rulesPublished(tomlUri)?.length && rulesCodes("a.html.erb")?.length === 1,
+  );
+  check(
+    "toml: problems are published on the file",
+    rulesPublished(tomlUri)?.map((d) => [d.range.start.line, d.message]),
+    [
+      [
+        1,
+        "unknown key `enabeld` in [Html.UnclosedElement]; it takes enabled, include, exclude",
+      ],
+    ],
+  );
+  check(
+    "toml: problems are logged",
+    rulesServer.notes.some(
+      (n) =>
+        n.method === "window/logMessage" &&
+        n.params.message.includes("unknown key `enabeld`"),
+    ),
+    true,
+  );
+  check("toml: rule back on after the edit", rulesCodes("a.html.erb"), [
+    "Html/UnclosedElement",
+  ]);
+  fs.writeFileSync(rulesToml, quiet);
+  await rulesServer.send(
+    "workspace/didChangeWatchedFiles",
+    { changes: [{ uri: tomlUri, type: 2 }] },
+    true,
+  );
+  await until(
+    "the toml problems to clear",
+    () =>
+      rulesPublished(tomlUri)?.length === 0 &&
+      rulesCodes("a.html.erb")?.length === 0,
+  );
+  check("toml: problems cleared when fixed", rulesPublished(tomlUri), []);
+  check("toml: rule off again", rulesCodes("a.html.erb"), []);
+  await rulesServer.send("shutdown", {});
+  await rulesServer.send("exit", {}, true);
+  fs.rmSync(rulesRoot, { recursive: true, force: true });
   // VS Code percent-encodes `@` and `+` and the server must answer with URIs that decode to the same files.
   const oddDir = path.join(views, "my app @1+2");
   fs.mkdirSync(oddDir, { recursive: true });
