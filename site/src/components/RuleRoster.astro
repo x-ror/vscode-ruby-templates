@@ -1,0 +1,286 @@
+---
+import "../styles/roster.css";
+import Listing from "./Listing.astro";
+import { backtickParts } from "../lib/backticks.mjs";
+import { diagnostics } from "../data/diagnostics";
+import { DEPARTMENTS, departmentOf, languageList, ruleId, rules, statusLabel, type Example, type Rule } from "../data/rules";
+
+const DIAGNOSTICS_PAGE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/reference/diagnostics/`;
+const sections = DEPARTMENTS.map((department) => ({
+  ...department,
+  entries: rules.filter((rule) => departmentOf(rule) === department),
+}));
+const countOf = (status: Rule["status"]) => rules.filter((rule) => rule.status === status).length;
+
+const languagesOf = (rule: Rule) =>
+  rule.availableIn
+    ? `${languageList(rule.availableIn)} today; ${languageList(rule.languages.filter((lang) => !rule.availableIn!.includes(lang)))} not yet`
+    : languageList(rule.languages);
+const typeLabel = (rule: Rule) => (rule.type === "autofix" ? "Autofix" : "Warning");
+const labels = (rule: Rule) => (rule.type === "autofix" ? ["Before", "After"] : ["Flagged", "Fine"]);
+const safeNote = (rule: Rule) => rule.safeNote ?? (rule.safe ? "It only reports; nothing is rewritten." : "");
+const statusText = (rule: Rule) => {
+  if (rule.status === "planned") return `Planned for phase ${rule.phase}. Not available yet: the extension doesn't do this today.`;
+  if (rule.status === "partial") return `Partly available: see how it works today.${rule.phase ? ` The rest is planned for phase ${rule.phase}.` : ""}`;
+  return "Available.";
+};
+const exampleId = (rule: Rule, example: Example, i: number) => `${ruleId(rule)}-${i + 1}-${example.lang}`;
+const codeParts = (text: string) => backtickParts(text);
+---
+
+<div class="roster rules not-content">
+  <div class="rules__scroll" tabindex="0" role="region" aria-label="Summary of all rules">
+    <table class="rules__table">
+      <caption class="rules__caption">
+        {rules.length} rules: {countOf("available")} available, {countOf("partial")} partial, {countOf("planned")} planned
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col" class="rules__head">Rule</th>
+          <th scope="col" class="rules__head">Languages</th>
+          <th scope="col" class="rules__head">Type</th>
+          <th scope="col" class="rules__head">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          rules.map((rule) => (
+            <tr class="rules__row">
+              <th scope="row" class="rules__cell rules__cell--rule">
+                <a class="rules__link" href={`#${ruleId(rule)}`}>
+                  {rule.name}
+                </a>
+              </th>
+              <td class="rules__cell">{languageList(rule.languages)}</td>
+              <td class="rules__cell">{typeLabel(rule)}</td>
+              <td class="rules__cell">
+                <span class={`rules__mark rules__mark--${rule.status}`}>{statusLabel(rule)}</span>
+              </td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+
+  {
+    sections.map((section) => (
+      <section class="roster__section" aria-labelledby={section.id}>
+        <h2 class="roster__section-title" id={section.id}>
+          {section.title}
+        </h2>
+        {section.entries.map((rule) => {
+          const id = ruleId(rule);
+          const [beforeLabel, afterLabel] = labels(rule);
+          return (
+            <article class="roster__entry" aria-labelledby={id}>
+              <h3 class="roster__code" id={id}>
+                <a class="roster__anchor" href={`#${id}`}>
+                  {rule.name}
+                </a>
+              </h3>
+              <p class="rules__status-line">
+                <span class={`rules__mark rules__mark--${rule.status}`}>{statusLabel(rule)}</span>
+              </p>
+              <p class="roster__summary">{codeParts(rule.summary).map(({ text, code }) => (code ? <code>{text}</code> : text))}</p>
+              <dl class="roster__furniture">
+                <div class="roster__field">
+                  <dt class="roster__term">Languages</dt>
+                  <dd class="roster__detail">{languagesOf(rule)}</dd>
+                </div>
+                <div class="roster__field">
+                  <dt class="roster__term">Type</dt>
+                  <dd class="roster__detail">
+                    {rule.type === "autofix" ? "Autofix, run by the formatter." : "Warning, shown as a diagnostic."}
+                    {rule.status === "planned" && rule.type === "autofix" && departmentOf(rule).id !== "rails" && " Off by default."}
+                    {rule.status === "planned" && departmentOf(rule).id === "rails" && " On by default."}
+                  </dd>
+                </div>
+                <div class="roster__field">
+                  <dt class="roster__term">Rendered output</dt>
+                  <dd class="roster__detail">
+                    {rule.safe ? "Safe." : "Not safe."}{" "}
+                    {codeParts(safeNote(rule)).map(({ text, code }) => (code ? <code>{text}</code> : text))}
+                  </dd>
+                </div>
+                <div class="roster__field">
+                  <dt class="roster__term">Status</dt>
+                  <dd class="roster__detail">{statusText(rule)}</dd>
+                </div>
+                {rule.today && (
+                  <div class="roster__field">
+                    <dt class="roster__term">Today</dt>
+                    <dd class="roster__detail">
+                      {codeParts(rule.today).map(({ text, code }) => (code ? <code>{text}</code> : text))}
+                      {rule.code && diagnostics.some((d) => d.code === rule.code) && (
+                        <>
+                          {" "}
+                          See <a href={`${DIAGNOSTICS_PAGE}#${rule.code}`}><code>{rule.code}</code></a> in the diagnostics reference.
+                        </>
+                      )}
+                    </dd>
+                  </div>
+                )}
+                {rule.setting && (
+                  <div class="roster__field">
+                    <dt class="roster__term">{rule.setting.label}</dt>
+                    <dd class="roster__detail">
+                      <pre class="roster__setting" tabindex="0" role="region" aria-label={`Setting: ${rule.setting.label.toLowerCase()}`}><code>{rule.setting.json}</code></pre>
+                    </dd>
+                  </div>
+                )}
+                {rule.config && (
+                  <div class="roster__field">
+                    <dt class="roster__term">Planned config</dt>
+                    <dd class="roster__detail">
+                      <pre class="roster__setting" tabindex="0" role="region" aria-label="Planned configuration in .ruby-templates.yml"><code>{rule.config}</code></pre>
+                    </dd>
+                  </div>
+                )}
+                <div class="roster__field">
+                  <dt class="roster__term">{rule.type === "autofix" ? "Example" : "Examples"}</dt>
+                  <dd class="roster__detail">
+                    {rule.examples.map((example, i) => (
+                      <div class="rules__example">
+                        {example.note && (
+                          <p class="rules__note">{codeParts(example.note).map(({ text, code }) => (code ? <code>{text}</code> : text))}</p>
+                        )}
+                        <div class="rules__pair">
+                          <Listing
+                            id={`${exampleId(rule, example, i)}-before`}
+                            file={`${beforeLabel} · ${example.file}`}
+                            lang={example.lang}
+                            code={example.before}
+                            faults={example.faults}
+                          />
+                          <Listing
+                            id={`${exampleId(rule, example, i)}-after`}
+                            file={`${afterLabel} · ${example.afterFile ?? example.file}`}
+                            lang={example.lang}
+                            code={example.after}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          );
+        })}
+      </section>
+    ))
+  }
+</div>
+
+<style>
+  /* ---- summary table: every rule at a glance ---- */
+
+  .rules__scroll {
+    overflow-x: auto;
+    border-block: 1px solid var(--rt-hairline);
+  }
+
+  .rules__scroll:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .rules__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9375rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rules__caption {
+    padding: 0 0 0.75rem;
+    text-align: left;
+    font-size: 0.9375rem;
+    color: var(--rt-ink-muted);
+  }
+
+  .rules__head {
+    padding: 0.5rem 1rem 0.5rem 0;
+    text-align: left;
+    font-size: 0.875rem;
+    font-weight: 650;
+    color: var(--rt-ink-muted);
+    border-bottom: 1px solid var(--rt-ink);
+    white-space: nowrap;
+  }
+
+  .rules__cell {
+    padding: 0.5rem 1rem 0.5rem 0;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--rt-hairline);
+  }
+
+  .rules__cell--rule {
+    font-family: var(--rt-font-mono);
+    font-size: 0.875rem;
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
+  .rules__row:last-child > .rules__cell {
+    border-bottom: 0;
+  }
+
+  /* ---- status: shown in words, and by the border style ---- */
+
+  .rules__mark {
+    display: inline-block;
+    padding: 0 0.5rem;
+    border: 1px solid var(--rt-ink);
+    border-radius: 3px;
+    font-size: 0.8125rem;
+    font-weight: 650;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .rules__mark--partial {
+    background: var(--rt-code-bg);
+  }
+
+  .rules__mark--planned {
+    border-style: dashed;
+    border-color: var(--rt-ink-muted);
+    font-weight: 550;
+    color: var(--rt-ink-muted);
+  }
+
+  .rules__status-line {
+    margin: 0.375rem 0 0;
+  }
+
+  .rules__status-line + .roster__summary {
+    margin-top: 0.5rem;
+  }
+
+  /* ---- examples: the pair, two-up when there is room ---- */
+
+  .rules__example + .rules__example {
+    margin-top: 1.25rem;
+  }
+
+  .rules__note {
+    margin: 0 0 0.5rem;
+    font-size: 0.9375rem;
+    color: var(--rt-ink-muted);
+  }
+
+  .rules__pair {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  @media (min-width: 64rem) {
+    .rules__pair {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }
+  }
+</style>

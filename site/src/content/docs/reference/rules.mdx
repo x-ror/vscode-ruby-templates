@@ -1,0 +1,30 @@
+---
+title: Rules
+description: The formatting and lint rules of Ruby Templates for ERB, Haml and Slim, the ones that work today and the ones planned, each with an example.
+tableOfContents: false
+---
+
+import RuleRoster from "../../../components/RuleRoster.astro";
+
+This page is the catalogue of rules, and a public roadmap. Rules marked _Available_ or _Partial_ work in the extension today. Rules marked _Planned_ do not exist yet; they are listed with a phase number, and lower phases come first. The rule names, their options and the config file shown here are a draft and may still change.
+
+Today the formatter and the checks run without configuration. [Formatting](/vscode-ruby-templates/guides/formatting/) describes what the formatter does, and the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists every code the checks report.
+
+## How to read an entry
+
+- **Type.** An _autofix_ is a formatter rule that rewrites the template. A _warning_ is a check that reports a problem and rewrites nothing.
+- **Rendered output.** _Safe_ means the rule leaves the rendered page as it is: it only changes whitespace the browser ignores, or changes markup into an equal form. _Not safe_ says what can change.
+- **Examples.** An autofix shows the template before and after. A warning shows a flagged template and a fine one. The examples of available rules were produced by `ruby-templates format` and `ruby-templates check`; the ones of planned rules are written by hand.
+- **Defaults.** The planned formatting rules are off until you turn them on, so a file is never changed unless you ask. The planned Rails checks are on.
+
+## Planned configuration
+
+Planned rules are configured in a `.ruby-templates.yml` at the project root, keyed by rule name as RuboCop does. This file is not read yet; the extension ignores it.
+
+```yaml
+Layout/EmptyLines:
+  Enabled: true
+  Max: 1
+```
+
+<RuleRoster />
