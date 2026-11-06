@@ -16,6 +16,12 @@ const languagesOf = (rule: Rule) =>
   rule.availableIn
     ? `${languageList(rule.availableIn)} today; ${languageList(rule.languages.filter((lang) => !rule.availableIn!.includes(lang)))} not yet`
     : languageList(rule.languages);
+const onByDefaultText = (on: Rule["languages"], all: Rule["languages"]) =>
+  on.length === 0
+    ? "Off by default."
+    : on.length === all.length
+      ? "On by default."
+      : `On by default in ${languageList(on)}, off in ${languageList(all.filter((lang) => !on.includes(lang)))}.`;
 const typeLabel = (rule: Rule) => (rule.type === "autofix" ? "Autofix" : "Warning");
 const labels = (rule: Rule) => (rule.type === "autofix" ? ["Before", "After"] : ["Flagged", "Fine"]);
 const safeNote = (rule: Rule) => rule.safeNote ?? (rule.safe ? "It only reports; nothing is rewritten." : "");
@@ -92,8 +98,9 @@ const codeParts = (text: string) => backtickParts(text);
                   <strong class="roster__term">Type</strong>{" "}
                   <span class="roster__detail">
                     {rule.type === "autofix" ? "Autofix, run by the formatter." : "Warning, shown as a diagnostic."}
-                    {rule.status === "planned" && rule.type === "autofix" && departmentOf(rule).id !== "rails" && " Off by default."}
-                    {rule.status === "planned" && departmentOf(rule).id === "rails" && " On by default."}
+                    {rule.onByDefault === undefined && rule.status === "planned" && rule.type === "autofix" && departmentOf(rule).id !== "rails" && " Off by default."}
+                    {rule.onByDefault === undefined && rule.status === "planned" && departmentOf(rule).id === "rails" && " On by default."}
+                    {rule.onByDefault !== undefined && ` ${onByDefaultText(rule.onByDefault, rule.languages)}`}
                   </span>
                 </p>
                 <p class="roster__field">
@@ -131,9 +138,9 @@ const codeParts = (text: string) => backtickParts(text);
                 )}
                 {rule.config && (
                   <div class="roster__field">
-                    <strong class="roster__term">Planned config</strong>{" "}
+                    <strong class="roster__term">{rule.status === "planned" ? "Planned config" : "Turn it on"}</strong>{" "}
                     <div class="roster__detail">
-                      <pre class="roster__setting" tabindex="0" role="region" aria-label="Planned configuration in .ruby-templates.toml"><code>{rule.config}</code></pre>
+                      <pre class="roster__setting" tabindex="0" role="region" aria-label="Configuration in .ruby-templates.toml"><code>{rule.config}</code></pre>
                     </div>
                   </div>
                 )}

@@ -51,6 +51,24 @@ A file Haml or Slim would reject is left unchanged, and so is any result that wo
 
 The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which are configured in a `.ruby-templates.toml`.
 
+## Blank lines
+
+Two rules in a `.ruby-templates.toml` decide what happens to blank lines; neither runs on _Format Selection_.
+
+- `Layout/TrailingEmptyLines` is on for Haml and Slim: the file ends with exactly one line break. The blank lines at the end go, and a missing final line break is added in the file's line ending. It is off for ERB, because Rails renders ERB byte for byte and the end of a partial is output (a final line break shows as a space between inline elements); turn it on with `enabled = true`.
+- `Layout/EmptyLines` is off. Turn it on to cut every run of blank lines longer than `max` (1 by default) down to `max`.
+
+```toml
+[Layout.EmptyLines]
+enabled = true
+max = 1
+
+[Layout.TrailingEmptyLines]
+enabled = false
+```
+
+Blank lines stay where whitespace counts: `<pre>`, `<xmp>`, `<listing>`, `<textarea>`, `<script>`, `<style>`, quoted attribute values, comments and the Ruby inside ERB tags; Haml filters; Slim text blocks and engine bodies. For Haml and Slim, the formatter also compares what the template compiles to before and after, ignoring line numbers, and keeps the blank lines of the file when the result would differ.
+
 ## Safe by construction
 
 Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel.

@@ -238,6 +238,16 @@ enum Compiled {
     Flat { index: usize, text: String },
 }
 
+impl Compiled {
+    /// Whether it is a filter line, its depth, its text and the lines joined into it.
+    fn without_line(&self) -> (bool, usize, &str, &[String]) {
+        match self {
+            Compiled::Node { tabs, text, joined, .. } => (false, *tabs, text, joined),
+            Compiled::Flat { text, .. } => (true, 0, text, &[]),
+        }
+    }
+}
+
 pub struct Parsed {
     /// The first error Haml raises for the template, at the line it reports.
     pub error: Option<Error>,
@@ -287,6 +297,16 @@ pub fn same_compilation(before: &str, after: &str) -> bool {
     }
     let (before, after) = (parse(before), parse(after));
     before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
+}
+
+/// `same_compilation` with the lines the nodes are on left out, for a text that lost blank lines. A blank line that
+/// matters (in a filter body, in a multi-line string) is part of what is compared, so removing it makes the texts differ.
+pub fn same_compilation_ignoring_lines(before: &str, after: &str) -> bool {
+    let (before, after) = (parse(before), parse(after));
+    before.error.is_none()
+        && after.error.is_none()
+        && before.compiled.len() == after.compiled.len()
+        && before.compiled.iter().zip(&after.compiled).all(|(a, b)| a.without_line() == b.without_line())
 }
 
 /// The lines of `text` as Haml (and the LSP) split them, at `\r\n`, `\r` and `\n`, each with its line ending
@@ -2176,6 +2196,23 @@ mod tests {
         assert!(void("%br/").is_empty());
         assert!(void("%p\n  %br\n  %img{src: 1}\n  %b x").is_empty());
         assert!(parse("%br\n  %p x\n% a").void_content.is_empty());
+    }
+
+    #[test]
+    fn same_compilation_ignoring_lines_still_sees_blank_lines_that_are_content() {
+        assert!(same_compilation_ignoring_lines("%p\n\n\n%q\n", "%p\n%q\n"));
+        assert!(same_compilation_ignoring_lines("%p\n\n  %q\n", "%p\n  %q\n"));
+        assert!(!same_compilation_ignoring_lines("%p\n%q\n", "%p\n%r\n"));
+        assert!(!same_compilation_ignoring_lines("%p\n%q\n", "%p\n  %q\n"));
+        assert!(!same_compilation_ignoring_lines("%p= x\n  %b\n", "%p= x\n  %b\n"), "an error");
+        for (name, before, after) in [
+            ("plain filter", ":plain\n  a\n\n  b\n", ":plain\n  a\n  b\n"),
+            ("preserve filter", "%div\n  :preserve\n    a\n\n\n    b\n", "%div\n  :preserve\n    a\n    b\n"),
+            ("heredoc in a ruby filter", ":ruby\n  x = <<~E\n    a\n\n    b\n  E\n", ":ruby\n  x = <<~E\n    a\n    b\n  E\n"),
+        ] {
+            assert!(same_compilation(before, before) && same_compilation(after, after), "{name}");
+            assert!(!same_compilation_ignoring_lines(before, after), "{name}");
+        }
     }
 
     /// Pairs of templates and whether `Haml::Engine` (`test/oracle/haml.rb --rails`) compiles them to the same source.

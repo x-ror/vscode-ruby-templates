@@ -50,6 +50,28 @@ pub fn same_compilation(before: &str, after: &str, extra_engines: &[String]) -> 
     before == after || generated(before, extra_engines) == generated(after, extra_engines)
 }
 
+/// `same_compilation` for a text that lost blank lines: the pieces compared leave out line breaks and positions, but a
+/// blank line that is text (in a text block) is part of the text pieces, so removing it makes the texts differ.
+pub fn same_compilation_ignoring_lines(before: &str, after: &str, extra_engines: &[String]) -> bool {
+    let without_positions = |text: &str| {
+        let mut pieces = crate::slim::parser::parse(text, extra_engines).pieces;
+        pieces.retain(|piece| !matches!(piece, Piece::Newline));
+        for piece in &mut pieces {
+            match piece {
+                Piece::Line { line, .. } => *line = 0,
+                Piece::Control { at, .. }
+                | Piece::Output { at, .. }
+                | Piece::Attribute { at, .. }
+                | Piece::Splat { at, .. }
+                | Piece::Code { at, .. } => *at = Origin { line: 0, offset: None },
+                Piece::Newline | Piece::Static(_) | Piece::Close(_) => {}
+            }
+        }
+        pieces
+    };
+    without_positions(before) == without_positions(after)
+}
+
 /// The Ruby `Slim::Engine` generates from the parser's output.
 pub fn compiled(parsed: &Parsed) -> Compiled {
     compile(&parsed.pieces)
@@ -265,6 +287,20 @@ mod tests {
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
         compiled(&parse(text, &[])).diagnostics(text, ruby_prism::Version::Latest)
+    }
+
+    #[test]
+    fn same_compilation_ignoring_lines_still_sees_blank_lines_that_are_text() {
+        assert!(same_compilation_ignoring_lines("p\n\n\nq\n", "p\nq\n", &[]));
+        assert!(same_compilation_ignoring_lines("div\n  | a\n\n\np\n", "div\n  | a\np\n", &[]), "after the block");
+        assert!(!same_compilation_ignoring_lines("p\nq\n", "p\nr\n", &[]));
+        for (name, before, after) in [
+            ("text block", "div\n  | a\n\n    b\n", "div\n  | a\n    b\n"),
+            ("javascript", "javascript:\n  a\n\n  b\n", "javascript:\n  a\n  b\n"),
+            ("heredoc in ruby:", "ruby:\n  x = <<~E\n    a\n\n    b\n  E\n", "ruby:\n  x = <<~E\n    a\n    b\n  E\n"),
+        ] {
+            assert!(!same_compilation_ignoring_lines(before, after, &[]), "{name}");
+        }
     }
 
     /// (0-based line, Prism's message) of each error.

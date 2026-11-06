@@ -124,6 +124,11 @@ jobs:
         run: bun test/cli.js
         env:
           RUBY_TEMPLATES: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
+      - name: Rule examples
+        if: matrix.test
+        run: bun test/rules.js
+        env:
+          RUBY_TEMPLATES: server/target/${{ matrix.target }}/release/ruby-templates${{ matrix.ext }}
       - name: npm package
         if: matrix.test
         run: bun test/npm.js

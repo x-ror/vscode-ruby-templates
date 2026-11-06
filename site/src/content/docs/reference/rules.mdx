@@ -14,8 +14,8 @@ The formatter and the checks work without configuration, and a `.ruby-templates.
 
 - **Type.** An _autofix_ is a formatter rule that rewrites the template. A _warning_ is a check that reports a problem and rewrites nothing.
 - **Rendered output.** _Safe_ means the rule leaves the rendered page as it is: it only changes whitespace the browser ignores, or changes markup into an equal form. _Not safe_ says what can change.
-- **Examples.** An autofix shows the template before and after. A warning shows a flagged template and a fine one. The examples of available rules were produced by `ruby-templates format` and `ruby-templates check`; the ones of planned rules are written by hand.
-- **Defaults.** The planned formatting rules are off until you turn them on, so a file is never changed unless you ask. The planned Rails checks are on.
+- **Examples.** An autofix shows the template before and after. A warning shows a flagged template and a fine one. The examples of available rules are run through `ruby-templates format` and `ruby-templates check` by the tests; the ones of planned rules are written by hand.
+- **Defaults.** A formatting rule says whether it is on by default. `Layout/TrailingEmptyLines` is, for Haml and Slim; the others, `Layout/EmptyLines` among them, are off until you turn them on, so a file is never changed beyond what the entry says unless you ask. The planned Rails checks are on.
 
 ## Configuration
 
@@ -43,6 +43,14 @@ To change a rule for some files only, give it `include` or `exclude` globs. They
 exclude = ["**/*.haml", "app/views/legacy/**"]
 ```
 
+A rule with options takes them in its own table. `max` is a whole number, 0 or more:
+
+```toml
+[Layout.EmptyLines]
+enabled = true
+max = 2
+```
+
 ### All keys
 
 ```toml
@@ -67,7 +75,7 @@ The language tables take the keys of the `rubyTemplates.<language>.*` settings, 
 - The file looks for `.ruby-templates.toml` in the template's folder and every folder above it, nearest first, and stops at one with `root = true`.
 - The files merge key by key: the nearest file that sets a key wins. A list (`exclude`, `include`, `disabled_diagnostics`, `extra_engines`) is replaced, not extended. Globs are relative to the folder of the file that holds them.
 - The file is stronger than VS Code: precedence is the nearest file, then the VS Code settings (where no file says anything), then `.editorconfig` for the indentation width, then the defaults.
-- A rule is on unless the nearest file that sets either its `enabled` or its department's `enabled` says `false`; within that one file, the rule's own `enabled` beats the department's. A root file with `[Html.ImgAlt] enabled = true` and a `legacy/` file with `[Html] enabled = false` therefore leave `Html/ImgAlt` off under `legacy/`. Then the rule's `include` and `exclude` apply, and the rule must exist for the file's language. A file in the global `exclude` gets no diagnostics and is not formatted.
+- A rule is on, if it is on by default, unless the nearest file that sets either its `enabled` or its department's `enabled` says `false`, and a formatting rule that is off by default is on when that file says `true`; within that one file, the rule's own `enabled` beats the department's. A root file with `[Html.ImgAlt] enabled = true` and a `legacy/` file with `[Html] enabled = false` therefore leave `Html/ImgAlt` off under `legacy/`. Then the rule's `include` and `exclude` apply, and the rule must exist for the file's language. A file in the global `exclude` gets no diagnostics and is not formatted.
 
 ### Problems in the file
 

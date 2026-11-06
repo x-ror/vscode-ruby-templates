@@ -1,6 +1,6 @@
 //! ERB re-indentation. A line that starts in markup gets one indent unit per open HTML element and ERB block, read
 //! with `erb::tags`; a line that starts inside a multi-line tag moves with the line its owner starts on, keeping its
-//! relative indentation; a `<script>`, `<style>`, `<pre>`, `<textarea>` or `<title>` body (its end tag's line too), a
+//! relative indentation; a `<script>`, `<style>`, `<pre>`, `<xmp>`, `<listing>`, `<textarea>` or `<title>` body (its end tag's line too), a
 //! quoted attribute value, every line after the first of an HTML comment and every line that starts inside an ERB tag
 //! (its Ruby) keep every byte.
 
@@ -87,7 +87,8 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
         .into_iter()
         .collect();
     let decided = decide(&lines, &roles, &units, &levels, unit);
-    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), notes })
+    let removable = roles.iter().map(|&role| role == Role::Markup).collect();
+    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), removable, notes })
 }
 
 /// Why `text` isn't safe to re-indent: its first ERB error, else its first HTML or tag problem.
@@ -130,9 +131,10 @@ fn regions(text: &str, tokens: &[Token], starts: &[usize], align_comments: bool)
                     keep_end.push((q + 1, q_end - 1));
                 }
                 if let Token::Open { tag, .. } = token {
-                    if tag.name == "pre" {
-                        let Some(close) = closing(&tokens[i + 1..], "pre") else {
-                            return skip(SkipKind::Doubt, format!("line {}: `<pre>` is never closed", line_of(starts, tag.start) + 1));
+                    if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") {
+                        let Some(close) = closing(&tokens[i + 1..], &tag.name) else {
+                            let message = format!("line {}: `<{}>` is never closed", line_of(starts, tag.start) + 1, tag.name);
+                            return skip(SkipKind::Doubt, message);
                         };
                         fixed.push((tag.end, close.start));
                         keep_end.push((tag.end, close.start.saturating_sub(1)));

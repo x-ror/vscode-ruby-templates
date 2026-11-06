@@ -205,7 +205,7 @@
 
 _Format Document_ (`Shift+Alt+F`). Після кожного файлу відкат: `Ctrl+Z` або `git checkout`.
 
-- [ ] **F-01** `messy.html.erb`: один рівень відступу на HTML-елемент і ERB-блок, `<% else %>` / `<% end %>` на рівні `if`, хвостові пробіли прибрані. Тіла `<pre>` і `<script>` та друге й наступні рядки багаторядкового `<%= f.text_field … %>` не змінюються. Порожні рядки всередині ERB лишаються (ERB-форматер їх не стискає).
+- [ ] **F-01** `messy.html.erb`: один рівень відступу на HTML-елемент і ERB-блок, `<% else %>` / `<% end %>` на рівні `if`, хвостові пробіли прибрані. Тіла `<pre>` і `<script>` та друге й наступні рядки багаторядкового `<%= f.text_field … %>` не змінюються. Порожні рядки всередині ERB лишаються, доки не ввімкнено `Layout/EmptyLines` (F-14).
 - [ ] **F-02** `messy.html.haml`: відступ 2, тіло `:javascript` рухається разом із заголовком і зберігає свій відносний відступ, порожні рядки в кінці зникають.
 - [ ] **F-03** `messy.html.slim`: відступ 2, `|`-блок і тіло `javascript:` рухаються з рядком. Хвостові пробіли в `|`-тексті лишаються, бо вони частина виводу.
 - [ ] **F-04** `unsafe.html.erb`, `unsafe.html.slim`: файл не змінюється, в Output причина («left unchanged …»).
@@ -218,6 +218,7 @@ _Format Document_ (`Shift+Alt+F`). Після кожного файлу відк
 - [ ] **F-11** `.js.erb`, `.text.erb`, `.json.erb`, `*.jbuilder`, `.liquid` не форматуються ніколи (`highlight/sample.js.erb`, `highlight/sample.html.liquid`).
 - [ ] **F-12** `heredoc.html.erb`: рядки з початком тегів `<%= <<~HTML.html_safe` (2) і `<% summary = <<~TEXT` (6) та `<p>` (10) отримують один рівень відступу. Тіла heredoc, їхні кінцівки (`HTML`, `TEXT`) і рядки `%>` (3–5, 7–9) лишаються байт у байт.
 - [ ] **F-13** Глоби `.editorconfig`. У VS Code ширину задає розмір табуляції редактора (F-05), тому дивись через командний рядок (розділ 7): у `playground/editorconfig` `plain.html.erb` дає відступ 4 (секція `[app/views/playground/editorconfig/**/*.html.erb]`: `/**/` збігається і з однією `/`), `page2.html.erb` 3 (`[page{1..3}.html.erb]`: без `/` секція діє в будь-якій папці), `page02.html.erb` знову 4 (діапазон не збігається з нулем попереду), `{brace.html.erb` 6 (секція `[{brace.html.erb]` з незакритою дужкою читається буквально).
+- [ ] **F-14** Порожні рядки. Додай у `rails_app/.ruby-templates.toml` `[Layout.EmptyLines]` з `enabled = true` і `max = 1` (потім прибери). Format Document у `messy.html.erb` лишає один порожній рядок там, де після `<% end %>` було три; порожні рядки в `<pre>` і `<script>` не змінюються. Те саме командою `$B format demo/rails_app/app/views/playground/format/messy.html.erb`. `[Layout.TrailingEmptyLines] enabled = false` лишає кінець файлу як є, а за замовчуванням файл Haml і Slim закінчується одним переведенням рядка (ERB рендериться байт у байт, тому там правило вимкнене; `enabled = true` вмикає його).
 
 ## 6. Команди, яким потрібен Ruby (`playground/preview`)
 

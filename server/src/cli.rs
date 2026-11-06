@@ -32,7 +32,8 @@ Usage:
   ruby-templates format [--check] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
 check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates.
-format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace and the final newline.
+format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines
+        (off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
         Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
         on stderr. Without --check or --write the result goes to stdout. --align-comments moves the
         lines inside ERB comments with the line the comment opens on.
@@ -56,9 +57,11 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 
 /// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
 fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| crate::format::slim::format(&text, crate::format::Settings::default().indent_size, &[]));
+    let formatted = std::fs::read_to_string(file).ok().and_then(|text| {
+        let settings = crate::format::Settings::default();
+        let indented = crate::format::slim::format(&text, settings.indent_size, &[])?;
+        Some(crate::format::blank_lines::apply(&indented.text, &indented.removable, &settings, &text))
+    });
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");
         return FINDINGS;
@@ -332,8 +335,8 @@ fn format_command(args: &FormatArgs) -> i32 {
 }
 
 /// The settings in force for `shown`, what was read to get them, and the config files' problems.
-fn print_verbose(shown: &str, lang: TemplateLang, settings: &format::Settings, notes: &[String], rules: &ResolvedRules) {
-    eprintln!("{shown}: {:?}", format::effective_settings(lang, settings));
+fn print_verbose(shown: &str, settings: &format::Settings, notes: &[String], rules: &ResolvedRules) {
+    eprintln!("{shown}: {settings:?}");
     notes.iter().for_each(|note| eprintln!("{shown}: {note}"));
     for file in rules.files() {
         eprintln!("{shown}: read {}", shown_path(&file.path).display());
@@ -352,7 +355,7 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, (project
             let mut settings = rules.format_settings(resolved.settings);
             settings.align_comments |= args.align_comments;
             if args.verbose {
-                print_verbose(&shown.to_string(), lang, &settings, &resolved.notes, &rules);
+                print_verbose(&shown.to_string(), &settings, &resolved.notes, &rules);
             }
             if let Some(by) = rules.excluded_by() {
                 format::skip(SkipKind::NotHandled, format!("excluded by {}", by.display()))

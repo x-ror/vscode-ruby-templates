@@ -13,6 +13,7 @@ bun run test:unit     # pure JS helpers (ERB tags, language configs, Haml toggle
 bun run test:snippets # snippets: unique prefixes, valid bodies, no unescaped `$`
 bun test/e2e.js       # LSP end-to-end test against a fake Rails tree (exits 1 on a mismatch)
 bun test/cli.js       # the ruby-templates command line on a temp folder
+bun test/rules.js     # the site's rule examples: each available autofix rule turns `before` into `after`
 bun test/npm.js       # the npm packages: assembled from the release build, packed, installed offline, run
 bun run test:slim     # Slim editing helpers and onEnterRules
 bun run test:vscode   # commands, formatter and the server inside a real VS Code (downloads it into .vscode-test/; `xvfb-run -a` first on Linux without a display)

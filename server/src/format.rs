@@ -1,6 +1,7 @@
-//! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace and the final
+//! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace, blank lines and the final
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
+pub(crate) mod blank_lines;
 pub mod erb;
 pub mod haml;
 pub mod slim;
@@ -17,15 +18,17 @@ use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptio
 pub struct Settings {
     /// Columns per nesting level.
     pub indent_size: usize,
-    /// End the file with a line ending; off for a range, which can't add a line.
-    pub final_newline: bool,
+    /// `Layout/TrailingEmptyLines`: end the file with exactly one line ending; off for a range, which can't change the lines.
+    pub trailing_empty_lines: bool,
+    /// `Layout/EmptyLines`: the longest run of blank lines kept; `None` leaves them all.
+    pub max_empty_lines: Option<usize>,
     /// Move the lines inside an ERB template's comments with the line the comment opens on.
     pub align_comments: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { indent_size: 2, final_newline: true, align_comments: false }
+        Self { indent_size: 2, trailing_empty_lines: true, max_empty_lines: None, align_comments: false }
     }
 }
 
@@ -66,6 +69,9 @@ pub(crate) fn skip<T>(kind: SkipKind, reason: impl Into<String>) -> Result<T, Sk
 /// A language's re-indented text.
 pub(crate) struct Indented {
     pub text: String,
+    /// Per line of `text`: a blank one may be removed. False where whitespace counts: filter and text blocks, `<pre>`,
+    /// continuations of a tag or of Ruby.
+    pub removable: Vec<bool>,
     /// What was left alone inside an otherwise formatted file, for `--verbose`.
     pub notes: Vec<String>,
 }
@@ -101,7 +107,6 @@ pub(crate) fn format_in(
     if uri.path().as_str().to_ascii_lowercase().ends_with(".tt") {
         return skip(SkipKind::NotHandled, "generator template: the generator's ERB is mixed in");
     }
-    let settings = &effective_settings(lang, settings);
     // The formatter refuses on errors, so it must see the ones the server shows: those of the project's Ruby.
     let ruby = ruby_context(uri, projects);
     let template = Template { uri, lang, plain_erb };
@@ -163,16 +168,27 @@ fn format_once(
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
         TemplateLang::Liquid => return skip(SkipKind::NotHandled, "Liquid has no formatter here"),
     };
-    let mut formatted = indented.text;
-    if settings.final_newline && !formatted.is_empty() && !formatted.ends_with('\n') {
-        formatted.push_str(dominant_ending(text));
-    }
-    Ok(Formatted { text: formatted, notes: indented.notes })
+    Ok(tidy(lang, indented, text, settings, extra_engines))
 }
 
-/// The settings `format` works with: Slim and Haml follow their own rules for the end of the file, and ERB keeps it as it is.
-pub fn effective_settings(lang: TemplateLang, settings: &Settings) -> Settings {
-    Settings { final_newline: settings.final_newline && lang != TemplateLang::Erb, ..settings.clone() }
+/// The blank-line rules applied to `indented`; left out, with a note, when the compiled template would change.
+fn tidy(lang: TemplateLang, indented: Indented, original: &str, settings: &Settings, extra_engines: &[String]) -> Formatted {
+    let Indented { text: indented, removable, mut notes } = indented;
+    let tidied = blank_lines::apply(&indented, &removable, settings, original);
+    if tidied == indented || same_compilation_ignoring_lines(lang, &indented, &tidied, extra_engines) {
+        return Formatted { text: tidied, notes };
+    }
+    notes.push("blank lines kept: removing them would change the compiled output".to_string());
+    Formatted { text: indented, notes }
+}
+
+/// Whether Haml or Slim compile both texts alike, line numbers aside; ERB has no compiled form to compare.
+fn same_compilation_ignoring_lines(lang: TemplateLang, before: &str, after: &str, extra_engines: &[String]) -> bool {
+    match lang {
+        TemplateLang::Haml => crate::haml::parser::same_compilation_ignoring_lines(before, after),
+        TemplateLang::Slim | TemplateLang::Skim => crate::slim::ruby::same_compilation_ignoring_lines(before, after, extra_engines),
+        _ => true,
+    }
 }
 
 fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: ruby_prism::Version) -> Result<Indented, Skipped> {
@@ -182,33 +198,23 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: 
         return skip(SkipKind::Doubt, "Slim would reject the file");
     }
     let original = text;
-    let Some(text) = slim::format(text, settings.indent_size, extra_engines) else {
+    let Some(indented) = slim::format(text, settings.indent_size, extra_engines) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
-    if !crate::slim::ruby::same_compilation(original, &text, extra_engines) {
+    if !crate::slim::ruby::same_compilation(original, &indented.text, extra_engines) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
-    Ok(Indented { text, notes: vec![] })
+    Ok(indented)
 }
 
 fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
-    let Some(formatted) = haml::format(text, settings.indent_size) else {
+    let Some(indented) = haml::format(text, settings.indent_size) else {
         return skip(SkipKind::Doubt, "Haml would reject the file");
     };
-    if !crate::haml::parser::same_compilation(text, &formatted) {
+    if !crate::haml::parser::same_compilation(text, &indented.text) {
         return skip(SkipKind::Doubt, "the compiled output would change");
     }
-    Ok(Indented { text: formatted, notes: vec![] })
-}
-
-fn dominant_ending(text: &str) -> &'static str {
-    let lf = text.matches('\n').count();
-    let crlf = text.matches("\r\n").count();
-    if crlf * 2 > lf {
-        "\r\n"
-    } else {
-        "\n"
-    }
+    Ok(indented)
 }
 
 // ASCII only: a no-break space is content.
@@ -295,7 +301,7 @@ mod tests {
         );
         assert_eq!(fmt("a.slim", "p\n\n\nq\n   \n", &Settings::default()).as_deref(), Ok("p\n\n\nq\n"), "inner blank lines stay");
         // A range leaves the final newline as it is.
-        let range = Settings { final_newline: false, ..Settings::default() };
+        let range = Settings { trailing_empty_lines: false, ..Settings::default() };
         assert_eq!(fmt("a.slim", "p", &range).as_deref(), Ok("p"));
     }
 
@@ -306,7 +312,7 @@ mod tests {
         assert_eq!(fmt("a.haml", "%div\n  %p\n", &Settings { indent_size: 3, ..d() }).as_deref(), Ok("%div\n   %p\n"));
         assert_eq!(fmt("a.haml", "%p \r\n%i\r\n\r\n  \r\n", &d()).as_deref(), Ok("%p\r\n%i\r\n"), "ending kept, trailing lines collapse");
         assert_eq!(fmt("a.haml", "%p\n\n\n%i\n", &d()).as_deref(), Ok("%p\n\n\n%i\n"));
-        let range = Settings { final_newline: false, ..d() };
+        let range = Settings { trailing_empty_lines: false, ..d() };
         assert_eq!(fmt("a.haml", "%p", &range).as_deref(), Ok("%p"));
     }
 
@@ -327,22 +333,87 @@ mod tests {
     }
 
     #[test]
-    fn erb_keeps_the_end_of_the_file() {
+    fn every_language_ends_with_one_line_ending() {
         let s = Settings::default();
-        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
-        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>  ", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>"));
-        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n\n", &s).as_deref(), Ok("<p>x</p>\n\n\n"));
-        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n  ", &s).as_deref(), Ok("<p>x</p>\n\n"));
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>\n"));
+        assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>  ", &s).as_deref(), Ok("<div>\n  <p>x</p>\n</div>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n\n", &s).as_deref(), Ok("<p>x</p>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>x</p>\n\n  ", &s).as_deref(), Ok("<p>x</p>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>", &s).as_deref(), Ok("<p>\r\n<br>\r\n"));
+        assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
+        assert_eq!(fmt("a.slim", "p\r\nq", &s).as_deref(), Ok("p\r\nq\r\n"));
+        assert_eq!(fmt("a.haml", "%p\n\n\n", &s).as_deref(), Ok("%p\n"));
+        assert_eq!(fmt("a.haml", ":plain\n  a\n\n  \n", &s).as_deref(), Ok(":plain\n  a\n"));
+        assert_eq!(fmt("a.slim", "div\n    | text\n\n\n        ", &s).as_deref(), Ok("div\n  | text\n"), "an editor's auto-indent");
     }
 
     #[test]
-    fn final_newline_follows_the_language() {
-        let s = Settings::default();
-        assert_eq!(fmt("a.slim", "p", &s).as_deref(), Ok("p\n"));
-        assert_eq!(fmt("a.slim", "p\r\nq", &s).as_deref(), Ok("p\r\nq\r\n"));
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &s).as_deref(), Ok("<p>\n\n\n"), "ERB keeps the end of the file");
-        assert_eq!(fmt("a.html.erb", "<p>\r\n<br>\r\n", &s).as_deref(), Ok("<p>\r\n<br>\r\n"), "ERB keeps each ending");
-        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &s).as_deref(), Ok("<p>\n<br>"));
+    fn trailing_empty_lines_can_be_turned_off() {
+        let off = Settings { trailing_empty_lines: false, ..Settings::default() };
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n", &off).as_deref(), Ok("<p>\n\n\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n<br>", &off).as_deref(), Ok("<p>\n<br>"));
+        assert_eq!(fmt("a.slim", "p\nq\n\n\n", &off).as_deref(), Ok("p\nq\n\n\n"));
+        assert_eq!(fmt("a.haml", "%p\n\n \n", &off).as_deref(), Ok("%p\n\n\n"));
+        assert_eq!(fmt("a.haml", "%p", &off).as_deref(), Ok("%p"));
+    }
+
+    fn collapsing(max: usize) -> Settings {
+        Settings { max_empty_lines: Some(max), ..Settings::default() }
+    }
+
+    #[test]
+    fn empty_lines_are_cut_to_max_in_all_three_languages() {
+        assert_eq!(fmt("a.html.erb", "<h1>x</h1>\n\n\n\n<ul>\n</ul>\n", &collapsing(1)).as_deref(), Ok("<h1>x</h1>\n\n<ul>\n</ul>\n"));
+        assert_eq!(fmt("a.html.erb", "\n\n<p>\n\n\n\n</p>\n", &collapsing(2)).as_deref(), Ok("\n\n<p>\n\n\n</p>\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n</p>\n", &collapsing(0)).as_deref(), Ok("<p>\n</p>\n"));
+        assert_eq!(fmt("a.haml", "%h1 x\n\n\n\n%ul\n", &collapsing(1)).as_deref(), Ok("%h1 x\n\n%ul\n"));
+        assert_eq!(fmt("a.slim", "h1 x\n\n\n\nul\n", &collapsing(1)).as_deref(), Ok("h1 x\n\nul\n"));
+        assert_eq!(fmt("a.slim", "h1 x\r\n\r\n\r\nul\r\n", &collapsing(1)).as_deref(), Ok("h1 x\r\n\r\nul\r\n"));
+        assert_eq!(fmt("a.slim", "\u{feff}\n\n\nh1 x\n", &collapsing(1)).as_deref(), Ok("\u{feff}\nh1 x\n"));
+        // Off by default.
+        assert_eq!(fmt("a.slim", "h1 x\n\n\n\nul\n", &Settings::default()).as_deref(), Ok("h1 x\n\n\n\nul\n"));
+    }
+
+    #[test]
+    fn empty_lines_are_kept_where_whitespace_counts() {
+        let s = collapsing(0);
+        let erb = "<pre>\na\n\n\nb</pre>\n<listing>\na\n\n\nb</listing>\n<xmp>\na\n\n\nb</xmp>\n<textarea>\n\n\n</textarea>\n<script>\na\n\n\nb\n</script>\n<style>\na\n\n\nb\n</style>\n";
+        assert_eq!(fmt("a.html.erb", erb, &s).as_deref(), Ok(erb));
+        let ruby = "<%= link_to(\n\n\n  x) %>\n<p title=\"a\n\n\nb\">x</p>\n<!-- a\n\n\nb -->\n<p\n\n\nid=\"x\">y</p>\n";
+        assert_eq!(fmt("a.html.erb", ruby, &s).as_deref(), Ok(ruby));
+        let haml = "%div\n  :plain\n    a\n\n\n    b\n  :preserve\n    c\n\n    d\n";
+        assert_eq!(fmt("a.haml", haml, &s).as_deref(), Ok(haml));
+        let slim = "div\n  | a\n\n\n    b\n  javascript:\n    x\n\n    y\n";
+        assert_eq!(fmt("a.slim", slim, &s).as_deref(), Ok(slim));
+        // A blank line after the block is not part of it.
+        assert_eq!(fmt("a.slim", "div\n  | a\n\n\np\n", &s).as_deref(), Ok("div\n  | a\np\n"));
+    }
+
+    #[test]
+    fn a_failed_comparison_keeps_the_indented_text_and_says_so() {
+        // The mask flags a text block's blank line, as a bug in a formatter would.
+        let text = "div\n    | a\n\n      b\n";
+        let indented = Indented { text: "div\n  | a\n\n    b\n".to_string(), removable: vec![true; 5], notes: vec![] };
+        let tidied = tidy(TemplateLang::Slim, indented, text, &collapsing(0), &[]);
+        assert_eq!(tidied.text, "div\n  | a\n\n    b\n");
+        assert_eq!(tidied.notes, ["blank lines kept: removing them would change the compiled output"]);
+        let indented = Indented { text: "p\n\n\nq\n".to_string(), removable: vec![true; 5], notes: vec![] };
+        assert_eq!(tidy(TemplateLang::Slim, indented, text, &collapsing(0), &[]).text, "p\nq\n");
+    }
+
+    #[test]
+    fn a_blank_pass_that_would_change_the_compiled_output_is_refused() {
+        // Flagging a text block's blank line as removable is the bug this guards against.
+        let slim = "div\n  | a\n\n    b\n";
+        let flagged = blank_lines::apply(slim, &[true; 5], &collapsing(0), slim);
+        assert_eq!(flagged, "div\n  | a\n    b\n");
+        assert!(!same_compilation_ignoring_lines(TemplateLang::Slim, slim, &flagged, &[]));
+        let haml = ":plain\n  a\n\n  b\n";
+        let flagged = blank_lines::apply(haml, &[true; 5], &collapsing(0), haml);
+        assert!(!same_compilation_ignoring_lines(TemplateLang::Haml, haml, &flagged, &[]));
+        // Removing blank lines between nodes changes only line numbers.
+        assert!(same_compilation_ignoring_lines(TemplateLang::Slim, "p\n\n\nq\n", "p\nq\n", &[]));
+        assert!(same_compilation_ignoring_lines(TemplateLang::Haml, "%p\n\n\n%q\n", "%p\n%q\n", &[]));
     }
 
     #[test]
@@ -350,7 +421,7 @@ mod tests {
         let three = Settings { indent_size: 3, ..Settings::default() };
         assert_eq!(fmt("a.html.erb", "<div>\n<p>x</p>\n</div>\n", &three).as_deref(), Ok("<div>\n   <p>x</p>\n</div>\n"));
         assert_eq!(fmt("a.html.erb", "<p>x</p>  \n", &Settings::default()).as_deref(), Ok("<p>x</p>\n"));
-        assert_eq!(fmt("a.html.erb", "<p>\n\n\n<br>\n\n", &Settings::default()).as_deref(), Ok("<p>\n\n\n<br>\n\n"));
+        assert_eq!(fmt("a.html.erb", "<p>\n\n\n<br>\n\n", &Settings::default()).as_deref(), Ok("<p>\n\n\n<br>\n"));
     }
 
     #[test]
@@ -407,7 +478,12 @@ mod tests {
 
     fn settings_variants() -> Vec<Settings> {
         let d = Settings::default;
-        vec![d(), Settings { indent_size: 4, ..d() }, Settings { final_newline: false, ..d() }]
+        vec![
+            d(),
+            Settings { indent_size: 4, ..d() },
+            Settings { trailing_empty_lines: false, ..d() },
+            Settings { max_empty_lines: Some(0), ..d() },
+        ]
     }
 
     /// The invariants checked on the unguarded formatter, so a violation fails here instead of being refused.
@@ -429,7 +505,7 @@ mod tests {
                 }
             }
         }
-        assert!(formatted >= 40, "only {formatted} sample variants were formatted");
+        assert!(formatted >= 50, "only {formatted} sample variants were formatted");
     }
 
     #[test]
