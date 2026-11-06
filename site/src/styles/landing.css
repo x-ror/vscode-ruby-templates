@@ -269,6 +269,8 @@ body {
   font-size: 1.0625rem;
   text-decoration: none;
   box-shadow: 0 6px 14px -4px var(--rt-seal-shadow);
+  /* White on the seal's red: without its background it vanishes on paper. */
+  print-color-adjust: exact;
 }
 
 .seal__glyph {
@@ -453,5 +455,15 @@ body {
 @media (max-width: 40rem) {
   .pairing__where {
     white-space: normal;
+  }
+}
+
+/* Navigation and install links do nothing on paper. */
+@media print {
+  .site-header,
+  .menu-card__order,
+  .menu-card__index,
+  .course__more {
+    display: none;
   }
 }

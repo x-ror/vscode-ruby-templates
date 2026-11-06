@@ -70,8 +70,10 @@
   color: var(--shiki-light);
 }
 
-:root[data-theme="dark"] .listing__token {
-  color: var(--shiki-dark);
+@media screen {
+  :root[data-theme="dark"] .listing__token {
+    color: var(--shiki-dark);
+  }
 }
 
 /* ---- fault mark: the one sign every diagnostic wears ---- */
@@ -185,4 +187,30 @@
 
 .fault-list__code {
   font-family: inherit;
+}
+
+@media print {
+  .listing {
+    break-inside: avoid;
+  }
+
+  .listing__code {
+    overflow: visible;
+  }
+
+  .listing__line {
+    grid-template-columns:
+      2.75rem calc(var(--marks, 1) * 1.25rem + 0.5rem)
+      minmax(0, 1fr);
+  }
+
+  .listing__text {
+    white-space: pre-wrap;
+  }
+
+  /* Browsers drop backgrounds on paper; the marks and flagged lines are the content here. */
+  .fault-mark::before,
+  .listing__line--fault {
+    print-color-adjust: exact;
+  }
 }

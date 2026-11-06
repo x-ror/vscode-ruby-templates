@@ -155,3 +155,23 @@
 .roster__setting:focus-visible {
   outline-offset: -2px;
 }
+
+@media print {
+  .roster__index {
+    display: none;
+  }
+
+  .roster__field {
+    grid-template-columns: 8rem minmax(0, 1fr);
+  }
+
+  .roster__code,
+  .roster__term {
+    break-after: avoid;
+  }
+
+  .roster__setting {
+    overflow: visible;
+    white-space: pre-wrap;
+  }
+}

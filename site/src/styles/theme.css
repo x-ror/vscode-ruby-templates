@@ -27,21 +27,24 @@
   --sl-color-hairline-light: #ebeaee;
 }
 
-:root[data-theme="dark"] {
-  --sl-color-white: #f6f5f9;
-  --sl-color-gray-1: #e4e3e8;
-  --sl-color-gray-2: #cfced5;
-  --sl-color-gray-3: #a9a8b1;
-  --sl-color-gray-4: #75747d;
-  --sl-color-gray-5: #44434b;
-  --sl-color-gray-6: #2b2a31;
-  --sl-color-black: var(--rt-card);
-  --sl-color-accent-low: #2c2f3d;
-  --sl-color-accent: var(--rt-link);
-  --sl-color-accent-high: #dfe2ee;
-  --sl-color-text-accent: var(--rt-link);
-  --sl-color-bg-sidebar: var(--rt-card);
-  --sl-color-hairline: var(--rt-hairline);
+/* Dark on screen only: paper always gets the light theme. */
+@media screen {
+  :root[data-theme="dark"] {
+    --sl-color-white: #f6f5f9;
+    --sl-color-gray-1: #e4e3e8;
+    --sl-color-gray-2: #cfced5;
+    --sl-color-gray-3: #a9a8b1;
+    --sl-color-gray-4: #75747d;
+    --sl-color-gray-5: #44434b;
+    --sl-color-gray-6: #2b2a31;
+    --sl-color-black: var(--rt-card);
+    --sl-color-accent-low: #2c2f3d;
+    --sl-color-accent: var(--rt-link);
+    --sl-color-accent-high: #dfe2ee;
+    --sl-color-text-accent: var(--rt-link);
+    --sl-color-bg-sidebar: var(--rt-card);
+    --sl-color-hairline: var(--rt-hairline);
+  }
 }
 
 /* The header is the card itself, divided from the page by one rule. */
@@ -120,4 +123,11 @@ h1#_top {
 
 :root:not([data-has-toc]) .sl-markdown-content > :is(p, ul, ol, blockquote) {
   max-width: 72ch;
+}
+
+/* The header is navigation and search, which do nothing on paper. */
+@media print {
+  header.header {
+    display: none;
+  }
 }
