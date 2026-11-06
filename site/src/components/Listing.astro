@@ -27,6 +27,7 @@ const faultsByLine = Map.groupBy(
   faults.map((fault, i) => ({ ...fault, n: i + 1 })),
   (fault) => fault.line,
 );
+const marksPerLine = Math.max(1, ...[...faultsByLine.values()].map((marks) => marks.length));
 const styleOf = (style: Record<string, string> | undefined) =>
   Object.entries(style ?? {})
     .map(([key, value]) => `${key}:${value}`)
@@ -35,7 +36,7 @@ const styleOf = (style: Record<string, string> | undefined) =>
 
 <figure class:list={["listing", { "listing--notes-beside": notesBeside && faults.length }]}>
   <figcaption class="listing__file">{file}</figcaption>
-  <pre class="listing__code" tabindex="0" role="region" aria-label={`${file}, source`}><code>{lines.map((tokens, i) => {
+  <pre class="listing__code" style={`--marks:${marksPerLine}`} tabindex="0" role="region" aria-label={`${file}, source`}><code>{lines.map((tokens, i) => {
     const line = i + 1;
     const marks = faultsByLine.get(line) ?? [];
     return (
@@ -49,9 +50,11 @@ const styleOf = (style: Record<string, string> | undefined) =>
       {faults.map((fault, i) => (
         <li class="fault-list__item" id={`${id}-fault-${i + 1}`}>
           <span class="fault-mark" aria-hidden="true"><span class="fault-mark__number">{i + 1}</span></span>
-          <a class="fault-list__location" href={`#${id}-L${fault.line}`}>Line {fault.line}, column {fault.column}</a>
           <span class="fault-list__message">{backtickParts(fault.message).map(({ text, code }) => (code ? <code>{text}</code> : text))}</span>
-          <code class="fault-list__code">{fault.code}</code>
+          <span class="fault-list__meta">
+            <a class="fault-list__location" href={`#${id}-L${fault.line}`} aria-label={`Line ${fault.line}, column ${fault.column}`}>{fault.line}:{fault.column}</a>
+            <code class="fault-list__code">{fault.code}</code>
+          </span>
         </li>
       ))}
     </ol>

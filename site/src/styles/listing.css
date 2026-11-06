@@ -33,7 +33,9 @@
 
 .listing__line {
   display: grid;
-  grid-template-columns: 2.75rem 1.75rem max-content;
+  grid-template-columns:
+    2.75rem calc(var(--marks, 1) * 1.25rem + 0.5rem)
+    max-content;
   scroll-margin-block: 6rem;
 }
 
@@ -75,6 +77,8 @@
 /* ---- fault mark: the one sign every diagnostic wears ---- */
 
 /* A 24px target holding a rotated square drawn behind the number. */
+/* Beats `.roster a`, which would paint the number in link colour. */
+.listing .fault-mark,
 .fault-mark {
   position: relative;
   display: inline-grid;
@@ -101,6 +105,11 @@
   border-radius: 3px;
 }
 
+/* Several marks on one line sit closer than their 24px targets. */
+.listing__gutter > .fault-mark {
+  width: 1.25rem;
+}
+
 .fault-mark__number {
   position: relative;
 }
@@ -121,9 +130,10 @@
   }
 }
 
+/* Read like the Problems panel: the message first, where and which code under it. */
 .fault-list {
   margin: 0;
-  padding: 0.25rem 1rem 0.75rem;
+  padding: 0.375rem 0;
   list-style: none;
   border-top: 1px solid var(--rt-hairline);
   background: var(--rt-card);
@@ -131,15 +141,11 @@
 
 .fault-list__item {
   display: grid;
-  grid-template-columns: 1.75rem minmax(0, 1fr);
-  column-gap: 0.75rem;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  column-gap: 0.625rem;
   align-items: start;
-  padding-block: 0.75rem;
+  padding: 0.5rem 1rem;
   scroll-margin-block: 6rem;
-}
-
-.fault-list__item + .fault-list__item {
-  border-top: 1px solid var(--rt-hairline);
 }
 
 .fault-list__item:target {
@@ -147,20 +153,14 @@
 }
 
 .fault-list__item > .fault-mark {
-  grid-row: span 3;
-  margin-top: 0.25rem;
-}
-
-.fault-list__location {
-  font-size: 0.875rem;
-  font-weight: 650;
-  color: var(--rt-link);
-  text-underline-offset: 0.2em;
+  grid-row: span 2;
 }
 
 .fault-list__message {
-  font-size: 1rem;
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
   color: var(--rt-ink);
+  text-wrap: pretty;
 }
 
 .fault-list__message code {
@@ -168,9 +168,21 @@
   font-size: 0.875em;
 }
 
-.fault-list__code {
-  justify-self: start;
+.fault-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
   font-family: var(--rt-font-mono);
   font-size: 0.8125rem;
   color: var(--rt-ink-muted);
+}
+
+.fault-list__location {
+  color: var(--rt-link);
+  font-variant-numeric: tabular-nums;
+  text-underline-offset: 0.2em;
+}
+
+.fault-list__code {
+  font-family: inherit;
 }

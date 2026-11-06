@@ -112,3 +112,12 @@ h1#_top {
   font-size: var(--sl-text-base);
   font-weight: 650;
 }
+
+/* Without the right-hand contents the page takes the room for its listings; prose keeps a readable measure. */
+:root:not([data-has-toc]) {
+  --sl-content-width: 64rem;
+}
+
+:root:not([data-has-toc]) .sl-markdown-content > :is(p, ul, ol, blockquote) {
+  max-width: 72ch;
+}
