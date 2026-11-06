@@ -9,5 +9,10 @@ const headings = getHeadings().filter(({ depth }) => depth > 1);
 ---
 
 <StarlightPage frontmatter={{ title: "Changelog" }} headings={headings}>
+  <p>
+    What changed in each release of Ruby Templates, newest first. Every entry describes what you notice in the editor or on the
+    command line: new checks and their messages, formatter and highlighting changes, Rails navigation and completion, and the
+    fixes that came with them. The same notes ship with the extension as CHANGELOG.md.
+  </p>
   <Fragment set:html={html} />
 </StarlightPage>

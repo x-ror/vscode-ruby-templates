@@ -57,20 +57,20 @@ const setting = (entry: Diagnostic) =>
             <p class="roster__summary">
               {backtickParts(entry.summary).map(({ text, code }) => (code ? <code>{text}</code> : text))}
             </p>
-            <dl class="roster__furniture">
-              <div class="roster__field">
-                <dt class="roster__term">Languages</dt>
-                <dd class="roster__detail">{languageList(entry)}</dd>
-              </div>
-              <div class="roster__field">
-                <dt class="roster__term">When it fires</dt>
-                <dd class="roster__detail">
+            <div class="roster__furniture">
+              <p class="roster__field">
+                <strong class="roster__term">Languages</strong>{" "}
+                <span class="roster__detail">{languageList(entry)}</span>
+              </p>
+              <p class="roster__field">
+                <strong class="roster__term">When it fires</strong>{" "}
+                <span class="roster__detail">
                   {backtickParts(entry.explanation).map(({ text, code }) => (code ? <code>{text}</code> : text))}
-                </dd>
-              </div>
+                </span>
+              </p>
               <div class="roster__field">
-                <dt class="roster__term">Example</dt>
-                <dd class="roster__detail">
+                <strong class="roster__term">Example</strong>{" "}
+                <div class="roster__detail">
                   <Listing
                     id={entry.code}
                     file={entry.example.file}
@@ -78,15 +78,15 @@ const setting = (entry: Diagnostic) =>
                     code={entry.example.code}
                     faults={[{ line: entry.line, column: entry.column, message: entry.message, code: entry.code }]}
                   />
-                </dd>
+                </div>
               </div>
               <div class="roster__field">
-                <dt class="roster__term">Turn it off</dt>
-                <dd class="roster__detail">
+                <strong class="roster__term">Turn it off</strong>{" "}
+                <div class="roster__detail">
                   <pre class="roster__setting" tabindex="0" role="region" aria-label="Setting to turn this check off"><code>{setting(entry)}</code></pre>
-                </dd>
+                </div>
               </div>
-            </dl>
+            </div>
           </article>
         ))}
       </section>

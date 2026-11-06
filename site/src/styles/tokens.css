@@ -21,25 +21,28 @@
   color-scheme: light;
 }
 
-:root[data-theme="dark"] {
-  --rt-card: #1c1b20;
-  --rt-ink: #ecebef;
-  --rt-ink-muted: #a9a8b1;
-  --rt-hairline: #34333b;
-  --rt-seal: #c21f39;
-  --rt-seal-ink: #ffffff;
-  --rt-seal-shadow: rgb(0 0 0 / 0.6);
-  --rt-fault: #ff8696;
-  --rt-link: #b9c1dc;
-  --rt-focus: #b9c1dc;
-  --rt-code-bg: #22272e;
-  --rt-selection: #34407a;
+/* Dark on screen only: paper always gets the light theme. */
+@media screen {
+  :root[data-theme="dark"] {
+    --rt-card: #1c1b20;
+    --rt-ink: #ecebef;
+    --rt-ink-muted: #a9a8b1;
+    --rt-hairline: #34333b;
+    --rt-seal: #c21f39;
+    --rt-seal-ink: #ffffff;
+    --rt-seal-shadow: rgb(0 0 0 / 0.6);
+    --rt-fault: #ff8696;
+    --rt-link: #b9c1dc;
+    --rt-focus: #b9c1dc;
+    --rt-code-bg: #22272e;
+    --rt-selection: #34407a;
 
-  color-scheme: dark;
+    color-scheme: dark;
+  }
 }
 
 /* Before the theme script runs, or without it. */
-@media (prefers-color-scheme: dark) {
+@media screen and (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --rt-card: #1c1b20;
     --rt-ink: #ecebef;
@@ -58,4 +61,12 @@
 ::selection {
   background: var(--rt-selection);
   color: var(--rt-ink);
+}
+
+/* Paper can't follow links: they read as plain text. Fault marks keep their own colour. */
+@media print {
+  a:not(.fault-mark) {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
 }
