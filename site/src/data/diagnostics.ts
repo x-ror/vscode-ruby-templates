@@ -1,4 +1,4 @@
-// Every diagnostic code the language server reports, with a template that triggers it and the message
+// Every diagnostic code (rule name) the language server reports, with a template that triggers it and the message
 // `ruby-templates check` prints for that template.
 import fs from "node:fs";
 import path from "node:path";
@@ -13,7 +13,10 @@ export const LANGUAGE_NAMES: Record<Language, string> = {
 };
 
 export interface Diagnostic {
+  /** The rule name, `Department/Name`: the diagnostic's code. */
   code: string;
+  /** The code before 0.11, still accepted in `disabledDiagnostics`. */
+  formerly: string;
   languages: Language[];
   summary: string;
   /** When it fires; backticks quote code, as in the server's messages. */
@@ -24,9 +27,14 @@ export interface Diagnostic {
   column: number;
 }
 
+/** The id of a code's section on the diagnostics page: `Html/ImgAlt` is `html-imgalt`. */
+export const codeAnchor = (code: string) =>
+  code.toLowerCase().replace("/", "-");
+
 export const diagnostics: Diagnostic[] = [
   {
-    code: "unclosed-tag",
+    code: "Syntax/UnclosedErbTag",
+    formerly: "unclosed-tag",
     languages: ["erb"],
     summary: "A `<%` with no `%>` after it.",
     explanation:
@@ -44,7 +52,8 @@ export const diagnostics: Diagnostic[] = [
     column: 4,
   },
   {
-    code: "unexpected-close-tag",
+    code: "Html/UnexpectedCloseTag",
+    formerly: "unexpected-close-tag",
     languages: ["erb"],
     summary: "An end tag with no open element of that name.",
     explanation:
@@ -64,7 +73,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "mismatched-close-tag",
+    code: "Html/MismatchedCloseTag",
+    formerly: "mismatched-close-tag",
     languages: ["erb"],
     summary: "An end tag that doesn't close the innermost open element.",
     explanation:
@@ -82,7 +92,8 @@ export const diagnostics: Diagnostic[] = [
     column: 26,
   },
   {
-    code: "unclosed-element",
+    code: "Html/UnclosedElement",
+    formerly: "unclosed-element",
     languages: ["erb"],
     summary: "An element whose end tag never comes.",
     explanation:
@@ -99,7 +110,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "img-missing-alt",
+    code: "Html/ImgAlt",
+    formerly: "img-missing-alt",
     languages: ["erb"],
     summary: "An image without alt text.",
     explanation:
@@ -116,7 +128,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "duplicate-id",
+    code: "Html/DuplicateId",
+    formerly: "duplicate-id",
     languages: ["erb"],
     summary: "The same static id twice in one template.",
     explanation:
@@ -136,7 +149,8 @@ export const diagnostics: Diagnostic[] = [
     column: 10,
   },
   {
-    code: "inconsistent-indent",
+    code: "Syntax/InconsistentIndent",
+    formerly: "inconsistent-indent",
     languages: ["haml"],
     summary: "Indentation Haml can't follow.",
     explanation:
@@ -156,7 +170,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "top-level-indent",
+    code: "Syntax/TopLevelIndent",
+    formerly: "top-level-indent",
     languages: ["haml"],
     summary: "The first line is indented.",
     explanation:
@@ -172,11 +187,12 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "illegal-nesting",
+    code: "Syntax/IllegalNesting",
+    formerly: "illegal-nesting",
     languages: ["haml"],
     summary: "Lines nested under something that can't hold them.",
     explanation:
-      'Haml rejects lines nested under a tag that already has content on its own line, under plain text, and under a self-closing tag such as `%br/`; each has its own "Illegal nesting" message. Nesting under `!!!` has its own code, `doctype-children`.',
+      'Haml rejects lines nested under a tag that already has content on its own line, under plain text, and under a self-closing tag such as `%br/`; each has its own "Illegal nesting" message. Nesting under `!!!` has its own code, `Syntax/DoctypeChildren`.',
     example: {
       file: "app/views/users/show.html.haml",
       lang: "haml",
@@ -190,7 +206,8 @@ export const diagnostics: Diagnostic[] = [
     column: 3,
   },
   {
-    code: "doctype-children",
+    code: "Syntax/DoctypeChildren",
+    formerly: "doctype-children",
     languages: ["haml", "slim"],
     summary: "Lines nested under the doctype.",
     explanation:
@@ -207,7 +224,8 @@ export const diagnostics: Diagnostic[] = [
     column: 3,
   },
   {
-    code: "unmatched-branch",
+    code: "Syntax/UnmatchedBranch",
+    formerly: "unmatched-branch",
     languages: ["haml"],
     summary:
       "An `else`, `elsif` or `when` that doesn't line up with its block.",
@@ -227,7 +245,8 @@ export const diagnostics: Diagnostic[] = [
     column: 3,
   },
   {
-    code: "explicit-end",
+    code: "Syntax/ExplicitEnd",
+    formerly: "explicit-end",
     languages: ["haml", "slim"],
     summary: "A `- end` line.",
     explanation:
@@ -245,7 +264,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "illegal-element",
+    code: "Syntax/IllegalElement",
+    formerly: "illegal-element",
     languages: ["haml"],
     summary: "A `.` or `#` with no class or id name after it.",
     explanation:
@@ -261,11 +281,12 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "unknown-filter",
+    code: "Syntax/UnknownFilter",
+    formerly: "unknown-filter",
     languages: ["haml"],
     summary: "A filter Haml doesn't have.",
     explanation:
-      "The name after `:` isn't one of Haml's filters (`:javascript`, `:css`, `:markdown`, `:plain`, `:ruby`, …), usually a typo. Haml raises this when it compiles the template. A name that isn't a word at all is a `syntax-error` (\"Invalid filter name\").",
+      "The name after `:` isn't one of Haml's filters (`:javascript`, `:css`, `:markdown`, `:plain`, `:ruby`, …), usually a typo. Haml raises this when it compiles the template. A name that isn't a word at all is a `Syntax/Template` (\"Invalid filter name\").",
     example: {
       file: "app/views/users/show.html.haml",
       lang: "haml",
@@ -278,7 +299,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "self-closing-content",
+    code: "Syntax/SelfClosingContent",
+    formerly: "self-closing-content",
     languages: ["haml"],
     summary: "Content after a tag closed with `/`.",
     explanation:
@@ -294,7 +316,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "unclosed-attribute",
+    code: "Syntax/UnclosedAttribute",
+    formerly: "unclosed-attribute",
     languages: ["haml", "slim"],
     summary: "An attribute list or value that is never closed.",
     explanation:
@@ -310,7 +333,8 @@ export const diagnostics: Diagnostic[] = [
     column: 33,
   },
   {
-    code: "syntax-error",
+    code: "Syntax/Template",
+    formerly: "syntax-error",
     languages: ["haml", "slim"],
     summary: "Any other error the Haml or Slim parser raises.",
     explanation:
@@ -326,7 +350,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "void-children",
+    code: "Html/VoidChildren",
+    formerly: "void-children",
     languages: ["haml", "slim"],
     summary: "Content inside a void element such as `img` or `input`.",
     explanation:
@@ -343,7 +368,8 @@ export const diagnostics: Diagnostic[] = [
     column: 3,
   },
   {
-    code: "bad-dedent",
+    code: "Syntax/BadDedent",
+    formerly: "bad-dedent",
     languages: ["slim"],
     summary: "A line un-indented to a level no open line has.",
     explanation:
@@ -362,7 +388,8 @@ export const diagnostics: Diagnostic[] = [
     column: 4,
   },
   {
-    code: "unknown-engine",
+    code: "Syntax/UnknownEngine",
+    formerly: "unknown-engine",
     languages: ["slim"],
     summary: "An embedded engine Slim doesn't know.",
     explanation:
@@ -379,7 +406,8 @@ export const diagnostics: Diagnostic[] = [
     column: 9,
   },
   {
-    code: "ruby-syntax",
+    code: "Syntax/Ruby",
+    formerly: "ruby-syntax",
     languages: ["erb", "haml", "slim", "jbuilder"],
     summary: "Ruby in the template that doesn't parse.",
     explanation:
@@ -399,7 +427,8 @@ export const diagnostics: Diagnostic[] = [
     column: 1,
   },
   {
-    code: "unresolved-render",
+    code: "Rails/MissingPartial",
+    formerly: "unresolved-render",
     languages: ["erb", "haml", "slim", "jbuilder"],
     summary: "A `render` of a partial or template that isn't in app/views.",
     explanation:
@@ -415,7 +444,8 @@ export const diagnostics: Diagnostic[] = [
     column: 13,
   },
   {
-    code: "strict-locals",
+    code: "Rails/StrictLocals",
+    formerly: "strict-locals",
     languages: ["erb", "haml", "slim", "jbuilder"],
     summary:
       "A `render` whose locals don't match the partial's `locals:` comment.",
@@ -439,14 +469,16 @@ function settingCodes(): Map<string, string[]> {
   const manifest = JSON.parse(
     fs.readFileSync(path.resolve(process.cwd(), "..", "package.json"), "utf8"),
   );
-  const properties: Record<string, { items?: { enum?: string[] } }> =
-    manifest.contributes.configuration.properties;
+  const properties: Record<
+    string,
+    { items?: { anyOf?: { enum?: string[] }[] } }
+  > = manifest.contributes.configuration.properties;
   return new Map(
     Object.entries(properties).flatMap(([key, value]) => {
       const lang = key.match(
         /^rubyTemplates\.(\w+)\.disabledDiagnostics$/,
       )?.[1];
-      return lang ? [[lang, value.items?.enum ?? []]] : [];
+      return lang ? [[lang, value.items?.anyOf?.[0]?.enum ?? []]] : [];
     }),
   );
 }

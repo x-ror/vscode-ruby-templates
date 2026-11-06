@@ -5,7 +5,7 @@ use crate::util::{error, leading_ws, span_range, LineIndex};
 use tower_lsp_server::ls_types::{Diagnostic, Range};
 
 /// The diagnostic code of a Ruby syntax error, in every template language.
-pub const RUBY_SYNTAX: &str = "ruby-syntax";
+pub const RUBY_SYNTAX: &str = "Syntax/Ruby";
 
 /// Slim and Haml compile into a method body, where `yield` is valid; Prism, parsing it alone, says otherwise.
 const IGNORED_ERROR: &str = "Invalid yield";

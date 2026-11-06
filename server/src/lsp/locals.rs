@@ -69,7 +69,7 @@ impl Backend {
     async fn local_passes(&self, project: Project, path: &Path, local: &str) -> Result<Vec<Location>> {
         let Some(views) = paths::views_root(path) else { return Ok(vec![]) };
         let (open, partial, local) = (self.open_texts(), path.to_path_buf(), local.to_string());
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = self.engines_at(path);
         off_server_task(move || {
             let sources = partial_rename::sources(&views, &open);
             partial_rename::local_passes(&project, &partial, &local, &sources, &extra_engines)
@@ -87,7 +87,7 @@ impl Backend {
         name: &str,
     ) -> Result<Option<Range>> {
         let text = doc.text.as_str();
-        let (lang, source, engines) = (doc.lang, text.to_string(), self.options().extra_engines.clone());
+        let (lang, source, engines) = (doc.lang, text.to_string(), self.engines(uri));
         let found = off_server_task(move || code_context::local_definition(lang, &source, offset, &engines)).await?;
         // A partial's strict local that the template also assigns (`user ||= …`) is defined by its callers.
         let strict_local = || is_partial(uri) && project.strict_locals(text).is_some_and(|sig| sig.declares(name));
@@ -190,7 +190,7 @@ impl Backend {
         let at = line_start + line[..col.min(line.len())].trim_end_matches(|c: char| c.is_alphanumeric() || c == '_').len();
         let declaration = comment.parameter_at(name).map(|start| (start, start + name.len()));
         let mut uses = comment.parameter_reads(name);
-        uses.extend(code_context::local_uses(doc.lang, &doc.text, close, name, &self.options().extra_engines).spans);
+        uses.extend(code_context::local_uses(doc.lang, &doc.text, close, name, &self.engines(uri)).spans);
         let &(start, end) = declaration.iter().chain(&uses).find(|&&(start, _)| start == at)?;
         let index = util::LineIndex::new(&doc.text);
         Some(StrictLocal { name: name.to_string(), range: index.range(start, end), declaration, uses })
@@ -209,11 +209,11 @@ impl Backend {
 
     /// Whether a partial's strict local can take the name `new`: a local's name nothing in the partial declares, reads or
     /// calls, so no read of the renamed local means something else.
-    pub(super) fn free_local_name(&self, doc: &Doc, project: &Project, new: &str) -> bool {
+    pub(super) fn free_local_name(&self, uri: &Uri, doc: &Doc, project: &Project, new: &str) -> bool {
         let close = project.strict_locals_close();
         let declared = project.strict_locals(&doc.text).is_some_and(|sig| sig.declares(new));
         let in_defaults = strict_locals::find(&doc.text, close).is_some_and(|comment| !comment.parameter_reads(new).is_empty());
-        let uses = code_context::local_uses(doc.lang, &doc.text, close, new, &self.options().extra_engines);
+        let uses = code_context::local_uses(doc.lang, &doc.text, close, new, &self.engines(uri));
         is_local_name(new) && !declared && !in_defaults && uses.spans.is_empty() && !uses.shadowed
     }
 }

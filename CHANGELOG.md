@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- A `.ruby-templates.toml` configures the project: `[Html.ImgAlt] enabled = false` turns a rule off, `include`/`exclude` globs limit it to some files, a department table (`[Html]`) switches its rules, `exclude` leaves files out of every check and the formatter, and `[erb]`, `[haml]`, `[slim]` and `[jbuilder]` take the `format.enabled`, `format.align_comments`, `diagnostics.enabled`, `disabled_diagnostics` and `extra_engines` settings. The nearest file wins key by key, `root = true` stops the search, and the file wins over the VS Code settings. Problems in the file show on it in the Problems panel and in the output, and make `ruby-templates check` exit with 1.
+- `ruby-templates check` and `format` read the `.ruby-templates.toml` files too: rules turned off, excluded files, `[erb] format.enabled = false` and `format.align_comments`.
+- Diagnostic codes are rule names now: `Html/ImgAlt` instead of `img-missing-alt`, `Rails/MissingPartial` instead of `unresolved-render`, `Syntax/Ruby` instead of `ruby-syntax`, and so on (the diagnostics reference lists each earlier code). The old codes are still accepted in `disabledDiagnostics`, in the settings and in the file.
+- The ERB and Haml formatting providers are always registered; the server returns no edits where formatting is off by `format.enabled` or a `.ruby-templates.toml`, so a file can turn it on or off against the setting.
+- `rust-version` of the server is 1.85, for the TOML parser.
+
 ## 0.10.1
 
 - The strict-locals check also runs when a `render` matches several files (a variant next to the base file, or two handlers): a local is reported missing when every file requires it and unknown when none takes it, and a file without a `locals:` comment still skips the call. With actionview 8 or newer the message names the first file and the count of the others (`for _badge.html.erb and 1 other`). "Declare in the locals" adds the local to all of the files.

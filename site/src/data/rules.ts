@@ -59,8 +59,8 @@ export interface Rule {
   today?: string;
   /** The diagnostic code on the diagnostics page that covers it today. */
   code?: string;
-  /** JSON for the setting that controls it today. */
-  setting?: { label: string; json: string };
+  /** The `.ruby-templates.toml` table that turns it off. */
+  setting?: { label: string; code: string };
   /** The planned `.ruby-templates.toml` table, for rules with options. */
   config?: string;
   examples: Example[];
@@ -392,7 +392,7 @@ export const rules: Rule[] = [
       'A code action does it, not the formatter. "Add spaces inside this ERB tag" is offered on the tags under the cursor, and "Add spaces inside every ERB tag" is the source action `source.erbSpacing`, which `editor.codeActionsOnSave` can run. It handles one-line code and output tags; comments (`<%#`), literal `<%%` and tags that span lines are left alone. Format Document and format on save do not apply it. Phase 1 makes it a formatter rule.',
     setting: {
       label: "Run it on save",
-      json: `"[erb]": {
+      code: `"[erb]": {
   "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
 }`,
     },
@@ -934,12 +934,13 @@ export const rules: Rule[] = [
     type: "warning",
     safe: true,
     status: "available",
-    code: "strict-locals",
+    code: "Rails/StrictLocals",
     today:
       'With Rails 7.1 or later in `Gemfile.lock`, a literal render that resolves to a partial with a `locals:` comment is compared with it, using Rails\' messages (`missing local`, `unknown local`, `no locals accepted`). When a render matches several files (a variant next to the base file, or two handlers), a local is missing when every file requires it and unknown when none takes it. Quick fixes "Remove `x` from the render" and "Declare `x` in the locals of …" (it edits all the files).',
     setting: {
       label: "Turn it off",
-      json: `"rubyTemplates.erb.disabledDiagnostics": ["strict-locals"]`,
+      code: `[Rails.StrictLocals]
+enabled = false`,
     },
     examples: [
       {
@@ -952,7 +953,7 @@ export const rules: Rule[] = [
             line: 1,
             column: 13,
             message: "missing local: :user for app/views/users/_card.html.erb",
-            code: "strict-locals",
+            code: "Rails/StrictLocals",
           },
         ],
         note: "`_card.html.erb` starts with `<%# locals: (user:) -%>`.",
@@ -966,12 +967,13 @@ export const rules: Rule[] = [
     type: "warning",
     safe: true,
     status: "available",
-    code: "unresolved-render",
+    code: "Rails/MissingPartial",
     today:
       'Checks literal names in `render "users/card"`, `render partial:`, `render template:` and Jbuilder\'s `json.partial!`, with Rails\' "Missing partial" or "Missing template" message. The quick fix "Create partial `users/_profile.html.erb`" creates the file next to the others, in the format and template language of the view.',
     setting: {
       label: "Turn it off",
-      json: `"rubyTemplates.erb.disabledDiagnostics": ["unresolved-render"]`,
+      code: `[Rails.MissingPartial]
+enabled = false`,
     },
     examples: [
       {
@@ -981,7 +983,7 @@ export const rules: Rule[] = [
         after: text('<%= render "users/profile", user: @user %>'),
         afterFile:
           "app/views/users/show.html.erb, with app/views/users/_profile.html.erb in place",
-        faults: reported("unresolved-render").faults,
+        faults: reported("Rails/MissingPartial").faults,
       },
     ],
   },
@@ -1187,12 +1189,13 @@ export const rules: Rule[] = [
     safe: true,
     status: "partial",
     phase: 2,
-    code: "ruby-syntax",
+    code: "Syntax/Ruby",
     today:
-      "The template doesn't compile, so it is reported as a Ruby syntax error with Prism's messages, as `ruby-syntax`. Nothing says that the `=` is the cause. The planned rule is a message that names it.",
+      "The template doesn't compile, so it is reported as a Ruby syntax error with Prism's messages, as `Syntax/Ruby`. Nothing says that the `=` is the cause. The planned rule is a message that names it.",
     setting: {
       label: "Turn it off",
-      json: `"rubyTemplates.erb.disabledDiagnostics": ["ruby-syntax"]`,
+      code: `[Syntax.Ruby]
+enabled = false`,
     },
     examples: [
       {
@@ -1205,20 +1208,20 @@ export const rules: Rule[] = [
             line: 1,
             column: 5,
             message: "expected an `end` to close the conditional clause",
-            code: "ruby-syntax",
+            code: "Syntax/Ruby",
           },
           {
             line: 1,
             column: 14,
             message: "expected `then` or `;` or '\\n'",
-            code: "ruby-syntax",
+            code: "Syntax/Ruby",
           },
           {
             line: 1,
             column: 14,
             message:
               "unexpected ')', assuming it is closing the parent parentheses",
-            code: "ruby-syntax",
+            code: "Syntax/Ruby",
           },
         ],
       },
@@ -1573,12 +1576,13 @@ export const rules: Rule[] = [
     safe: true,
     status: "partial",
     phase: 3,
-    code: "img-missing-alt",
+    code: "Html/ImgAlt",
     today:
       'In ERB with an HTML host, for `<img>` and for `image_tag` in an output tag without `alt:`. An empty `alt=""` counts as alt text. Haml and Slim templates are not checked.',
     setting: {
       label: "Turn it off",
-      json: `"rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt"]`,
+      code: `[Html.ImgAlt]
+enabled = false`,
     },
     examples: [
       {
@@ -1598,14 +1602,14 @@ export const rules: Rule[] = [
             column: 1,
             message:
               "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)",
-            code: "img-missing-alt",
+            code: "Html/ImgAlt",
           },
           {
             line: 2,
             column: 5,
             message:
               "`image_tag` without `alt:`: the alt attribute must be specified (HTML 4.8.4.4.1)",
-            code: "img-missing-alt",
+            code: "Html/ImgAlt",
           },
         ],
       },
@@ -1620,23 +1624,128 @@ export const rules: Rule[] = [
     safe: true,
     status: "partial",
     phase: 3,
-    code: "duplicate-id",
+    code: "Html/DuplicateId",
     today:
       "In ERB with an HTML host, at the second occurrence. Ids that hold ERB, ids in different branches of a conditional and content inside `<template>` are left alone. Haml and Slim templates are not checked.",
     setting: {
       label: "Turn it off",
-      json: `"rubyTemplates.erb.disabledDiagnostics": ["duplicate-id"]`,
+      code: `[Html.DuplicateId]
+enabled = false`,
     },
     examples: [
       {
         lang: "erb",
-        ...reported("duplicate-id"),
+        ...reported("Html/DuplicateId"),
         after: text(
           '<div id="profile">',
           "  <%= @user.name %>",
           "</div>",
           '<div id="settings"></div>',
         ),
+      },
+    ],
+  },
+  {
+    name: "Html/UnexpectedCloseTag",
+    summary: "An end tag with no open element of that name.",
+    languages: ["erb"],
+    type: "warning",
+    safe: true,
+    status: "available",
+    code: "Html/UnexpectedCloseTag",
+    today:
+      "In ERB with an HTML host, including the end tag of a void element. A stray end tag in a partial is not reported, since a partial may close what another one opened.",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.UnexpectedCloseTag]
+enabled = false`,
+    },
+    examples: [
+      {
+        lang: "erb",
+        ...reported("Html/UnexpectedCloseTag"),
+        after: text(
+          '<div class="profile">',
+          "  <p><%= @user.name %></p>",
+          "</div>",
+        ),
+      },
+    ],
+  },
+  {
+    name: "Html/MismatchedCloseTag",
+    summary: "An end tag that doesn't close the innermost open element.",
+    languages: ["erb"],
+    type: "warning",
+    safe: true,
+    status: "available",
+    code: "Html/MismatchedCloseTag",
+    today:
+      "In ERB with an HTML host, partials included. When the end tag crosses an open element, the browser could recover in more than one way, so checking stops there.",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.MismatchedCloseTag]
+enabled = false`,
+    },
+    examples: [
+      {
+        lang: "erb",
+        ...reported("Html/MismatchedCloseTag"),
+        after: text(
+          '<div class="profile">',
+          "  <span><%= @user.name %></span>",
+          "</div>",
+        ),
+      },
+    ],
+  },
+  {
+    name: "Html/UnclosedElement",
+    summary: "An element whose end tag never comes.",
+    languages: ["erb"],
+    type: "warning",
+    safe: true,
+    status: "available",
+    code: "Html/UnclosedElement",
+    today:
+      "In ERB with an HTML host, at the start tag. Elements whose end tag HTML lets you omit, void elements, partials and files that end inside an ERB block are left alone.",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.UnclosedElement]
+enabled = false`,
+    },
+    examples: [
+      {
+        lang: "erb",
+        ...reported("Html/UnclosedElement"),
+        after: text(
+          '<section class="users">',
+          "  <h2>Users</h2>",
+          "</section>",
+        ),
+      },
+    ],
+  },
+  {
+    name: "Html/VoidChildren",
+    summary: "Content inside a void element such as `img` or `input`.",
+    languages: ["haml", "slim"],
+    type: "warning",
+    safe: true,
+    status: "available",
+    code: "Html/VoidChildren",
+    today:
+      "Haml reports content on the tag's line or nested under it; Slim reports lines nested under a void element, in HTML templates only.",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.VoidChildren]
+enabled = false`,
+    },
+    examples: [
+      {
+        lang: "slim",
+        ...reported("Html/VoidChildren"),
+        after: text('img src="/logo.png" alt="Logo"'),
       },
     ],
   },
@@ -1649,9 +1758,9 @@ export const rules: Rule[] = [
     safe: true,
     status: "partial",
     phase: 3,
-    code: "syntax-error",
+    code: "Syntax/Template",
     today:
-      "Slim itself rejects a repeated attribute other than `class`, and the language server reports Slim's error, `Multiple href attributes specified`, as `syntax-error`. ERB and Haml templates are not checked; phase 3 adds them and a code of its own.",
+      "Slim itself rejects a repeated attribute other than `class`, and the language server reports Slim's error, `Multiple href attributes specified`, as `Syntax/Template`. ERB and Haml templates are not checked; phase 3 adds them and a code of its own.",
     examples: [
       {
         lang: "erb",
@@ -1679,7 +1788,7 @@ export const rules: Rule[] = [
             line: 1,
             column: 1,
             message: "Multiple href attributes specified",
-            code: "syntax-error",
+            code: "Syntax/Template",
           },
         ],
       },

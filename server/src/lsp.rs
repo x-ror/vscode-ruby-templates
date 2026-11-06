@@ -15,6 +15,8 @@ use crate::rails::{
     assets, controller_classes, controllers, helper_defs, i18n, ivars, model_columns, partials, paths, project, render_refs, routes,
     stimulus, view_roots,
 };
+use crate::rules::file::{ConfigFile, FILE_NAME};
+use crate::rules::resolve::{resolve, Configs, ResolvedRules};
 use crate::slim;
 use crate::slim::hover;
 use crate::util::{file_location, line_location};
@@ -59,8 +61,12 @@ pub async fn serve() {
         view_roots: Arc::default(),
         routes: DashMap::new(),
         options: Arc::default(),
+        resolved: Arc::default(),
+        config_reports: Arc::default(),
         roots: OnceLock::new(),
         dynamic_formatting: OnceLock::new(),
+        dynamic_watching: OnceLock::new(),
+        semantic_refresh: OnceLock::new(),
         publishes: Arc::default(),
         next_publish: AtomicU64::new(0),
     })
@@ -89,11 +95,18 @@ struct Backend {
     routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     options: Arc<OnceLock<Options>>,
+    /// What applied to each open document at its latest diagnostics run, for the handlers that read the Slim engines.
+    resolved: Arc<DashMap<PathBuf, Arc<ResolvedRules>>>,
+    config_reports: Arc<ConfigReports>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
     roots: OnceLock<Vec<PathBuf>>,
-    /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration and `slim.format.enabled` is on:
+    /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration:
     /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
     dynamic_formatting: OnceLock<bool>,
+    /// The client takes `workspace/didChangeWatchedFiles` registrations, for config files outside the workspace folders.
+    dynamic_watching: OnceLock<Option<Watching>>,
+    /// The client takes `workspace/semanticTokens/refresh`.
+    semantic_refresh: OnceLock<bool>,
     /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
     local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
@@ -116,6 +129,12 @@ impl LanguageServer for Backend {
         let dynamic_formatting =
             params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
         let _ = self.dynamic_formatting.set(dynamic_formatting);
+        let workspace = params.capabilities.workspace.unwrap_or_default();
+        let watching = workspace.did_change_watched_files.unwrap_or_default();
+        let roots = self.roots.get().cloned().unwrap_or_default();
+        let relative = watching.relative_pattern_support.unwrap_or(false);
+        let _ = self.dynamic_watching.set((watching.dynamic_registration == Some(true)).then_some(Watching { roots, relative }));
+        let _ = self.semantic_refresh.set(workspace.semantic_tokens.and_then(|t| t.refresh_support).unwrap_or(false));
         Ok(InitializeResult {
             offset_encoding: None,
             server_info: Some(ServerInfo { name: SERVER_NAME.into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
@@ -171,7 +190,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        if self.dynamic_formatting.get() == Some(&true) && self.options().format_enabled(TemplateLang::Slim) {
+        if self.dynamic_formatting.get() == Some(&true) {
             let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
             let registration = Registration {
                 id: SLIM_FORMATTING_REGISTRATION.into(),
@@ -235,6 +254,9 @@ impl LanguageServer for Backend {
             p.changes.into_iter().filter_map(|e| Some((util::file_path(&e.uri)?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
         self.local_callers.clear();
+        for (path, _) in events.iter().filter(|(path, _)| path.ends_with(FILE_NAME)) {
+            self.config_reports.forget(&self.client, path).await;
+        }
         if may_change_view_roots(&events) {
             self.view_roots.clear();
         }
@@ -253,6 +275,9 @@ impl LanguageServer for Backend {
             return;
         }
         self.publishes.remove(&p.text_document.uri);
+        if let Some(path) = util::file_path(&p.text_document.uri) {
+            self.resolved.remove(&path);
+        }
         self.docs.remove(&p.text_document.uri);
         self.local_callers.clear();
         self.client.publish_diagnostics(p.text_document.uri, vec![], None).await;
@@ -274,7 +299,7 @@ impl LanguageServer for Backend {
         }
         let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
         let (line_start, line, col) = util::line_at(&doc.text, pos);
-        let engines = &self.options().extra_engines;
+        let engines = &self.engines(&uri);
         if let Some(key) = i18n_key_at(&project, &doc, &path, pos, engines) {
             return Ok(locations_response(translation_locations(&self.locale_files(&path), &key)));
         }
@@ -337,7 +362,7 @@ impl LanguageServer for Backend {
             return Ok(Some(links.collect()));
         }
         let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
-        let in_code = render_filter(doc.lang, &doc.text, &self.options().extra_engines);
+        let in_code = render_filter(doc.lang, &doc.text, &self.engines(&uri));
         let pipes = HamlPipes::new(doc.lang);
         let mut links = Vec::new();
         for (i, (line_start, line)) in util::lines_with_offsets(&doc.text).enumerate() {
@@ -368,7 +393,7 @@ impl LanguageServer for Backend {
             None => None,
         };
         let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
-        let engines = &self.options().extra_engines;
+        let engines = &self.engines(&uri);
         if doc.lang == TemplateLang::Slim {
             let parsed = slim::parser::parse(&doc.text, engines);
             let marker = util::position_to_offset(&doc.text, pos).and_then(|o| hover::marker_doc(&doc.text, o, &parsed));
@@ -459,7 +484,7 @@ impl LanguageServer for Backend {
         else {
             return Ok(None);
         };
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = self.engines(&p.text_document.uri);
         // A provider's ranges replace VS Code's indentation folding; `None` falls back to it. That fallback is
         // what folds the host language of `.js.erb`/`.yml.erb`/… where ERB blocks alone would regress.
         off_server_task(move || match lang {
@@ -479,7 +504,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let path = util::file_path(&uri);
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = self.engines(&uri);
         let data = off_server_task(move || {
             let close = path.map_or_else(Default::default, |path| Project::for_template(&path).strict_locals_close());
             semantic_tokens::tokens(lang, &text, close, &extra_engines)
@@ -493,7 +518,7 @@ impl LanguageServer for Backend {
         let Some((lang, html, text)) = self.docs.get(&uri).map(|doc| (doc.lang, doc.html_host(&uri), doc.text.clone())) else {
             return Ok(None);
         };
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = self.engines(&uri);
         off_server_task(move || {
             let symbols = match lang {
                 TemplateLang::Erb => outline::document_symbols(&text, html),
@@ -571,8 +596,8 @@ impl LanguageServer for Backend {
         if project.is_gem_file(&path) {
             return Ok(None);
         }
-        let extra_engines = self.options().extra_engines.clone();
-        if !self.free_local_name(&doc, &project, &new) {
+        let extra_engines = self.engines(&uri);
+        if !self.free_local_name(&uri, &doc, &project, &new) {
             return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
         }
         let index = util::LineIndex::new(&doc.text);
@@ -614,7 +639,7 @@ impl LanguageServer for Backend {
         }
         let Some(path) = util::file_path(&uri) else { return Ok(None) };
         let project = self.project_of(&path).await?;
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = self.engines(&uri);
         let i18n_key = {
             let Some(doc) = self.docs.get(&uri) else { return Ok(None) };
             i18n_key_at(&project, &doc, &path, pos, &extra_engines)
@@ -704,7 +729,7 @@ impl LanguageServer for Backend {
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
-        let extra_engines = self.options().extra_engines.clone();
+        let extra_engines = renames.first().map_or_else(|| self.options().extra_engines.clone(), |(old, _)| self.engines_at(old));
         let view_roots = Arc::clone(&self.view_roots);
         let changes = off_server_task(move || {
             let mut changes = HashMap::new();
@@ -761,27 +786,29 @@ impl Backend {
     async fn formatted(&self, uri: &Uri, options: &FormattingOptions, lines_only: bool) -> Option<(String, String)> {
         let (lang, plain_erb, text) =
             self.docs.get(uri).filter(|doc| !doc.percent_lines).map(|doc| (doc.lang, doc.plain_erb, doc.text.clone()))?;
-        if !self.options().format_enabled(lang) {
-            return None;
-        }
         let (uri, options) = (uri.clone(), options.clone());
-        // A range may hold a comment's inner lines without the line they move with.
-        let align_comments = self.options().align_erb_comments && !lines_only;
-        let extra_engines = self.options().extra_engines.clone();
-        // Reads .editorconfig and the project from disk, and formats a whole file: off the server task.
-        let result = off_server_task(move || {
-            let path = util::file_path(&uri);
-            let mut settings =
-                path.map_or_else(format::Settings::default, |path| config::settings_for(&path).settings).with_editor(&options);
-            if lines_only {
-                settings.final_newline = false;
+        let editor = Arc::clone(&self.options);
+        let started = self.config_reports.generation();
+        // Reads the config files, .editorconfig and the project from disk, and formats a whole file: off the server task.
+        let (rules, result) = off_server_task(move || {
+            let rules = resolve(&uri, lang, editor.get_or_init(Options::default), &mut Configs::new());
+            if rules.excluded_by().is_some() || !rules.format_enabled() {
+                return (Arc::new(rules), None);
             }
-            settings.align_comments = align_comments;
-            let result = format::format(&uri, lang, plain_erb, &text, &settings, &extra_engines);
-            (uri, text, result)
+            let base = util::file_path(&uri).map_or_else(format::Settings::default, |path| config::settings_for(&path).settings);
+            let mut settings = rules.format_settings(base.with_editor(&options));
+            if lines_only {
+                // A range can't add a line, and may hold a comment's inner lines without the line they move with.
+                settings.final_newline = false;
+                settings.align_comments = false;
+            }
+            let result = format::format(&uri, lang, plain_erb, &text, &settings, rules.extra_engines());
+            (Arc::new(rules), Some((uri, text, result)))
         })
         .await
         .ok()?;
+        self.config_reports.report(&self.client, rules.files(), started, self.dynamic_watching.get().and_then(Option::as_ref)).await;
+        let result = result?;
         match result {
             (_, text, Ok(formatted)) => Some((text, formatted.text)),
             (uri, _, Err(skipped)) => {
@@ -802,6 +829,24 @@ impl Backend {
         self.docs.get(uri).filter(|doc| doc.lang != TemplateLang::Liquid).map(|doc| doc.clone())
     }
 
+    /// The Slim engines that apply to `uri`.
+    fn engines(&self, uri: &Uri) -> Vec<String> {
+        util::file_path(uri).map_or_else(|| self.options().extra_engines.clone(), |path| self.engines_at(&path))
+    }
+
+    /// The Slim engines of the file at `path`: its latest resolved rules', else the editor's.
+    fn engines_at(&self, path: &Path) -> Vec<String> {
+        if let Some(rules) = self.resolved.get(path) {
+            return rules.extra_engines().to_vec();
+        }
+        // Before the first diagnostics run (a document just opened).
+        let resolved = TemplateLang::from_file_name(&file_name_of(path)).zip(util::file_uri(path));
+        resolved.map_or_else(
+            || self.options().extra_engines.clone(),
+            |(lang, uri)| resolve(&uri, lang, self.options(), &mut Configs::new()).extra_engines().to_vec(),
+        )
+    }
+
     fn options(&self) -> &Options {
         self.options.get_or_init(Options::default)
     }
@@ -820,23 +865,34 @@ impl Backend {
             Arc::clone(&self.options),
             Arc::clone(&self.view_roots),
         );
+        let (resolved, config_reports) = (Arc::clone(&self.resolved), Arc::clone(&self.config_reports));
+        let (watching, refresh) = (self.dynamic_watching.get().cloned().flatten(), self.semantic_refresh.get() == Some(&true));
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             let latest = || publishes.get(&uri).is_some_and(|latest| *latest == run);
             let Some(doc) = docs.get(&uri).filter(|_| latest()).map(|doc| doc.clone()) else { return };
             let (checked, version) = (uri.clone(), doc.version);
-            let Ok(diags) = off_server_task(move || {
+            let started = config_reports.generation();
+            let Ok((diags, rules)) = off_server_task(move || {
                 let mut projects = Projects::new();
                 if let Some(path) = util::file_path(&checked) {
                     Project::memoized(&mut projects, &path, Some(&view_roots));
                 }
-                diagnostics_in(&checked, &doc, options.get_or_init(Options::default), &mut projects)
+                let rules = resolve(&checked, doc.lang, options.get_or_init(Options::default), &mut Configs::new());
+                (diagnostics_in(&checked, &doc, &rules, &mut projects), rules)
             })
             .await
             else {
                 return;
             };
+            config_reports.report(&client, rules.files(), started, watching.as_ref()).await;
             if latest() {
+                let engines = rules.extra_engines().to_vec();
+                let before = util::file_path(&uri).and_then(|path| resolved.insert(path, Arc::new(rules)));
+                // Tokens computed from the engines of an earlier run are stale.
+                if refresh && before.is_some_and(|before| before.extra_engines() != engines) {
+                    let _ = client.semantic_tokens_refresh().await;
+                }
                 client.publish_diagnostics(uri, diags, Some(version)).await;
             }
         });
@@ -972,6 +1028,96 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
     }
 }
 
+fn file_name_of(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// How to watch a config file the client's own watchers don't cover.
+#[derive(Clone)]
+struct Watching {
+    /// The workspace folders, which the client watches already.
+    roots: Vec<PathBuf>,
+    /// The client takes `{ baseUri, pattern }` globs.
+    relative: bool,
+}
+
+/// Config files' problems already reported, so each is logged and published once until its file changes.
+#[derive(Default)]
+struct ConfigReports {
+    /// Bumped when a config file changes: a run that started earlier may have read the old text, so it reports nothing.
+    generation: AtomicU64,
+    logged: DashSet<PathBuf>,
+    /// The files with problems published on them.
+    flagged: DashSet<Uri>,
+    /// The config files outside the workspace folders that a watcher was registered for.
+    watched: DashSet<PathBuf>,
+    /// Held while a report or a forget runs, so one can't land between the other's check and its publish.
+    busy: tokio::sync::Mutex<()>,
+}
+
+impl ConfigReports {
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Reports the problems of `files` read by a run that began at `started`; with `watching`, also watches the files
+    /// that are outside those folders, which the client's own watchers don't cover.
+    async fn report(&self, client: &Client, files: &[Arc<ConfigFile>], started: u64, watching: Option<&Watching>) {
+        let _busy = self.busy.lock().await;
+        if started != self.generation() {
+            return;
+        }
+        for file in files {
+            if let Some(watching) = watching.filter(|w| !w.roots.iter().any(|root| file.path.starts_with(root))) {
+                self.watch(client, &file.path, watching.relative).await;
+            }
+            if file.problems.is_empty() || !self.logged.insert(file.path.clone()) {
+                continue;
+            }
+            let shown = file.path.display();
+            let mut diagnostics = Vec::new();
+            for problem in &file.problems {
+                let (line, col) = (problem.range.start.line + 1, problem.range.start.character + 1);
+                client.log_message(MessageType::WARNING, format!("{shown}:{line}:{col}: {}", problem.message)).await;
+                diagnostics.push(Diagnostic { source: Some(SERVER_NAME.into()), ..util::warning(problem.range, problem.message.clone()) });
+            }
+            let Some(uri) = util::file_uri(&file.path) else { continue };
+            client.publish_diagnostics(uri.clone(), diagnostics, None).await;
+            self.flagged.insert(uri);
+        }
+    }
+
+    async fn watch(&self, client: &Client, path: &Path, relative: bool) {
+        if !self.watched.insert(path.to_path_buf()) {
+            return;
+        }
+        let pattern = match path.parent().and_then(util::file_uri) {
+            Some(base) if relative => serde_json::json!({ "baseUri": base, "pattern": FILE_NAME }),
+            _ => serde_json::json!(util::slash_path(path)),
+        };
+        let registration = Registration {
+            id: format!("watch-{}", path.display()),
+            method: "workspace/didChangeWatchedFiles".into(),
+            register_options: Some(serde_json::json!({ "watchers": [{ "globPattern": pattern }] })),
+        };
+        if let Err(e) = client.register_capability(vec![registration]).await {
+            self.watched.remove(path);
+            client.log_message(MessageType::WARNING, format!("{} not watched: {e}", path.display())).await;
+        }
+    }
+
+    /// The file at `path` changed on disk: report it again if it still has problems, and clear what was published.
+    async fn forget(&self, client: &Client, path: &Path) {
+        let _busy = self.busy.lock().await;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.logged.remove(path);
+        let Some(uri) = util::file_uri(path) else { return };
+        if self.flagged.remove(&uri).is_some() {
+            client.publish_diagnostics(uri, vec![], None).await;
+        }
+    }
+}
+
 /// Whether the watched-file `events` make the cache for `root` stale. Listings change only when files are
 /// created or deleted; `contents` caches also on edits. Deleting an ancestor of `root` counts too.
 fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> bool {
@@ -980,7 +1126,7 @@ fn stale(root: &Path, events: &[(PathBuf, FileChangeType)], contents: bool) -> b
 
 /// A created or deleted file may add or remove a view root; a changed one only when it is the lockfile that names the gems.
 fn may_change_view_roots(events: &[(PathBuf, FileChangeType)]) -> bool {
-    events.iter().any(|(path, kind)| *kind != FileChangeType::CHANGED || path.ends_with(project::LOCKFILE))
+    events.iter().any(|(path, kind)| !path.ends_with(FILE_NAME) && (*kind != FileChangeType::CHANGED || path.ends_with(project::LOCKFILE)))
 }
 
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.

@@ -2,7 +2,7 @@
 import "../styles/roster.css";
 import Listing from "./Listing.astro";
 import { backtickParts } from "../lib/backticks.mjs";
-import { diagnostics } from "../data/diagnostics";
+import { codeAnchor, diagnostics } from "../data/diagnostics";
 import { DEPARTMENTS, departmentOf, languageList, ruleId, rules, statusLabel, type Example, type Rule } from "../data/rules";
 
 const DIAGNOSTICS_PAGE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/reference/diagnostics/`;
@@ -115,7 +115,7 @@ const codeParts = (text: string) => backtickParts(text);
                       {rule.code && diagnostics.some((d) => d.code === rule.code) && (
                         <>
                           {" "}
-                          See <a href={`${DIAGNOSTICS_PAGE}#${rule.code}`}><code>{rule.code}</code></a> in the diagnostics reference.
+                          See <a href={`${DIAGNOSTICS_PAGE}#${codeAnchor(rule.code)}`}><code>{rule.code}</code></a> in the diagnostics reference.
                         </>
                       )}
                     </span>
@@ -125,7 +125,7 @@ const codeParts = (text: string) => backtickParts(text);
                   <div class="roster__field">
                     <strong class="roster__term">{rule.setting.label}</strong>{" "}
                     <div class="roster__detail">
-                      <pre class="roster__setting" tabindex="0" role="region" aria-label={`Setting: ${rule.setting.label.toLowerCase()}`}><code>{rule.setting.json}</code></pre>
+                      <pre class="roster__setting" tabindex="0" role="region" aria-label={`Setting: ${rule.setting.label.toLowerCase()}`}><code>{rule.setting.code}</code></pre>
                     </div>
                   </div>
                 )}

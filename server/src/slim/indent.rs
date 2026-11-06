@@ -10,14 +10,14 @@ use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
 pub mod code {
-    pub const BAD_DEDENT: &str = "bad-dedent";
-    pub const DOCTYPE_CHILDREN: &str = "doctype-children";
-    pub const VOID_CHILDREN: &str = "void-children";
-    pub const UNKNOWN_ENGINE: &str = "unknown-engine";
+    pub const BAD_DEDENT: &str = "Syntax/BadDedent";
+    pub const DOCTYPE_CHILDREN: &str = "Syntax/DoctypeChildren";
+    pub const VOID_CHILDREN: &str = "Html/VoidChildren";
+    pub const UNKNOWN_ENGINE: &str = "Syntax/UnknownEngine";
     /// Slim parser errors that belong to no other code.
-    pub const SYNTAX_ERROR: &str = "syntax-error";
-    pub const UNCLOSED_ATTRIBUTE: &str = "unclosed-attribute";
-    pub const EXPLICIT_END: &str = "explicit-end";
+    pub const SYNTAX_ERROR: &str = "Syntax/Template";
+    pub const UNCLOSED_ATTRIBUTE: &str = "Syntax/UnclosedAttribute";
+    pub const EXPLICIT_END: &str = "Syntax/ExplicitEnd";
     /// Checks that parse the `-`/`=` code as Ruby.
     pub const RUBY: &[&str] = &[crate::ruby::generated::RUBY_SYNTAX, EXPLICIT_END];
 }

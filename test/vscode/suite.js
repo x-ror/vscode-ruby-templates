@@ -316,7 +316,7 @@ const checks = {
     }
   },
 
-  async "ERB formatter: off with erb.format.enabled false, on again after"() {
+  async "ERB formatter: no edits with erb.format.enabled false, edits again after"() {
     const editor = await open("app/views/users/unformatted.html.erb");
     const key = "erb.format.enabled";
     const global = vscode.ConfigurationTarget.Global;
@@ -328,10 +328,7 @@ const checks = {
       );
     try {
       await settings().update(key, false, global);
-      await until(
-        "no formatter offered",
-        async () => !(await format())?.length,
-      );
+      await until("no edits offered", async () => !(await format())?.length);
     } finally {
       await settings().update(key, undefined, global);
     }

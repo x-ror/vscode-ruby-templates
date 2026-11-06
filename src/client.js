@@ -119,7 +119,7 @@ async function doStart(context) {
   const command = findServer(context);
   log(`starting language server: ${command}`);
 
-  // The server caches app/views listings and parsed locales, and a changed Gemfile.lock or .ruby-version changes its framework gates and the Ruby grammar; these events invalidate them. The folder globs
+  // The server caches app/views listings and parsed locales, and a changed Gemfile.lock or .ruby-version changes its framework gates and the Ruby grammar, and a .ruby-templates.toml changes which rules apply; these events invalidate them. The folder globs
   // catch deleting/renaming a whole app/ or config/ tree, which VS Code reports as one event for the folder.
   // Created once: restarts reuse them instead of piling up live watchers.
   if (!watchers) {
@@ -128,6 +128,7 @@ async function doStart(context) {
       "**/config/locales/**",
       "**/Gemfile.lock",
       "**/.ruby-version",
+      "**/.ruby-templates.toml",
       "**/{app,config,app/views,config/locales}",
     ].map((glob) => vscode.workspace.createFileSystemWatcher(glob));
     context.subscriptions.push(...watchers);
@@ -243,47 +244,24 @@ async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
 }
 
 const FORMATTED_LANGS = ["erb", "haml"];
-const formatEnabledKey = (lang) => `${lang}.format.enabled`;
 
-/** Offers the server's formatting for ERB and Haml only while `rubyTemplates.<lang>.format.enabled` is on, so another extension's formatter isn't shadowed. */
+/**
+ * Offers the server's formatting for ERB and Haml always: a `.ruby-templates.toml` beats the `format.enabled`
+ * settings, so the server decides per file and returns no edits where formatting is off.
+ */
 function registerServerFormatting(context) {
-  const registrations = new Map();
-  const update = () => {
-    for (const lang of FORMATTED_LANGS) {
-      const enabled = settings().get(formatEnabledKey(lang), true);
-      if (enabled === registrations.has(lang)) continue;
-      if (!enabled) {
-        registrations.get(lang).dispose();
-        registrations.delete(lang);
-        continue;
-      }
-      registrations.set(
-        lang,
-        vscode.Disposable.from(
-          vscode.languages.registerDocumentFormattingEditProvider(lang, {
-            provideDocumentFormattingEdits: async (doc, options) =>
-              (await serverFormatEdits(doc, options)) ?? [],
-          }),
-          vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
-            provideDocumentRangeFormattingEdits: async (doc, range, options) =>
-              (await serverFormatEdits(doc, options, range)) ?? [],
-          }),
-        ),
-      );
-    }
-  };
-  update();
-  context.subscriptions.push(
-    { dispose: () => registrations.forEach((r) => r.dispose()) },
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        FORMATTED_LANGS.some((lang) =>
-          e.affectsConfiguration(`${SECTION}.${formatEnabledKey(lang)}`),
-        )
-      )
-        update();
-    }),
-  );
+  for (const lang of FORMATTED_LANGS) {
+    context.subscriptions.push(
+      vscode.languages.registerDocumentFormattingEditProvider(lang, {
+        provideDocumentFormattingEdits: async (doc, options) =>
+          (await serverFormatEdits(doc, options)) ?? [],
+      }),
+      vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
+        provideDocumentRangeFormattingEdits: async (doc, range, options) =>
+          (await serverFormatEdits(doc, options, range)) ?? [],
+      }),
+    );
+  }
 }
 
 /** Starts the server, restarting it on the restart command or a change to a setting it reads; returns its log. */

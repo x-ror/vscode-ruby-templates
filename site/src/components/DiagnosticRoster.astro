@@ -2,7 +2,7 @@
 import "../styles/roster.css";
 import Listing from "./Listing.astro";
 import { backtickParts } from "../lib/backticks.mjs";
-import { diagnostics, LANGUAGE_NAMES, type Diagnostic } from "../data/diagnostics";
+import { codeAnchor, diagnostics, LANGUAGE_NAMES, type Diagnostic } from "../data/diagnostics";
 
 const listFormat = new Intl.ListFormat("en", { type: "conjunction" });
 const languageList = (entry: Diagnostic) => listFormat.format(entry.languages.map((lang) => LANGUAGE_NAMES[lang]));
@@ -12,6 +12,7 @@ const sections = [...Map.groupBy(diagnostics, (entry) => entry.languages.join("-
   title: languageList(entries[0]),
   entries,
 }));
+const toml = (entry: Diagnostic) => `[${entry.code.replace("/", ".")}]\nenabled = false`;
 const setting = (entry: Diagnostic) =>
   entry.languages.map((lang) => `"rubyTemplates.${lang}.disabledDiagnostics": ["${entry.code}"]`).join(",\n");
 ---
@@ -29,7 +30,7 @@ const setting = (entry: Diagnostic) =>
             <ul class="roster__codes">
               {section.entries.map((entry) => (
                 <li>
-                  <a class="roster__code-link" href={`#${entry.code}`}>
+                  <a class="roster__code-link" href={`#${codeAnchor(entry.code)}`}>
                     {entry.code}
                   </a>
                 </li>
@@ -48,9 +49,9 @@ const setting = (entry: Diagnostic) =>
           {section.title}
         </h2>
         {section.entries.map((entry) => (
-          <article class="roster__entry" aria-labelledby={entry.code}>
-            <h3 class="roster__code" id={entry.code}>
-              <a class="roster__anchor" href={`#${entry.code}`}>
+          <article class="roster__entry" aria-labelledby={codeAnchor(entry.code)}>
+            <h3 class="roster__code" id={codeAnchor(entry.code)}>
+              <a class="roster__anchor" href={`#${codeAnchor(entry.code)}`}>
                 {entry.code}
               </a>
             </h3>
@@ -72,7 +73,7 @@ const setting = (entry: Diagnostic) =>
                 <strong class="roster__term">Example</strong>{" "}
                 <div class="roster__detail">
                   <Listing
-                    id={entry.code}
+                    id={codeAnchor(entry.code)}
                     file={entry.example.file}
                     lang={entry.example.lang}
                     code={entry.example.code}
@@ -83,9 +84,19 @@ const setting = (entry: Diagnostic) =>
               <div class="roster__field">
                 <strong class="roster__term">Turn it off</strong>{" "}
                 <div class="roster__detail">
+                  <pre class="roster__setting" tabindex="0" role="region" aria-label="Table in .ruby-templates.toml that turns this check off"><code>{toml(entry)}</code></pre>
+                </div>
+              </div>
+              <div class="roster__field">
+                <strong class="roster__term">Or in settings.json</strong>{" "}
+                <div class="roster__detail">
                   <pre class="roster__setting" tabindex="0" role="region" aria-label="Setting to turn this check off"><code>{setting(entry)}</code></pre>
                 </div>
               </div>
+              <p class="roster__field">
+                <strong class="roster__term">Earlier code</strong>{" "}
+                <span class="roster__detail"><code>{entry.formerly}</code>, still accepted.</span>
+              </p>
             </div>
           </article>
         ))}

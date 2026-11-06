@@ -9,11 +9,13 @@ All settings live under `rubyTemplates.` and can be set per user or per workspac
 
 ```json
 {
-  "rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt"],
+  "rubyTemplates.erb.disabledDiagnostics": ["Html/ImgAlt"],
   "rubyTemplates.slim.extraEngines": ["mjml"],
   "rubyTemplates.preview.useRails": true
 }
 ```
+
+A `.ruby-templates.toml` in the project sets the diagnostics, formatting and Slim engine settings below too, and wins over them where it says something; see the [rules reference](/vscode-ruby-templates/reference/rules/#configuration).
 
 Editor settings for one template language use its language id, such as `[erb]`, `[haml]`, `[slim]` or `[erb-js]`; [File types](/vscode-ruby-templates/guides/file-types/) lists the ids.
 
@@ -21,15 +23,15 @@ Editor settings for one template language use its language id, such as `[erb]`, 
 
 | Setting                                      | Default | Description                                                                                  |
 | -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------- |
-| `rubyTemplates.erb.disabledDiagnostics`      | `[]`    | Built-in ERB diagnostics to turn off, by code.                                               |
-| `rubyTemplates.haml.disabledDiagnostics`     | `[]`    | Built-in Haml diagnostics to turn off, by code.                                              |
-| `rubyTemplates.jbuilder.disabledDiagnostics` | `[]`    | Built-in diagnostics to turn off in Jbuilder and Builder views, by code.                     |
-| `rubyTemplates.slim.disabledDiagnostics`     | `[]`    | Built-in Slim diagnostics to turn off, by code.                                              |
+| `rubyTemplates.erb.disabledDiagnostics`      | `[]`    | Built-in ERB diagnostics to turn off, by rule name.                                          |
+| `rubyTemplates.haml.disabledDiagnostics`     | `[]`    | Built-in Haml diagnostics to turn off, by rule name.                                         |
+| `rubyTemplates.jbuilder.disabledDiagnostics` | `[]`    | Built-in diagnostics to turn off in Jbuilder and Builder views, by rule name.                |
+| `rubyTemplates.slim.disabledDiagnostics`     | `[]`    | Built-in Slim diagnostics to turn off, by rule name.                                         |
 | `rubyTemplates.erb.diagnostics.enabled`      | `true`  | Show the language server's diagnostics in ERB files. Turn off to silence them all.           |
 | `rubyTemplates.haml.diagnostics.enabled`     | `true`  | Show the language server's diagnostics in Haml files. Turn off to silence them all.          |
 | `rubyTemplates.slim.diagnostics.enabled`     | `true`  | Show the language server's diagnostics in Slim and Skim files. Turn off to silence them all. |
 
-Each `disabledDiagnostics` setting takes the codes of that language's checks; the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists them. [Errors as you type](/vscode-ruby-templates/guides/checks/#turning-checks-off) shows examples.
+Each `disabledDiagnostics` setting takes the rule names of that language's checks (`Html/ImgAlt`; the kebab-case codes of earlier versions still work); the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists them. [Errors as you type](/vscode-ruby-templates/guides/checks/#turning-checks-off) shows examples.
 
 ## Formatting
 

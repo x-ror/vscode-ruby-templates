@@ -12,8 +12,8 @@ use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {
-    pub const IMG_MISSING_ALT: &str = "img-missing-alt";
-    pub const DUPLICATE_ID: &str = "duplicate-id";
+    pub const IMG_MISSING_ALT: &str = "Html/ImgAlt";
+    pub const DUPLICATE_ID: &str = "Html/DuplicateId";
 }
 
 const ALT_RULE: &str = "the alt attribute must be specified (HTML 4.8.4.4.1)";

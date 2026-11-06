@@ -253,16 +253,18 @@ $B format --write demo/rails_app/app/views/playground/format    # перепис
 - [ ] **C-01** Вивід і коди виходу збігаються з коментарями вище.
 - [ ] **C-02** Повторний `format --check` після `--write` дає exit 0 (форматування стабільне).
 - [ ] **C-03** `$B check demo/rails_app/app/views | head -1` не панікує (stderr порожній).
+- [ ] **C-04** `$B check demo/rails_app/app/views/playground/rules`: exit 0, нічого. `rails_app/.ruby-templates.toml` вимикає `Html/ImgAlt` для цієї теки; `$B check demo/rails_app/app/views/playground/broken/html_attrs.html.erb` те саме попередження про `alt` показує.
 
 ## 8. Налаштування (`rails_app/.vscode/settings.json`)
 
-- [ ] **S-01** `"rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt"]`: попередження про `alt` зникають, решта лишається. Те саме з кодом з Problems для Haml, Slim і `rubyTemplates.jbuilder.disabledDiagnostics`.
+- [ ] **S-01** `"rubyTemplates.erb.disabledDiagnostics": ["Html/ImgAlt"]`: попередження про `alt` зникають, решта лишається. Старий код `img-missing-alt` працює так само. Те саме з кодом з Problems для Haml, Slim і `rubyTemplates.jbuilder.disabledDiagnostics`.
 - [ ] **S-02** `"rubyTemplates.slim.diagnostics.enabled": false`: жодної діагностики в `.slim` і `.skim`.
 - [ ] **S-03** `"rubyTemplates.erb.autoCloseTags": false`: E-02 більше не додає закривальний тег.
 - [ ] **S-04** `rubyTemplates.slim.extraEngines` містить `mjml`: у Slim `mjml:` не є помилкою «unknown engine» і є в автодоповненні.
 - [ ] **S-05** `"rubyTemplates.server.enabled": false`: підсвітка й сніпети працюють, діагностики, навігації та форматування немає.
 - [ ] **S-06** `"files.associations": { "**/lib/reports/*.erb": "erb-percent" }`: `lib/reports/summary.erb` має мову _Text (ERB, % lines)_. Без запису файл відкривається як звичайний ERB: рядки `%` це текст, а діагностика дає «unexpected 'else'» (D-27).
 - [ ] **S-07** `"files.associations": { "**/playground/liquid/_includes/*.html": "liquid" }`: `_includes/header.html` має мову _Liquid_. Без запису це звичайний HTML.
+- [ ] **S-08** `rails_app/.ruby-templates.toml` сильніший за налаштування VS Code: `playground/rules/img.html.erb` без попередження про `alt` навіть з `"rubyTemplates.erb.disabledDiagnostics": []`. Заміни `exclude` на `["x"]` і збережи: попередження з'являється одразу. Помилка в ключі (`exclude` → `exclud`) дає попередження на самому `.ruby-templates.toml` у Problems і в Output.
 
 ## Відомі проблеми
 
