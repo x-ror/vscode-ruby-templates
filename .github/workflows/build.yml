@@ -83,6 +83,9 @@ jobs:
               test: true,
             }
     runs-on: ${{ matrix.os }}
+    # Fat LTO costs a minute or more per link; only published binaries need its smaller size.
+    env:
+      CARGO_PROFILE_RELEASE_LTO: ${{ startsWith(github.ref, 'refs/tags/') && 'fat' || 'thin' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
@@ -102,7 +105,8 @@ jobs:
       - name: Test
         if: matrix.test
         working-directory: server
-        run: cargo test --release --target ${{ matrix.target }}
+        # Dev profile: the release binary is exercised by the steps below.
+        run: cargo test --target ${{ matrix.target }}
       - name: Check samples
         if: matrix.test
         shell: bash
