@@ -467,7 +467,7 @@ colour = 1
                 "3:8: unknown key `format.enable` in [erb]; it takes format.enabled, format.align_comments, diagnostics.enabled, disabled_diagnostics",
                 "5:8: `format.enabled` belongs in [erb]",
                 "7:24: `disabled_diagnostics` must be a list of strings",
-                "8:2: unknown department `Nope`; the departments are Syntax, Html, Rails, Layout",
+                "8:2: unknown department `Nope`; the departments are Syntax, Html, Rails, Layout, Style",
             ]
         );
     }

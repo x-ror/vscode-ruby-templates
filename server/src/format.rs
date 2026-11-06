@@ -4,6 +4,7 @@
 pub(crate) mod blank_lines;
 pub mod erb;
 pub mod haml;
+mod inline;
 pub mod slim;
 
 use crate::checks::{language_diagnostics, ruby_context, Doc};
@@ -31,6 +32,12 @@ pub struct Settings {
     pub around_element_body: Option<Style>,
     /// `Layout/EmptyLinesAroundBranches`.
     pub around_branches: Option<Style>,
+    /// `Layout/SpaceInsideErbTag`.
+    pub space_inside_erb_tag: bool,
+    /// `Layout/SpaceAfterScriptMarker`.
+    pub space_after_script_marker: bool,
+    /// `Style/ErbCommentSyntax`.
+    pub erb_comment_syntax: bool,
 }
 
 impl Default for Settings {
@@ -43,6 +50,9 @@ impl Default for Settings {
             around_block_body: None,
             around_element_body: None,
             around_branches: None,
+            space_inside_erb_tag: false,
+            space_after_script_marker: false,
+            erb_comment_syntax: false,
         }
     }
 }
@@ -174,7 +184,43 @@ fn broken_invariant(
     after.iter().any(|d| !before.contains(d)).then_some("formatting would add a diagnostic")
 }
 
+/// `text` with the in-line rules applied first, then re-indented; without them, with a note, when they would change the
+/// template's meaning.
 fn format_once(
+    template: Template,
+    text: &str,
+    settings: &Settings,
+    extra_engines: &[String],
+    ruby: &RubyContext,
+) -> Result<Formatted, Skipped> {
+    let staged = inline::apply(template.lang, text, settings, extra_engines);
+    format_staged(template, text, staged, settings, extra_engines, ruby)
+}
+
+/// `format_once` with the in-line rules' result given. The Haml/Slim comparisons chain: `staged` against `text` here,
+/// then the re-indented text against `staged`, and the blank-line pass against that, so the output is compared with the
+/// input throughout.
+fn format_staged(
+    template: Template,
+    text: &str,
+    staged: Option<String>,
+    settings: &Settings,
+    extra_engines: &[String],
+    ruby: &RubyContext,
+) -> Result<Formatted, Skipped> {
+    let Some(staged) = staged else { return format_stages(template, text, settings, extra_engines, ruby) };
+    let formatted = format_stages(template, &staged, settings, extra_engines, ruby)
+        .ok()
+        .filter(|formatted| inline::keeps_meaning(template.lang, text, &staged, &formatted.text, extra_engines));
+    if let Some(formatted) = formatted {
+        return Ok(formatted);
+    }
+    let mut formatted = format_stages(template, text, settings, extra_engines, ruby)?;
+    formatted.notes.push("in-line spacing kept: changing it would change the compiled output".to_string());
+    Ok(formatted)
+}
+
+fn format_stages(
     template: Template,
     text: &str,
     settings: &Settings,
@@ -514,6 +560,60 @@ mod tests {
     }
 
     #[test]
+    fn the_inline_rules_run_before_the_indentation_in_all_three_languages() {
+        let s = inline();
+        assert_eq!(
+            fmt("a.html.erb", "<div>\n<%if a%>\n<% # note %>\n<p><%=x%></p>\n<%end%>\n</div>\n", &s).as_deref(),
+            Ok("<div>\n  <% if a %>\n    <%# note %>\n    <p><%= x %></p>\n  <% end %>\n</div>\n")
+        );
+        let haml = "%div\n    -if a\n        %a(href=\"x=y\")=z\n        =render \"u\"\n        \\=text\n";
+        assert_eq!(
+            fmt("a.html.haml", haml, &s).as_deref(),
+            Ok("%div\n  - if a\n    %a(href=\"x=y\")= z\n    = render \"u\"\n    \\=text\n")
+        );
+        let slim = "div\n    -if a\n        a href=\"x=y\"=z\n        =render \"u\"\n        | =text\n";
+        assert_eq!(fmt("a.html.slim", slim, &s).as_deref(), Ok("div\n  - if a\n    a href=\"x=y\"= z\n    = render \"u\"\n    | =text\n"));
+        // Off by default, and stable.
+        assert_eq!(fmt("a.html.slim", "p=x\n", &Settings::default()).as_deref(), Ok("p=x\n"));
+        for (name, text) in [("a.html.erb", "<%=x%><% # a %>\n"), ("a.haml", "=x\n%p=y\n"), ("a.slim", "=x\np=y\n")] {
+            let once = fmt(name, text, &s).unwrap();
+            assert_eq!(fmt(name, &once, &s).as_deref(), Ok(once.as_str()), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_inline_rules_work_with_the_settings_of_a_range() {
+        let range = Settings { trailing_empty_lines: false, max_empty_lines: None, ..inline() };
+        assert_eq!(fmt("a.slim", "p=x", &range).as_deref(), Ok("p= x"));
+        assert_eq!(fmt("a.html.erb", "<%=x%>", &range).as_deref(), Ok("<%= x %>"));
+    }
+
+    #[test]
+    fn inline_edits_that_change_the_template_are_dropped_with_a_note() {
+        let erb_uri = uri("a.html.erb");
+        let note = "in-line spacing kept: changing it would change the compiled output";
+        let ruby = RubyContext::outside_project();
+        let template = Template { uri: &erb_uri, lang: TemplateLang::Erb, plain_erb: false };
+        let text = "<div>\n<%= a %>\n</div>\n";
+        // A stage that changed a tag's Ruby, as a bug in an edit function would.
+        let formatted = format_staged(template, text, Some("<div>\n<%= b %>\n</div>\n".to_string()), &inline(), &[], &ruby).unwrap();
+        assert_eq!((formatted.text.as_str(), formatted.notes.as_slice()), ("<div>\n  <%= a %>\n</div>\n", [note.to_string()].as_slice()));
+        let spaced = Some("<div>\n<%= a %>\n</div>\n".to_string());
+        assert!(format_staged(template, text, spaced, &inline(), &[], &ruby).unwrap().notes.is_empty());
+        // Haml and Slim: spaces that change a text line.
+        for (name, lang, text, staged) in [
+            ("a.haml", TemplateLang::Haml, "%p a b\n=x\n", "%p a  b\n=x\n"),
+            ("a.haml", TemplateLang::Haml, "%p a\n=x\n", "%p a\n= y\n"),
+            ("a.slim", TemplateLang::Slim, "p a b\n=x\n", "p a  b\n=x\n"),
+        ] {
+            let uri = uri(name);
+            let template = Template { uri: &uri, lang, plain_erb: false };
+            let formatted = format_staged(template, text, Some(staged.to_string()), &inline(), &[], &ruby).unwrap();
+            assert_eq!((formatted.text.as_str(), formatted.notes.as_slice()), (text, [note.to_string()].as_slice()), "{name} {text:?}");
+        }
+    }
+
+    #[test]
     fn leaves_other_files_alone() {
         let s = Settings::default();
         assert_eq!(fmt("a.js.erb", "x", &s).map_err(|e| e.kind), Err(SkipKind::NotHandled));
@@ -558,10 +658,16 @@ mod tests {
         ]
     }
 
+    fn inline() -> Settings {
+        Settings { space_inside_erb_tag: true, space_after_script_marker: true, erb_comment_syntax: true, ..Settings::default() }
+    }
+
     fn settings_variants() -> Vec<Settings> {
         let d = Settings::default;
         vec![
             d(),
+            inline(),
+            Settings { max_empty_lines: Some(0), align_comments: true, ..inline() },
             Settings { indent_size: 4, ..d() },
             Settings { trailing_empty_lines: false, ..d() },
             Settings { max_empty_lines: Some(0), ..d() },
@@ -584,6 +690,7 @@ mod tests {
                         continue;
                     };
                     formatted += 1;
+                    assert!(!once.notes.iter().any(|n| n.starts_with("in-line")), "{name} with {settings:?}: {:?}", once.notes);
                     let broken = broken_invariant(Template { uri: &uri, lang, plain_erb: false }, &text, &once.text, &settings, &[], &ruby);
                     assert_eq!(broken, None, "{name} with {settings:?}:\n{text}\n---\n{}", once.text);
                 }

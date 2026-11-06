@@ -9,6 +9,7 @@ use crate::html::TOKENIZED_AS_TEXT;
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals::RubyContext;
 use crate::util::{coded, warning, LineIndex};
+use std::ops::Range as ByteRange;
 use tower_lsp_server::ls_types::{Diagnostic, Position, Range};
 
 /// Stable diagnostic codes; `rubyTemplates.erb.disabledDiagnostics` refers to these.
@@ -16,17 +17,69 @@ pub mod code {
     pub const UNCLOSED_TAG: &str = "Syntax/UnclosedErbTag";
 }
 
-/// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as `(start, end, tag)`.
-pub fn spacing_edits(text: &str) -> Vec<(usize, usize, String)> {
+/// A byte range of the text and what replaces it.
+pub type Edit = (ByteRange<usize>, String);
+
+/// The blanks Ruby and Erubi skip at the edges of a tag; other Unicode spaces such as U+00A0 are code.
+const BLANKS: [char; 3] = [' ', '\t', '\r'];
+
+/// `s` without ASCII whitespace at both ends.
+pub fn trim_ascii(s: &str) -> &str {
+    s.trim_matches([' ', '\t', '\r', '\n'])
+}
+
+/// `<%=foo%>` → `<%= foo %>`: one space inside the delimiters of each one-line code tag, as the tag's range and new text.
+/// Tags that span lines, `<%#` comments and `<%%` literals stay: the edges of a tag with lines may hold a newline.
+pub fn spacing_edits(text: &str) -> Vec<Edit> {
     let mut out = Vec::new();
     for tag in ruby::tags(text).iter().filter(|t| !t.is_comment() && !t.is_literal()) {
         let source = &text[tag.code.clone()];
-        if source.contains('\n') || source.trim().is_empty() {
+        if source.contains('\n') || trim_ascii(source).is_empty() {
             continue;
         }
-        let spaced = format!("{} {} {}", &text[tag.start..tag.code.start], source.trim(), &text[tag.code.end..tag.end]);
+        let spaced = format!("{} {} {}", &text[tag.start..tag.code.start], trim_ascii(source), &text[tag.code.end..tag.end]);
         if spaced != text[tag.start..tag.end] {
-            out.push((tag.start, tag.end, spaced));
+            out.push((tag.start..tag.end, spaced));
+        }
+    }
+    out
+}
+
+/// Whether every line of `code` is a Ruby comment or blank, and the first one is a comment.
+pub fn is_comment_only(code: &str) -> bool {
+    let mut lines = code.split('\n').map(|line| line.trim_start_matches(BLANKS));
+    lines.next().is_some_and(|first| first.starts_with('#')) && lines.all(|line| line.is_empty() || line.starts_with('#'))
+}
+
+/// Whether a plain `<%` tag may be written `<%#`: its Ruby is all comment and it stands alone on its lines. Erubi then ends
+/// the generated comment with the line; beside other content the `<% #` form comments out the output that follows, which
+/// `<%#` brings back. The encoding comment stays.
+pub fn is_rewritable_comment(text: &str, tag: &ruby::ErbTag) -> bool {
+    let code = &text[tag.code.clone()];
+    if tag.indicator.is_some() || !is_comment_only(code) || code.contains("coding") {
+        return false;
+    }
+    let blank = |s: &str| s.chars().all(|c| c == ' ' || c == '\t');
+    let line_start = text[..tag.start].rfind('\n').map_or(0, |at| at + 1);
+    let rest = &text[tag.end..];
+    let line_end = rest.find('\n').unwrap_or(rest.len());
+    blank(&text[line_start..tag.start]) && blank(rest[..line_end].trim_end_matches('\r'))
+}
+
+/// `<% # note %>` → `<%# note %>`, as edits that delete the blanks before the `#`; with `edge_space`, the blanks before
+/// the closing delimiter become one space, as `spacing_edits` would leave them.
+pub fn comment_edits(text: &str, edge_space: bool) -> Vec<Edit> {
+    let mut out = Vec::new();
+    for tag in ruby::tags(text).iter().filter(|t| is_rewritable_comment(text, t)) {
+        let code = &text[tag.code.clone()];
+        let hash = tag.code.start + code.len() - code.trim_start_matches(BLANKS).len();
+        if hash > tag.code.start {
+            out.push((tag.code.start..hash, String::new()));
+        }
+        let body = code.trim_end_matches(BLANKS);
+        let trailing = &code[body.len()..];
+        if edge_space && trailing != " " && !body.ends_with('\n') {
+            out.push((tag.code.end - trailing.len()..tag.code.end, " ".to_string()));
         }
     }
     out
@@ -313,7 +366,7 @@ mod tests {
 
     #[test]
     fn tag_spacing() {
-        let fixed = |t: &str| spacing_edits(t).into_iter().map(|(_, _, tag)| tag).collect::<Vec<_>>();
+        let fixed = |t: &str| spacing_edits(t).into_iter().map(|(_, tag)| tag).collect::<Vec<_>>();
         assert_eq!(fixed("<%=foo%>é<%if a-%><%==  raw %><%- x =%>"), ["<%= foo %>", "<% if a -%>", "<%== raw %>"]);
         assert!(fixed("<%= ok %><% x = 1 %><%# note %><%%= literal %>\n<% a\n  b %><%= x").is_empty());
     }

@@ -1233,7 +1233,7 @@ fn spacing_actions(uri: &Uri, text: &str, range: Range, only: Option<&[CodeActio
     };
     let edits = erb::spacing_edits(text);
     let index = util::LineIndex::new(text);
-    let to_edit = |(s, e, tag): &(usize, usize, String)| TextEdit::new(index.range(*s, *e), tag.clone());
+    let to_edit = |(range, tag): &erb::Edit| TextEdit::new(index.range(range.start, range.end), tag.clone());
     let action = |title: &str, kind: CodeActionKind, edits: Vec<TextEdit>| {
         CodeActionOrCommand::CodeAction(CodeAction {
             title: title.into(),
@@ -1242,7 +1242,7 @@ fn spacing_actions(uri: &Uri, text: &str, range: Range, only: Option<&[CodeActio
             ..Default::default()
         })
     };
-    let touching: Vec<TextEdit> = edits.iter().filter(|(s, e, _)| *s <= to && from <= *e).map(to_edit).collect();
+    let touching: Vec<TextEdit> = edits.iter().filter(|(range, _)| range.start <= to && from <= range.end).map(to_edit).collect();
     let mut out = Vec::new();
     if !touching.is_empty() {
         out.push(action("Add spaces inside this ERB tag", CodeActionKind::REFACTOR_REWRITE, touching));

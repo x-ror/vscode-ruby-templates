@@ -299,6 +299,55 @@ pub fn same_compilation(before: &str, after: &str) -> bool {
     before.error.is_none() && after.error.is_none() && before.compiled == after.compiled
 }
 
+/// Where the Ruby of each `-` line, `=` line and tag content starts in `text`, `None` for one that is not a slice of it
+/// (`|` multiline); `None` altogether when Haml rejects the text.
+pub(crate) fn code_starts(text: &str) -> Option<Vec<Option<usize>>> {
+    let parsed = parse_with_ruby(text);
+    if parsed.error.is_some() {
+        return None;
+    }
+    let bom_len = if text.starts_with(crate::util::BOM) { crate::util::BOM.len_utf8() } else { 0 };
+    let first_chunks = parsed.pieces.iter().filter_map(|piece| match piece {
+        Piece::Statement(code) | Piece::Output { code, .. } => code.first(),
+        _ => None,
+    });
+    Some(first_chunks.map(|chunk| chunk.offset.map(|offset| offset + bom_len)).collect())
+}
+
+/// `same_compilation` for a text that gained a space between a script marker and its code (`=foo` → `= foo`): `after`
+/// without the spaces it has at the start of Ruby code that `before` has none at is `before`, and both generate the same Ruby.
+pub fn same_compilation_after_marker_spacing(before: &str, after: &str) -> bool {
+    let generated = |text: &str| crate::haml::ruby::compiled(text, &parse_with_ruby(text), None).source;
+    let (Some(starts_before), Some(starts_after)) = (code_starts(before), code_starts(after)) else { return false };
+    if starts_before.len() != starts_after.len() || generated(before) != generated(after) {
+        return false;
+    }
+    let mut stripped = after.to_string();
+    let mut gained = Vec::new();
+    for (was, now) in starts_before.iter().zip(&starts_after) {
+        let (Some(was), Some(now)) = (was, now) else {
+            if was != now {
+                return false;
+            }
+            continue;
+        };
+        let shifted = was + gained.len();
+        if *now == shifted {
+            continue;
+        }
+        let bytes = after.as_bytes();
+        let space_after_marker = *now == shifted + 1 && bytes[now - 1] == b' ' && matches!(bytes[now - 2], b'=' | b'~' | b'-');
+        if !space_after_marker {
+            return false;
+        }
+        gained.push(now - 1);
+    }
+    for at in gained.into_iter().rev() {
+        stripped.remove(at);
+    }
+    stripped == before
+}
+
 /// `same_compilation` with the lines the nodes are on left out, for a text that lost blank lines. A blank line that
 /// matters (in a filter body, in a multi-line string) is part of what is compared, so removing it makes the texts differ.
 pub fn same_compilation_ignoring_lines(before: &str, after: &str) -> bool {

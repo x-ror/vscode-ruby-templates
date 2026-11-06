@@ -2539,6 +2539,55 @@ const check = (label, actual, expected) => {
       [4, 4, "  <p>b</p>"],
     ],
   );
+  // The in-line rules keep every line, so Format Selection applies them to the lines it covers.
+  const inlineDir = path.join(views, "inline");
+  fs.mkdirSync(inlineDir);
+  fs.writeFileSync(
+    path.join(inlineDir, ".ruby-templates.toml"),
+    [
+      "Layout.SpaceInsideErbTag",
+      "Style.ErbCommentSyntax",
+      "Layout.SpaceAfterScriptMarker",
+    ]
+      .map((rule) => `[${rule}]\nenabled = true\n`)
+      .join(""),
+  );
+  const inlineTexts = {
+    "a.html.erb": ["<% # a %>\n<%=b%>\n<%=c%>\n", [[1, "<%= b %>"]]],
+    "a.html.haml": ["=a\n=b\n=c\n", [[1, "= b"]]],
+    "a.html.slim": ["p=a\np=b\np=c\n", [[1, "p= b"]]],
+  };
+  for (const [name, [text, lines]] of Object.entries(inlineTexts)) {
+    const uri = fileUri(path.join(inlineDir, name));
+    await aligned.send(
+      "textDocument/didOpen",
+      {
+        textDocument: {
+          uri,
+          languageId: name.split(".").pop(),
+          version: 1,
+          text,
+        },
+      },
+      true,
+    );
+    const edits = (
+      await aligned.send("textDocument/rangeFormatting", {
+        textDocument: { uri },
+        options: blankOptions,
+        range: {
+          start: { line: 1, character: 0 },
+          end: { line: 1, character: 3 },
+        },
+      })
+    ).result;
+    check(
+      `${name}: a range gets the in-line rules on its lines only`,
+      edits?.map((e) => [e.range.start.line, e.newText]),
+      lines,
+    );
+  }
+
   // The rules around bodies and branches add and remove lines: not in Format Selection.
   const aroundDir = path.join(views, "around");
   fs.mkdirSync(aroundDir);

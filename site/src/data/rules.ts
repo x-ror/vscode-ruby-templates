@@ -400,13 +400,14 @@ export const rules: Rule[] = [
     type: "autofix",
     safe: true,
     safeNote:
-      "The spaces are outside the Ruby code, so the compiled template is the same.",
-    status: "partial",
-    phase: 1,
+      "The spaces are outside the Ruby code, so the compiled template is the same. The formatter checks that the trimmed Ruby of every tag is the same before and after, and keeps the spacing of a file when it is not.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Layout.SpaceInsideErbTag]", "enabled = true"),
     today:
-      'A code action does it, not the formatter. "Add spaces inside this ERB tag" is offered on the tags under the cursor, and "Add spaces inside every ERB tag" is the source action `source.erbSpacing`, which `editor.codeActionsOnSave` can run. It handles one-line code and output tags; comments (`<%#`), literal `<%%` and tags that span lines are left alone. Format Document and format on save do not apply it. Phase 1 makes it a formatter rule.',
+      'Each code and output tag that sits on one line gets one space after its opening and one before its closing delimiter, the `-` of `<%-` and `-%>` and the `=` of `<%==` included. Tags that span lines, comments (`<%#`) and literal `<%%` tags stay. Format selection applies it to the lines it covers. The code action does the same without the rule: "Add spaces inside this ERB tag" is offered on the tags under the cursor, and "Add spaces inside every ERB tag" is the source action `source.erbSpacing`.',
     setting: {
-      label: "Run it on save",
+      label: "Run the code action on save, without the rule",
       code: `"[erb]": {
   "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
 }`,
@@ -434,26 +435,45 @@ export const rules: Rule[] = [
   },
   {
     name: "Layout/SpaceAfterScriptMarker",
-    summary: "A space after the `=` or `-` that starts a Ruby line.",
+    summary: "A space after the `=` or `-` that starts Ruby code.",
     languages: ["haml", "slim"],
     type: "autofix",
     safe: true,
     safeNote:
-      "The marker and the code are the same tokens with a space between.",
-    status: "planned",
-    phase: 1,
+      "The marker and the code are the same tokens with a space between. The formatter checks that the template compiles to the same Ruby before and after, and keeps the markers of a file when it does not.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Layout.SpaceAfterScriptMarker]", "enabled = true"),
+    today:
+      "Where the parser reads Ruby code, the marker gets a space when the code follows it directly: `-`, `=`, `~`, `!=`, `&=`, `!~` and `&~` in Haml, `-`, `=` and `==` (with `<` and `>`) in Slim, both at the start of a line and after a tag (`%p=x`, `p=x`). Text, comments (`-#` in Haml and Slim, `/` in Slim), filters and engine bodies, `|` text blocks, attribute values, `==` and `\\=` lines in Haml (text, not code) and the continuation lines of multi-line Ruby are not touched. Also skipped: the first line of a multi-line Haml script written with `|`, the code after an attribute hash that spans lines, and Slim's `p: =x`. Format selection applies it to the lines it covers.",
     examples: [
       {
         lang: "haml",
         file: HAML_FILE,
-        before: text("-if @user", '  =render "users/card", user: @user'),
-        after: text("- if @user", '  = render "users/card", user: @user'),
+        before: text(
+          "-if @user",
+          "  %h1=@user.name",
+          '  =render "users/card", user: @user',
+        ),
+        after: text(
+          "- if @user",
+          "  %h1= @user.name",
+          '  = render "users/card", user: @user',
+        ),
       },
       {
         lang: "slim",
         file: SLIM_FILE,
-        before: text("-if @user", '  =render "users/card", user: @user'),
-        after: text("- if @user", '  = render "users/card", user: @user'),
+        before: text(
+          "-if @user",
+          "  h1=@user.name",
+          '  =render "users/card", user: @user',
+        ),
+        after: text(
+          "- if @user",
+          "  h1= @user.name",
+          '  = render "users/card", user: @user',
+        ),
       },
     ],
   },
@@ -725,9 +745,12 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "Both forms output nothing. Only comments on one line are rewritten.",
-    status: "planned",
-    phase: 1,
+      "Both forms output nothing. Only a tag that is nothing but comment and stands alone on its line is rewritten: beside other content, Rails comments out the output that follows a `<% #` tag on the same line, and `<%#` would bring it back.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Style.ErbCommentSyntax]", "enabled = true"),
+    today:
+      "`<% # note %>` becomes `<%# note %>`, keeping a `-%>` as it is. A tag over several lines is rewritten when every line is a comment or blank, since `<%#` comments out everything up to `%>`. `<%= # x %>` is not a comment and stays, `<%- # x -%>` is skipped to be conservative, and so is a tag with content before or after it on its line (it usually breaks the template: Rails comments out what follows it), and the encoding comment. The ERB formatter checks that the trimmed Ruby of every tag is the same afterwards.",
     examples: [
       {
         lang: "erb",
@@ -737,6 +760,21 @@ enabled = false`,
           "<p><%= user.name %></p>",
         ),
         after: text("<%# TODO: show the avatar %>", "<p><%= user.name %></p>"),
+      },
+      {
+        lang: "erb",
+        file: ERB_FILE,
+        before: text(
+          "<% # a comment over",
+          "   # two lines %>",
+          "<%- # a trimming tag %>",
+        ),
+        after: text(
+          "<%# a comment over",
+          "   # two lines %>",
+          "<%- # a trimming tag %>",
+        ),
+        note: "The second tag stays: `<%-` is not a comment tag.",
       },
     ],
   },
