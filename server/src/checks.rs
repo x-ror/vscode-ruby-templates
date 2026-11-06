@@ -439,10 +439,11 @@ mod tests {
         {
             let items = items(section);
             let listed: BTreeSet<&str> = items["anyOf"][0]["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
-            let rules: BTreeSet<&str> = crate::rules::RULES.iter().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
+            let lints = || crate::rules::RULES.iter().filter(|rule| rule.kind == crate::rules::Kind::Lint);
+            let rules: BTreeSet<&str> = lints().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
             assert_eq!(listed, rules, "{section}");
             let old_codes = regex::Regex::new(items["anyOf"][1]["pattern"].as_str().unwrap()).unwrap();
-            assert!(crate::rules::RULES.iter().all(|rule| old_codes.is_match(rule.alias)), "{section}");
+            assert!(lints().all(|rule| old_codes.is_match(rule.alias.unwrap())), "{section}");
         }
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();

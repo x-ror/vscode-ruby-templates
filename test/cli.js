@@ -278,6 +278,81 @@ try {
   assert.match(r.stderr, /read .*\.ruby-templates\.toml/);
   assert.match(r.stderr, /\.ruby-templates\.toml:1:7: warning: unknown rule/);
 
+  // Layout/EmptyLines and Layout/TrailingEmptyLines: switched in the file, for all three languages.
+  const blank = path.join(root, "blank");
+  fs.mkdirSync(blank);
+  const blankToml = path.join(blank, ".ruby-templates.toml");
+  const format = (name, text) =>
+    run(["format", "--stdin-filepath", path.join(blank, name)], text).stdout;
+  const gappy = {
+    "a.html.erb": "<h1>x</h1>\n\n\n\n<pre>\n\n\n</pre>\n<p>y</p>\n\n\n",
+    "a.html.haml": "%h1 x\n\n\n\n:plain\n  a\n\n\n  b\n%p y\n\n\n",
+    "a.html.slim": "h1 x\n\n\n\n| a\n\n\n  b\np y\n\n\n",
+  };
+  for (const [name, text] of Object.entries(gappy)) {
+    assert.strictEqual(
+      format(name, text),
+      name.endsWith(".erb") ? text : text.replace(/\n+$/, "\n"),
+      `${name}: only Haml and Slim lose the blank lines at the end`,
+    );
+  }
+  assert.strictEqual(
+    format("a.html.erb", "<p>x</p>"),
+    "<p>x</p>",
+    "ERB is rendered byte for byte: no final newline added",
+  );
+  fs.writeFileSync(blankToml, "[Layout.TrailingEmptyLines]\nenabled = true\n");
+  assert.strictEqual(format("a.html.erb", "<p>x</p>\n\n\n"), "<p>x</p>\n");
+  assert.strictEqual(format("a.html.erb", "<p>x</p>"), "<p>x</p>\n");
+  fs.writeFileSync(
+    blankToml,
+    "[Layout.EmptyLines]\nenabled = true\nmax = 1\n[Layout.TrailingEmptyLines]\nenabled = true\n",
+  );
+  assert.strictEqual(
+    format("a.html.erb", gappy["a.html.erb"]),
+    "<h1>x</h1>\n\n<pre>\n\n\n</pre>\n<p>y</p>\n",
+    "erb: <pre> keeps its lines",
+  );
+  assert.strictEqual(
+    format("a.html.haml", gappy["a.html.haml"]),
+    "%h1 x\n\n:plain\n  a\n\n\n  b\n%p y\n",
+    "haml: filters keep their lines",
+  );
+  assert.strictEqual(
+    format("a.html.slim", gappy["a.html.slim"]),
+    "h1 x\n\n| a\n\n\n  b\np y\n",
+    "slim: text blocks keep their lines",
+  );
+  fs.writeFileSync(
+    blankToml,
+    "[Layout.EmptyLines]\nenabled = true\nmax = 1\n[Layout.TrailingEmptyLines]\nenabled = false\n",
+  );
+
+  assert.strictEqual(
+    format("a.html.slim", "h1 x\n\n\np y\n\n\n"),
+    "h1 x\n\np y\n\n",
+  );
+  assert.strictEqual(
+    format("a.html.erb", "<p>x</p>\n\n\n<p>y</p>"),
+    "<p>x</p>\n\n<p>y</p>",
+    "no final line break added",
+  );
+  assert.strictEqual(format("a.html.haml", "%p x\n\n\n"), "%p x\n\n");
+  fs.writeFileSync(blankToml, "[Layout.EmptyLines]\nmax = -1\n");
+  r = run(
+    [
+      "format",
+      "--verbose",
+      "--stdin-filepath",
+      path.join(blank, "a.html.slim"),
+    ],
+    "p\n",
+  );
+  assert.match(
+    r.stderr,
+    /:2:7: warning: `max` must be a whole number, 0 or more/,
+  );
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

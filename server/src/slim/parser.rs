@@ -39,6 +39,8 @@ pub struct LineInfo {
     pub raw_column: bool,
     /// A Ruby or attribute continuation: Slim strips its indentation.
     pub free_indent: bool,
+    /// A blank line between two lines of a text block or an engine body: it is part of the text.
+    pub inside_block: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,7 +55,7 @@ pub enum Marker {
 }
 
 /// Where a piece of Ruby came from in the template.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Origin {
     pub line: usize,
     /// Byte offset of the code in the text, when it is one verbatim run on that line.
@@ -61,7 +63,7 @@ pub struct Origin {
 }
 
 /// What `Slim::Parser` hands to the later filters that matters for the Ruby the engine generates, in source order.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Piece {
     /// A structural line starts, `depth` levels deep.
     Line {
@@ -187,7 +189,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
         lines.push(line.strip_suffix('\r').unwrap_or(line));
     }
     let engines = SLIM_ENGINES.iter().copied().chain(extra_engines.iter().map(String::as_str)).collect();
-    let blank = LineInfo { role: Role::Blank, keeps_trailing: false, raw_column: false, free_indent: false };
+    let blank = LineInfo { role: Role::Blank, keeps_trailing: false, raw_column: false, free_indent: false, inside_block: false };
     let mut p = Parser {
         out: Parsed {
             lines: vec![blank; lines.len()],
@@ -907,9 +909,11 @@ impl<'a> Parser<'a> {
         }
         let base = self.base_indent();
         let mut continued = false;
+        let mut blanks = Vec::new();
         while let Some(&next) = self.lines.get(self.i + 1) {
             if is_blank(next) {
                 self.i += 1;
+                blanks.push(self.i);
                 layout.push_blank();
                 if ruby.is_none() {
                     self.out.pieces.push(Piece::Newline);
@@ -919,6 +923,7 @@ impl<'a> Parser<'a> {
             if indent_width(next) <= base {
                 break;
             }
+            blanks.drain(..).for_each(|blank| self.out.lines[blank].inside_block = true);
             self.enter(self.i + 1);
             self.pos = next.len() - trim_start(next).len();
             self.out.lines[self.i].keeps_trailing = true;

@@ -61,7 +61,9 @@ export interface Rule {
   code?: string;
   /** The `.ruby-templates.toml` table that turns it off. */
   setting?: { label: string; code: string };
-  /** The planned `.ruby-templates.toml` table, for rules with options. */
+  /** The languages where the rule runs without a `.ruby-templates.toml` entry; shown for formatting rules. */
+  onByDefault?: Language[];
+  /** The `.ruby-templates.toml` table that turns the rule on, with its options; planned until the rule is available. */
   config?: string;
   examples: Example[];
 }
@@ -97,9 +99,11 @@ export const rules: Rule[] = [
     type: "autofix",
     safe: true,
     safeNote:
-      "Browsers collapse the whitespace between elements, so a shorter run of blank lines renders the same. Content where whitespace counts (`<pre>`, `<textarea>`, filters) is left alone, as the formatter does today.",
-    status: "planned",
-    phase: 1,
+      "Browsers collapse the whitespace between elements, so a shorter run of blank lines renders the same. Content where whitespace counts is left alone: `<pre>`, `<textarea>`, `<script>`, `<style>`, quoted attribute values, comments and the Ruby in ERB tags in ERB, filters in Haml, text blocks and engine bodies in Slim. Two things can\'t be detected: elements that CSS styles `white-space: pre`, and blocks that capture their content and care about its whitespace (such as `<%= markdown do %>`). With `max = 0`, paragraphs there can join.",
+    status: "available",
+    onByDefault: [],
+    today:
+      "Runs of blank lines longer than `max` (a whole number, 1 by default; 0 removes them all) are cut to `max`, also at the start and the end of the file. Format selection leaves blank lines as they are. For Haml and Slim, the formatter checks that the compiled template stays the same, and keeps the blank lines of a file when it would not.",
     config: text("[Layout.EmptyLines]", "enabled = true", "max = 1"),
     examples: [
       {
@@ -541,15 +545,27 @@ export const rules: Rule[] = [
     name: "Layout/TrailingEmptyLines",
     summary: "The file ends with exactly one line break.",
     languages: ["erb", "haml", "slim"],
-    availableIn: ["haml", "slim"],
     type: "autofix",
-    safe: true,
-    safeNote: "Whitespace after the last tag renders as nothing.",
-    status: "partial",
-    phase: 1,
+    safe: false,
+    safeNote:
+      'Safe in Haml and Slim, which ignore the blank lines at the end. Not safe in ERB: Rails renders a template or partial byte for byte, so a final line break or the blank lines at the end become output. A partial `_icon.html.erb` that is `<svg></svg>` renders with a line break after it once the rule adds one, and that shows as a space in `<button><%= render "icon" %>Save</button>`.',
+    status: "available",
+    onByDefault: ["haml", "slim"],
+    config: text("[Layout.TrailingEmptyLines]", "enabled = true"),
     today:
-      "Haml and Slim files get one final line break and lose the blank lines before it. ERB files keep the end of the file as it is: blank lines stay, and no line break is added. Phase 1 moves the rule into the config and adds ERB.",
+      "The blank lines at the end of the file go, and a file that doesn't end with a line break gets one, using the line ending the file mostly has. It is on for Haml and Slim and off for ERB, where `enabled = true` turns it on, and `include` limits it to some files. Format selection leaves the end of the file as it is.",
+    setting: {
+      label: "Turn it off (Haml and Slim)",
+      code: `[Layout.TrailingEmptyLines]
+enabled = false`,
+    },
     examples: [
+      {
+        lang: "erb",
+        file: ERB_FILE,
+        before: text("<h1>Users</h1>", "", ""),
+        after: text("<h1>Users</h1>"),
+      },
       {
         lang: "haml",
         file: HAML_FILE,

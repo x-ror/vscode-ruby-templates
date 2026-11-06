@@ -2490,6 +2490,55 @@ const check = (label, actual, expected) => {
     alignedRange ?? [],
     [],
   );
+  // Layout/EmptyLines removes lines in Format Document, never in Format Selection.
+  const blankDir = path.join(views, "blank");
+  fs.mkdirSync(blankDir);
+  fs.writeFileSync(
+    path.join(blankDir, ".ruby-templates.toml"),
+    "[Layout.EmptyLines]\nenabled = true\nmax = 0\n",
+  );
+  const blankUri = fileUri(path.join(blankDir, "a.html.erb"));
+  await aligned.send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: blankUri,
+        languageId: "erb",
+        version: 1,
+        text: "<div>\n<p>a</p>\n\n\n<p>b</p>\n\n</div>\n",
+      },
+    },
+    true,
+  );
+  const blankOptions = { tabSize: 2, insertSpaces: true };
+  check(
+    "empty lines cut in the document",
+    (
+      await aligned.send("textDocument/formatting", {
+        textDocument: { uri: blankUri },
+        options: blankOptions,
+      })
+    ).result?.[0]?.newText,
+    "<div>\n  <p>a</p>\n  <p>b</p>\n</div>\n",
+  );
+  const blankRange = (
+    await aligned.send("textDocument/rangeFormatting", {
+      textDocument: { uri: blankUri },
+      options: blankOptions,
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 6, character: 0 },
+      },
+    })
+  ).result;
+  check(
+    "empty lines kept in a range",
+    blankRange?.map((e) => [e.range.start.line, e.range.end.line, e.newText]),
+    [
+      [1, 1, "  <p>a</p>"],
+      [4, 4, "  <p>b</p>"],
+    ],
+  );
   // .ruby-templates.toml: rules and switches per folder, and its own problems.
   const rulesRoot = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "rt-rules-")),

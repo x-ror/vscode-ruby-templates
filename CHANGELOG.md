@@ -6,6 +6,8 @@
 - `ruby-templates check` and `format` read the `.ruby-templates.toml` files too: rules turned off, excluded files, `[erb] format.enabled = false` and `format.align_comments`.
 - Diagnostic codes are rule names now: `Html/ImgAlt` instead of `img-missing-alt`, `Rails/MissingPartial` instead of `unresolved-render`, `Syntax/Ruby` instead of `ruby-syntax`, and so on (the diagnostics reference lists each earlier code). The old codes are still accepted in `disabledDiagnostics`, in the settings and in the file.
 - The ERB and Haml formatting providers are always registered; the server returns no edits where formatting is off by `format.enabled` or a `.ruby-templates.toml`, so a file can turn it on or off against the setting.
+- `Layout/EmptyLines` cuts runs of blank lines longer than `max` (1 by default) in ERB, Haml and Slim; it is off until `[Layout.EmptyLines] enabled = true`. Blank lines in `<pre>`, `<textarea>`, `<script>`, `<style>`, attribute values, comments and ERB tags, in Haml filters and in Slim text blocks and engine bodies stay, and Haml and Slim files are only changed when they compile to the same template without regard to line numbers.
+- `Layout/TrailingEmptyLines` is a rule now: on by default for Haml and Slim, as before, and `[Layout.TrailingEmptyLines] enabled = false` keeps the end of the file as it is. It is off for ERB, whose templates and partials Rails renders byte for byte, so a final line break or trailing blank lines would show in the page; `enabled = true` (with `include` for some files) gives ERB files exactly one final line break. Format Selection changes no blank lines.
 - `rust-version` of the server is 1.85, for the TOML parser.
 
 ## 0.10.1

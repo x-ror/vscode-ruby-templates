@@ -1,14 +1,15 @@
 //! Haml formatting that can't change the compiled template: each structural line is indented `width` spaces per
 //! level, filter and `-#` bodies move as a block, continuation lines move with their line, and trailing whitespace
-//! goes where Haml ignores it. Empty lines at the end become one line ending.
+//! goes where Haml ignores it. Every line stays; the blank ones that may go are reported.
 
+use crate::format::Indented;
 use crate::haml::parser::{lines_with_endings, parse, Role};
 use crate::util::{leading_ws, BOM};
 
 const BLANK_SPACE: [char; 2] = [' ', '\t'];
 
 /// The formatted text, or `None` when Haml would reject the text (or `width` is 0).
-pub(crate) fn format(text: &str, width: usize) -> Option<String> {
+pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
     if width == 0 {
         return None;
     }
@@ -62,7 +63,15 @@ pub(crate) fn format(text: &str, width: usize) -> Option<String> {
         }
         out.push_str(ending);
     }
-    Some(out)
+    // Haml reads nothing past its last line with content.
+    for &(line, ending) in &lines[parsed.roles.len()..] {
+        out.push_str(line.trim_matches(BLANK_SPACE));
+        out.push_str(ending);
+    }
+    // Haml also ends a line at a lone `\r`, which the blank-line pass doesn't.
+    let lone_cr = lines.iter().any(|&(_, ending)| ending == "\r");
+    let removable = (0..lines.len()).map(|i| !lone_cr && parsed.roles.get(i).is_none_or(|&role| role == Role::Blank)).collect();
+    Some(Indented { text: out, removable, notes: vec![] })
 }
 
 /// A tab counts as one indent level.
@@ -74,9 +83,13 @@ fn columns_of(whitespace: &str, width: usize) -> usize {
 mod tests {
     use super::*;
 
+    fn reindent(text: &str, width: usize) -> Option<String> {
+        format(text, width).map(|indented| indented.text)
+    }
+
     fn fmt(text: &str) -> String {
-        let once = format(text, 2).expect("formattable");
-        assert_eq!(format(&once, 2).as_deref(), Some(once.as_str()), "idempotent");
+        let once = reindent(text, 2).expect("formattable");
+        assert_eq!(reindent(&once, 2).as_deref(), Some(once.as_str()), "idempotent");
         once
     }
 
@@ -84,7 +97,7 @@ mod tests {
     fn reindents_structure() {
         assert_eq!(fmt("%div\n    %p\n        %b x  \n\t\n    %i\n"), "%div\n  %p\n    %b x\n\n  %i\n");
         assert_eq!(fmt("%div\n\t%p\n\t\t%b\n"), "%div\n  %p\n    %b\n");
-        assert_eq!(format("%ul\n  %li\n", 4).as_deref(), Some("%ul\n    %li\n"));
+        assert_eq!(reindent("%ul\n  %li\n", 4).as_deref(), Some("%ul\n    %li\n"));
         let each = "%ul\n    - each do |x|\n        %li\n            -# deep\n";
         assert_eq!(fmt(each), "%ul\n  - each do |x|\n    %li\n      -# deep\n");
     }
@@ -120,7 +133,7 @@ mod tests {
     #[test]
     fn the_line_after_a_tag_with_code_ending_in_a_comma_stays_a_whole_number_of_units() {
         let text = "%div\n  %p= link_to \"Home\",\n    root_path\n";
-        assert_eq!(format(text, 4).as_deref(), Some("%div\n    %p= link_to \"Home\",\n        root_path\n"));
+        assert_eq!(reindent(text, 4).as_deref(), Some("%div\n    %p= link_to \"Home\",\n        root_path\n"));
         assert_eq!(fmt("%div\n   %p= link_to \"x\",\n      y\n"), "%div\n  %p= link_to \"x\",\n      y\n");
     }
 
@@ -140,29 +153,32 @@ mod tests {
     }
 
     #[test]
-    fn empty_lines_at_the_end_collapse_into_the_final_line_ending() {
-        assert_eq!(fmt("%p\n\n\n"), "%p\n");
-        assert_eq!(fmt("%p\n  \n \t\n"), "%p\n");
-        assert_eq!(fmt("%p\r\n\r\n"), "%p\r\n");
-        assert_eq!(fmt("%p"), "%p");
-        assert_eq!(fmt(":plain\n  a\n\n  \n"), ":plain\n  a\n");
-        assert_eq!(fmt("%p\n\n%i\n\n"), "%p\n\n%i\n");
-        assert_eq!(fmt("\n\n"), "");
+    fn every_line_stays_and_the_blank_ones_that_may_go_are_reported() {
+        assert_eq!(fmt("%p\n  \n \t\n"), "%p\n\n\n");
+        assert_eq!(fmt("%p\r\n\r\n"), "%p\r\n\r\n");
+        assert_eq!(fmt("\n\n"), "\n\n");
+        let removable = |text: &str| format(text, 2).unwrap().removable;
+        assert_eq!(removable("%p\n\n%i\n"), [false, true, false, true]);
+        // A blank line in a filter or `-#` comment body is content; Haml skips the ones in multi-line Ruby.
+        assert_eq!(removable(":plain\n  a\n\n  b\n%p\n"), [false, false, false, false, false, true]);
+        assert_eq!(removable("-#\n  a\n\n  b\n"), [false, false, false, false, true]);
+        assert_eq!(removable("%p= f(1,\n\n  2)\n"), [false, true, false, true]);
+        assert_eq!(removable("%p\r\n\r\n%i\r\n\r"), [false; 5], "a lone CR ends a line only for Haml");
     }
 
     #[test]
     fn files_haml_rejects_come_back_as_none() {
-        assert_eq!(format("%p= x\n  %b", 2), None, "illegal nesting");
-        assert_eq!(format("%div\n    %p\n  %i odd", 2), None, "inconsistent indentation");
-        assert_eq!(format("  %p", 2), None, "indented at the start");
-        assert_eq!(format("%p", 0), None);
+        assert_eq!(reindent("%p= x\n  %b", 2), None, "illegal nesting");
+        assert_eq!(reindent("%div\n    %p\n  %i odd", 2), None, "inconsistent indentation");
+        assert_eq!(reindent("  %p", 2), None, "indented at the start");
+        assert_eq!(reindent("%p", 0), None);
     }
 
     #[test]
     fn many_attribute_groups_stay_linear() {
         let text = format!("%div\n  %p{} x,\n  %i", "{}".repeat(20_000));
         let started = std::time::Instant::now();
-        format(&text, 2);
+        reindent(&text, 2);
         assert!(started.elapsed().as_millis() < 500);
     }
 }

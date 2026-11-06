@@ -1,6 +1,6 @@
 //! `.ruby-templates.toml`, read against the rule registry. A part that can't be read is dropped with a `Problem`; the rest is kept.
 
-use super::{by_code, by_name, departments, Rule};
+use super::{by_code, by_name, departments, CountOption, Kind, Rule};
 use crate::glob::Glob;
 use crate::util::LineIndex;
 use std::ops::Range as Span;
@@ -31,6 +31,8 @@ pub struct RuleTable {
     pub enabled: Option<bool>,
     pub include: Option<Vec<Glob>>,
     pub exclude: Option<Vec<Glob>>,
+    /// The rule's whole-number options that the table sets, by key.
+    pub counts: Vec<(&'static str, usize)>,
 }
 
 /// One of `[erb]`, `[haml]`, `[slim]` (Skim too), `[jbuilder]`.
@@ -160,7 +162,7 @@ impl Reader<'_> {
                 let full = format!("{department}/{sub_name}");
                 match by_name(&full) {
                     Some(rule) => {
-                        let rule_table = self.rule_table(&format!("{department}.{sub_name}"), value);
+                        let rule_table = self.rule_table(&format!("{department}.{sub_name}"), rule, value);
                         file.rules.push((rule, rule_table));
                     }
                     None => self.problem(sub.span(), format!("unknown rule `{full}`")),
@@ -173,21 +175,33 @@ impl Reader<'_> {
         }
     }
 
-    fn rule_table(&mut self, table_name: &str, value: Value) -> RuleTable {
-        let mut rule = RuleTable::default();
-        let Some(table) = self.as_table(table_name, value) else { return rule };
+    fn rule_table(&mut self, table_name: &str, rule: &'static Rule, value: Value) -> RuleTable {
+        let mut parsed = RuleTable::default();
+        let Some(table) = self.as_table(table_name, value) else { return parsed };
         for (key, value) in table {
             match key.get_ref().as_ref() {
-                "enabled" => rule.enabled = self.boolean("enabled", value),
-                "include" => rule.include = self.globs("include", value),
-                "exclude" => rule.exclude = self.globs("exclude", value),
-                other => {
-                    let message = format!("unknown key `{other}` in [{table_name}]; it takes {}", RULE_KEYS.join(", "));
-                    self.problem(key.span(), message);
-                }
+                "enabled" => parsed.enabled = self.boolean("enabled", value),
+                "include" => parsed.include = self.globs("include", value),
+                "exclude" => parsed.exclude = self.globs("exclude", value),
+                other => match rule.options.iter().find(|option| option.key == other) {
+                    Some(option) => parsed.counts.extend(self.count(option, value)),
+                    None => {
+                        let takes = RULE_KEYS.into_iter().chain(rule.options.iter().map(|option| option.key)).collect::<Vec<_>>();
+                        let message = format!("unknown key `{other}` in [{table_name}]; it takes {}", takes.join(", "));
+                        self.problem(key.span(), message);
+                    }
+                },
             }
         }
-        rule
+        parsed
+    }
+
+    fn count(&mut self, option: &CountOption, value: Value) -> Option<(&'static str, usize)> {
+        let count = value.get_ref().as_integer().and_then(|n| usize::from_str_radix(n.as_str(), n.radix()).ok());
+        if count.is_none() {
+            self.problem(value.span(), format!("`{}` must be a whole number, 0 or more", option.key));
+        }
+        count.map(|count| (option.key, count))
     }
 
     fn as_table<'v>(&mut self, name: &str, value: &'v Spanned<DeValue<'v>>) -> Option<&'v DeTable<'v>> {
@@ -235,7 +249,11 @@ impl Reader<'_> {
         let mut names = Vec::new();
         for (code, span) in self.strings(name, value)? {
             match by_code(&code) {
-                Some(rule) => names.push(rule.name.to_string()),
+                Some(rule) if rule.kind == Kind::Lint => names.push(rule.name.to_string()),
+                Some(rule) => self.problem(
+                    span,
+                    format!("`{}` formats, it has no diagnostic; switch it in [{}]", rule.name, rule.name.replace('/', ".")),
+                ),
                 None => self.problem(span, format!("unknown rule `{code}`")),
             }
         }
@@ -361,6 +379,41 @@ colour = 1
     }
 
     #[test]
+    fn a_rule_with_options_reads_them_and_checks_them() {
+        let file = read("[Layout.EmptyLines]\nenabled = true\nmax = 2\n[Layout.TrailingEmptyLines]\nenabled = false\n");
+        assert!(file.problems.is_empty(), "{:?}", messages(&file));
+        assert_eq!(file.rules[0].1.counts, [("max", 2)]);
+        assert!(file.rules[1].1.counts.is_empty());
+        let file = read("[Layout.EmptyLines]\nmax = 0\n");
+        assert_eq!(file.rules[0].1.counts, [("max", 0)]);
+        for (value, bad) in [("-1", true), ("1.5", true), ("\"2\"", true), ("true", true), ("[1]", true), ("0x10", false)] {
+            let file = read(&format!("[Layout.EmptyLines]\nmax = {value}\n"));
+            let want = ["2:7: `max` must be a whole number, 0 or more".to_string()];
+            assert_eq!(messages(&file), if bad { &want[..] } else { &[] }, "max = {value}");
+            assert_eq!(file.rules[0].1.counts.is_empty(), bad, "max = {value}");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_list_what_the_rule_takes() {
+        let file = read("[Layout.EmptyLines]\nmaximum = 1\n[Layout.TrailingEmptyLines]\nmax = 1\n");
+        assert_eq!(
+            messages(&file),
+            [
+                "2:1: unknown key `maximum` in [Layout.EmptyLines]; it takes enabled, include, exclude, max",
+                "4:1: unknown key `max` in [Layout.TrailingEmptyLines]; it takes enabled, include, exclude",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_formatting_rule_is_not_a_disabled_diagnostic() {
+        let file = read("[erb]\ndisabled_diagnostics = [\"Layout/EmptyLines\", \"Html/ImgAlt\"]\n");
+        assert_eq!(messages(&file), ["2:25: `Layout/EmptyLines` formats, it has no diagnostic; switch it in [Layout.EmptyLines]"]);
+        assert_eq!(file.languages[0].1.disabled_diagnostics.as_deref(), Some(&["Html/ImgAlt".to_string()][..]));
+    }
+
+    #[test]
     fn languages_take_their_own_keys() {
         let file = read(
             "[erb]\nextra_engines = [\"mjml\"]\nformat.enable = true\n[jbuilder]\nformat.enabled = false\n[haml]\ndisabled_diagnostics = [\"nope\", 3]\n[Nope]\n",
@@ -372,7 +425,7 @@ colour = 1
                 "3:8: unknown key `format.enable` in [erb]; it takes format.enabled, format.align_comments, diagnostics.enabled, disabled_diagnostics",
                 "5:8: `format.enabled` belongs in [erb]",
                 "7:24: `disabled_diagnostics` must be a list of strings",
-                "8:2: unknown department `Nope`; the departments are Syntax, Html, Rails",
+                "8:2: unknown department `Nope`; the departments are Syntax, Html, Rails, Layout",
             ]
         );
     }

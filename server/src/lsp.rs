@@ -798,8 +798,9 @@ impl Backend {
             let base = util::file_path(&uri).map_or_else(format::Settings::default, |path| config::settings_for(&path).settings);
             let mut settings = rules.format_settings(base.with_editor(&options));
             if lines_only {
-                // A range can't add a line, and may hold a comment's inner lines without the line they move with.
-                settings.final_newline = false;
+                // A range can't add or remove a line, and may hold a comment's inner lines without the line they move with.
+                settings.trailing_empty_lines = false;
+                settings.max_empty_lines = None;
                 settings.align_comments = false;
             }
             let result = format::format(&uri, lang, plain_erb, &text, &settings, rules.extra_engines());

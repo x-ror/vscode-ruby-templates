@@ -2,7 +2,7 @@
 //! editor's settings where the files are silent.
 
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
-use super::{by_code, Rule, RULES};
+use super::{by_code, by_name, CountOption, Kind, Rule, EMPTY_LINES, RULES, TRAILING_EMPTY_LINES};
 use crate::format::Settings;
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
@@ -24,6 +24,9 @@ pub struct ResolvedRules {
     /// Rule names that report nothing: switched off, outside the template's language or disabled by name.
     off: HashSet<String>,
     extra_engines: Vec<String>,
+    /// `Layout/EmptyLines`: the longest run of blank lines kept; `None` when the rule is off.
+    max_empty_lines: Option<usize>,
+    trailing_empty_lines: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -72,15 +75,25 @@ impl ResolvedRules {
             .map(|(file, _)| file.path.clone());
         let disabled = in_lists(|t| t.disabled_diagnostics.as_ref()).unwrap_or_else(|| {
             let codes = editor.disabled(lang).iter();
-            codes.map(|code| by_code(code).map_or(code.clone(), |rule| rule.name.to_string())).collect()
+            let lint_name = |code: &String| match by_code(code) {
+                Some(rule) => (rule.kind == Kind::Lint).then(|| rule.name.to_string()),
+                None => Some(code.clone()),
+            };
+            codes.filter_map(lint_name).collect()
         });
-        let off = RULES.iter().filter(|rule| !rule_on(&files, template, lang, rule)).map(|rule| rule.name.to_string());
+        let off: HashSet<String> =
+            RULES.iter().filter(|rule| !rule_on(&files, template, lang, rule)).map(|rule| rule.name.to_string()).chain(disabled).collect();
+        let max_empty_lines = by_name(EMPTY_LINES)
+            .filter(|rule| !off.contains(rule.name))
+            .and_then(|rule| rule.options.iter().find(|option| option.key == "max").map(|option| count(&files, rule, option)));
         Self {
             format: in_table(|t| t.format_enabled).unwrap_or_else(|| editor.format_enabled(lang)),
             diagnostics: in_table(|t| t.diagnostics_enabled).unwrap_or_else(|| editor.diagnostics_enabled(lang)),
             align_comments: in_table(|t| t.align_comments).unwrap_or(editor.align_erb_comments),
             extra_engines: in_lists(|t| t.extra_engines.as_ref()).unwrap_or_else(|| editor.extra_engines.clone()),
-            off: off.chain(disabled).collect(),
+            max_empty_lines,
+            trailing_empty_lines: !off.contains(TRAILING_EMPTY_LINES),
+            off,
             files,
             excluded_by,
         }
@@ -114,7 +127,12 @@ impl ResolvedRules {
     }
 
     pub fn format_settings(&self, base: Settings) -> Settings {
-        Settings { align_comments: self.align_comments, ..base }
+        Settings {
+            align_comments: self.align_comments,
+            max_empty_lines: self.max_empty_lines,
+            trailing_empty_lines: self.trailing_empty_lines,
+            ..base
+        }
     }
 }
 
@@ -142,11 +160,18 @@ fn rule_table<'a>(file: &'a ConfigFile, rule: &Rule) -> Option<&'a RuleTable> {
     file.rules.iter().find(|(r, _)| r.name == rule.name).map(|(_, table)| table)
 }
 
+/// The option's value in the nearest file that sets it.
+fn count(files: &[Arc<ConfigFile>], rule: &Rule, option: &CountOption) -> usize {
+    let set = |file: &ConfigFile| rule_table(file, rule)?.counts.iter().find(|(key, _)| *key == option.key).map(|&(_, count)| count);
+    nearest(files, set).unwrap_or(option.default)
+}
+
 /// The nearest file that sets the rule's `enabled` or its department's decides, the rule's beating the department's within
-/// that file; unset means on. Then the rule's `include` and `exclude`.
+/// that file; unset means the rule's default. Then the rule's `include` and `exclude`.
 fn rule_on(files: &[Arc<ConfigFile>], template: &Path, lang: TemplateLang, rule: &Rule) -> bool {
     let department = |file: &ConfigFile| file.departments.iter().find(|(d, _)| *d == rule.department()).map(|&(_, enabled)| enabled);
-    let enabled = nearest(files, |f| rule_table(f, rule).and_then(|table| table.enabled).or_else(|| department(f))).unwrap_or(true);
+    let enabled = nearest(files, |f| rule_table(f, rule).and_then(|table| table.enabled).or_else(|| department(f)))
+        .unwrap_or(rule.is_on_by_default(lang));
     let included =
         nearest(files, |f| Some((f, rule_table(f, rule)?.include.as_ref()?))).is_none_or(|(f, globs)| matches_any(f, globs, template));
     let excluded =
@@ -328,5 +353,38 @@ mod tests {
         let project = Project::new("langs", &[("a.html.haml", "")]);
         let haml = project.resolve("a.html.haml", TemplateLang::Haml, &Options::default());
         assert!(!haml.reports(IMG) && haml.reports("Html/VoidChildren"));
+    }
+
+    #[test]
+    fn formatting_rules_decode_into_the_settings() {
+        let project = Project::new("format-rules", &[("a.html.erb", ""), ("b.html.slim", "")]);
+        let settings = project.erb("a.html.erb").format_settings(Settings::default());
+        assert_eq!((settings.max_empty_lines, settings.trailing_empty_lines), (None, false), "both off for ERB");
+        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
+        assert_eq!((slim.max_empty_lines, slim.trailing_empty_lines), (None, true), "TrailingEmptyLines on for Slim");
+        let editor = editor(serde_json::json!({ "slim": { "disabledDiagnostics": ["Layout/TrailingEmptyLines"] } }));
+        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &editor).format_settings(Settings::default());
+        assert!(slim.trailing_empty_lines, "the editor's diagnostic list doesn't switch a formatting rule");
+
+        let toml = "[Layout.EmptyLines]\nenabled = true\n[Layout.TrailingEmptyLines]\nenabled = false\n";
+        let on = Project::new("format-rules-on", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
+        let settings = on.erb("a.html.erb").format_settings(Settings::default());
+        assert_eq!((settings.max_empty_lines, settings.trailing_empty_lines), (Some(1), false), "max defaults to 1");
+
+        let files = [
+            (".ruby-templates.toml", "[Layout]\nenabled = true\n[Layout.EmptyLines]\nmax = 3\n"),
+            ("inner/.ruby-templates.toml", "[Layout.EmptyLines]\nmax = 0\nexclude = [\"**/*.slim\"]\n"),
+            ("a.html.erb", ""),
+            ("inner/a.html.erb", ""),
+            ("inner/b.html.slim", ""),
+        ];
+        let nested = Project::new("format-rules-nested", &files);
+        let max = |file: &str, lang| nested.resolve(file, lang, &Options::default()).format_settings(Settings::default()).max_empty_lines;
+        assert_eq!(max("a.html.erb", TemplateLang::Erb), Some(3), "the department switch turns a formatting rule on");
+        assert_eq!(max("inner/a.html.erb", TemplateLang::Erb), Some(0), "the nearest file sets max");
+        assert_eq!(max("inner/b.html.slim", TemplateLang::Slim), None, "its exclude");
+        let off = Project::new("format-rules-dept", &[(".ruby-templates.toml", "[Layout]\nenabled = false\n"), ("a.html.slim", "")]);
+        let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
+        assert!(!settings.trailing_empty_lines, "the department switch turns an on-by-default rule off");
     }
 }

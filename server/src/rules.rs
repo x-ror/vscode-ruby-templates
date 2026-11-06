@@ -1,4 +1,4 @@
-//! Every diagnostic rule, by the `Department/Name` that is its diagnostic code and its name in `.ruby-templates.toml`.
+//! Every rule, by the `Department/Name` that is its diagnostic code (lint rules) and its name in `.ruby-templates.toml`.
 
 pub mod file;
 pub mod resolve;
@@ -6,13 +6,33 @@ pub mod resolve;
 use crate::lang::TemplateLang;
 use TemplateLang::{Erb, Haml, Ruby, Slim};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Rewrites the template.
+    Format,
+    /// Reports a diagnostic.
+    Lint,
+}
+
+/// A whole-number option of a rule's table, 0 or more.
+#[derive(Debug)]
+pub struct CountOption {
+    pub key: &'static str,
+    pub default: usize,
+}
+
 #[derive(Debug)]
 pub struct Rule {
     pub name: &'static str,
     /// Skim counts as Slim.
     pub languages: &'static [TemplateLang],
-    /// The code the rule had before 0.11, still accepted in `disabledDiagnostics`.
-    pub alias: &'static str,
+    pub kind: Kind,
+    /// The languages where the rule runs when no file switches it.
+    pub on_by_default: &'static [TemplateLang],
+    /// The keys its table takes besides `enabled`, `include` and `exclude`.
+    pub options: &'static [CountOption],
+    /// The code a lint rule had before 0.11, still accepted in `disabledDiagnostics`.
+    pub alias: Option<&'static str>,
 }
 
 impl Rule {
@@ -23,39 +43,53 @@ impl Rule {
     pub fn applies_to(&self, lang: TemplateLang) -> bool {
         self.languages.contains(&if lang == TemplateLang::Skim { Slim } else { lang })
     }
+
+    pub fn is_on_by_default(&self, lang: TemplateLang) -> bool {
+        self.on_by_default.contains(&if lang == TemplateLang::Skim { Slim } else { lang })
+    }
 }
 
-const fn rule(name: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
-    Rule { name, languages, alias }
+const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
+    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], alias: Some(alias) }
 }
+
+const fn format_rule(name: &'static str, on_by_default: &'static [TemplateLang], options: &'static [CountOption]) -> Rule {
+    Rule { name, languages: &[Erb, Haml, Slim], kind: Kind::Format, on_by_default, options, alias: None }
+}
+
+pub const EMPTY_LINES: &str = "Layout/EmptyLines";
+pub const TRAILING_EMPTY_LINES: &str = "Layout/TrailingEmptyLines";
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
 
 pub const RULES: &[Rule] = &[
-    rule("Syntax/Ruby", ALL, "ruby-syntax"),
-    rule("Syntax/Template", HAML_SLIM, "syntax-error"),
-    rule("Syntax/UnclosedErbTag", &[Erb], "unclosed-tag"),
-    rule("Syntax/InconsistentIndent", &[Haml], "inconsistent-indent"),
-    rule("Syntax/TopLevelIndent", &[Haml], "top-level-indent"),
-    rule("Syntax/IllegalNesting", &[Haml], "illegal-nesting"),
-    rule("Syntax/DoctypeChildren", HAML_SLIM, "doctype-children"),
-    rule("Syntax/UnmatchedBranch", &[Haml], "unmatched-branch"),
-    rule("Syntax/ExplicitEnd", HAML_SLIM, "explicit-end"),
-    rule("Syntax/IllegalElement", &[Haml], "illegal-element"),
-    rule("Syntax/UnknownFilter", &[Haml], "unknown-filter"),
-    rule("Syntax/SelfClosingContent", &[Haml], "self-closing-content"),
-    rule("Syntax/UnclosedAttribute", HAML_SLIM, "unclosed-attribute"),
-    rule("Syntax/BadDedent", &[Slim], "bad-dedent"),
-    rule("Syntax/UnknownEngine", &[Slim], "unknown-engine"),
-    rule("Html/UnexpectedCloseTag", &[Erb], "unexpected-close-tag"),
-    rule("Html/MismatchedCloseTag", &[Erb], "mismatched-close-tag"),
-    rule("Html/UnclosedElement", &[Erb], "unclosed-element"),
-    rule("Html/ImgAlt", &[Erb], "img-missing-alt"),
-    rule("Html/DuplicateId", &[Erb], "duplicate-id"),
-    rule("Html/VoidChildren", HAML_SLIM, "void-children"),
-    rule("Rails/MissingPartial", ALL, "unresolved-render"),
-    rule("Rails/StrictLocals", ALL, "strict-locals"),
+    lint("Syntax/Ruby", ALL, "ruby-syntax"),
+    lint("Syntax/Template", HAML_SLIM, "syntax-error"),
+    lint("Syntax/UnclosedErbTag", &[Erb], "unclosed-tag"),
+    lint("Syntax/InconsistentIndent", &[Haml], "inconsistent-indent"),
+    lint("Syntax/TopLevelIndent", &[Haml], "top-level-indent"),
+    lint("Syntax/IllegalNesting", &[Haml], "illegal-nesting"),
+    lint("Syntax/DoctypeChildren", HAML_SLIM, "doctype-children"),
+    lint("Syntax/UnmatchedBranch", &[Haml], "unmatched-branch"),
+    lint("Syntax/ExplicitEnd", HAML_SLIM, "explicit-end"),
+    lint("Syntax/IllegalElement", &[Haml], "illegal-element"),
+    lint("Syntax/UnknownFilter", &[Haml], "unknown-filter"),
+    lint("Syntax/SelfClosingContent", &[Haml], "self-closing-content"),
+    lint("Syntax/UnclosedAttribute", HAML_SLIM, "unclosed-attribute"),
+    lint("Syntax/BadDedent", &[Slim], "bad-dedent"),
+    lint("Syntax/UnknownEngine", &[Slim], "unknown-engine"),
+    lint("Html/UnexpectedCloseTag", &[Erb], "unexpected-close-tag"),
+    lint("Html/MismatchedCloseTag", &[Erb], "mismatched-close-tag"),
+    lint("Html/UnclosedElement", &[Erb], "unclosed-element"),
+    lint("Html/ImgAlt", &[Erb], "img-missing-alt"),
+    lint("Html/DuplicateId", &[Erb], "duplicate-id"),
+    lint("Html/VoidChildren", HAML_SLIM, "void-children"),
+    lint("Rails/MissingPartial", ALL, "unresolved-render"),
+    lint("Rails/StrictLocals", ALL, "strict-locals"),
+    format_rule(EMPTY_LINES, &[], &[CountOption { key: "max", default: 1 }]),
+    // ERB is rendered byte for byte, so its end is output.
+    format_rule(TRAILING_EMPTY_LINES, HAML_SLIM, &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {
@@ -64,7 +98,7 @@ pub fn by_name(name: &str) -> Option<&'static Rule> {
 
 /// The rule a diagnostic code or an old alias names.
 pub fn by_code(code: &str) -> Option<&'static Rule> {
-    RULES.iter().find(|rule| rule.name == code || rule.alias == code)
+    RULES.iter().find(|rule| rule.name == code || rule.alias == Some(code))
 }
 
 pub fn departments() -> impl Iterator<Item = &'static str> {
@@ -83,9 +117,9 @@ mod tests {
         for rule in RULES {
             assert!(shape.is_match(rule.name), "{}", rule.name);
             assert!(seen.insert(rule.name), "{} twice", rule.name);
-            assert!(seen.insert(rule.alias), "{} twice", rule.alias);
+            assert!(rule.alias.is_none_or(|alias| seen.insert(alias)), "{:?} twice", rule.alias);
         }
-        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails"]);
+        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Layout"]);
     }
 
     #[test]
@@ -109,11 +143,11 @@ mod tests {
             include_str!("ruby/generated.rs"),
         ];
         let declared: HashSet<&str> = sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c.get(1).unwrap().as_str())).collect();
-        let registered: HashSet<&str> = RULES.iter().map(|rule| rule.name).collect();
+        let registered: HashSet<&str> = RULES.iter().filter(|rule| rule.kind == Kind::Lint).map(|rule| rule.name).collect();
         assert_eq!(declared, registered);
     }
 
-    /// The site's catalogue lists each registered rule, for the same languages and as a warning that exists.
+    /// The site's catalogue lists each registered rule, for the same languages, as the same kind of rule and as one that exists.
     #[test]
     fn site_catalogue_lists_the_registered_rules() {
         let catalogue = include_str!("../../site/src/data/rules.ts");
@@ -134,7 +168,8 @@ mod tests {
             let listed = field(entry, "availableIn").or_else(|| field(entry, "languages")).unwrap();
             let have: Vec<&str> = rule.languages.iter().map(language).collect();
             assert_eq!(listed, have.join(","), "{} languages", rule.name);
-            assert_eq!(field(entry, "type").as_deref(), Some("warning"), "{}", rule.name);
+            let kind = if rule.kind == Kind::Lint { "warning" } else { "autofix" };
+            assert_eq!(field(entry, "type").as_deref(), Some(kind), "{}", rule.name);
             assert_ne!(field(entry, "status").as_deref(), Some("planned"), "{}", rule.name);
         }
     }
