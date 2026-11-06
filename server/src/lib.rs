@@ -7,6 +7,7 @@ mod completion;
 mod config;
 mod erb;
 mod format;
+mod glob;
 mod haml;
 mod helpers;
 mod html;
