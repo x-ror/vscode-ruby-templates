@@ -49,6 +49,8 @@ ul
 
 A file Haml or Slim would reject is left unchanged, and so is any result that wouldn't compile to the same output.
 
+The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatting rules the extension has and the ones planned, which will be configured in a `.ruby-templates.toml`.
+
 ## Safe by construction
 
 Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel.
