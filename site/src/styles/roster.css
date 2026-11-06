@@ -114,7 +114,9 @@
   margin: 1.25rem 0 0;
 }
 
+/* Each field is a paragraph led by its bold label, so reader views read "Languages ERB" in one line. */
 .roster__field {
+  margin: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem 1.5rem;
@@ -154,4 +156,24 @@
 
 .roster__setting:focus-visible {
   outline-offset: -2px;
+}
+
+@media print {
+  .roster__index {
+    display: none;
+  }
+
+  .roster__field {
+    grid-template-columns: 8rem minmax(0, 1fr);
+  }
+
+  .roster__code,
+  .roster__term {
+    break-after: avoid;
+  }
+
+  .roster__setting {
+    overflow: visible;
+    white-space: pre-wrap;
+  }
 }

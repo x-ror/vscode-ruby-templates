@@ -30,10 +30,8 @@ The file is read by the editor and by `ruby-templates check`, and it beats the s
 Or list the codes to turn off for a language in your `settings.json`:
 
 ```json
-{
-  "rubyTemplates.erb.disabledDiagnostics": ["Html/ImgAlt", "Html/DuplicateId"],
-  "rubyTemplates.haml.disabledDiagnostics": ["Rails/MissingPartial"]
-}
+"rubyTemplates.erb.disabledDiagnostics": ["Html/ImgAlt", "Html/DuplicateId"],
+"rubyTemplates.haml.disabledDiagnostics": ["Rails/MissingPartial"]
 ```
 
 Before 0.11 the codes were kebab-case words (`img-missing-alt`, `unresolved-render`). They still work in both places, and each entry below names its earlier code.

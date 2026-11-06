@@ -83,34 +83,34 @@ const codeParts = (text: string) => backtickParts(text);
                 <span class={`rules__mark rules__mark--${rule.status}`}>{statusLabel(rule)}</span>
               </p>
               <p class="roster__summary">{codeParts(rule.summary).map(({ text, code }) => (code ? <code>{text}</code> : text))}</p>
-              <dl class="roster__furniture">
-                <div class="roster__field">
-                  <dt class="roster__term">Languages</dt>
-                  <dd class="roster__detail">{languagesOf(rule)}</dd>
-                </div>
-                <div class="roster__field">
-                  <dt class="roster__term">Type</dt>
-                  <dd class="roster__detail">
+              <div class="roster__furniture">
+                <p class="roster__field">
+                  <strong class="roster__term">Languages</strong>{" "}
+                  <span class="roster__detail">{languagesOf(rule)}</span>
+                </p>
+                <p class="roster__field">
+                  <strong class="roster__term">Type</strong>{" "}
+                  <span class="roster__detail">
                     {rule.type === "autofix" ? "Autofix, run by the formatter." : "Warning, shown as a diagnostic."}
                     {rule.status === "planned" && rule.type === "autofix" && departmentOf(rule).id !== "rails" && " Off by default."}
                     {rule.status === "planned" && departmentOf(rule).id === "rails" && " On by default."}
-                  </dd>
-                </div>
-                <div class="roster__field">
-                  <dt class="roster__term">Rendered output</dt>
-                  <dd class="roster__detail">
+                  </span>
+                </p>
+                <p class="roster__field">
+                  <strong class="roster__term">Rendered output</strong>{" "}
+                  <span class="roster__detail">
                     {rule.safe ? "Safe." : "Not safe."}{" "}
                     {codeParts(safeNote(rule)).map(({ text, code }) => (code ? <code>{text}</code> : text))}
-                  </dd>
-                </div>
-                <div class="roster__field">
-                  <dt class="roster__term">Status</dt>
-                  <dd class="roster__detail">{statusText(rule)}</dd>
-                </div>
+                  </span>
+                </p>
+                <p class="roster__field">
+                  <strong class="roster__term">Status</strong>{" "}
+                  <span class="roster__detail">{statusText(rule)}</span>
+                </p>
                 {rule.today && (
-                  <div class="roster__field">
-                    <dt class="roster__term">Today</dt>
-                    <dd class="roster__detail">
+                  <p class="roster__field">
+                    <strong class="roster__term">Today</strong>{" "}
+                    <span class="roster__detail">
                       {codeParts(rule.today).map(({ text, code }) => (code ? <code>{text}</code> : text))}
                       {rule.code && diagnostics.some((d) => d.code === rule.code) && (
                         <>
@@ -118,28 +118,28 @@ const codeParts = (text: string) => backtickParts(text);
                           See <a href={`${DIAGNOSTICS_PAGE}#${codeAnchor(rule.code)}`}><code>{rule.code}</code></a> in the diagnostics reference.
                         </>
                       )}
-                    </dd>
-                  </div>
+                    </span>
+                  </p>
                 )}
                 {rule.setting && (
                   <div class="roster__field">
-                    <dt class="roster__term">{rule.setting.label}</dt>
-                    <dd class="roster__detail">
-                      <pre class="roster__setting" tabindex="0" role="region" aria-label={`Setting: ${rule.setting.label.toLowerCase()}`}><code>{rule.setting.toml}</code></pre>
-                    </dd>
+                    <strong class="roster__term">{rule.setting.label}</strong>{" "}
+                    <div class="roster__detail">
+                      <pre class="roster__setting" tabindex="0" role="region" aria-label={`Setting: ${rule.setting.label.toLowerCase()}`}><code>{rule.setting.code}</code></pre>
+                    </div>
                   </div>
                 )}
                 {rule.config && (
                   <div class="roster__field">
-                    <dt class="roster__term">Planned config</dt>
-                    <dd class="roster__detail">
+                    <strong class="roster__term">Planned config</strong>{" "}
+                    <div class="roster__detail">
                       <pre class="roster__setting" tabindex="0" role="region" aria-label="Planned configuration in .ruby-templates.toml"><code>{rule.config}</code></pre>
-                    </dd>
+                    </div>
                   </div>
                 )}
                 <div class="roster__field">
-                  <dt class="roster__term">{rule.type === "autofix" ? "Example" : "Examples"}</dt>
-                  <dd class="roster__detail">
+                  <strong class="roster__term">{rule.type === "autofix" ? "Example" : "Examples"}</strong>{" "}
+                  <div class="roster__detail">
                     {rule.examples.map((example, i) => (
                       <div class="rules__example">
                         {example.note && (
@@ -162,9 +162,9 @@ const codeParts = (text: string) => backtickParts(text);
                         </div>
                       </div>
                     ))}
-                  </dd>
+                  </div>
                 </div>
-              </dl>
+              </div>
             </article>
           );
         })}

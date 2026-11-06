@@ -1,0 +1,30 @@
+---
+import { Icon } from "@astrojs/starlight/components";
+import Default from "@astrojs/starlight/components/ThemeSelect.astro";
+---
+
+<button class="focus-toggle" type="button" aria-pressed="false" title="Focus mode">
+  <Icon name="open-book" size="1.125rem" />
+  <span class="sr-only">Focus mode</span>
+</button>
+<Default />
+
+<script>
+  // The attribute itself is set in <head> before first paint, from the same key.
+  const STORAGE_KEY = "rt-focus";
+  const root = document.documentElement;
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".focus-toggle")) {
+    button.setAttribute("aria-pressed", String(root.hasAttribute("data-focus")));
+    button.addEventListener("click", () => {
+      const on = root.toggleAttribute("data-focus");
+      for (const other of document.querySelectorAll(".focus-toggle")) other.setAttribute("aria-pressed", String(on));
+      try {
+        if (on) localStorage.setItem(STORAGE_KEY, "1");
+        else localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Storage blocked: the mode still works for this page.
+      }
+    });
+  }
+</script>

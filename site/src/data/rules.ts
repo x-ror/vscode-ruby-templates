@@ -60,7 +60,7 @@ export interface Rule {
   /** The diagnostic code on the diagnostics page that covers it today. */
   code?: string;
   /** The `.ruby-templates.toml` table that turns it off. */
-  setting?: { label: string; toml: string };
+  setting?: { label: string; code: string };
   /** The planned `.ruby-templates.toml` table, for rules with options. */
   config?: string;
   examples: Example[];
@@ -392,10 +392,8 @@ export const rules: Rule[] = [
       'A code action does it, not the formatter. "Add spaces inside this ERB tag" is offered on the tags under the cursor, and "Add spaces inside every ERB tag" is the source action `source.erbSpacing`, which `editor.codeActionsOnSave` can run. It handles one-line code and output tags; comments (`<%#`), literal `<%%` and tags that span lines are left alone. Format Document and format on save do not apply it. Phase 1 makes it a formatter rule.',
     setting: {
       label: "Run it on save",
-      json: `{
-  "[erb]": {
-    "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
-  }
+      code: `"[erb]": {
+  "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
 }`,
     },
     examples: [
@@ -941,7 +939,7 @@ export const rules: Rule[] = [
       'With Rails 7.1 or later in `Gemfile.lock`, a literal render that resolves to a partial with a `locals:` comment is compared with it, using Rails\' messages (`missing local`, `unknown local`, `no locals accepted`). When a render matches several files (a variant next to the base file, or two handlers), a local is missing when every file requires it and unknown when none takes it. Quick fixes "Remove `x` from the render" and "Declare `x` in the locals of …" (it edits all the files).',
     setting: {
       label: "Turn it off",
-      toml: `[Rails.StrictLocals]
+      code: `[Rails.StrictLocals]
 enabled = false`,
     },
     examples: [
@@ -974,7 +972,7 @@ enabled = false`,
       'Checks literal names in `render "users/card"`, `render partial:`, `render template:` and Jbuilder\'s `json.partial!`, with Rails\' "Missing partial" or "Missing template" message. The quick fix "Create partial `users/_profile.html.erb`" creates the file next to the others, in the format and template language of the view.',
     setting: {
       label: "Turn it off",
-      toml: `[Rails.MissingPartial]
+      code: `[Rails.MissingPartial]
 enabled = false`,
     },
     examples: [
@@ -1196,7 +1194,7 @@ enabled = false`,
       "The template doesn't compile, so it is reported as a Ruby syntax error with Prism's messages, as `Syntax/Ruby`. Nothing says that the `=` is the cause. The planned rule is a message that names it.",
     setting: {
       label: "Turn it off",
-      toml: `[Syntax.Ruby]
+      code: `[Syntax.Ruby]
 enabled = false`,
     },
     examples: [
@@ -1583,7 +1581,7 @@ enabled = false`,
       'In ERB with an HTML host, for `<img>` and for `image_tag` in an output tag without `alt:`. An empty `alt=""` counts as alt text. Haml and Slim templates are not checked.',
     setting: {
       label: "Turn it off",
-      toml: `[Html.ImgAlt]
+      code: `[Html.ImgAlt]
 enabled = false`,
     },
     examples: [
@@ -1631,7 +1629,7 @@ enabled = false`,
       "In ERB with an HTML host, at the second occurrence. Ids that hold ERB, ids in different branches of a conditional and content inside `<template>` are left alone. Haml and Slim templates are not checked.",
     setting: {
       label: "Turn it off",
-      toml: `[Html.DuplicateId]
+      code: `[Html.DuplicateId]
 enabled = false`,
     },
     examples: [
@@ -1659,7 +1657,7 @@ enabled = false`,
       "In ERB with an HTML host, including the end tag of a void element. A stray end tag in a partial is not reported, since a partial may close what another one opened.",
     setting: {
       label: "Turn it off",
-      toml: `[Html.UnexpectedCloseTag]
+      code: `[Html.UnexpectedCloseTag]
 enabled = false`,
     },
     examples: [
@@ -1686,7 +1684,7 @@ enabled = false`,
       "In ERB with an HTML host, partials included. When the end tag crosses an open element, the browser could recover in more than one way, so checking stops there.",
     setting: {
       label: "Turn it off",
-      toml: `[Html.MismatchedCloseTag]
+      code: `[Html.MismatchedCloseTag]
 enabled = false`,
     },
     examples: [
@@ -1713,7 +1711,7 @@ enabled = false`,
       "In ERB with an HTML host, at the start tag. Elements whose end tag HTML lets you omit, void elements, partials and files that end inside an ERB block are left alone.",
     setting: {
       label: "Turn it off",
-      toml: `[Html.UnclosedElement]
+      code: `[Html.UnclosedElement]
 enabled = false`,
     },
     examples: [
@@ -1740,7 +1738,7 @@ enabled = false`,
       "Haml reports content on the tag's line or nested under it; Slim reports lines nested under a void element, in HTML templates only.",
     setting: {
       label: "Turn it off",
-      toml: `[Html.VoidChildren]
+      code: `[Html.VoidChildren]
 enabled = false`,
     },
     examples: [
