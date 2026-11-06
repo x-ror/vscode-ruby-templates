@@ -392,10 +392,8 @@ export const rules: Rule[] = [
       'A code action does it, not the formatter. "Add spaces inside this ERB tag" is offered on the tags under the cursor, and "Add spaces inside every ERB tag" is the source action `source.erbSpacing`, which `editor.codeActionsOnSave` can run. It handles one-line code and output tags; comments (`<%#`), literal `<%%` and tags that span lines are left alone. Format Document and format on save do not apply it. Phase 1 makes it a formatter rule.',
     setting: {
       label: "Run it on save",
-      json: `{
-  "[erb]": {
-    "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
-  }
+      json: `"[erb]": {
+  "editor.codeActionsOnSave": { "source.erbSpacing": "explicit" }
 }`,
     },
     examples: [
@@ -941,9 +939,7 @@ export const rules: Rule[] = [
       'With Rails 7.1 or later in `Gemfile.lock`, a literal render that resolves to a partial with a `locals:` comment is compared with it, using Rails\' messages (`missing local`, `unknown local`, `no locals accepted`). When a render matches several files (a variant next to the base file, or two handlers), a local is missing when every file requires it and unknown when none takes it. Quick fixes "Remove `x` from the render" and "Declare `x` in the locals of …" (it edits all the files).',
     setting: {
       label: "Turn it off",
-      json: `{
-  "rubyTemplates.erb.disabledDiagnostics": ["strict-locals"]
-}`,
+      json: `"rubyTemplates.erb.disabledDiagnostics": ["strict-locals"]`,
     },
     examples: [
       {
@@ -975,9 +971,7 @@ export const rules: Rule[] = [
       'Checks literal names in `render "users/card"`, `render partial:`, `render template:` and Jbuilder\'s `json.partial!`, with Rails\' "Missing partial" or "Missing template" message. The quick fix "Create partial `users/_profile.html.erb`" creates the file next to the others, in the format and template language of the view.',
     setting: {
       label: "Turn it off",
-      json: `{
-  "rubyTemplates.erb.disabledDiagnostics": ["unresolved-render"]
-}`,
+      json: `"rubyTemplates.erb.disabledDiagnostics": ["unresolved-render"]`,
     },
     examples: [
       {
@@ -1198,9 +1192,7 @@ export const rules: Rule[] = [
       "The template doesn't compile, so it is reported as a Ruby syntax error with Prism's messages, as `ruby-syntax`. Nothing says that the `=` is the cause. The planned rule is a message that names it.",
     setting: {
       label: "Turn it off",
-      json: `{
-  "rubyTemplates.erb.disabledDiagnostics": ["ruby-syntax"]
-}`,
+      json: `"rubyTemplates.erb.disabledDiagnostics": ["ruby-syntax"]`,
     },
     examples: [
       {
@@ -1586,9 +1578,7 @@ export const rules: Rule[] = [
       'In ERB with an HTML host, for `<img>` and for `image_tag` in an output tag without `alt:`. An empty `alt=""` counts as alt text. Haml and Slim templates are not checked.',
     setting: {
       label: "Turn it off",
-      json: `{
-  "rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt"]
-}`,
+      json: `"rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt"]`,
     },
     examples: [
       {
@@ -1635,9 +1625,7 @@ export const rules: Rule[] = [
       "In ERB with an HTML host, at the second occurrence. Ids that hold ERB, ids in different branches of a conditional and content inside `<template>` are left alone. Haml and Slim templates are not checked.",
     setting: {
       label: "Turn it off",
-      json: `{
-  "rubyTemplates.erb.disabledDiagnostics": ["duplicate-id"]
-}`,
+      json: `"rubyTemplates.erb.disabledDiagnostics": ["duplicate-id"]`,
     },
     examples: [
       {

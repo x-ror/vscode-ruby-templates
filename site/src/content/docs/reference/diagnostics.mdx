@@ -15,10 +15,8 @@ The messages are those of Erubi, Rails, Haml 7, Slim 5 and Prism, or quote the s
 List the codes to turn off for a language in your `settings.json`:
 
 ```json
-{
-  "rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt", "duplicate-id"],
-  "rubyTemplates.haml.disabledDiagnostics": ["unresolved-render"]
-}
+"rubyTemplates.erb.disabledDiagnostics": ["img-missing-alt", "duplicate-id"],
+"rubyTemplates.haml.disabledDiagnostics": ["unresolved-render"]
 ```
 
 `rubyTemplates.slim.disabledDiagnostics` also applies to Skim templates, and `rubyTemplates.jbuilder.disabledDiagnostics` to Jbuilder and Builder views. To silence a whole language, set `rubyTemplates.erb.diagnostics.enabled`, `rubyTemplates.haml.diagnostics.enabled` or `rubyTemplates.slim.diagnostics.enabled` to `false`. These settings apply in the editor; `ruby-templates check` always runs every check. Liquid templates and Thor templates (`*.tt`) get no diagnostics.
