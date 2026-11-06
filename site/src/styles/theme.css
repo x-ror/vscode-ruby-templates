@@ -131,3 +131,104 @@ h1#_top {
     display: none;
   }
 }
+
+/* ---- reading time, progress, and focus mode: the content without the menus ---- */
+
+/* The line under the title, as a newspaper sets it: published, updated by whom, reading time. */
+.page-meta {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--rt-ink-muted);
+}
+
+.page-meta time {
+  color: var(--rt-ink);
+}
+
+/* Along the header's lower edge, driven by the scroll position itself; browsers without scroll timelines show no bar. */
+.reading-progress {
+  display: none;
+}
+
+@supports (animation-timeline: scroll()) {
+  .reading-progress {
+    display: block;
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 3px;
+    background: var(--rt-seal);
+    transform-origin: 0 50%;
+    /* Longhands: the minifier folds a full set into the `animation` shorthand, which can't carry a timeline. */
+    animation-name: reading-progress;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
+    animation-timeline: scroll(root);
+  }
+}
+
+@keyframes reading-progress {
+  from {
+    scale: 0 1;
+  }
+  to {
+    scale: 1 1;
+  }
+}
+
+.focus-toggle {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--sl-color-gray-1);
+  cursor: pointer;
+}
+
+.focus-toggle:hover {
+  color: var(--sl-color-white);
+}
+
+.focus-toggle[aria-pressed="true"] {
+  border-color: var(--rt-hairline);
+  background: var(--rt-code-bg);
+  color: var(--rt-ink);
+}
+
+:root[data-focus] {
+  --sl-mobile-toc-height: 0rem;
+}
+
+:root[data-focus] .right-sidebar-container {
+  display: none;
+}
+
+:root[data-focus] .main-pane {
+  --sl-content-margin-inline: auto;
+  width: 100%;
+}
+
+:root[data-focus] .sl-markdown-content {
+  font-size: 1.125rem;
+  line-height: 1.8;
+}
+
+@media (min-width: 50rem) {
+  :root[data-focus] {
+    --sl-content-inline-start: 0rem;
+  }
+
+  :root[data-focus] .sidebar-pane {
+    display: none;
+  }
+}
+
+@media print {
+  .reading-progress,
+  .focus-toggle {
+    display: none;
+  }
+}

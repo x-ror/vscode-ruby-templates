@@ -26,9 +26,18 @@ export default defineConfig({
         baseUrl:
           "https://github.com/x-ror/vscode-ruby-templates/edit/main/site/",
       },
-      head: [{ tag: "meta", attrs: { name: "author", content: "x-ror" } }],
+      head: [
+        { tag: "meta", attrs: { name: "author", content: "x-ror" } },
+        {
+          tag: "script",
+          content:
+            'try{localStorage.getItem("rt-focus")&&document.documentElement.setAttribute("data-focus","")}catch{}',
+        },
+      ],
       components: {
+        Header: "./src/components/starlight/Header.astro",
         MarkdownContent: "./src/components/starlight/Article.astro",
+        ThemeSelect: "./src/components/starlight/ThemeSelect.astro",
       },
       customCss: ["./src/styles/fonts.css", "./src/styles/theme.css"],
       expressiveCode: {

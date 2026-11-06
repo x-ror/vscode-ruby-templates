@@ -1,6 +1,48 @@
 ---
-// Starlight's content wrapper as an <article>, the element reader views look for.
+// Starlight's content wrapper as an <article>, the element reader views look for, opened by the page's dates and reading
+// time so reader views keep them too.
+import path from "node:path";
 import "@astrojs/starlight/style/markdown.css";
+import { fileHistory } from "../../lib/history.mjs";
+
+const { entry, lang } = Astro.locals.starlightRoute;
+const history = fileHistory(path.resolve(process.cwd(), entry.filePath));
+const format = (date: Date) => date.toLocaleDateString(lang, { dateStyle: "medium", timeZone: "UTC" });
+// Real text, not CSS: reader views drop generated content. The non-breaking space keeps the dot at the end of a line.
+const SEPARATOR = "\u00a0· ";
+const sameDay = history && format(history.published) === format(history.updated.date);
 ---
 
-<article class="sl-markdown-content"><slot /></article>
+<article class="sl-markdown-content">
+  <p class="page-meta">
+    {
+      history && (
+        <span>
+          Published <time datetime={history.published.toISOString()}>{format(history.published)}</time>
+          {sameDay && ` by\u00a0${history.updated.author}`}
+        </span>
+      )
+    }{
+      history && !sameDay && (
+        <span>
+          {SEPARATOR}Updated <time datetime={history.updated.date.toISOString()}>{format(history.updated.date)}</time> by{"\u00a0"}
+          {history.updated.author}
+        </span>
+      )
+    }<span class="reading-time" hidden>{history && SEPARATOR}<span class="reading-time__value"></span></span>
+  </p>
+  <slot />
+</article>
+
+<script>
+  const WORDS_PER_MINUTE = 200;
+
+  const content = document.querySelector(".sl-markdown-content");
+  const label = document.querySelector<HTMLElement>(".reading-time");
+  const value = label?.querySelector(".reading-time__value");
+  if (content && label && value) {
+    const words = content.textContent?.split(/\s+/).filter(Boolean).length ?? 0;
+    value.textContent = `${Math.max(1, Math.round(words / WORDS_PER_MINUTE))} min read`;
+    label.hidden = false;
+  }
+</script>
