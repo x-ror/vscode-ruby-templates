@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.1
 
 - The strict-locals check also runs when a `render` matches several files (a variant next to the base file, or two handlers): a local is reported missing when every file requires it and unknown when none takes it, and a file without a `locals:` comment still skips the call. With actionview 8 or newer the message names the first file and the count of the others (`for _badge.html.erb and 1 other`). "Declare in the locals" adds the local to all of the files.
 
