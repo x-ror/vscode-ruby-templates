@@ -6,6 +6,7 @@
 
 use crate::erb::tags;
 use crate::erb::tags::{Block, PState, Paths, Tag, Token, OPTIONAL_END};
+use crate::format::blank_lines::{Body, LineInfo, LineRole};
 use crate::format::{skip, Indented, SkipKind, Skipped};
 use crate::html::NO_END_TAG;
 use crate::ruby::strict_locals::RubyContext;
@@ -81,14 +82,49 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
     let keeps_end = keeps_end(&lines, &keep_end);
 
     let paired = paired_optional(&tokens);
-    let (levels, uncertain) = levels(text, Nesting::new(&tokens, &paired, partial), &lines, &roles);
-    let notes = uncertain
+    let levels = levels(text, Nesting::new(&tokens, &paired, partial), &lines, &roles);
+    let notes = levels
+        .uncertain
         .map(|line| format!("line {}: indentation kept from here on: ERB branches leave different tags open, or tags overlap", line + 1))
         .into_iter()
         .collect();
-    let decided = decide(&lines, &roles, &units, &levels, unit);
-    let removable = roles.iter().map(|&role| role == Role::Markup).collect();
-    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), removable, notes })
+    let decided = decide(&lines, &roles, &units, &levels.levels, unit);
+    let infos = line_infos(&tokens, &starts, &roles, &levels);
+    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), lines: infos, notes })
+}
+
+/// Per line: whether a blank line may go, its level, what it opens (the last block or element its tags open, if the
+/// nesting is deeper after the line than at its start) and whether it leads with a closer.
+fn line_infos(tokens: &[Token], starts: &[usize], roles: &[Role], levels: &Levels) -> Vec<LineInfo> {
+    let mut found = vec![(LineRole::Other, 0); starts.len()];
+    for token in tokens {
+        let (start, end) = span(token);
+        let line = line_of(starts, start);
+        let role = match token {
+            Token::Erb(e) if matches!(e.effect, BlockEffect::Continue) => LineRole::Branch,
+            _ if found[line].0 == LineRole::Branch => continue,
+            Token::Erb(e) if matches!(e.effect, BlockEffect::Open(_)) => LineRole::Opens(Body::Block),
+            // Whitespace counts in these, and their end tag's line has no level to close them.
+            Token::Open { tag, .. } if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") => LineRole::Other,
+            Token::Open { .. } => LineRole::Opens(Body::Element),
+            _ => continue,
+        };
+        found[line] = (role, line_of(starts, end.saturating_sub(1)) - line);
+    }
+    (0..starts.len())
+        .map(|i| {
+            let (role, tail) = found[i];
+            // Whether the nesting is deeper where the line's own lines end, not only after its first.
+            let after = levels.depths_after.get(i + tail).copied().flatten();
+            let (role, tail) = match (role, levels.levels[i], after) {
+                (LineRole::Branch, Some(_), _) => (role, tail),
+                (LineRole::Opens(_), Some(level), Some(after)) if after > level => (role, tail),
+                _ => (LineRole::Other, 0),
+            };
+            let closes = i > 0 && matches!((levels.levels[i], levels.depths_after[i - 1]), (Some(level), Some(before)) if level < before);
+            LineInfo { removable: roles[i] == Role::Markup, depth: levels.levels[i], role, closes, tail }
+        })
+        .collect()
 }
 
 /// Why `text` isn't safe to re-indent: its first ERB error, else its first HTML or tag problem.
@@ -423,23 +459,36 @@ impl<'t> Nesting<'t> {
     }
 }
 
-/// The nesting level of each markup line, and the line from which the nesting is uncertain, if any.
-fn levels(text: &str, mut nesting: Nesting, lines: &[Line], roles: &[Role]) -> (Vec<Option<usize>>, Option<usize>) {
-    let mut out = vec![None; lines.len()];
+struct Levels {
+    /// The nesting level of each markup line.
+    levels: Vec<Option<usize>>,
+    /// The nesting after each line, where a line follows it.
+    depths_after: Vec<Option<usize>>,
+    /// The line from which the nesting is uncertain, if any.
+    uncertain: Option<usize>,
+}
+
+fn levels(text: &str, mut nesting: Nesting, lines: &[Line], roles: &[Role]) -> Levels {
+    let mut out = Levels { levels: vec![None; lines.len()], depths_after: vec![None; lines.len()], uncertain: None };
     for (l, line) in lines.iter().enumerate() {
         if !nesting.advance_to(line.start) {
-            return (out, Some(l));
+            out.uncertain = Some(l);
+            return out;
+        }
+        if l > 0 {
+            out.depths_after[l - 1] = Some(nesting.depth());
         }
         if roles[l] != Role::Markup || line.rest.is_empty() {
             continue;
         }
         let at = line.start + line.ws.len();
         let Some(level) = nesting.line_level(text, at, at + line.rest.len()) else {
-            return (out, Some(l));
+            out.uncertain = Some(l);
+            return out;
         };
-        out[l] = Some(level);
+        out.levels[l] = Some(level);
     }
-    (out, None)
+    out
 }
 
 /// The new leading whitespace of each line, `None` to keep it. A unit moves only as a whole: if one of its lines

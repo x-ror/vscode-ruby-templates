@@ -2539,6 +2539,72 @@ const check = (label, actual, expected) => {
       [4, 4, "  <p>b</p>"],
     ],
   );
+  // The rules around bodies and branches add and remove lines: not in Format Selection.
+  const aroundDir = path.join(views, "around");
+  fs.mkdirSync(aroundDir);
+  const aroundToml = path.join(aroundDir, ".ruby-templates.toml");
+  const aroundOpen = async (name, text) => {
+    const uri = fileUri(path.join(aroundDir, name));
+    await aligned.send(
+      "textDocument/didOpen",
+      {
+        textDocument: {
+          uri,
+          languageId: name.split(".").pop(),
+          version: 1,
+          text,
+        },
+      },
+      true,
+    );
+    return uri;
+  };
+  const aroundTexts = {
+    "a.html.haml": "%div\n    %p x\n\n    %i y\n\n",
+    "a.html.slim": "div\n    p x\n\n    i y\n\n",
+    "a.html.erb":
+      "<div>\n<% if a %>\n\n<p>x</p>\n\n<% else %>\n<p>y</p>\n<% end %>\n\n</div>\n",
+  };
+  for (const style of ["empty_lines", "no_empty_lines"]) {
+    fs.writeFileSync(
+      aroundToml,
+      ["BlockBody", "ElementBody", "Branches"]
+        .map(
+          (rule) =>
+            `[Layout.EmptyLinesAround${rule}]\nenabled = true\nstyle = "${style}"\n`,
+        )
+        .join(""),
+    );
+    for (const [name, text] of Object.entries(aroundTexts)) {
+      const uri = await aroundOpen(`${style}-${name}`, text);
+      const lines = text.split("\n").length;
+      const edits = (
+        await aligned.send("textDocument/rangeFormatting", {
+          textDocument: { uri },
+          options: blankOptions,
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: lines, character: 0 },
+          },
+        })
+      ).result;
+      // Each edit replaces the text of one line; applied, the file keeps its lines and its content.
+      const result = text.split("\n");
+      for (const e of edits ?? []) {
+        result.splice(
+          e.range.start.line,
+          e.range.end.line - e.range.start.line + 1,
+          ...e.newText.split("\n"),
+        );
+      }
+      check(
+        `${style} ${name}: a range keeps the lines and the content`,
+        [result.length, result.join("\n").replace(/\s/g, "")],
+        [lines, text.replace(/\s/g, "")],
+      );
+    }
+  }
+
   // .ruby-templates.toml: rules and switches per folder, and its own problems.
   const rulesRoot = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "rt-rules-")),

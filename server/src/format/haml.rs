@@ -2,6 +2,7 @@
 //! level, filter and `-#` bodies move as a block, continuation lines move with their line, and trailing whitespace
 //! goes where Haml ignores it. Every line stays; the blank ones that may go are reported.
 
+use crate::format::blank_lines::{code_role, drop_childless_openers, Body, LineInfo, LineRole};
 use crate::format::Indented;
 use crate::haml::parser::{lines_with_endings, parse, Role};
 use crate::util::{leading_ws, BOM};
@@ -70,8 +71,36 @@ pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
     }
     // Haml also ends a line at a lone `\r`, which the blank-line pass doesn't.
     let lone_cr = lines.iter().any(|&(_, ending)| ending == "\r");
-    let removable = (0..lines.len()).map(|i| !lone_cr && parsed.roles.get(i).is_none_or(|&role| role == Role::Blank)).collect();
-    Some(Indented { text: out, removable, notes: vec![] })
+    let mut infos: Vec<LineInfo> = (0..lines.len())
+        .map(|i| {
+            let role = parsed.roles.get(i).copied();
+            let removable = !lone_cr && role.is_none_or(|role| role == Role::Blank);
+            match role {
+                Some(Role::Structural { depth }) if !lone_cr => {
+                    let tail =
+                        parsed.roles[i + 1..].iter().take_while(|&&next| matches!(next, Role::Inner { owner, .. } if owner == i)).count();
+                    LineInfo { removable, depth: Some(depth), role: node_role(lines[i].0.trim_start()), tail, ..LineInfo::default() }
+                }
+                _ => LineInfo { removable, ..LineInfo::default() },
+            }
+        })
+        .collect();
+    drop_childless_openers(&mut infos);
+    Some(Indented { text: out, lines: infos, notes: vec![] })
+}
+
+/// What a node does if it has children: Ruby opens a block, a tag an element; a filter or text opens nothing.
+fn node_role(content: &str) -> LineRole {
+    if let Some(code) = content.strip_prefix('-') {
+        return if code.starts_with('#') { LineRole::Other } else { code_role(code) };
+    }
+    let output = ["=", "!=", "&=", "~"].iter().any(|prefix| content.starts_with(prefix));
+    let tag = content.starts_with(['%', '.']) || (content.starts_with('#') && !content.starts_with("#{"));
+    match (output, tag) {
+        (true, _) => LineRole::Opens(Body::Block),
+        (_, true) => LineRole::Opens(Body::Element),
+        _ => LineRole::Other,
+    }
 }
 
 /// A tab counts as one indent level.
@@ -85,6 +114,10 @@ mod tests {
 
     fn reindent(text: &str, width: usize) -> Option<String> {
         format(text, width).map(|indented| indented.text)
+    }
+
+    fn info(text: &str) -> Vec<(Option<usize>, LineRole)> {
+        format(text, 2).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
     }
 
     fn fmt(text: &str) -> String {
@@ -157,13 +190,41 @@ mod tests {
         assert_eq!(fmt("%p\n  \n \t\n"), "%p\n\n\n");
         assert_eq!(fmt("%p\r\n\r\n"), "%p\r\n\r\n");
         assert_eq!(fmt("\n\n"), "\n\n");
-        let removable = |text: &str| format(text, 2).unwrap().removable;
+        let removable = |text: &str| format(text, 2).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
         assert_eq!(removable("%p\n\n%i\n"), [false, true, false, true]);
         // A blank line in a filter or `-#` comment body is content; Haml skips the ones in multi-line Ruby.
         assert_eq!(removable(":plain\n  a\n\n  b\n%p\n"), [false, false, false, false, false, true]);
         assert_eq!(removable("-#\n  a\n\n  b\n"), [false, false, false, false, true]);
         assert_eq!(removable("%p= f(1,\n\n  2)\n"), [false, true, false, true]);
         assert_eq!(removable("%p\r\n\r\n%i\r\n\r"), [false; 5], "a lone CR ends a line only for Haml");
+    }
+
+    #[test]
+    fn lines_report_their_depth_and_what_they_open() {
+        use LineRole::{Branch, Opens, Other};
+        let text = "- if a\n  %div\n    = f do\n      x\n- else\n  :plain\n    y\n%p\n  \\- b\n.c\n#{d}\n";
+        assert_eq!(
+            info(text),
+            [
+                (Some(0), Opens(Body::Block)),
+                (Some(1), Opens(Body::Element)),
+                (Some(2), Opens(Body::Block)),
+                (Some(3), Other),
+                (Some(0), Branch),
+                (Some(1), Other),
+                (None, Other),
+                (Some(0), Opens(Body::Element)),
+                (Some(1), Other),
+                (Some(0), Other),
+                (Some(0), Other),
+                (None, Other),
+            ]
+        );
+        assert_eq!(
+            info("- case 1\n- when 1\n  a\n- elsewhere\n  b\n- in 2\n").iter().map(|l| l.1).collect::<Vec<_>>(),
+            [Opens(Body::Block), Branch, Other, Opens(Body::Block), Other, Branch, Other]
+        );
+        assert_eq!(info("%p\r%i\r")[0], (None, Other), "a lone CR: no rule applies");
     }
 
     #[test]

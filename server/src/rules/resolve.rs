@@ -2,8 +2,11 @@
 //! editor's settings where the files are silent.
 
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
-use super::{by_code, by_name, CountOption, Kind, Rule, EMPTY_LINES, RULES, TRAILING_EMPTY_LINES};
-use crate::format::Settings;
+use super::{
+    by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
+    EMPTY_LINES_STYLE, RULES, STYLE, TRAILING_EMPTY_LINES,
+};
+use crate::format::{Settings, Style};
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
 use crate::options::Options;
@@ -27,6 +30,9 @@ pub struct ResolvedRules {
     /// `Layout/EmptyLines`: the longest run of blank lines kept; `None` when the rule is off.
     max_empty_lines: Option<usize>,
     trailing_empty_lines: bool,
+    around_block_body: Option<Style>,
+    around_element_body: Option<Style>,
+    around_branches: Option<Style>,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -93,6 +99,9 @@ impl ResolvedRules {
             extra_engines: in_lists(|t| t.extra_engines.as_ref()).unwrap_or_else(|| editor.extra_engines.clone()),
             max_empty_lines,
             trailing_empty_lines: !off.contains(TRAILING_EMPTY_LINES),
+            around_block_body: style(&files, &off, AROUND_BLOCK_BODY),
+            around_element_body: style(&files, &off, AROUND_ELEMENT_BODY),
+            around_branches: style(&files, &off, AROUND_BRANCHES),
             off,
             files,
             excluded_by,
@@ -131,6 +140,9 @@ impl ResolvedRules {
             align_comments: self.align_comments,
             max_empty_lines: self.max_empty_lines,
             trailing_empty_lines: self.trailing_empty_lines,
+            around_block_body: self.around_block_body,
+            around_element_body: self.around_element_body,
+            around_branches: self.around_branches,
             ..base
         }
     }
@@ -164,6 +176,19 @@ fn rule_table<'a>(file: &'a ConfigFile, rule: &Rule) -> Option<&'a RuleTable> {
 fn count(files: &[Arc<ConfigFile>], rule: &Rule, option: &CountOption) -> usize {
     let set = |file: &ConfigFile| rule_table(file, rule)?.counts.iter().find(|(key, _)| *key == option.key).map(|&(_, count)| count);
     nearest(files, set).unwrap_or(option.default)
+}
+
+/// The option's word in the nearest file that sets it.
+fn choice(files: &[Arc<ConfigFile>], rule: &Rule, option: &ChoiceOption) -> &'static str {
+    let set = |file: &ConfigFile| rule_table(file, rule)?.choices.iter().find(|(key, _)| *key == option.key).map(|&(_, word)| word);
+    nearest(files, set).unwrap_or(option.default)
+}
+
+/// The `style` of an `EmptyLinesAround…` rule; `None` when the rule is off.
+fn style(files: &[Arc<ConfigFile>], off: &HashSet<String>, name: &str) -> Option<Style> {
+    let rule = by_name(name).filter(|rule| !off.contains(rule.name))?;
+    let option = rule.choices.iter().find(|option| option.key == STYLE.key)?;
+    Some(if choice(files, rule, option) == EMPTY_LINES_STYLE { Style::EmptyLines } else { Style::NoEmptyLines })
 }
 
 /// The nearest file that sets the rule's `enabled` or its department's decides, the rule's beating the department's within
@@ -383,6 +408,14 @@ mod tests {
         assert_eq!(max("a.html.erb", TemplateLang::Erb), Some(3), "the department switch turns a formatting rule on");
         assert_eq!(max("inner/a.html.erb", TemplateLang::Erb), Some(0), "the nearest file sets max");
         assert_eq!(max("inner/b.html.slim", TemplateLang::Slim), None, "its exclude");
+        let toml = "[Layout]\nenabled = true\n[Layout.EmptyLinesAroundBranches]\nstyle = \"empty_lines\"\n[Layout.EmptyLinesAroundElementBody]\nenabled = false\n";
+        let around = Project::new("format-rules-around", &[(".ruby-templates.toml", toml), ("a.html.haml", "")]);
+        let settings = around.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default());
+        let styles = (settings.around_block_body, settings.around_element_body, settings.around_branches);
+        assert_eq!(styles, (Some(Style::NoEmptyLines), None, Some(Style::EmptyLines)), "no_empty_lines by default, off by enabled = false");
+        let plain = Project::new("format-rules-around-off", &[("a.html.haml", "")]);
+        let settings = plain.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default());
+        assert_eq!((settings.around_block_body, settings.around_element_body, settings.around_branches), (None, None, None));
         let off = Project::new("format-rules-dept", &[(".ruby-templates.toml", "[Layout]\nenabled = false\n"), ("a.html.slim", "")]);
         let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
         assert!(!settings.trailing_empty_lines, "the department switch turns an on-by-default rule off");

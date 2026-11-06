@@ -1692,7 +1692,7 @@ impl BraceScanner {
     }
 }
 
-fn block_keyword(code: &str) -> Option<&str> {
+pub(crate) fn block_keyword(code: &str) -> Option<&str> {
     if !BLOCK_KEYWORD.is_match(code) {
         return None;
     }

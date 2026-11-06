@@ -21,6 +21,14 @@ pub struct CountOption {
     pub default: usize,
 }
 
+/// An option of a rule's table that is one of a few words.
+#[derive(Debug)]
+pub struct ChoiceOption {
+    pub key: &'static str,
+    pub values: &'static [&'static str],
+    pub default: &'static str,
+}
+
 #[derive(Debug)]
 pub struct Rule {
     pub name: &'static str,
@@ -31,6 +39,7 @@ pub struct Rule {
     pub on_by_default: &'static [TemplateLang],
     /// The keys its table takes besides `enabled`, `include` and `exclude`.
     pub options: &'static [CountOption],
+    pub choices: &'static [ChoiceOption],
     /// The code a lint rule had before 0.11, still accepted in `disabledDiagnostics`.
     pub alias: Option<&'static str>,
 }
@@ -50,15 +59,27 @@ impl Rule {
 }
 
 const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
-    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], alias: Some(alias) }
+    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], alias: Some(alias) }
 }
 
-const fn format_rule(name: &'static str, on_by_default: &'static [TemplateLang], options: &'static [CountOption]) -> Rule {
-    Rule { name, languages: &[Erb, Haml, Slim], kind: Kind::Format, on_by_default, options, alias: None }
+const fn format_rule(
+    name: &'static str,
+    on_by_default: &'static [TemplateLang],
+    options: &'static [CountOption],
+    choices: &'static [ChoiceOption],
+) -> Rule {
+    Rule { name, languages: &[Erb, Haml, Slim], kind: Kind::Format, on_by_default, options, choices, alias: None }
 }
 
 pub const EMPTY_LINES: &str = "Layout/EmptyLines";
 pub const TRAILING_EMPTY_LINES: &str = "Layout/TrailingEmptyLines";
+pub const AROUND_BLOCK_BODY: &str = "Layout/EmptyLinesAroundBlockBody";
+pub const AROUND_ELEMENT_BODY: &str = "Layout/EmptyLinesAroundElementBody";
+pub const AROUND_BRANCHES: &str = "Layout/EmptyLinesAroundBranches";
+
+pub const NO_EMPTY_LINES: &str = "no_empty_lines";
+pub const EMPTY_LINES_STYLE: &str = "empty_lines";
+pub const STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_EMPTY_LINES, EMPTY_LINES_STYLE], default: NO_EMPTY_LINES };
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
@@ -87,9 +108,12 @@ pub const RULES: &[Rule] = &[
     lint("Html/VoidChildren", HAML_SLIM, "void-children"),
     lint("Rails/MissingPartial", ALL, "unresolved-render"),
     lint("Rails/StrictLocals", ALL, "strict-locals"),
-    format_rule(EMPTY_LINES, &[], &[CountOption { key: "max", default: 1 }]),
+    format_rule(EMPTY_LINES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
-    format_rule(TRAILING_EMPTY_LINES, HAML_SLIM, &[]),
+    format_rule(TRAILING_EMPTY_LINES, HAML_SLIM, &[], &[]),
+    format_rule(AROUND_BLOCK_BODY, &[], &[], &[STYLE]),
+    format_rule(AROUND_ELEMENT_BODY, &[], &[], &[STYLE]),
+    format_rule(AROUND_BRANCHES, &[], &[], &[STYLE]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {

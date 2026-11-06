@@ -53,21 +53,27 @@ The [rules reference](/vscode-ruby-templates/reference/rules/) lists the formatt
 
 ## Blank lines
 
-Two rules in a `.ruby-templates.toml` decide what happens to blank lines; neither runs on _Format Selection_.
+Rules in a `.ruby-templates.toml` decide what happens to blank lines; none runs on _Format Selection_.
 
 - `Layout/TrailingEmptyLines` is on for Haml and Slim: the file ends with exactly one line break. The blank lines at the end go, and a missing final line break is added in the file's line ending. It is off for ERB, because Rails renders ERB byte for byte and the end of a partial is output (a final line break shows as a space between inline elements); turn it on with `enabled = true`.
 - `Layout/EmptyLines` is off. Turn it on to cut every run of blank lines longer than `max` (1 by default) down to `max`.
+- `Layout/EmptyLinesAroundBlockBody`, `Layout/EmptyLinesAroundElementBody` and `Layout/EmptyLinesAroundBranches` are off. Each takes `style`: `no_empty_lines` (the default) removes the blank lines at the start and end of a body (`<% if %>`, `<% x.each do %>`, `<div>`, `%div`, `div` and what they contain) or before and after `else`, `elsif`, `when`, `in`, `rescue` and `ensure`; `empty_lines` keeps exactly one there and adds it where there is none. The end of a body is the closing tag or `<% end %>`, so it only exists in ERB: in Haml and Slim the rules set the blank lines after the opening line and around branch lines, and leave the ones before a dedent alone, since they separate siblings. A body with nothing in it (`<div>` directly above `</div>`, `- if a` above `- else`) loses its blank lines under `no_empty_lines` and is left alone under `empty_lines`; a body that ends the file has no closing line, so nothing is added there.
+- `max` of `Layout/EmptyLines` is applied after these rules, so with `max = 0` no blank line is left and `empty_lines` has no effect.
 
 ```toml
 [Layout.EmptyLines]
 enabled = true
 max = 1
 
+[Layout.EmptyLinesAroundBlockBody]
+enabled = true
+style = "no_empty_lines"
+
 [Layout.TrailingEmptyLines]
 enabled = false
 ```
 
-Blank lines stay where whitespace counts: `<pre>`, `<xmp>`, `<listing>`, `<textarea>`, `<script>`, `<style>`, quoted attribute values, comments and the Ruby inside ERB tags; Haml filters; Slim text blocks and engine bodies. For Haml and Slim, the formatter also compares what the template compiles to before and after, ignoring line numbers, and keeps the blank lines of the file when the result would differ.
+Blank lines stay where whitespace counts: `<pre>`, `<xmp>`, `<listing>`, `<textarea>`, `<script>`, `<style>`, quoted attribute values, comments and the Ruby inside ERB tags; Haml filters; Slim text blocks and engine bodies. For Haml and Slim, the formatter also compares what the template compiles to before and after, ignoring line numbers, and keeps the blank lines of the file when removing or adding them would change it.
 
 ## Safe by construction
 

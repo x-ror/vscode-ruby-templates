@@ -141,13 +141,16 @@ export const rules: Rule[] = [
     languages: ["erb", "haml", "slim"],
     type: "autofix",
     safe: true,
-    safeNote: "Only blank lines between tags change, which render as nothing.",
-    status: "planned",
-    phase: 1,
+    safeNote:
+      "Only blank lines between tags change, which render as whitespace between them, and browsers collapse that. Content where whitespace counts is left alone: `<pre>`, `<textarea>`, `<script>`, `<style>`, attribute values, comments and the Ruby in ERB tags in ERB, filters in Haml, text blocks and engine bodies in Slim. Two things can\'t be detected: elements that CSS styles `white-space: pre`, and blocks that capture their content and care about its whitespace (such as `<%= markdown do %>`).",
+    status: "available",
+    onByDefault: [],
+    today:
+      "`style` is `no_empty_lines` (the default) or `empty_lines`, which keeps exactly one blank line there and adds it where there is none. In ERB the body is what lies between the opening tag and the closing tag or `<% end %>`. Haml and Slim have no closing line, so only the start of the body is covered: the blank lines after `- if` or `- each do` are set, and those before the next line at the same or a lower depth are siblings\' separators and stay. A block with nothing in it loses its blank lines under `no_empty_lines` and is left alone under `empty_lines`. The lines before and after `else` and `when` belong to `Layout/EmptyLinesAroundBranches`, and `Layout/EmptyLines` `max` is applied after this rule, so `max = 0` wins over `empty_lines`. Format selection leaves blank lines as they are. For Haml and Slim, the formatter checks that the compiled template stays the same, and keeps the blank lines of a file when it would not.",
     config: text(
       "[Layout.EmptyLinesAroundBlockBody]",
       "enabled = true",
-      'style = "no_empty_lines" # or empty_lines, or keep',
+      'style = "no_empty_lines" # or empty_lines',
     ),
     examples: [
       {
@@ -186,15 +189,16 @@ export const rules: Rule[] = [
           "",
           "    %p= report.title",
           "",
-          "",
           "%footer Done",
         ),
         after: text(
           "- if @admin_section",
           "  - @reports.each do |report|",
           "    %p= report.title",
+          "",
           "%footer Done",
         ),
+        note: "Haml and Slim have no closing line, so only the blank lines after `- if` and `- each` go; the one before `%footer` separates siblings.",
       },
       {
         lang: "slim",
@@ -206,13 +210,13 @@ export const rules: Rule[] = [
           "",
           "    p = report.title",
           "",
-          "",
           "footer Done",
         ),
         after: text(
           "- if @admin_section",
           "  - @reports.each do |report|",
           "    p = report.title",
+          "",
           "footer Done",
         ),
       },
@@ -224,13 +228,16 @@ export const rules: Rule[] = [
     languages: ["erb", "haml", "slim"],
     type: "autofix",
     safe: true,
-    safeNote: "The blank lines sit between tags, where they render as nothing.",
-    status: "planned",
-    phase: 1,
+    safeNote:
+      "The blank lines sit between tags, where they render as whitespace that browsers collapse. Content where whitespace counts is left alone: `<pre>`, `<textarea>`, `<script>`, `<style>`, attribute values, comments and the Ruby in ERB tags in ERB, filters in Haml, text blocks and engine bodies in Slim. Elements that CSS styles `white-space: pre` can\'t be detected.",
+    status: "available",
+    onByDefault: [],
+    today:
+      "`style` is `no_empty_lines` (the default) or `empty_lines`, which keeps exactly one blank line there and adds it where there is none. In ERB the body is what lies between the start tag and the end tag. Haml and Slim have no closing line, so only the start of the body is covered: the blank lines after `%section` or `section` are set, and those before the next line at the same or a lower depth are siblings\' separators and stay. An element with nothing in it (`<div>` and `</div>` on two lines) loses its blank lines under `no_empty_lines` and is left alone under `empty_lines`. `Layout/EmptyLines` `max` is applied after this rule, so `max = 0` wins over `empty_lines`. Format selection leaves blank lines as they are. For Haml and Slim, the formatter checks that the compiled template stays the same, and keeps the blank lines of a file when it would not.",
     config: text(
       "[Layout.EmptyLinesAroundElementBody]",
       "enabled = true",
-      'style = "no_empty_lines" # or empty_lines, or keep',
+      'style = "no_empty_lines" # or empty_lines',
     ),
     examples: [
       {
@@ -261,15 +268,16 @@ export const rules: Rule[] = [
           "  %h2 Users",
           "  %p Active this week",
           "",
-          "",
           "%footer Done",
         ),
         after: text(
           "%section.users",
           "  %h2 Users",
           "  %p Active this week",
+          "",
           "%footer Done",
         ),
+        note: "Haml and Slim have no closing line, so only the blank line after `%section.users` goes; the one before `%footer` separates siblings.",
       },
       {
         lang: "slim",
@@ -280,13 +288,13 @@ export const rules: Rule[] = [
           "  h2 Users",
           "  p Active this week",
           "",
-          "",
           "footer Done",
         ),
         after: text(
           "section.users",
           "  h2 Users",
           "  p Active this week",
+          "",
           "footer Done",
         ),
       },
@@ -298,13 +306,16 @@ export const rules: Rule[] = [
     languages: ["erb", "haml", "slim"],
     type: "autofix",
     safe: true,
-    safeNote: "The blank lines sit between tags, where they render as nothing.",
-    status: "planned",
-    phase: 1,
+    safeNote:
+      "The blank lines sit between tags, where they render as whitespace that browsers collapse. Content where whitespace counts is left alone, as for `Layout/EmptyLines`. Two things can\'t be detected: elements that CSS styles `white-space: pre`, and blocks that capture their content and care about its whitespace (such as `<%= markdown do %>`).",
+    status: "available",
+    onByDefault: [],
+    today:
+      "`style` is `no_empty_lines` (the default) or `empty_lines`, which keeps exactly one blank line before and after the line and adds it where there is none. It covers `else`, `elsif`, `when`, `in`, `rescue` and `ensure` lines in ERB, Haml and Slim. A branch with nothing in it (`<% if a %>` directly above `<% else %>`, or `- case a` above `- when 1`) loses its blank lines under `no_empty_lines` and is left alone under `empty_lines`. `Layout/EmptyLines` `max` is applied after this rule, so `max = 0` wins over `empty_lines`. Format selection leaves blank lines as they are. For Haml and Slim, the formatter checks that the compiled template stays the same, and keeps the blank lines of a file when it would not.",
     config: text(
       "[Layout.EmptyLinesAroundBranches]",
       "enabled = true",
-      'style = "no_empty_lines" # or empty_lines, or keep',
+      'style = "no_empty_lines" # or empty_lines',
     ),
     examples: [
       {

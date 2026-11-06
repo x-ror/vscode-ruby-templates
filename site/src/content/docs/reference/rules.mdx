@@ -43,12 +43,16 @@ To change a rule for some files only, give it `include` or `exclude` globs. They
 exclude = ["**/*.haml", "app/views/legacy/**"]
 ```
 
-A rule with options takes them in its own table. `max` is a whole number, 0 or more:
+A rule with options takes them in its own table. `max` is a whole number, 0 or more; `style` is one of a few words, and a value that is not one is a problem in the file:
 
 ```toml
 [Layout.EmptyLines]
 enabled = true
 max = 2
+
+[Layout.EmptyLinesAroundBlockBody]
+enabled = true
+style = "empty_lines"
 ```
 
 ### All keys

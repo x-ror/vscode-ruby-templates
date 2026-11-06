@@ -802,6 +802,9 @@ impl Backend {
                 settings.trailing_empty_lines = false;
                 settings.max_empty_lines = None;
                 settings.align_comments = false;
+                settings.around_block_body = None;
+                settings.around_element_body = None;
+                settings.around_branches = None;
             }
             let result = format::format(&uri, lang, plain_erb, &text, &settings, rules.extra_engines());
             (Arc::new(rules), Some((uri, text, result)))
