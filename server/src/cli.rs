@@ -32,8 +32,9 @@ Usage:
   ruby-templates format [--check] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
 check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates.
-format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines
-        (off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
+format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines,
+        Layout/EmptyLinesAroundBlockBody, Layout/EmptyLinesAroundElementBody and Layout/EmptyLinesAroundBranches (all
+        off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
         Nothing else changes; a file whose structure is in doubt is left as it is, with the reason
         on stderr. Without --check or --write the result goes to stdout. --align-comments moves the
         lines inside ERB comments with the line the comment opens on.
@@ -60,7 +61,7 @@ fn legacy_format(file: &str) -> i32 {
     let formatted = std::fs::read_to_string(file).ok().and_then(|text| {
         let settings = crate::format::Settings::default();
         let indented = crate::format::slim::format(&text, settings.indent_size, &[])?;
-        Some(crate::format::blank_lines::apply(&indented.text, &indented.removable, &settings, &text))
+        Some(crate::format::blank_lines::apply(&indented.text, &indented.lines, &settings, &text))
     });
     let Some(formatted) = formatted else {
         eprintln!("{file}: cannot be formatted");

@@ -2,6 +2,7 @@
 //! `tab_size` spaces per nesting level, text and engine blocks and continuations move with their
 //! owner line, and trailing whitespace goes where Slim ignores it. Every line stays; the blank ones that may go are reported.
 
+use crate::format::blank_lines::{code_role, drop_childless_openers, Body, LineInfo, LineRole};
 use crate::format::Indented;
 use crate::slim::parser::{indent_width, parse, Role};
 use crate::util::{leading_ws, raw_lines, BOM};
@@ -53,8 +54,34 @@ pub(crate) fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> O
         }
         out.push_str(cr);
     }
-    let removable = parsed.lines.iter().map(|info| info.role == Role::Blank && !info.inside_block).collect();
-    Some(Indented { text: out, removable, notes: vec![] })
+    let mut infos: Vec<LineInfo> = parsed
+        .lines
+        .iter()
+        .zip(&lines)
+        .enumerate()
+        .map(|(i, (info, &(_, line, _)))| LineInfo {
+            removable: info.role == Role::Blank && !info.inside_block,
+            depth: match info.role {
+                Role::Structural { depth } => Some(depth),
+                _ => None,
+            },
+            role: if matches!(info.role, Role::Structural { .. }) { node_role(line.trim_start()) } else { LineRole::Other },
+            tail: parsed.lines[i + 1..].iter().take_while(|next| next.role == Role::Inner { owner: i }).count(),
+            ..LineInfo::default()
+        })
+        .collect();
+    drop_childless_openers(&mut infos);
+    Some(Indented { text: out, lines: infos, notes: vec![] })
+}
+
+/// What a node does if it has children: Ruby opens a block, a tag an element; text and comments open nothing.
+fn node_role(content: &str) -> LineRole {
+    match content.chars().next() {
+        Some('-') => code_role(&content[1..]),
+        Some('=') => LineRole::Opens(Body::Block),
+        Some('|' | '\'' | '/' | '<' | '\\') | None => LineRole::Other,
+        Some(_) => LineRole::Opens(Body::Element),
+    }
 }
 
 #[cfg(test)]
@@ -63,6 +90,10 @@ mod tests {
 
     fn reindent(text: &str, width: usize, extra_engines: &[String]) -> Option<String> {
         format(text, width, extra_engines).map(|indented| indented.text)
+    }
+
+    fn info(text: &str) -> Vec<(Option<usize>, LineRole)> {
+        format(text, 2, &[]).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
     }
 
     fn fmt(text: &str) -> String {
@@ -116,12 +147,36 @@ mod tests {
         assert_eq!(fmt("div\n    | text\n\n\n        "), "div\n  | text\n\n\n");
         assert_eq!(fmt("p\r\n\r\n"), "p\r\n\r\n");
         assert_eq!(fmt("\u{feff}\n"), "\u{feff}\n");
-        let removable = |text: &str| format(text, 2, &[]).unwrap().removable;
+        let removable = |text: &str| format(text, 2, &[]).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
         assert_eq!(removable("p\n\nq\n\n"), [false, true, false, true, true]);
         // Between lines of a text block or an engine body a blank line is text; after the block it is not.
         assert_eq!(removable("| a\n\n  b\n\np\n"), [false, false, false, true, false, true]);
         assert_eq!(removable("javascript:\n  x\n\n  y\n"), [false, false, false, false, true]);
         assert_eq!(removable("/ c\n\n  d\n"), [false, true, false, true]);
+    }
+
+    #[test]
+    fn lines_report_their_depth_and_what_they_open() {
+        use LineRole::{Branch, Opens, Other};
+        let text = "- if a\n  div\n    = f do\n      | x\n- else\n  javascript:\n    y\nul\n  li\n/ c\n  d\np\n";
+        assert_eq!(
+            info(text),
+            [
+                (Some(0), Opens(Body::Block)),
+                (Some(1), Opens(Body::Element)),
+                (Some(2), Opens(Body::Block)),
+                (Some(3), Other),
+                (Some(0), Branch),
+                (Some(1), Other),
+                (None, Other),
+                (Some(0), Opens(Body::Element)),
+                (Some(1), Other),
+                (Some(0), Other),
+                (None, Other),
+                (Some(0), Other),
+                (None, Other),
+            ]
+        );
     }
 
     #[test]

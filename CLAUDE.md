@@ -53,6 +53,7 @@ Run the ones that cover what you changed; all of them before a release.
 - Rust: `cargo fmt --manifest-path server/Cargo.toml --check`, `cargo clippy --manifest-path server/Cargo.toml`, `cargo test --manifest-path server/Cargo.toml` (also asserts `test/broken/bad.html.{haml,slim}`)
 - Server end to end: `bun run build:server && bun run test:server && bun test/e2e.js && bun test/cli.js` (each asserts and exits non-zero on a mismatch)
 - Grammars: `bun run test:tokens` (snapshots in `test/__snapshots__`, `UPDATE=1` rewrites them)
+- Rule examples: `bun run test:rules` (after `bun run build:server`; runs every example of an available autofix rule in `site/src/data/rules.ts` through `ruby-templates format`)
 - JS: `bun run format:check`, `bun run test:unit`, `bun run test:slim`, `bun run test:snippets`, `bun run build` (the bundle VS Code loads); any JS file: `bun build --no-bundle <file>`
 - Slim/Haml formatters: `bun run test:format` (needs `ruby -rslim` / `ruby -rhaml`)
 - npm package: `bun test/npm.js` (after `cargo build --release`; packs and installs offline)
@@ -63,6 +64,7 @@ Run the ones that cover what you changed; all of them before a release.
 - Rust logic: `#[cfg(test)] mod tests` in the same file; file-system cases on a temp dir (see `rails/partials.rs` `model_render_partials`).
 - LSP behaviour through the real server: a case in `test/e2e.js`.
 - The `ruby-templates` command line (arguments, exit codes, files written): a case in `test/cli.js`.
+- A rule's documented behaviour: the examples of its entry in `site/src/data/rules.ts` (checked by `test:rules`); set its `status` there in the same PR, the `rules.rs` sync test fails otherwise.
 - Grammar scopes: a line in the matching `test/sample.*` (new samples need an entry in `test/tokenize.js` `samples`).
 - JS helpers: the matching `test/*.js` run by `test:unit`/`test:slim`/`test:snippets`, with `assert`.
 - Client behaviour that needs VS Code (commands, providers, settings): a check in `test/vscode/suite.js`.

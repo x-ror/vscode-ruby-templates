@@ -1,6 +1,6 @@
 //! `.ruby-templates.toml`, read against the rule registry. A part that can't be read is dropped with a `Problem`; the rest is kept.
 
-use super::{by_code, by_name, departments, CountOption, Kind, Rule};
+use super::{by_code, by_name, departments, ChoiceOption, CountOption, Kind, Rule};
 use crate::glob::Glob;
 use crate::util::LineIndex;
 use std::ops::Range as Span;
@@ -33,6 +33,8 @@ pub struct RuleTable {
     pub exclude: Option<Vec<Glob>>,
     /// The rule's whole-number options that the table sets, by key.
     pub counts: Vec<(&'static str, usize)>,
+    /// The rule's word options that the table sets, by key.
+    pub choices: Vec<(&'static str, &'static str)>,
 }
 
 /// One of `[erb]`, `[haml]`, `[slim]` (Skim too), `[jbuilder]`.
@@ -183,14 +185,20 @@ impl Reader<'_> {
                 "enabled" => parsed.enabled = self.boolean("enabled", value),
                 "include" => parsed.include = self.globs("include", value),
                 "exclude" => parsed.exclude = self.globs("exclude", value),
-                other => match rule.options.iter().find(|option| option.key == other) {
-                    Some(option) => parsed.counts.extend(self.count(option, value)),
-                    None => {
-                        let takes = RULE_KEYS.into_iter().chain(rule.options.iter().map(|option| option.key)).collect::<Vec<_>>();
+                other => {
+                    let count = rule.options.iter().find(|option| option.key == other);
+                    let choice = rule.choices.iter().find(|choice| choice.key == other);
+                    if let Some(option) = count {
+                        parsed.counts.extend(self.count(option, value));
+                    } else if let Some(option) = choice {
+                        parsed.choices.extend(self.choice(option, value));
+                    } else {
+                        let own = rule.options.iter().map(|option| option.key).chain(rule.choices.iter().map(|choice| choice.key));
+                        let takes = RULE_KEYS.into_iter().chain(own).collect::<Vec<_>>();
                         let message = format!("unknown key `{other}` in [{table_name}]; it takes {}", takes.join(", "));
                         self.problem(key.span(), message);
                     }
-                },
+                }
             }
         }
         parsed
@@ -202,6 +210,16 @@ impl Reader<'_> {
             self.problem(value.span(), format!("`{}` must be a whole number, 0 or more", option.key));
         }
         count.map(|count| (option.key, count))
+    }
+
+    fn choice(&mut self, option: &ChoiceOption, value: Value) -> Option<(&'static str, &'static str)> {
+        let word = value.get_ref().as_str().and_then(|word| option.values.iter().find(|&&allowed| allowed == word));
+        if word.is_none() {
+            let got = value.get_ref().as_str().map_or_else(|| value.get_ref().type_str().to_string(), |word| format!("\"{word}\""));
+            let message = format!("`{}` must be one of {}, got {got}", option.key, option.values.join(", "));
+            self.problem(value.span(), message);
+        }
+        word.map(|&word| (option.key, word))
     }
 
     fn as_table<'v>(&mut self, name: &str, value: &'v Spanned<DeValue<'v>>) -> Option<&'v DeTable<'v>> {
@@ -395,6 +413,25 @@ colour = 1
     }
 
     #[test]
+    fn a_style_is_one_of_its_words() {
+        let file = read(
+            "[Layout.EmptyLinesAroundBranches]\nstyle = \"empty_lines\"\n[Layout.EmptyLinesAroundBlockBody]\nstyle = \"no_empty_lines\"\n",
+        );
+        assert!(file.problems.is_empty(), "{:?}", messages(&file));
+        let style = |name: &str| file.rules.iter().find(|(rule, _)| rule.name == name).map(|(_, table)| table.choices.clone());
+        assert_eq!(style("Layout/EmptyLinesAroundBranches"), Some(vec![("style", "empty_lines")]));
+        assert_eq!(style("Layout/EmptyLinesAroundBlockBody"), Some(vec![("style", "no_empty_lines")]));
+        for (value, got) in
+            [("\"keep\"", "\"keep\""), ("true", "boolean"), ("1", "integer"), ("\"\"", "\"\""), ("[\"empty_lines\"]", "array")]
+        {
+            let file = read(&format!("[Layout.EmptyLinesAroundElementBody]\nstyle = {value}\n"));
+            let want = [format!("2:9: `style` must be one of no_empty_lines, empty_lines, got {got}")];
+            assert_eq!(messages(&file), want, "style = {value}");
+            assert!(file.rules[0].1.choices.is_empty(), "style = {value}");
+        }
+    }
+
+    #[test]
     fn unknown_keys_list_what_the_rule_takes() {
         let file = read("[Layout.EmptyLines]\nmaximum = 1\n[Layout.TrailingEmptyLines]\nmax = 1\n");
         assert_eq!(
@@ -403,6 +440,11 @@ colour = 1
                 "2:1: unknown key `maximum` in [Layout.EmptyLines]; it takes enabled, include, exclude, max",
                 "4:1: unknown key `max` in [Layout.TrailingEmptyLines]; it takes enabled, include, exclude",
             ]
+        );
+        let file = read("[Layout.EmptyLinesAroundBranches]\nmax = 1\n");
+        assert_eq!(
+            messages(&file),
+            ["2:1: unknown key `max` in [Layout.EmptyLinesAroundBranches]; it takes enabled, include, exclude, style"]
         );
     }
 

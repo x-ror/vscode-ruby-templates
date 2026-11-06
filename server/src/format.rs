@@ -11,6 +11,7 @@ use crate::lang::{html_host, is_partial, TemplateLang};
 use crate::rails::project::Projects;
 use crate::ruby::strict_locals::RubyContext;
 use crate::util;
+use blank_lines::LineInfo;
 use std::fmt;
 use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Uri};
 
@@ -24,12 +25,34 @@ pub struct Settings {
     pub max_empty_lines: Option<usize>,
     /// Move the lines inside an ERB template's comments with the line the comment opens on.
     pub align_comments: bool,
+    /// `Layout/EmptyLinesAroundBlockBody`; `None` leaves those blank lines.
+    pub around_block_body: Option<Style>,
+    /// `Layout/EmptyLinesAroundElementBody`.
+    pub around_element_body: Option<Style>,
+    /// `Layout/EmptyLinesAroundBranches`.
+    pub around_branches: Option<Style>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { indent_size: 2, trailing_empty_lines: true, max_empty_lines: None, align_comments: false }
+        Self {
+            indent_size: 2,
+            trailing_empty_lines: true,
+            max_empty_lines: None,
+            align_comments: false,
+            around_block_body: None,
+            around_element_body: None,
+            around_branches: None,
+        }
     }
+}
+
+/// How many blank lines the `EmptyLinesAround…` rules leave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    NoEmptyLines,
+    /// Exactly one.
+    EmptyLines,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,9 +92,8 @@ pub(crate) fn skip<T>(kind: SkipKind, reason: impl Into<String>) -> Result<T, Sk
 /// A language's re-indented text.
 pub(crate) struct Indented {
     pub text: String,
-    /// Per line of `text`: a blank one may be removed. False where whitespace counts: filter and text blocks, `<pre>`,
-    /// continuations of a tag or of Ruby.
-    pub removable: Vec<bool>,
+    /// What each line of `text` is to the blank-line rules.
+    pub lines: Vec<LineInfo>,
     /// What was left alone inside an otherwise formatted file, for `--verbose`.
     pub notes: Vec<String>,
 }
@@ -171,14 +193,15 @@ fn format_once(
     Ok(tidy(lang, indented, text, settings, extra_engines))
 }
 
-/// The blank-line rules applied to `indented`; left out, with a note, when the compiled template would change.
+/// The blank-line rules applied to `indented`; left out, with a note, when removing or adding lines would change the
+/// compiled template.
 fn tidy(lang: TemplateLang, indented: Indented, original: &str, settings: &Settings, extra_engines: &[String]) -> Formatted {
-    let Indented { text: indented, removable, mut notes } = indented;
-    let tidied = blank_lines::apply(&indented, &removable, settings, original);
+    let Indented { text: indented, lines, mut notes } = indented;
+    let tidied = blank_lines::apply(&indented, &lines, settings, original);
     if tidied == indented || same_compilation_ignoring_lines(lang, &indented, &tidied, extra_engines) {
         return Formatted { text: tidied, notes };
     }
-    notes.push("blank lines kept: removing them would change the compiled output".to_string());
+    notes.push("blank lines kept: changing them would change the compiled output".to_string());
     Formatted { text: indented, notes }
 }
 
@@ -236,6 +259,8 @@ fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blank_lines::tests::removable;
+    use blank_lines::{Body, LineRole};
 
     fn uri(name: &str) -> Uri {
         format!("file:///app/views/users/{name}").parse::<Uri>().unwrap()
@@ -393,23 +418,80 @@ mod tests {
     fn a_failed_comparison_keeps_the_indented_text_and_says_so() {
         // The mask flags a text block's blank line, as a bug in a formatter would.
         let text = "div\n    | a\n\n      b\n";
-        let indented = Indented { text: "div\n  | a\n\n    b\n".to_string(), removable: vec![true; 5], notes: vec![] };
+        let indented = Indented { text: "div\n  | a\n\n    b\n".to_string(), lines: removable(5), notes: vec![] };
         let tidied = tidy(TemplateLang::Slim, indented, text, &collapsing(0), &[]);
         assert_eq!(tidied.text, "div\n  | a\n\n    b\n");
-        assert_eq!(tidied.notes, ["blank lines kept: removing them would change the compiled output"]);
-        let indented = Indented { text: "p\n\n\nq\n".to_string(), removable: vec![true; 5], notes: vec![] };
+        assert_eq!(tidied.notes, ["blank lines kept: changing them would change the compiled output"]);
+        let indented = Indented { text: "p\n\n\nq\n".to_string(), lines: removable(5), notes: vec![] };
         assert_eq!(tidy(TemplateLang::Slim, indented, text, &collapsing(0), &[]).text, "p\nq\n");
+    }
+
+    fn around(style: Style) -> Settings {
+        Settings { around_block_body: Some(style), around_element_body: Some(style), around_branches: Some(style), ..Settings::default() }
+    }
+
+    #[test]
+    fn the_rules_around_bodies_and_branches_work_in_all_three_languages() {
+        let (no, one) = (around(Style::NoEmptyLines), around(Style::EmptyLines));
+        let erb = "<div>\n\n<% if a %>\n\n<p>x</p>\n\n<% else %>\n<p>y</p>\n<% end %>\n\n</div>\n";
+        assert_eq!(
+            fmt("a.html.erb", erb, &no).as_deref(),
+            Ok("<div>\n  <% if a %>\n    <p>x</p>\n  <% else %>\n    <p>y</p>\n  <% end %>\n</div>\n")
+        );
+        let erb_one = "<div>\n\n  <% if a %>\n\n    <p>x</p>\n\n  <% else %>\n\n    <p>y</p>\n\n  <% end %>\n\n</div>\n";
+        assert_eq!(fmt("a.html.erb", erb, &one).as_deref(), Ok(erb_one));
+        assert_eq!(fmt("a.html.erb", erb_one, &one).as_deref(), Ok(erb_one), "stable");
+        let haml = "%div\n\n    - if a\n\n        %p x\n\n    - else\n        %p y\n\n%footer\n";
+        assert_eq!(fmt("a.haml", haml, &no).as_deref(), Ok("%div\n  - if a\n    %p x\n  - else\n    %p y\n\n%footer\n"));
+        let haml_one = "%div\n\n  - if a\n\n    %p x\n\n  - else\n\n    %p y\n\n%footer\n";
+        assert_eq!(fmt("a.haml", haml, &one).as_deref(), Ok(haml_one));
+        let slim = "div\n\n    - if a\n\n        p x\n\n    - else\n        p y\n\nfooter\n";
+        assert_eq!(fmt("a.slim", slim, &no).as_deref(), Ok("div\n  - if a\n    p x\n  - else\n    p y\n\nfooter\n"));
+        let slim_one = "div\n\n  - if a\n\n    p x\n\n  - else\n\n    p y\n\nfooter\n";
+        assert_eq!(fmt("a.slim", slim, &one).as_deref(), Ok(slim_one));
+        assert_eq!(fmt("a.slim", slim_one, &one).as_deref(), Ok(slim_one), "stable");
+        // Off by default, and `max` has the last word.
+        assert_eq!(fmt("a.slim", "div\n\n  p x\n", &Settings::default()).as_deref(), Ok("div\n\n  p x\n"));
+        let max_zero = Settings { max_empty_lines: Some(0), ..one };
+        assert_eq!(fmt("a.slim", "div\n  p x\n", &max_zero).as_deref(), Ok("div\n  p x\n"));
+    }
+
+    #[test]
+    fn a_filter_before_a_node_does_not_stop_the_blank_lines_around_it() {
+        let haml = "%div\n  :plain\n    a\n  %p x\n";
+        assert_eq!(fmt("a.haml", haml, &around(Style::EmptyLines)).as_deref(), Ok("%div\n\n  :plain\n    a\n  %p x\n"));
+    }
+
+    #[test]
+    fn a_blank_line_added_inside_a_text_block_is_refused() {
+        // The line info puts `b`, which is text, among the nodes, as a bug in a formatter would.
+        let text = "div\n  | a\n    b\n";
+        let node = |depth, role| LineInfo { depth: Some(depth), role, ..LineInfo::default() };
+        let opens = LineRole::Opens(Body::Element);
+        let lines = vec![node(0, opens), node(1, opens), node(2, LineRole::Other)];
+        let indented = Indented { text: text.to_string(), lines, notes: vec![] };
+        let tidied = tidy(TemplateLang::Slim, indented, text, &around(Style::EmptyLines), &[]);
+        assert_eq!(tidied.text, text);
+        assert_eq!(tidied.notes, ["blank lines kept: changing them would change the compiled output"]);
+        // The same bug on Haml, in a filter.
+        let haml = "%div\n  :plain\n    a\n    b\n";
+        let filter = LineInfo { tail: 1, ..node(1, opens) };
+        let lines = vec![node(0, opens), filter, LineInfo::default(), node(2, LineRole::Other)];
+        let indented = Indented { text: haml.to_string(), lines, notes: vec![] };
+        let tidied = tidy(TemplateLang::Haml, indented, haml, &around(Style::EmptyLines), &[]);
+        assert_eq!(tidied.text, haml);
+        assert_eq!(tidied.notes.len(), 1);
     }
 
     #[test]
     fn a_blank_pass_that_would_change_the_compiled_output_is_refused() {
         // Flagging a text block's blank line as removable is the bug this guards against.
         let slim = "div\n  | a\n\n    b\n";
-        let flagged = blank_lines::apply(slim, &[true; 5], &collapsing(0), slim);
+        let flagged = blank_lines::apply(slim, &removable(5), &collapsing(0), slim);
         assert_eq!(flagged, "div\n  | a\n    b\n");
         assert!(!same_compilation_ignoring_lines(TemplateLang::Slim, slim, &flagged, &[]));
         let haml = ":plain\n  a\n\n  b\n";
-        let flagged = blank_lines::apply(haml, &[true; 5], &collapsing(0), haml);
+        let flagged = blank_lines::apply(haml, &removable(5), &collapsing(0), haml);
         assert!(!same_compilation_ignoring_lines(TemplateLang::Haml, haml, &flagged, &[]));
         // Removing blank lines between nodes changes only line numbers.
         assert!(same_compilation_ignoring_lines(TemplateLang::Slim, "p\n\n\nq\n", "p\nq\n", &[]));
@@ -483,6 +565,8 @@ mod tests {
             Settings { indent_size: 4, ..d() },
             Settings { trailing_empty_lines: false, ..d() },
             Settings { max_empty_lines: Some(0), ..d() },
+            around(Style::NoEmptyLines),
+            around(Style::EmptyLines),
         ]
     }
 

@@ -353,6 +353,75 @@ try {
     /:2:7: warning: `max` must be a whole number, 0 or more/,
   );
 
+  // The rules around block and element bodies and branches: one table for all three, each style, all three languages.
+  const around = path.join(root, "around");
+  fs.mkdirSync(around);
+  fs.writeFileSync(
+    path.join(around, ".editorconfig"),
+    "root = true\n[*]\nindent_size = 2\n",
+  );
+  const aroundFormat = (style, name, text) => {
+    fs.writeFileSync(
+      path.join(around, ".ruby-templates.toml"),
+      [
+        "Layout.EmptyLinesAroundBlockBody",
+        "Layout.EmptyLinesAroundElementBody",
+        "Layout.EmptyLinesAroundBranches",
+      ]
+        .map((rule) => `[${rule}]\nenabled = true\nstyle = "${style}"\n`)
+        .join(""),
+    );
+    return run(["format", "--stdin-filepath", path.join(around, name)], text)
+      .stdout;
+  };
+  const bodies = {
+    "a.html.erb": [
+      "<div>\n\n  <% if a %>\n\n    <p>x</p>\n\n  <% else %>\n\n    <pre>\n\n    </pre>\n  <% end %>\n\n</div>\n",
+      "<div>\n  <% if a %>\n    <p>x</p>\n  <% else %>\n    <pre>\n\n    </pre>\n  <% end %>\n</div>\n",
+      "<div>\n\n  <% if a %>\n\n    <p>x</p>\n\n  <% else %>\n\n    <pre>\n\n    </pre>\n\n  <% end %>\n\n</div>\n",
+    ],
+    "a.html.haml": [
+      "%div\n\n  - if a\n\n    %p x\n\n  - else\n\n    :plain\n      a\n\n      b\n\n%footer\n",
+      // The blank line before `%footer` separates siblings; Haml has no closing line.
+      "%div\n  - if a\n    %p x\n  - else\n    :plain\n      a\n\n      b\n\n%footer\n",
+      "%div\n\n  - if a\n\n    %p x\n\n  - else\n\n    :plain\n      a\n\n      b\n\n%footer\n",
+    ],
+    "a.html.slim": [
+      "div\n\n  - if a\n\n    p x\n\n  - else\n\n    | a\n\n      b\n\nfooter\n",
+      "div\n  - if a\n    p x\n  - else\n    | a\n\n      b\n\nfooter\n",
+      "div\n\n  - if a\n\n    p x\n\n  - else\n\n    | a\n\n      b\n\nfooter\n",
+    ],
+  };
+  for (const [name, [messy, none, one]] of Object.entries(bodies)) {
+    assert.strictEqual(
+      aroundFormat("no_empty_lines", name, messy),
+      none,
+      `${name}: no_empty_lines`,
+    );
+    assert.strictEqual(
+      aroundFormat("empty_lines", name, none),
+      one,
+      `${name}: empty_lines adds them`,
+    );
+  }
+  fs.writeFileSync(
+    path.join(around, ".ruby-templates.toml"),
+    '[Layout.EmptyLinesAroundBranches]\nstyle = "keep"\n',
+  );
+  r = run(
+    [
+      "format",
+      "--verbose",
+      "--stdin-filepath",
+      path.join(around, "a.html.erb"),
+    ],
+    "<p>x</p>\n",
+  );
+  assert.match(
+    r.stderr,
+    /:2:9: warning: `style` must be one of no_empty_lines, empty_lines, got "keep"/,
+  );
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
