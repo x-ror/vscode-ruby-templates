@@ -3,6 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import { LANGS } from "./src/lib/grammars.mjs";
 import { THEMES } from "./src/lib/themes.mjs";
+import { readableLines } from "./src/lib/readable-lines.mjs";
 
 export default defineConfig({
   site: "https://x-ror.github.io",
@@ -25,9 +26,14 @@ export default defineConfig({
         baseUrl:
           "https://github.com/x-ror/vscode-ruby-templates/edit/main/site/",
       },
+      head: [{ tag: "meta", attrs: { name: "author", content: "x-ror" } }],
+      components: {
+        MarkdownContent: "./src/components/starlight/Article.astro",
+      },
       customCss: ["./src/styles/fonts.css", "./src/styles/theme.css"],
       expressiveCode: {
         themes: [THEMES.dark, THEMES.light],
+        plugins: [readableLines()],
         shiki: { langs: LANGS },
       },
       sidebar: [

@@ -27,6 +27,7 @@ const faultsByLine = Map.groupBy(
   faults.map((fault, i) => ({ ...fault, n: i + 1 })),
   (fault) => fault.line,
 );
+// Gutter marks are pointer shortcuts, hidden from screen readers and reader view so the code stays clean; the fault list carries the problems.
 const marksPerLine = Math.max(1, ...[...faultsByLine.values()].map((marks) => marks.length));
 const styleOf = (style: Record<string, string> | undefined) =>
   Object.entries(style ?? {})
@@ -40,8 +41,8 @@ const styleOf = (style: Record<string, string> | undefined) =>
     const line = i + 1;
     const marks = faultsByLine.get(line) ?? [];
     return (
-      <span class:list={["listing__line", { "listing__line--fault": marks.length }]} id={`${id}-L${line}`}><span class="listing__number" aria-hidden="true">{line}</span><span class="listing__gutter">{marks.map((m) => (
-        <a class="fault-mark" href={`#${id}-fault-${m.n}`} aria-label={`Problem ${m.n} on line ${line}`}><span class="fault-mark__number">{m.n}</span></a>
+      <span class:list={["listing__line", { "listing__line--fault": marks.length }]} id={`${id}-L${line}`}><span class="listing__number" aria-hidden="true">{line}</span><span class="listing__gutter" aria-hidden="true">{marks.map((m) => (
+        <a class="fault-mark" href={`#${id}-fault-${m.n}`} tabindex="-1"><span class="fault-mark__number">{m.n}</span></a>
       ))}</span><span class="listing__text">{tokens.map((t) => <span class="listing__token" style={styleOf(t.htmlStyle)}>{t.content}</span>)}</span>{"\n"}</span>
     );
   })}</code></pre>
