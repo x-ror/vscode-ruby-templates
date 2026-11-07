@@ -69,10 +69,10 @@ impl Backend {
     async fn local_passes(&self, project: Project, path: &Path, local: &str) -> Result<Vec<Location>> {
         let Some(views) = paths::views_root(path) else { return Ok(vec![]) };
         let (open, partial, local) = (self.open_texts(), path.to_path_buf(), local.to_string());
-        let extra_engines = self.engines_at(path);
+        let engines = self.engines_lookup();
         off_server_task(move || {
-            let sources = partial_rename::sources(&views, &open);
-            partial_rename::local_passes(&project, &partial, &local, &sources, &extra_engines)
+            let sources = partial_rename::sources(&views, &open, engines);
+            partial_rename::local_passes(&project, &partial, &local, &sources)
         })
         .await
     }

@@ -28,6 +28,8 @@ pub struct Source {
     /// `None` for `.rb` files, where every string is code.
     pub lang: Option<TemplateLang>,
     pub text: String,
+    /// The Slim engines that apply to this file; empty for other languages.
+    pub extra_engines: Vec<String>,
 }
 
 /// `app/views/users/_card.html.slim` → `users/card`, and `app/views/_card.html.slim` → `/card`, the name Rails looks up
@@ -76,14 +78,13 @@ fn is_first_match_from(project: &Project, source: &Path, views: &Path, qualified
 /// `want` keeps, so the code filter is built only for sources with a candidate.
 fn code_refs<'s, T>(
     source: &'s Source,
-    extra_engines: &[String],
     find: impl Fn(&'s str, usize, &'s str, &HamlPipes) -> Vec<(RenderRef, T)>,
     want: impl Fn(&RenderRef) -> bool,
 ) -> Vec<(usize, usize, RenderRef, T)> {
     let pipes = HamlPipes::new(source.lang.unwrap_or(TemplateLang::Ruby));
     let shift = |offset: usize| move |(r, found): (RenderRef, T)| (offset + r.start, offset + r.end, r, found);
     if matches!(source.lang, Some(TemplateLang::Slim | TemplateLang::Skim)) {
-        let spans = outline::slim::code_spans(&source.text, extra_engines);
+        let spans = outline::slim::code_spans(&source.text, &source.extra_engines);
         return spans
             .into_iter()
             .flat_map(|(s, e)| find(&source.text, s, &source.text[s..e], &pipes).into_iter().filter(|(r, _)| want(r)).map(shift(s)))
@@ -98,7 +99,7 @@ fn code_refs<'s, T>(
     if candidates.is_empty() {
         return vec![];
     }
-    let template_code = source.lang.map(|lang| render_filter(lang, &source.text, extra_engines));
+    let template_code = source.lang.map(|lang| render_filter(lang, &source.text, &source.extra_engines));
     candidates
         .into_iter()
         .filter(|(i, offset, line, (r, _))| match &template_code {
@@ -194,20 +195,19 @@ fn renders_named<'s, 'a>(
 }
 
 /// Every reference in `sources` that resolves to one of `files`, `render @users` included.
-pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+pub fn references(project: &Project, files: &[PathBuf], sources: &[Source]) -> Vec<Location> {
     let stems = partial_stems(project, files);
     let mut out = Vec::new();
     for source in sources {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
-        let named = code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
+        let named = code_refs(source, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
             .into_iter()
             .filter(|(_, _, r, _)| files.iter().any(|f| f.parent().is_some_and(|d| may_look_in(project, &source.path, r, d))))
             .filter(|(start, _, r, _)| ref_targets(project, source, *start, r).iter().any(|t| files.contains(t)))
             .map(|(start, end, ..)| (start, end));
         let models = code_refs(
             source,
-            extra_engines,
             |_, _, line, _| model_refs(line).into_iter().map(|r| (r, ())).collect(),
             |r| may_name(&stems, &crate::rails::inflect::singularize(&r.name)),
         )
@@ -223,8 +223,8 @@ pub fn references(project: &Project, files: &[PathBuf], sources: &[Source], extr
 }
 
 /// The `render` calls of `partial` that pass `local` (`render "card", user: u`), at the local's key.
-pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
-    local_keys(project, partial, local, sources, extra_engines)
+pub fn local_passes(project: &Project, partial: &Path, local: &str, sources: &[Source]) -> Vec<Location> {
+    local_keys(project, partial, local, sources)
         .into_iter()
         .filter_map(|LocalKey { source, key, .. }| {
             let (start, end) = key?;
@@ -242,10 +242,9 @@ pub fn local_key_edits(
     local: &str,
     new: &str,
     sources: &[Source],
-    extra_engines: &[String],
 ) -> (Vec<(Uri, TextEdit)>, Vec<Location>) {
     let (mut edits, mut unread) = (Vec::new(), Vec::new());
-    for LocalKey { source, call, key } in local_keys(project, partial, local, sources, extra_engines) {
+    for LocalKey { source, call, key } in local_keys(project, partial, local, sources) {
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         let Some((start, end)) = key else {
@@ -271,14 +270,12 @@ struct LocalKey<'s> {
 }
 
 /// Each `render` of `partial` that passes `local`, or whose locals can't be read.
-fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [Source], extra_engines: &[String]) -> Vec<LocalKey<'s>> {
+fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [Source]) -> Vec<LocalKey<'s>> {
     let files = [partial.to_path_buf()];
     let stems = partial_stems(project, &files);
     let mut out = Vec::new();
     for source in sources {
-        for (start, _, r, call) in
-            code_refs(source, extra_engines, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name))
-        {
+        for (start, _, r, call) in code_refs(source, renders_named(&stems, project.prism_version()), |r| may_name(&stems, &r.name)) {
             if !files[0].parent().is_some_and(|d| may_look_in(project, &source.path, &r, d))
                 || !ref_targets(project, source, start, &r).contains(&files[0])
             {
@@ -298,7 +295,7 @@ fn local_keys<'s>(project: &Project, partial: &Path, local: &str, sources: &'s [
 }
 
 /// The `t("…")` calls in code whose full key is `key`; lazy `.x` keys count only in views, where they have a scope.
-pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_engines: &[String]) -> Vec<Location> {
+pub fn i18n_references(project: &Project, key: &str, sources: &[Source]) -> Vec<Location> {
     let last = key.rsplit('.').next().unwrap_or(key);
     let find = |line: &str| if line.contains(last) { i18n_refs(line) } else { vec![] };
     let mut out = Vec::new();
@@ -306,7 +303,7 @@ pub fn i18n_references(project: &Project, key: &str, sources: &[Source], extra_e
         let Some(uri) = crate::util::file_uri(&source.path) else { continue };
         let index = LineIndex::new(&source.text);
         let found = |_: &str, _, line: &str, _: &HamlPipes| find(line).into_iter().map(|r| (r, ())).collect();
-        for (start, end, ..) in code_refs(source, extra_engines, found, |r| key.ends_with(r.name.as_str()))
+        for (start, end, ..) in code_refs(source, found, |r| key.ends_with(r.name.as_str()))
             .into_iter()
             .filter(|(_, _, r, _)| i18n::full_key(project, &source.path, &r.name).is_some_and(|full| full == key))
         {
@@ -338,20 +335,25 @@ const CODE_DIRS: &[&str] = &["controllers", "helpers", "components"];
 
 /// Templates under `views`, plus Ruby files and templates in app/{controllers,helpers,components}, that mention
 /// `render` or `partial`, as every reference does. Text of `open` documents wins over the disk copy, which may lack
-/// unsaved edits.
-pub fn sources(views: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
+/// unsaved edits. `engines` gives the Slim engines of each Slim file.
+pub fn sources(views: &Path, open: &HashMap<PathBuf, String>, engines: impl FnMut(&Path) -> Vec<String>) -> Vec<Source> {
     let code_dirs = views.parent().into_iter().flat_map(|app| CODE_DIRS.iter().map(move |d| app.join(d)));
     let may_render = |text: &str| text.contains("render") || text.contains("partial");
-    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open, may_render)
+    sources_in(std::iter::once(views.to_path_buf()).chain(code_dirs), open, may_render, engines)
 }
 
 /// Templates and Ruby files anywhere in `app` and the app's `lib`: translations are looked up from models,
 /// mailers and jobs too.
-pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>) -> Vec<Source> {
-    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open, |_| true)
+pub fn i18n_sources(app: &Path, open: &HashMap<PathBuf, String>, engines: impl FnMut(&Path) -> Vec<String>) -> Vec<Source> {
+    sources_in(std::iter::once(app.to_path_buf()).chain(app.parent().map(|rails| rails.join("lib"))), open, |_| true, engines)
 }
 
-fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, String>, keep: fn(&str) -> bool) -> Vec<Source> {
+fn sources_in(
+    roots: impl Iterator<Item = PathBuf>,
+    open: &HashMap<PathBuf, String>,
+    keep: fn(&str) -> bool,
+    mut engines: impl FnMut(&Path) -> Vec<String>,
+) -> Vec<Source> {
     let roots: Vec<PathBuf> = roots.collect();
     // A document opened but not saved yet is on no disk walk.
     let unsaved = open.keys().filter(|path| !path.exists() && roots.iter().any(|root| path.starts_with(root))).cloned();
@@ -367,19 +369,16 @@ fn sources_in(roots: impl Iterator<Item = PathBuf>, open: &HashMap<PathBuf, Stri
                 _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None).filter(|&lang| lang != TemplateLang::Liquid)?),
             };
             let text = crate::util::open_or_read(open.get(&path).cloned(), &path)?;
-            keep(&text).then_some(Source { path, lang, text })
+            let slim = matches!(lang, Some(TemplateLang::Slim | TemplateLang::Skim));
+            let extra_engines = if slim { engines(&path) } else { vec![] };
+            keep(&text).then_some(Source { path, lang, text, extra_engines })
         })
         .collect()
 }
 
 /// Edits for every partial reference that resolves only to renamed files that all agree on the new name;
 /// a reference also matching a file left in place (another format or variant) is not touched.
-pub fn render_edits(
-    project: &Project,
-    renames: &[(PathBuf, PathBuf)],
-    sources: &[Source],
-    extra_engines: &[String],
-) -> HashMap<Uri, Vec<TextEdit>> {
+pub fn render_edits(project: &Project, renames: &[(PathBuf, PathBuf)], sources: &[Source]) -> HashMap<Uri, Vec<TextEdit>> {
     let folder_renamed = renames.iter().any(|(old, _)| old.is_dir());
     let stems = partial_stems(project, renames.iter().map(|(old, _)| old));
 
@@ -389,7 +388,7 @@ pub fn render_edits(
         let mut edits = Vec::new();
         let renamed = |r: &RenderRef| folder_renamed || may_name(&stems, &r.name);
         let found = |text, at, line, pipes: &HamlPipes| render_calls_in(text, at, line, pipes, project.prism_version(), renamed);
-        for (start, end, r, _) in code_refs(source, extra_engines, found, renamed) {
+        for (start, end, r, _) in code_refs(source, found, renamed) {
             let names: Option<Vec<String>> = ref_targets(project, source, start, &r)
                 .iter()
                 .map(|t| new_ref_name(project, &r.name, &source.path, &moved(t, renames)?, renames))
@@ -433,11 +432,11 @@ mod tests {
             slash_path(path.strip_prefix(&self.0).unwrap())
         }
         fn source(&self, rel: &str, lang: Option<TemplateLang>, text: &str) -> Source {
-            Source { path: self.path(rel), lang, text: text.into() }
+            Source { path: self.path(rel), lang, text: text.into(), extra_engines: vec![] }
         }
         fn edits(&self, renames: &[(&str, &str)], sources: &[Source]) -> Vec<(String, u32, u32, String)> {
             let renames: Vec<_> = renames.iter().map(|(a, b)| (self.path(a), self.path(b))).collect();
-            let mut got: Vec<_> = render_edits(&Project::unknown(), &renames, sources, &[])
+            let mut got: Vec<_> = render_edits(&Project::unknown(), &renames, sources)
                 .iter()
                 .flat_map(|(uri, edits)| {
                     let file = self.rel(&uri.to_file_path().unwrap());
@@ -548,7 +547,7 @@ mod tests {
         let index = "app/views/admin/users/index.html.erb";
         let sources = [t.source(index, ERB, "<%= render \"nav\" %>\n")];
         let nav = t.path("app/views/admin/base/_nav.html.erb");
-        assert_eq!(references(&Project::unknown(), &[nav], &sources, &[]).len(), 1);
+        assert_eq!(references(&Project::unknown(), &[nav], &sources).len(), 1);
         let nav = "app/views/admin/base/_nav.html.erb";
         assert_eq!(t.edits(&[(nav, "app/views/admin/base/_menu.html.erb")], &sources), [(index.into(), 0, 12, "menu".into())]);
         assert_eq!(t.edits(&[(nav, "app/views/shared/_nav.html.erb")], &sources), [(index.into(), 0, 12, "shared/nav".into())]);
@@ -593,7 +592,7 @@ mod tests {
         ];
         let card = t.path("controllers/app/views/users/_card.html.erb");
         let found: Vec<String> =
-            references(&Project::unknown(), &[card], &sources, &[]).iter().map(|l| t.rel(&l.uri.to_file_path().unwrap())).collect();
+            references(&Project::unknown(), &[card], &sources).iter().map(|l| t.rel(&l.uri.to_file_path().unwrap())).collect();
         assert_eq!(found, ["controllers/app/helpers/cards_helper.rb"], "a folder named controllers above the app is no controller");
     }
 
@@ -606,7 +605,7 @@ mod tests {
             t.source("app/controllers/users_controller.rb", None, "render partial: \"/card\"\n"),
         ];
         let root_card = t.path("app/views/_card.html.erb");
-        let mut got: Vec<(String, u32)> = references(&Project::unknown(), &[root_card], &sources, &[])
+        let mut got: Vec<(String, u32)> = references(&Project::unknown(), &[root_card], &sources)
             .into_iter()
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line))
             .collect();
@@ -627,7 +626,7 @@ mod tests {
         let text = "<%= render partial: \"card\",\n  formats: [:json] %>\n<%= render partial: \"card\" %>\n";
         let sources = [t.source("app/views/users/index.html.erb", ERB, text)];
         let lines = |partial: &str| -> Vec<u32> {
-            references(&Project::unknown(), &[t.path(partial)], &sources, &[]).into_iter().map(|l| l.range.start.line).collect()
+            references(&Project::unknown(), &[t.path(partial)], &sources).into_iter().map(|l| l.range.start.line).collect()
         };
         assert_eq!(lines("app/views/users/_card.json.jbuilder"), [0]);
         assert_eq!(lines("app/views/users/_card.html.erb"), [2]);
@@ -734,7 +733,7 @@ mod tests {
             t.source("app/controllers/cards_controller.rb", None, "render partial: \"users/card\", locals: { size: x |\n  y, user: u }\n"),
         ];
         let card = t.path("app/views/users/_card.html.erb");
-        let mut got: Vec<(String, u32, u32)> = local_passes(&Project::unknown(), &card, "user", &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = local_passes(&Project::unknown(), &card, "user", &sources)
             .into_iter()
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
@@ -749,8 +748,8 @@ mod tests {
                 ("app/views/users/index.html.erb".into(), 0, 37)
             ]
         );
-        assert!(local_passes(&Project::unknown(), &card, "missing", &sources, &[]).is_empty());
-        let size = local_passes(&Project::unknown(), &card, "size", &sources, &[]);
+        assert!(local_passes(&Project::unknown(), &card, "missing", &sources).is_empty());
+        let size = local_passes(&Project::unknown(), &card, "size", &sources);
         assert!(size.iter().any(|l| l.uri.to_file_path().unwrap().ends_with("filter.html.haml") && l.range.start.line == 2));
     }
 
@@ -768,7 +767,7 @@ mod tests {
             t.source("app/views/users/edit.html.erb", ERB, "<%= render partial: \"card\", locals: opts %>\n<%= render \"card\", size: 1 %>\n"),
         ];
         let card = t.path("app/views/users/_card.html.erb");
-        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources);
         let unread: Vec<(String, u32)> = unread.iter().map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line)).collect();
         assert_eq!(unread, [("app/views/users/edit.html.erb".into(), 0)]);
         let mut got: Vec<(String, u32, u32, u32, String)> = edits
@@ -796,7 +795,7 @@ mod tests {
         let text = "<p>héllo 日本</p>\n<%\n  render \"card\",\n    user: u,\n    size: items\n      .first\n%>\n<%= render \"card\",\n  user:,\n  size: 1 %>\n";
         let sources = [t.source("app/views/users/index.html.erb", ERB, text)];
         let card = t.path("app/views/users/_card.html.erb");
-        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources);
         assert!(unread.is_empty());
         let mut got: Vec<(u32, u32, u32, String)> =
             edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
@@ -810,7 +809,7 @@ mod tests {
         let text = "<%= render formats: [:json], locals: { user: u },\r\n  partial: \"users/card\" %>\r\n<%= render formats: [:json], \"é\" => 1,\r\n  partial: \"users/card\" %>\r\n";
         let sources = [t.source("app/views/users/index.json.erb", ERB, text)];
         let card = t.path("app/views/users/_card.json.erb");
-        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources);
         let got: Vec<_> = edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character)).collect();
         let unread: Vec<_> = unread.iter().map(|l| (l.range.start.line, l.range.start.character)).collect();
         assert_eq!((got, unread), (vec![(0, 39, 43)], vec![(2, 4)]));
@@ -822,7 +821,7 @@ mod tests {
         let text = "%p é\n= render \"card\", size: 1, |\n  user: u |\n%p x\n= render \"card\", :user => u\n";
         let sources = [t.source("app/views/users/index.html.haml", HAML, text)];
         let card = t.path("app/views/users/_card.html.haml");
-        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        let (edits, unread) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources);
         assert!(unread.is_empty());
         let mut got: Vec<(u32, u32, u32, String)> =
             edits.into_iter().map(|(_, e)| (e.range.start.line, e.range.start.character, e.range.end.character, e.new_text)).collect();
@@ -838,7 +837,7 @@ mod tests {
         let sources = [t.source("app/views/users/index.html.erb", ERB, &text)];
         let card = t.path("app/views/users/_card.html.erb");
         crate::ruby::prism::PARSES.with(|parses| parses.set(0));
-        let (edits, _) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources, &[]);
+        let (edits, _) = local_key_edits(&Project::unknown(), &card, "user", "member", &sources);
         assert_eq!(edits.len(), renders);
         assert_eq!(crate::ruby::prism::PARSES.with(|parses| parses.get()), renders);
     }
@@ -855,7 +854,7 @@ mod tests {
             t.source("app/views/users/show.html.slim", SLIM, "h1 = t(\".title\")\n= t(\"users.index.title\")\n"),
             t.source("app/helpers/users_helper.rb", None, "def x = I18n.t(\"users.index.title\") + t(\".title\")\n"),
         ];
-        let mut got: Vec<(String, u32, u32)> = i18n_references(&Project::unknown(), "users.index.title", &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = i18n_references(&Project::unknown(), "users.index.title", &sources)
             .into_iter()
             .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line, l.range.start.character))
             .collect();
@@ -882,7 +881,7 @@ mod tests {
             t.source("app/views/home/dot.html.erb", ERB, "<%= render \"./users/card\" %>\n"),
         ];
         let card = t.path("app/views/users/_card.html.slim");
-        let mut got: Vec<(String, u32, u32)> = references(&Project::unknown(), &[card], &sources, &[])
+        let mut got: Vec<(String, u32, u32)> = references(&Project::unknown(), &[card], &sources)
             .into_iter()
             .map(|l| {
                 let file = t.rel(&l.uri.to_file_path().unwrap());
@@ -912,7 +911,7 @@ mod tests {
             t.source("app/views/posts/index.html.erb", ERB, "<%= render \"card\" %>\n<%# render @users %>\n"),
         ];
         let found = |rel: &str| -> Vec<(String, u32)> {
-            let mut got: Vec<_> = references(&Project::unknown(), &[t.path(rel)], &sources, &[])
+            let mut got: Vec<_> = references(&Project::unknown(), &[t.path(rel)], &sources)
                 .into_iter()
                 .map(|l| (t.rel(&l.uri.to_file_path().unwrap()), l.range.start.line))
                 .collect();
@@ -937,7 +936,7 @@ mod tests {
         let t = Tree::new("ranges", &["app/views/users/_card.html.slim"]);
         let rename = [(t.path("app/views/users/_card.html.slim"), t.path("app/views/users/_tile.html.slim"))];
         let range_of = |source: Source| {
-            let edits = render_edits(&Project::unknown(), &rename, &[source], &[]);
+            let edits = render_edits(&Project::unknown(), &rename, &[source]);
             let edit = edits.into_values().next().unwrap().remove(0);
             (edit.range.start, edit.range.end)
         };
@@ -968,7 +967,7 @@ mod tests {
             (t.path("app/views/users/new.html.erb"), "<%= render 'never saved' %>".to_string()),
         ]);
         let mut found: Vec<_> =
-            sources(&t.path("app/views"), &open).into_iter().map(|s| (t.rel(&s.path), s.lang.is_none(), s.text)).collect();
+            sources(&t.path("app/views"), &open, |_| vec![]).into_iter().map(|s| (t.rel(&s.path), s.lang.is_none(), s.text)).collect();
         found.sort();
         assert_eq!(
             found,
@@ -978,5 +977,21 @@ mod tests {
                 ("app/views/users/new.html.erb".to_string(), false, "<%= render 'never saved' %>".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn each_slim_source_gets_the_engines_of_its_own_path() {
+        let t = Tree::new("engines", &["app/views/users/_card.html.slim"]);
+        let render = "mjml:\n  = render \"users/card\"\n";
+        for rel in ["app/views/mjml/index.html.slim", "app/views/plain/index.html.slim"] {
+            std::fs::create_dir_all(t.path(rel).parent().unwrap()).unwrap();
+            std::fs::write(t.path(rel), render).unwrap();
+        }
+        let engines = |path: &Path| if path.starts_with(t.path("app/views/mjml")) { vec!["mjml".to_string()] } else { vec![] };
+        let sources = sources(&t.path("app/views"), &HashMap::new(), engines);
+        let card = t.path("app/views/users/_card.html.slim");
+        let found: Vec<String> =
+            references(&Project::unknown(), &[card], &sources).iter().map(|l| t.rel(&l.uri.to_file_path().unwrap())).collect();
+        assert_eq!(found, ["app/views/plain/index.html.slim"]);
     }
 }
