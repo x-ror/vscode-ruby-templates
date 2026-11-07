@@ -349,23 +349,24 @@ fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
-struct TagEnd {
+pub(crate) struct TagEnd {
     end: usize,
-    self_closing: bool,
+    pub(crate) self_closing: bool,
     quoted: Vec<(usize, usize)>,
 }
 
 /// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
 /// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
-/// value, not to `/>`.
-fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
+/// value, not to `/>`, and a `/` apart from the `>` (`<a href=x/ >`) closes nothing.
+pub(crate) fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
     let mut i = from;
     let mut prev = 0u8;
+    let mut last = 0u8;
     let mut unquoted = false;
     let mut quoted = Vec::new();
     while let Some(&b) = html.get(i) {
         match b {
-            b'>' => return Some(TagEnd { end: i + 1, self_closing: prev == b'/' && !unquoted, quoted }),
+            b'>' => return Some(TagEnd { end: i + 1, self_closing: last == b'/' && !unquoted, quoted }),
             b'"' | b'\'' if prev == b'=' => {
                 let close = find(html, i + 1, &[b])?;
                 quoted.push((i, close + 1));
@@ -378,6 +379,7 @@ fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
         if !b.is_ascii_whitespace() {
             prev = b;
         }
+        last = b;
         i += 1;
     }
     None
@@ -747,9 +749,19 @@ mod tests {
     }
 
     #[test]
+    fn a_slash_apart_from_the_closing_bracket_is_not_self_closing() {
+        assert!(messages("<a href=x/ >y</a>").is_empty());
+        assert!(messages("<a href=x/>y</a>").is_empty());
+        assert!(messages("<div/ >y</div>").is_empty());
+        assert_eq!(messages("<div/>y</div>").len(), 1);
+        assert_eq!(messages("<a href=x />y</a>").len(), 1);
+    }
+
+    #[test]
     fn review_false_positives() {
         assert!(messages("<a href=/>Home</a><a href=/users/>U</a>").is_empty());
         assert!(messages("<br/><input disabled/><x-icon a=b />").is_empty());
+        assert!(messages("<img src=x/><br/ ><div/ >x</div>").is_empty());
         assert!(messages("<%= javascript_tag do %>\n el.innerHTML = \"<span>\" + x + \"</div>\"; if (a<b) {}\n<% end %>").is_empty());
         assert!(messages("<%= content_tag(:script) do %>\"</div>\"<% end %>").is_empty());
         let header = "<div class=\"wrapper\"><header>x</header>";

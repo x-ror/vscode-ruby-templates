@@ -2,6 +2,7 @@
 //! inside a start tag.
 
 use crate::erb::html_lint::{inside, non_markup};
+use crate::erb::tags;
 use crate::html;
 use crate::html::{BOOLEAN_ATTRIBUTES, NO_END_TAG, TAGS};
 use crate::util::completion_item;
@@ -85,7 +86,7 @@ fn open_element(before: &str) -> Option<String> {
         let rest = &before[whole.end()..];
         // A start tag still being typed (`<a hre`) has no `>` before the next tag.
         let Some(gt) = rest.find('>').filter(|&gt| !rest[..gt].contains('<')) else { continue };
-        let self_closing = rest[..gt].trim_end().ends_with('/');
+        let self_closing = tags::tag_end(&rest.as_bytes()[..=gt], 0).is_some_and(|tag| tag.self_closing);
         if &cap[1] == "/" {
             if let Some(at) = stack.iter().rposition(|open| *open == name) {
                 stack.truncate(at);
@@ -163,6 +164,9 @@ mod tests {
         assert_eq!(close("<section><% if a %><b>x</b><% end %>"), ["section>"]);
         assert_eq!(close("<div><%= \"<p>\" %>"), ["div>"]);
         assert!(close("<div></div>").is_empty());
+        assert_eq!(close("<div><a href=x/ >y"), ["a>"]);
+        assert_eq!(close("<div><a href=x/>y"), ["a>"]);
+        assert_eq!(close("<div><i />"), ["div>"]);
         assert_eq!(close("<%# <section> %><div><p></p>"), ["div>"]);
         assert_eq!(close("<section>\n  <butt\n  <a hre\n  "), ["section>"]);
     }
