@@ -368,10 +368,10 @@ fn sources_in(
                 Some(ext) if ext == "rb" => None,
                 _ => Some(TemplateLang::from_uri_or_id(&crate::util::file_uri(&path)?, None).filter(|&lang| lang != TemplateLang::Liquid)?),
             };
-            let text = crate::util::open_or_read(open.get(&path).cloned(), &path)?;
+            let text = crate::util::open_or_read(open.get(&path).cloned(), &path).filter(|text| keep(text))?;
             let slim = matches!(lang, Some(TemplateLang::Slim | TemplateLang::Skim));
             let extra_engines = if slim { engines(&path) } else { vec![] };
-            keep(&text).then_some(Source { path, lang, text, extra_engines })
+            Some(Source { path, lang, text, extra_engines })
         })
         .collect()
 }

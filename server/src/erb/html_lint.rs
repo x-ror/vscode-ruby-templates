@@ -167,9 +167,9 @@ fn parse_attributes(text: &str, regions: &[(usize, usize)], start: usize, mut po
                             continue;
                         }
                         end = erb_end(text, end)?;
-                        // `alt=<% if x %>"a b"<% end %>`: a quoted value after ERB is one this can't read.
-                        if text[end..].starts_with(['"', '\'']) {
-                            return None;
+                        // `alt=<% if x %>"a b"<% end %>`: a quoted piece after ERB is part of the same value.
+                        if let Some(q) = text[end..].chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                            end = quoted_end(text, regions, end + 1, q)? + 1;
                         }
                     }
                     ((pos, end), end)
@@ -292,9 +292,12 @@ mod tests {
     }
 
     #[test]
-    fn a_quoted_value_after_erb_is_skipped() {
+    fn a_quoted_value_after_erb_is_one_value() {
         assert!(codes("<img alt=<% if x %>\"a b\"<% end %>>").is_empty());
-        assert!(codes("<p id=<% if x %>\"a b\"<% end %>></p><p id=\"b\"></p><p id=\"b c\"></p>").is_empty());
+        assert!(codes("<p class=<% if x %>\"a id=b c\"<% end %>></p><p id=b></p>").is_empty());
+        assert_eq!(codes("<img title=<% if x %>\"a\"<% end %> src=\"x\">").len(), 1);
+        assert_eq!(codes("<img class=<%= c %>'x' src=y>").len(), 1);
+        assert_eq!(codes("<div class=<% if a %>\"b\"<% end %> id=\"dup\"></div><div id=\"dup\"></div>").len(), 1);
         assert!(codes("<img alt=<%= t(:a) %>>").is_empty());
         assert_eq!(codes("<img src=<%= x %>>").len(), 1);
     }
