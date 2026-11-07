@@ -596,7 +596,7 @@ impl LanguageServer for Backend {
         if project.is_gem_file(&path) {
             return Ok(None);
         }
-        let extra_engines = self.engines(&uri);
+        let engines = self.engines_lookup();
         if !self.free_local_name(&uri, &doc, &project, &new) {
             return Err(tower_lsp_server::jsonrpc::Error::invalid_params(format!("`{new}` can't be the local's new name")));
         }
@@ -614,8 +614,8 @@ impl LanguageServer for Backend {
         let Some(views) = paths::views_root(&path) else { return Ok(None) };
         let (open, partial, old, renamed) = (self.open_texts(), path.clone(), name.clone(), new.clone());
         let (callers, unread) = off_server_task(move || {
-            let sources = partial_rename::sources(&views, &open);
-            partial_rename::local_key_edits(&project, &partial, &old, &renamed, &sources, &extra_engines)
+            let sources = partial_rename::sources(&views, &open, engines);
+            partial_rename::local_key_edits(&project, &partial, &old, &renamed, &sources)
         })
         .await?;
         if !unread.is_empty() {
@@ -647,10 +647,10 @@ impl LanguageServer for Backend {
         let declaration = p.context.include_declaration;
         if let Some((key, app)) = i18n_key.zip(paths::app_root(&path)) {
             let declarations = if declaration { translation_locations(&self.locale_files(&path), &key) } else { vec![] };
-            let open = self.open_texts();
+            let (open, engines) = (self.open_texts(), self.engines_lookup());
             let mut locations = off_server_task(move || {
-                let sources = partial_rename::i18n_sources(&app, &open);
-                partial_rename::i18n_references(&project, &key, &sources, &extra_engines)
+                let sources = partial_rename::i18n_sources(&app, &open, engines);
+                partial_rename::i18n_references(&project, &key, &sources)
             })
             .await?;
             locations.extend(declarations);
@@ -663,10 +663,10 @@ impl LanguageServer for Backend {
         let Some(views) = paths::views_root(&path) else { return Ok(None) };
         let Some(files) = referenced_partials(&project, &path, &doc, pos) else { return Ok(None) };
         let declarations: Vec<Location> = if declaration { files.iter().filter_map(file_location).collect() } else { vec![] };
-        let open = self.open_texts();
+        let (open, engines) = (self.open_texts(), self.engines_lookup());
         let mut locations = off_server_task(move || {
-            let sources = partial_rename::sources(&views, &open);
-            partial_rename::references(&project, &files, &sources, &extra_engines)
+            let sources = partial_rename::sources(&views, &open, engines);
+            partial_rename::references(&project, &files, &sources)
         })
         .await?;
         locations.extend(declarations);
@@ -729,14 +729,14 @@ impl LanguageServer for Backend {
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
-        let extra_engines = renames.first().map_or_else(|| self.options().extra_engines.clone(), |(old, _)| self.engines_at(old));
+        let mut engines = self.engines_lookup();
         let view_roots = Arc::clone(&self.view_roots);
         let changes = off_server_task(move || {
             let mut changes = HashMap::new();
             for views in roots {
-                let sources = partial_rename::sources(&views, &open);
+                let sources = partial_rename::sources(&views, &open, &mut engines);
                 let project = Project::for_views(&views).with_view_cache(Arc::clone(&view_roots));
-                changes.extend(partial_rename::render_edits(&project, &renames, &sources, &extra_engines));
+                changes.extend(partial_rename::render_edits(&project, &renames, &sources));
             }
             changes
         })
@@ -844,11 +844,13 @@ impl Backend {
             return rules.extra_engines().to_vec();
         }
         // Before the first diagnostics run (a document just opened).
-        let resolved = TemplateLang::from_file_name(&file_name_of(path)).zip(util::file_uri(path));
-        resolved.map_or_else(
-            || self.options().extra_engines.clone(),
-            |(lang, uri)| resolve(&uri, lang, self.options(), &mut Configs::new()).extra_engines().to_vec(),
-        )
+        engines_from_config(path, self.options(), &mut Configs::new())
+    }
+
+    /// A lookup of each file's Slim engines for work that reads many files off the server task, reading each config folder once.
+    fn engines_lookup(&self) -> impl FnMut(&Path) -> Vec<String> + Send + 'static {
+        let (options, mut configs) = (Arc::clone(&self.options), Configs::new());
+        move |path| engines_from_config(path, options.get_or_init(Options::default), &mut configs)
     }
 
     fn options(&self) -> &Options {
@@ -1030,6 +1032,12 @@ fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperation
         scheme: Some("file".into()),
         pattern: FileOperationPattern { glob: glob.into(), matches: Some(matches), options: None },
     }
+}
+
+/// The Slim engines of the file at `path` from its nearest config file, else the editor's.
+fn engines_from_config(path: &Path, editor: &Options, configs: &mut Configs) -> Vec<String> {
+    let resolved = TemplateLang::from_file_name(&file_name_of(path)).zip(util::file_uri(path));
+    resolved.map_or_else(|| editor.extra_engines.clone(), |(lang, uri)| resolve(&uri, lang, editor, configs).extra_engines().to_vec())
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -1331,8 +1339,8 @@ mod tests {
     /// `file line:col new_text` for each edit, sorted.
     fn rename(renames: &[(PathBuf, PathBuf)]) -> Vec<String> {
         let views = paths::views_root(&renames[0].0).unwrap();
-        let sources = partial_rename::sources(&views, &HashMap::new());
-        let mut got: Vec<String> = partial_rename::render_edits(&Project::unknown(), renames, &sources, &[])
+        let sources = partial_rename::sources(&views, &HashMap::new(), |_| vec![]);
+        let mut got: Vec<String> = partial_rename::render_edits(&Project::unknown(), renames, &sources)
             .into_iter()
             .flat_map(|(uri, edits)| {
                 let file = uri.path().as_str().rsplit('/').next().unwrap_or("").to_string();

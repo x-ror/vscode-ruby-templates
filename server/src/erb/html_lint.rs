@@ -162,7 +162,15 @@ fn parse_attributes(text: &str, regions: &[(usize, usize)], start: usize, mut po
                 _ => {
                     let mut end = pos;
                     while let Some(c) = text[end..].chars().next().filter(|c| !c.is_whitespace() && *c != '>') {
-                        end = if text[end..].starts_with("<%") { erb_end(text, end)? } else { end + c.len_utf8() };
+                        if !text[end..].starts_with("<%") {
+                            end += c.len_utf8();
+                            continue;
+                        }
+                        end = erb_end(text, end)?;
+                        // `alt=<% if x %>"a b"<% end %>`: a quoted piece after ERB is part of the same value.
+                        if let Some(q) = text[end..].chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                            end = quoted_end(text, regions, end + 1, q)? + 1;
+                        }
                     }
                     ((pos, end), end)
                 }
@@ -281,6 +289,17 @@ mod tests {
         assert_eq!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"x\">").len(), 1);
         // A no-break or ideographic space after the name is part of an attribute name, not a crash.
         assert_eq!(codes("<img\u{a0}src=\"a\">\n<div\u{3000}class=\"x\">"), [(0, code::IMG_MISSING_ALT.to_string())]);
+    }
+
+    #[test]
+    fn a_quoted_value_after_erb_is_one_value() {
+        assert!(codes("<img alt=<% if x %>\"a b\"<% end %>>").is_empty());
+        assert!(codes("<p class=<% if x %>\"a id=b c\"<% end %>></p><p id=b></p>").is_empty());
+        assert_eq!(codes("<img title=<% if x %>\"a\"<% end %> src=\"x\">").len(), 1);
+        assert_eq!(codes("<img class=<%= c %>'x' src=y>").len(), 1);
+        assert_eq!(codes("<div class=<% if a %>\"b\"<% end %> id=\"dup\"></div><div id=\"dup\"></div>").len(), 1);
+        assert!(codes("<img alt=<%= t(:a) %>>").is_empty());
+        assert_eq!(codes("<img src=<%= x %>>").len(), 1);
     }
 
     #[test]
