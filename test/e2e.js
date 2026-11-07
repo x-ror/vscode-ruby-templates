@@ -2264,6 +2264,35 @@ const check = (label, actual, expected) => {
     "/app/views/users/outline.html.slim 2:18 tile",
     "/app/views/users/show.html.haml 1:16 tile",
   ]);
+  // Each Slim file read for a rename uses the extra_engines of its own folder's .ruby-templates.toml, else the setting (mjml).
+  const engineViews = path.join(root, "slimapp", "app", "views");
+  const engineBody = 'mjml:\n  = render "users/tile"\n';
+  for (const dir of ["users", "mjml", "plain"]) {
+    fs.mkdirSync(path.join(engineViews, dir), { recursive: true });
+  }
+  fs.writeFileSync(path.join(engineViews, "users", "_tile.html.slim"), "p\n");
+  fs.writeFileSync(path.join(engineViews, "plain", "a.html.slim"), engineBody);
+  fs.writeFileSync(path.join(engineViews, "mjml", "a.html.slim"), engineBody);
+  fs.writeFileSync(
+    path.join(engineViews, "plain", ".ruby-templates.toml"),
+    "[slim]\nextra_engines = []\n",
+  );
+  const tile = path.join(engineViews, "users", "_tile.html.slim");
+  const engineRenamed = await send("workspace/willRenameFiles", {
+    files: [
+      {
+        oldUri: fileUri(tile),
+        newUri: fileUri(tile.replace("_tile", "_chip")),
+      },
+    ],
+  });
+  check(
+    "willRenameFiles reads each Slim file with its own extra_engines",
+    Object.keys(engineRenamed.result?.changes ?? {}).map((u) =>
+      rel(decodeURIComponent(u)),
+    ),
+    ["/slimapp/app/views/plain/a.html.slim"],
+  );
   // A changed .ruby-version changes the grammar Ruby is parsed with, so open documents are checked again.
   const versionedUri = fileUri(path.join(views, "users", "versioned.html.erb"));
   await send(
