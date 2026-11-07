@@ -2546,6 +2546,7 @@ const check = (label, actual, expected) => {
     path.join(inlineDir, ".ruby-templates.toml"),
     [
       "Layout.SpaceInsideErbTag",
+      "Layout.SpaceInHtmlTag",
       "Style.ErbCommentSyntax",
       "Layout.SpaceAfterScriptMarker",
     ]
@@ -2553,7 +2554,10 @@ const check = (label, actual, expected) => {
       .join(""),
   );
   const inlineTexts = {
-    "a.html.erb": ["<% # a %>\n<%=b%>\n<%=c%>\n", [[1, "<%= b %>"]]],
+    "a.html.erb": [
+      '<% # a %>\n<p  id = "b" ><%=b%></p>\n<p  id = "c" ><%=c%></p>\n',
+      [[1, '<p id="b"><%= b %></p>']],
+    ],
     "a.html.haml": ["=a\n=b\n=c\n", [[1, "= b"]]],
     "a.html.slim": ["p=a\np=b\np=c\n", [[1, "p= b"]]],
   };

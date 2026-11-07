@@ -77,14 +77,18 @@ Blank lines stay where whitespace counts: `<pre>`, `<xmp>`, `<listing>`, `<texta
 
 ## Spaces inside tags and after markers
 
-Three rules change the spaces on a line and never add or remove one; all are off until enabled, and they run before the re-indentation, in _Format Selection_ too.
+Four rules change the spaces on a line and never add or remove one; all are off until enabled, and they run before the re-indentation, in _Format Selection_ too.
 
 - `Layout/SpaceInsideErbTag` gives an ERB tag one space inside its delimiters: `<%=x%>` and `<%=  x  %>` become `<%= x %>`, `<%-x-%>` becomes `<%- x -%>`. Only tags on one line are changed; `<%#` comments, `<%%` literals and tags that span lines stay. The "Add spaces inside this ERB tag" code action and the `source.erbSpacing` source action do the same without the rule.
+- `Layout/SpaceInHtmlTag` tidies the start and end tags of an ERB template: one space between the name and the attributes and between attributes, none around `=` or before `>`. `<div  class = "card"   id="u" >` becomes `<div class="card" id="u">` and `</div  >` becomes `</div>`; `<br  />` keeps one space before the `/>`. A blank run with a newline stays (attributes on their own lines are layout), as do quoted and unquoted values, the bodies of `<script>`, `<style>`, `<textarea>`, `<title>`, `<xmp>`, `<iframe>`, `<noscript>`, `<noembed>`, `<noframes>` and `<plaintext>`, comments, CDATA and text such as `a < b`. Beside an ERB tag in a tag, `<div <%= attrs %>  class="a">` loses only the extra blank: the space between an ERB tag and what follows is never added or removed, since `<%= x %>class` and `<%= x %> class` render differently.
 - `Style/ErbCommentSyntax` turns `<% # note %>` into `<%# note %>`. The tag has to be nothing but comment, on every line if it has several, and stand alone on its lines: beside other content Rails comments out what follows a `<% #` tag, which `<%#` would bring back. `<%= # x %>`, `<%- # x -%>` (skipped to be conservative) and tags with Ruby before or after the comment stay.
 - `Layout/SpaceAfterScriptMarker` adds a space after the marker of a Ruby line: `-foo` and `=foo` become `- foo` and `= foo` (also `~`, `!=`, `&=`, `!~` and `&~` in Haml, `==` in Slim), and after a tag (`%p=x` and `p=x` become `%p= x` and `p= x`). Comments (`-#`, Slim's `/`), text, filters, attribute values and continuation lines stay, as do Haml's `==` and `\=` lines, which are text.
 
 ```toml
 [Layout.SpaceInsideErbTag]
+enabled = true
+
+[Layout.SpaceInHtmlTag]
 enabled = true
 
 [Style.ErbCommentSyntax]
@@ -94,7 +98,7 @@ enabled = true
 enabled = true
 ```
 
-A result is kept only when the Ruby of every ERB tag is the same afterwards, and when Haml or Slim compile it to the same template; otherwise the file is formatted without these rules and `--verbose` says so.
+A result is kept only when the Ruby of every ERB tag and the name, attributes and values of every HTML tag are the same afterwards, and when Haml or Slim compile it to the same template; otherwise the file is formatted without these rules and `--verbose` says so.
 
 ## Safe by construction
 

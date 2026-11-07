@@ -4,7 +4,8 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
-    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, STYLE, TRAILING_EMPTY_LINES,
+    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, STYLE,
+    TRAILING_EMPTY_LINES,
 };
 use crate::format::{Settings, Style};
 use crate::glob::Glob;
@@ -36,6 +37,7 @@ pub struct ResolvedRules {
     space_inside_erb_tag: bool,
     space_after_script_marker: bool,
     erb_comment_syntax: bool,
+    space_in_html_tag: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -108,6 +110,7 @@ impl ResolvedRules {
             space_inside_erb_tag: !off.contains(SPACE_INSIDE_ERB_TAG),
             space_after_script_marker: !off.contains(SPACE_AFTER_SCRIPT_MARKER),
             erb_comment_syntax: !off.contains(ERB_COMMENT_SYNTAX),
+            space_in_html_tag: !off.contains(SPACE_IN_HTML_TAG),
             off,
             files,
             excluded_by,
@@ -152,6 +155,7 @@ impl ResolvedRules {
             space_inside_erb_tag: self.space_inside_erb_tag,
             space_after_script_marker: self.space_after_script_marker,
             erb_comment_syntax: self.erb_comment_syntax,
+            space_in_html_tag: self.space_in_html_tag,
             ..base
         }
     }

@@ -35,9 +35,10 @@ check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder template
 format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines,
         Layout/EmptyLinesAroundBlockBody, Layout/EmptyLinesAroundElementBody and Layout/EmptyLinesAroundBranches (all
         off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
-        Layout/SpaceInsideErbTag, Style/ErbCommentSyntax and Layout/SpaceAfterScriptMarker (all off) set spaces
-        inside ERB tags and after Haml and Slim script markers. Nothing else changes; a file whose structure is in
-        doubt is left as it is, with the reason on stderr. Without --check or --write the result goes to stdout.
+        Layout/SpaceInsideErbTag, Layout/SpaceInHtmlTag, Style/ErbCommentSyntax and Layout/SpaceAfterScriptMarker
+        (all off) set spaces inside ERB and HTML tags and after Haml and Slim script markers. Nothing else changes;
+        a file whose structure is in doubt is left as it is, with the reason on stderr. Without --check or --write
+        the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.
 
 Both read .ruby-templates.toml files, from the file's folder up. Exit codes: 0 ok, 1 diagnostics (errors or

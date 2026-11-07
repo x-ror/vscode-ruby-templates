@@ -435,9 +435,9 @@ try {
   // Each: the text, the formatter's output with the rules on, and with them off (re-indented only).
   const inlineTexts = {
     "a.html.erb": [
-      "<div>\n<% # note %>\n<p><%=user.name%></p>\n</div>\n",
-      "<div>\n  <%# note %>\n  <p><%= user.name %></p>\n</div>\n",
-      "<div>\n  <% # note %>\n  <p><%=user.name%></p>\n</div>\n",
+      '<div>\n<% # note %>\n<p  id = "a" ><%=user.name%></p>\n</div>\n',
+      '<div>\n  <%# note %>\n  <p id="a"><%= user.name %></p>\n</div>\n',
+      '<div>\n  <% # note %>\n  <p  id = "a" ><%=user.name%></p>\n</div>\n',
     ],
     "a.html.haml": [
       "%div\n  -if a\n    %p=x\n    =render y\n",
@@ -462,6 +462,7 @@ try {
     inlineToml,
     [
       "Layout.SpaceInsideErbTag",
+      "Layout.SpaceInHtmlTag",
       "Style.ErbCommentSyntax",
       "Layout.SpaceAfterScriptMarker",
     ]
