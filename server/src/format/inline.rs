@@ -1,5 +1,5 @@
-//! The rules that change a line from the inside and no line count: spaces in ERB tags, `<% #` comments and the space after
-//! a Haml or Slim script marker. They run before re-indentation, on the text as written.
+//! The rules that change a line from the inside and no line count: spaces in ERB tags and HTML tags, `<% #` comments and the
+//! space after a Haml or Slim script marker. They run before re-indentation, on the text as written.
 
 use crate::erb::ruby::tags;
 use crate::erb::{self, Edit};
@@ -40,6 +40,13 @@ fn erb_staged(text: &str, settings: &Settings) -> String {
     }
     if settings.space_inside_erb_tag {
         staged = replaced(&staged, &erb::spacing_edits(&staged));
+    }
+    if settings.space_in_html_tag {
+        // Kept on its own: a tag it misreads must not cost the other rules their edits.
+        let spaced = replaced(&staged, &erb::tag_spacing::edits(&staged));
+        if erb::tag_spacing::same_tags(&staged, &spaced) {
+            staged = spaced;
+        }
     }
     staged
 }
@@ -214,6 +221,25 @@ mod tests {
         assert!(!same("<p><% # a %>\n", "<p><%# a %>\n"));
         assert!(!same("<%= a %> <% # a %>\n", "<%= a %> <%# a %>\n"));
         assert!(same("<% # a %>\n", "<%# a %>\n"));
+    }
+
+    fn html_tags(text: &str) -> String {
+        staged(TemplateLang::Erb, text, &Settings { space_in_html_tag: true, ..Settings::default() })
+    }
+
+    #[test]
+    fn html_tag_spacing_is_off_by_default_and_runs_on_erb_only() {
+        let text = "<div  class=\"a\"  >\n";
+        assert_eq!(apply(TemplateLang::Erb, text, &Settings::default(), &[]), None);
+        assert_eq!(html_tags(text), "<div class=\"a\">\n");
+        let settings = Settings { space_in_html_tag: true, ..Settings::default() };
+        assert_eq!(apply(TemplateLang::Slim, "p  a\n", &settings, &[]), None);
+    }
+
+    #[test]
+    fn html_tag_spacing_composes_with_the_erb_rules() {
+        let settings = Settings { space_in_html_tag: true, space_inside_erb_tag: true, ..Settings::default() };
+        assert_eq!(staged(TemplateLang::Erb, "<div  <%=x%>  a=\"<%=y%>\" >\n", &settings), "<div <%= x %> a=\"<%= y %>\">\n");
     }
 
     #[test]

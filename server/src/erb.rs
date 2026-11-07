@@ -3,6 +3,7 @@
 pub mod complete;
 pub mod html_lint;
 pub mod ruby;
+pub mod tag_spacing;
 pub mod tags;
 
 use crate::html::TOKENIZED_AS_TEXT;

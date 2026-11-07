@@ -80,6 +80,7 @@ pub const AROUND_BRANCHES: &str = "Layout/EmptyLinesAroundBranches";
 pub const SPACE_INSIDE_ERB_TAG: &str = "Layout/SpaceInsideErbTag";
 pub const SPACE_AFTER_SCRIPT_MARKER: &str = "Layout/SpaceAfterScriptMarker";
 pub const ERB_COMMENT_SYNTAX: &str = "Style/ErbCommentSyntax";
+pub const SPACE_IN_HTML_TAG: &str = "Layout/SpaceInHtmlTag";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -122,6 +123,7 @@ pub const RULES: &[Rule] = &[
     format_rule(SPACE_INSIDE_ERB_TAG, &[Erb], &[], &[], &[]),
     format_rule(SPACE_AFTER_SCRIPT_MARKER, HAML_SLIM, &[], &[], &[]),
     format_rule(ERB_COMMENT_SYNTAX, &[Erb], &[], &[], &[]),
+    format_rule(SPACE_IN_HTML_TAG, &[Erb], &[], &[], &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {

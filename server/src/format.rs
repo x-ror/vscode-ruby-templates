@@ -38,6 +38,8 @@ pub struct Settings {
     pub space_after_script_marker: bool,
     /// `Style/ErbCommentSyntax`.
     pub erb_comment_syntax: bool,
+    /// `Layout/SpaceInHtmlTag`.
+    pub space_in_html_tag: bool,
 }
 
 impl Default for Settings {
@@ -53,6 +55,7 @@ impl Default for Settings {
             space_inside_erb_tag: false,
             space_after_script_marker: false,
             erb_comment_syntax: false,
+            space_in_html_tag: false,
         }
     }
 }
@@ -586,6 +589,7 @@ mod tests {
         let range = Settings { trailing_empty_lines: false, max_empty_lines: None, ..inline() };
         assert_eq!(fmt("a.slim", "p=x", &range).as_deref(), Ok("p= x"));
         assert_eq!(fmt("a.html.erb", "<%=x%>", &range).as_deref(), Ok("<%= x %>"));
+        assert_eq!(fmt("a.html.erb", "<p  a = \"1\" >", &range).as_deref(), Ok("<p a=\"1\">"));
     }
 
     #[test]
@@ -659,7 +663,13 @@ mod tests {
     }
 
     fn inline() -> Settings {
-        Settings { space_inside_erb_tag: true, space_after_script_marker: true, erb_comment_syntax: true, ..Settings::default() }
+        Settings {
+            space_inside_erb_tag: true,
+            space_after_script_marker: true,
+            erb_comment_syntax: true,
+            space_in_html_tag: true,
+            ..Settings::default()
+        }
     }
 
     fn settings_variants() -> Vec<Settings> {

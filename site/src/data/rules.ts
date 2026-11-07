@@ -372,9 +372,13 @@ export const rules: Rule[] = [
     languages: ["erb"],
     type: "autofix",
     safe: true,
-    safeNote: "Whitespace inside a start tag doesn't change the element.",
-    status: "planned",
-    phase: 1,
+    safeNote:
+      "Whitespace inside a start tag doesn't change the element. The formatter checks that every tag has the same name, attributes and values, that a blank stays where an ERB tag in a tag had one, and that the text between tags is byte for byte the same (the blanks inside ERB tags aside), and leaves the tags alone when it does not.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Layout.SpaceInHtmlTag]", "enabled = true"),
+    today:
+      'In the start and end tags of ERB templates, a run of blanks between the name and the attributes or between attributes becomes one space, blanks around the `=` of an attribute and before `>` go, and `<br  />` keeps one space before `/>`. A run with a newline, a quoted value, an unquoted value, an ERB tag (`<div <%= attrs %>  class="a">` loses only the extra blank; the last space next to an ERB tag is never added or removed, and blanks beside an ERB tag in a name or value stay), a tag whose attributes are not plain enough to read (a quote after an ERB tag, say), and everything that is not markup (the bodies of `<script>`, `<style>`, `<textarea>`, `<title>`, `<xmp>`, `<iframe>`, `<noscript>`, `<noembed>`, `<noframes>` and `<plaintext>`, comments, CDATA, `a < b` text, `<%%` literals) stay. A run with a line break, a bare `\\r` included, is never touched. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "erb",
@@ -389,6 +393,12 @@ export const rules: Rule[] = [
           '  <img src="<%= user.avatar_url %>" alt="">',
           "</div>",
         ),
+      },
+      {
+        lang: "erb",
+        file: ERB_FILE,
+        before: '<div  class="card"   id="u"><%= u.name %></div  >',
+        after: '<div class="card" id="u"><%= u.name %></div>',
       },
     ],
   },
