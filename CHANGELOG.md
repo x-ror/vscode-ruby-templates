@@ -15,6 +15,7 @@
 - `Layout/TrailingWhitespace` is a rule now, on for ERB, Haml and Slim as before; `[Layout.TrailingWhitespace] enabled = false` keeps the whitespace at the line ends, whitespace-only lines included.
 - `rust-version` of the server is 1.85, for the TOML parser.
 - `<a href=x/ >y</a>` is no longer read as a self-closing tag, which made `Html/UnexpectedCloseTag` report `</a>` and left the file unformatted: only a `/` right before the `>`, outside an unquoted value, self-closes, as in the HTML tokenizer. The close-tag completion follows the same rule.
+- `Html/ImgAlt` and `Html/DuplicateId` skip a tag whose attribute value is a quoted string after an ERB tag (`alt=<% if x %>"a b"<% end %>`) instead of splitting the value at the blank.
 
 ## 0.10.1
 
