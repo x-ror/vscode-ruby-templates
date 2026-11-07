@@ -4,10 +4,10 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
-    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, STYLE,
-    TRAILING_EMPTY_LINES,
+    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG,
+    SPACE_IN_HTML_TAG, STYLE, TABS, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE,
 };
-use crate::format::{Settings, Style};
+use crate::format::{IndentStyle, Settings, Style};
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
 use crate::options::Options;
@@ -38,6 +38,9 @@ pub struct ResolvedRules {
     space_after_script_marker: bool,
     erb_comment_syntax: bool,
     space_in_html_tag: bool,
+    /// `Layout/IndentationStyle`: `Spaces` when the rule is off, the file's `style` when it sets one, else `None`: the editor's or `.editorconfig`'s.
+    indent_style: Option<IndentStyle>,
+    trailing_whitespace: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -111,6 +114,8 @@ impl ResolvedRules {
             space_after_script_marker: !off.contains(SPACE_AFTER_SCRIPT_MARKER),
             erb_comment_syntax: !off.contains(ERB_COMMENT_SYNTAX),
             space_in_html_tag: !off.contains(SPACE_IN_HTML_TAG),
+            indent_style: indent_style(&files, &off),
+            trailing_whitespace: !off.contains(TRAILING_WHITESPACE),
             off,
             files,
             excluded_by,
@@ -156,6 +161,8 @@ impl ResolvedRules {
             space_after_script_marker: self.space_after_script_marker,
             erb_comment_syntax: self.erb_comment_syntax,
             space_in_html_tag: self.space_in_html_tag,
+            indent_style: self.indent_style.unwrap_or(base.indent_style),
+            trailing_whitespace: self.trailing_whitespace,
             ..base
         }
     }
@@ -192,9 +199,22 @@ fn count(files: &[Arc<ConfigFile>], rule: &Rule, option: &CountOption) -> usize 
 }
 
 /// The option's word in the nearest file that sets it.
-fn choice(files: &[Arc<ConfigFile>], rule: &Rule, option: &ChoiceOption) -> &'static str {
+fn set_choice(files: &[Arc<ConfigFile>], rule: &Rule, option: &ChoiceOption) -> Option<&'static str> {
     let set = |file: &ConfigFile| rule_table(file, rule)?.choices.iter().find(|(key, _)| *key == option.key).map(|&(_, word)| word);
-    nearest(files, set).unwrap_or(option.default)
+    nearest(files, set)
+}
+
+fn choice(files: &[Arc<ConfigFile>], rule: &Rule, option: &ChoiceOption) -> &'static str {
+    set_choice(files, rule, option).unwrap_or(option.default)
+}
+
+/// `Layout/IndentationStyle`: spaces where the rule is off, else the `style` a file sets.
+fn indent_style(files: &[Arc<ConfigFile>], off: &HashSet<String>) -> Option<IndentStyle> {
+    let rule = by_name(INDENTATION_STYLE)?;
+    if off.contains(rule.name) {
+        return Some(IndentStyle::Spaces);
+    }
+    set_choice(files, rule, &INDENT_STYLE).map(|word| if word == TABS { IndentStyle::Tabs } else { IndentStyle::Spaces })
 }
 
 /// The `style` of an `EmptyLinesAround…` rule; `None` when the rule is off.
@@ -432,5 +452,34 @@ mod tests {
         let off = Project::new("format-rules-dept", &[(".ruby-templates.toml", "[Layout]\nenabled = false\n"), ("a.html.slim", "")]);
         let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
         assert!(!settings.trailing_empty_lines, "the department switch turns an on-by-default rule off");
+    }
+
+    #[test]
+    fn indentation_style_follows_the_file_then_the_base_and_trailing_whitespace_the_switch() {
+        let style = |project: &Project, file: &str, lang, base: IndentStyle| {
+            let base = Settings { indent_style: base, ..Settings::default() };
+            project.resolve(file, lang, &Options::default()).format_settings(base).indent_style
+        };
+        let silent = Project::new("indent-silent", &[("a.html.erb", "")]);
+        assert_eq!(
+            style(&silent, "a.html.erb", TemplateLang::Erb, IndentStyle::Tabs),
+            IndentStyle::Tabs,
+            "the base: editor or .editorconfig"
+        );
+        let toml = |text: &str| Project::new("indent-toml", &[(".ruby-templates.toml", text), ("a.html.erb", ""), ("b.html.haml", "")]);
+        let spaces = toml("[Layout.IndentationStyle]\nstyle = \"spaces\"\n");
+        assert_eq!(style(&spaces, "a.html.erb", TemplateLang::Erb, IndentStyle::Tabs), IndentStyle::Spaces, "the file beats the base");
+        let tabs = toml("[Layout.IndentationStyle]\nstyle = \"tabs\"\n");
+        assert_eq!(style(&tabs, "a.html.erb", TemplateLang::Erb, IndentStyle::Spaces), IndentStyle::Tabs);
+        let off = toml("[Layout.IndentationStyle]\nenabled = false\nstyle = \"tabs\"\n");
+        assert_eq!(style(&off, "a.html.erb", TemplateLang::Erb, IndentStyle::Tabs), IndentStyle::Spaces, "off writes spaces");
+        assert_eq!(style(&tabs, "b.html.haml", TemplateLang::Haml, IndentStyle::Tabs), IndentStyle::Spaces, "not a Haml rule");
+
+        let trailing = |project: &Project, file: &str, lang| {
+            project.resolve(file, lang, &Options::default()).format_settings(Settings::default()).trailing_whitespace
+        };
+        assert!(trailing(&silent, "a.html.erb", TemplateLang::Erb), "on by default");
+        let no_trim = toml("[Layout.TrailingWhitespace]\nenabled = false\n");
+        assert!(!trailing(&no_trim, "a.html.erb", TemplateLang::Erb) && !trailing(&no_trim, "b.html.haml", TemplateLang::Haml));
     }
 }

@@ -36,7 +36,9 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         Layout/EmptyLinesAroundBlockBody, Layout/EmptyLinesAroundElementBody and Layout/EmptyLinesAroundBranches (all
         off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
         Layout/SpaceInsideErbTag, Layout/SpaceInHtmlTag, Style/ErbCommentSyntax and Layout/SpaceAfterScriptMarker
-        (all off) set spaces inside ERB and HTML tags and after Haml and Slim script markers. Nothing else changes;
+        (all off) set spaces inside ERB and HTML tags and after Haml and Slim script markers. Layout/IndentationStyle
+        (ERB; spaces unless .editorconfig or its style say tabs) and Layout/TrailingWhitespace (on) set the indent
+        character and whether line-end whitespace goes. Nothing else changes;
         a file whose structure is in doubt is left as it is, with the reason on stderr. Without --check or --write
         the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.
@@ -62,7 +64,7 @@ pub fn legacy(args: &[String]) -> Option<i32> {
 fn legacy_format(file: &str) -> i32 {
     let formatted = std::fs::read_to_string(file).ok().and_then(|text| {
         let settings = crate::format::Settings::default();
-        let indented = crate::format::slim::format(&text, settings.indent_size, &[])?;
+        let indented = crate::format::slim::format(&text, &settings, &[])?;
         Some(crate::format::blank_lines::apply(&indented.text, &indented.lines, &settings, &text))
     });
     let Some(formatted) = formatted else {

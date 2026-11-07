@@ -40,6 +40,10 @@ pub struct Settings {
     pub erb_comment_syntax: bool,
     /// `Layout/SpaceInHtmlTag`.
     pub space_in_html_tag: bool,
+    /// `Layout/IndentationStyle`: what an ERB template's indent level is written with.
+    pub indent_style: IndentStyle,
+    /// `Layout/TrailingWhitespace`: strip spaces and tabs at line ends where they don't count.
+    pub trailing_whitespace: bool,
 }
 
 impl Default for Settings {
@@ -56,8 +60,17 @@ impl Default for Settings {
             space_after_script_marker: false,
             erb_comment_syntax: false,
             space_in_html_tag: false,
+            indent_style: IndentStyle::Spaces,
+            trailing_whitespace: true,
         }
     }
+}
+
+/// What one indent level is made of: `indent_size` spaces, or a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndentStyle {
+    Spaces,
+    Tabs,
 }
 
 /// How many blank lines the `EmptyLinesAround…` rules leave.
@@ -79,9 +92,18 @@ pub enum SkipKind {
 }
 
 impl Settings {
-    /// These settings under the editor's indentation width.
+    /// These settings under the editor's indentation width and style.
     pub fn with_editor(self, options: &FormattingOptions) -> Self {
-        Self { indent_size: options.tab_size as usize, ..self }
+        let indent_style = if options.insert_spaces { IndentStyle::Spaces } else { IndentStyle::Tabs };
+        Self { indent_size: options.tab_size as usize, indent_style, ..self }
+    }
+
+    /// The text of one indent level.
+    fn indent_unit(&self) -> String {
+        match self.indent_style {
+            IndentStyle::Spaces => " ".repeat(self.indent_size),
+            IndentStyle::Tabs => "\t".to_string(),
+        }
     }
 }
 
@@ -234,7 +256,7 @@ fn format_stages(
     let indented = match lang {
         TemplateLang::Slim | TemplateLang::Skim => indent_slim(text, settings, extra_engines, ruby.grammar)?,
         TemplateLang::Erb if !html_host(uri, plain_erb, text) => return skip(SkipKind::NotHandled, "not an HTML ERB template"),
-        TemplateLang::Erb => erb::indent(text, &" ".repeat(settings.indent_size), is_partial(uri), settings.align_comments, ruby)?,
+        TemplateLang::Erb => erb::indent(text, settings, is_partial(uri), ruby)?,
         TemplateLang::Haml => indent_haml(text, settings)?,
         TemplateLang::Ruby => return skip(SkipKind::NotHandled, "Ruby views are formatted by Ruby tools"),
         TemplateLang::Liquid => return skip(SkipKind::NotHandled, "Liquid has no formatter here"),
@@ -270,7 +292,7 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: 
         return skip(SkipKind::Doubt, "Slim would reject the file");
     }
     let original = text;
-    let Some(indented) = slim::format(text, settings.indent_size, extra_engines) else {
+    let Some(indented) = slim::format(text, settings, extra_engines) else {
         return skip(SkipKind::Doubt, "Slim would reject the file, or its indentation can't move safely");
     };
     if !crate::slim::ruby::same_compilation(original, &indented.text, extra_engines) {
@@ -280,7 +302,7 @@ fn indent_slim(text: &str, settings: &Settings, extra_engines: &[String], ruby: 
 }
 
 fn indent_haml(text: &str, settings: &Settings) -> Result<Indented, Skipped> {
-    let Some(indented) = haml::format(text, settings.indent_size) else {
+    let Some(indented) = haml::format(text, settings) else {
         return skip(SkipKind::Doubt, "Haml would reject the file");
     };
     if !crate::haml::parser::same_compilation(text, &indented.text) {
@@ -560,6 +582,88 @@ mod tests {
         let project = Settings { indent_size: 4, ..Settings::default() };
         let editor = FormattingOptions { tab_size: 3, insert_spaces: false, ..Default::default() };
         assert_eq!(project.with_editor(&editor).indent_size, 3);
+    }
+
+    #[test]
+    fn editor_insert_spaces_sets_the_indentation_style() {
+        let editor = |insert_spaces| FormattingOptions { tab_size: 2, insert_spaces, ..Default::default() };
+        let tabbed = Settings { indent_style: IndentStyle::Tabs, ..Settings::default() };
+        assert_eq!(tabbed.clone().with_editor(&editor(true)).indent_style, IndentStyle::Spaces, "the editor beats .editorconfig");
+        assert_eq!(Settings::default().with_editor(&editor(false)).indent_style, IndentStyle::Tabs);
+    }
+
+    fn tabs() -> Settings {
+        Settings { indent_style: IndentStyle::Tabs, ..Settings::default() }
+    }
+
+    fn erb(text: &str, settings: &Settings) -> String {
+        let once = fmt("a.html.erb", text, settings).unwrap();
+        assert_eq!(fmt("a.html.erb", &once, settings).as_deref(), Ok(once.as_str()), "idempotent");
+        once
+    }
+
+    #[test]
+    fn erb_tabs_replace_the_levels_the_indenter_writes() {
+        let text = "<ul>\n<% @users.each do |user| %>\n<li>\n<%= user.name %>\n</li>\n<% end %>\n</ul>\n";
+        let want = "<ul>\n\t<% @users.each do |user| %>\n\t\t<li>\n\t\t\t<%= user.name %>\n\t\t</li>\n\t<% end %>\n</ul>\n";
+        assert_eq!(erb(text, &tabs()), want);
+        let four = Settings { indent_size: 4, ..tabs() };
+        assert_eq!(erb(text, &four), want, "the width doesn't matter with tabs");
+        assert_eq!(
+            erb(want, &Settings::default()),
+            "<ul>\n  <% @users.each do |user| %>\n    <li>\n      <%= user.name %>\n    </li>\n  <% end %>\n</ul>\n"
+        );
+    }
+
+    #[test]
+    fn erb_tabs_leave_fixed_regions_and_inner_text_alone() {
+        let text = "<div>\n  <pre>\n    a  b\n  </pre>\n  <script>\n    var x = 1;\n      y();\n  </script>\n  <p class=\"a\n     b\">x</p>\n  <%# note\n    more %>\n  <% foo(1,\n      2) %>\n</div>\n";
+        let want = "<div>\n\t<pre>\n    a  b\n  </pre>\n\t<script>\n    var x = 1;\n      y();\n  </script>\n\t<p class=\"a\n     b\">x</p>\n\t<%# note\n    more %>\n\t<% foo(1,\n      2) %>\n</div>\n";
+        assert_eq!(erb(text, &tabs()), want);
+    }
+
+    #[test]
+    fn erb_tabs_move_a_multi_line_tag_with_its_owner_keeping_the_relative_part() {
+        let text = "<div>\n<a href=\"/x\"\n   class=\"y\">z</a>\n</div>\n";
+        assert_eq!(erb(text, &tabs()), "<div>\n\t<a href=\"/x\"\n\t   class=\"y\">z</a>\n</div>\n");
+    }
+
+    #[test]
+    fn erb_tabs_and_crlf() {
+        assert_eq!(erb("<div>\r\n<p>\r\nx\r\n</p>\r\n</div>\r\n", &tabs()), "<div>\r\n\t<p>\r\n\t\tx\r\n\t</p>\r\n</div>\r\n");
+    }
+
+    #[test]
+    fn haml_and_slim_ignore_the_indentation_style() {
+        assert_eq!(fmt("a.html.haml", "%div\n    %p\n", &tabs()).as_deref(), Ok("%div\n  %p\n"));
+        assert_eq!(fmt("a.html.slim", "div\n    p\n", &tabs()).as_deref(), Ok("div\n  p\n"));
+    }
+
+    #[test]
+    fn trailing_whitespace_off_keeps_every_line_end_as_written() {
+        let off = Settings { trailing_whitespace: false, ..Settings::default() };
+        for (name, text, trimmed) in [
+            ("a.html.erb", "<div>  \n<p>x \t\n  \n</p>\n</div>\n", "<div>\n  <p>x\n\n  </p>\n</div>\n"),
+            ("a.html.haml", "%div  \n    %p x \t\n  \n    %b\n", "%div\n  %p x\n\n  %b\n"),
+            ("a.html.slim", "div  \n    p \t\n  \n    b\n", "div\n  p\n\n  b\n"),
+        ] {
+            assert_eq!(fmt(name, text, &Settings::default()).as_deref(), Ok(trimmed), "{name} on");
+            let kept = fmt(name, text, &off).unwrap();
+            assert!(kept.contains("  \n") && kept.contains(" \t\n"), "{name} off: {kept:?}");
+            assert_eq!(fmt(name, &kept, &off).as_deref(), Ok(kept.as_str()), "{name} off, idempotent");
+        }
+        for (name, text) in [
+            ("a.html.erb", "<div>\n \t\n    \n  <p>x</p>\n</div>\n"),
+            ("a.html.haml", "%div\n \t\n    \n  %p x\n"),
+            ("a.html.slim", "div\n \t\n    \n  p x\n"),
+        ] {
+            assert_eq!(fmt(name, text, &off).as_deref(), Ok(text), "{name}: whitespace-only lines kept exactly");
+            let on = text.replace(" \t\n    \n", "\n\n");
+            assert_eq!(fmt(name, text, &Settings::default()).as_deref(), Ok(on.as_str()), "{name}: emptied when on");
+        }
+        assert_eq!(fmt("a.html.erb", "<div>  \n<p>x \t\n</p>\n</div>\n", &off).as_deref(), Ok("<div>  \n  <p>x \t\n  </p>\n</div>\n"));
+        assert_eq!(fmt("a.html.haml", "%div  \n    %p x \t\n", &off).as_deref(), Ok("%div  \n  %p x \t\n"));
+        assert_eq!(fmt("a.html.slim", "div  \n    p \t\n", &off).as_deref(), Ok("div  \n  p \t\n"));
     }
 
     #[test]

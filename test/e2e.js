@@ -1336,6 +1336,48 @@ const check = (label, actual, expected) => {
     JSON.stringify(tabs.result?.[0]?.newText),
   );
 
+  // ERB writes a tab per level when the editor says insertSpaces: false; Haml and Slim stay spaces.
+  const tabsUri = fileUri(path.join(views, "users", "tabs.html.erb"));
+  const tabsText = "<div>\n<p>\nx\n</p>\n</div>\n";
+  const tabsOptions = { tabSize: 2, insertSpaces: false };
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: tabsUri,
+        languageId: "erb",
+        version: 1,
+        text: tabsText,
+      },
+    },
+    true,
+  );
+  const erbTabs = await send("textDocument/formatting", {
+    textDocument: { uri: tabsUri },
+    options: tabsOptions,
+  });
+  expect(
+    "erb formatting, tabs",
+    erbTabs.result?.length === 1 &&
+      erbTabs.result[0].newText === "<div>\n\t<p>\n\t\tx\n\t</p>\n</div>\n",
+    JSON.stringify(erbTabs.result?.[0]?.newText),
+  );
+  const erbTabsRange = await send("textDocument/rangeFormatting", {
+    textDocument: { uri: tabsUri },
+    options: tabsOptions,
+    range: {
+      start: { line: 2, character: 0 },
+      end: { line: 2, character: 0 },
+    },
+  });
+  expect(
+    "erb range formatting, tabs",
+    erbTabsRange.result?.length === 1 &&
+      erbTabsRange.result[0].range.start.line === 2 &&
+      erbTabsRange.result[0].newText === "\t\tx",
+    JSON.stringify(erbTabsRange.result),
+  );
+
   // Haml through the same formatter: the editor's width, the whole document or the lines of a range.
   const reindentUri = fileUri(path.join(views, "users", "reindent.html.haml"));
   await send(
@@ -1363,6 +1405,15 @@ const check = (label, actual, expected) => {
     "haml formatting",
     hamlEdits[0]?.newText === "%div\n  %p\n    %b x\n  %i\n",
     JSON.stringify(hamlEdits[0]?.newText),
+  );
+  const hamlTabs = await send("textDocument/formatting", {
+    textDocument: { uri: reindentUri },
+    options: { tabSize: 2, insertSpaces: false },
+  });
+  expect(
+    "haml formatting, insertSpaces false stays spaces",
+    hamlTabs.result?.[0]?.newText === "%div\n  %p\n    %b x\n  %i\n",
+    JSON.stringify(hamlTabs.result?.[0]?.newText),
   );
   const rangeEdits =
     (

@@ -3,14 +3,15 @@
 //! goes where Haml ignores it. Every line stays; the blank ones that may go are reported.
 
 use crate::format::blank_lines::{code_role, drop_childless_openers, Body, LineInfo, LineRole};
-use crate::format::Indented;
+use crate::format::{Indented, Settings};
 use crate::haml::parser::{lines_with_endings, parse, Role};
 use crate::util::{leading_ws, BOM};
 
 const BLANK_SPACE: [char; 2] = [' ', '\t'];
 
-/// The formatted text, or `None` when Haml would reject the text (or `width` is 0).
-pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
+/// The formatted text, or `None` when Haml would reject the text (or `width` is 0). Trailing whitespace stays unless `trim_trailing`.
+pub(crate) fn format(text: &str, settings: &Settings) -> Option<Indented> {
+    let (width, trim_trailing) = (settings.indent_size, settings.trailing_whitespace);
     if width == 0 {
         return None;
     }
@@ -30,12 +31,13 @@ pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
         let old = leading_ws(line).len();
         let content = &line[old..];
         match role {
-            Role::Blank => {}
+            Role::Blank if trim_trailing => {}
+            Role::Blank => out.push_str(line),
             Role::Structural { depth } => {
                 columns[i] = (columns_of(&line[..old], width), depth * width);
                 unit_known |= depth > 0;
                 out.push_str(&" ".repeat(depth * width));
-                out.push_str(content.trim_end_matches(BLANK_SPACE));
+                out.push_str(line_end(content, trim_trailing));
             }
             Role::Inner { owner, counted } => {
                 let (owner_old, owner_new) = columns[owner];
@@ -49,11 +51,11 @@ pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
                     unit_known = true;
                 }
                 out.push_str(&" ".repeat(column));
-                out.push_str(content.trim_end_matches(BLANK_SPACE));
+                out.push_str(line_end(content, trim_trailing));
             }
             Role::FlatBody { owner, prefix_len } => match prefix_len {
                 // Before Haml knows its indentation unit a body has no prefix to strip: the whole line is text.
-                0 if content.is_empty() && unit_known => {}
+                0 if content.is_empty() && unit_known && trim_trailing => {}
                 0 => out.push_str(line),
                 _ => {
                     unit_known = true;
@@ -66,7 +68,7 @@ pub(crate) fn format(text: &str, width: usize) -> Option<Indented> {
     }
     // Haml reads nothing past its last line with content.
     for &(line, ending) in &lines[parsed.roles.len()..] {
-        out.push_str(line.trim_matches(BLANK_SPACE));
+        out.push_str(if trim_trailing { line.trim_matches(BLANK_SPACE) } else { line });
         out.push_str(ending);
     }
     // Haml also ends a line at a lone `\r`, which the blank-line pass doesn't.
@@ -103,6 +105,14 @@ fn node_role(content: &str) -> LineRole {
     }
 }
 
+fn line_end(content: &str, trim_trailing: bool) -> &str {
+    if trim_trailing {
+        content.trim_end_matches(BLANK_SPACE)
+    } else {
+        content
+    }
+}
+
 /// A tab counts as one indent level.
 fn columns_of(whitespace: &str, width: usize) -> usize {
     whitespace.chars().map(|c| if c == '\t' { width } else { 1 }).sum()
@@ -113,11 +123,11 @@ mod tests {
     use super::*;
 
     fn reindent(text: &str, width: usize) -> Option<String> {
-        format(text, width).map(|indented| indented.text)
+        format(text, &Settings { indent_size: width, ..Settings::default() }).map(|indented| indented.text)
     }
 
     fn info(text: &str) -> Vec<(Option<usize>, LineRole)> {
-        format(text, 2).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
+        format(text, &Settings::default()).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
     }
 
     fn fmt(text: &str) -> String {
@@ -190,7 +200,8 @@ mod tests {
         assert_eq!(fmt("%p\n  \n \t\n"), "%p\n\n\n");
         assert_eq!(fmt("%p\r\n\r\n"), "%p\r\n\r\n");
         assert_eq!(fmt("\n\n"), "\n\n");
-        let removable = |text: &str| format(text, 2).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
+        let removable =
+            |text: &str| format(text, &Settings::default()).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
         assert_eq!(removable("%p\n\n%i\n"), [false, true, false, true]);
         // A blank line in a filter or `-#` comment body is content; Haml skips the ones in multi-line Ruby.
         assert_eq!(removable(":plain\n  a\n\n  b\n%p\n"), [false, false, false, false, false, true]);

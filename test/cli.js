@@ -479,6 +479,79 @@ try {
     "p\n  <%=x%>\n",
   );
 
+  // Layout/IndentationStyle (ERB tabs, from the file or .editorconfig) and Layout/TrailingWhitespace.
+  const layout = path.join(root, "layout");
+  fs.mkdirSync(layout);
+  const layoutToml = path.join(layout, ".ruby-templates.toml");
+  fs.writeFileSync(
+    path.join(layout, ".editorconfig"),
+    "root = true\n[*]\nindent_size = 2\n",
+  );
+  const layoutFormat = (name, text) =>
+    run(["format", "--stdin-filepath", path.join(layout, name)], text).stdout;
+  const spaced = "<div>\n  <pre>\n  a  \n  </pre>\n  <p>x</p>\n</div>\n";
+  const tabbed = "<div>\n\t<pre>\n  a  \n  </pre>\n\t<p>x</p>\n</div>\n";
+  fs.writeFileSync(layoutToml, "");
+  assert.strictEqual(
+    layoutFormat("a.html.erb", tabbed),
+    spaced,
+    "spaces by default",
+  );
+  fs.writeFileSync(layoutToml, '[Layout.IndentationStyle]\nstyle = "tabs"\n');
+  assert.strictEqual(
+    layoutFormat("a.html.erb", spaced),
+    tabbed,
+    "tabs, <pre> kept",
+  );
+  assert.strictEqual(layoutFormat("a.html.erb", tabbed), tabbed, "stable");
+  assert.strictEqual(
+    layoutFormat("a.html.slim", "div\n    p x\n"),
+    "div\n  p x\n",
+    "Slim stays spaces",
+  );
+  fs.writeFileSync(layoutToml, "");
+  fs.writeFileSync(
+    path.join(layout, ".editorconfig"),
+    "root = true\n[*]\nindent_style = tab\n",
+  );
+  assert.strictEqual(
+    layoutFormat("a.html.erb", spaced),
+    tabbed,
+    ".editorconfig indent_style = tab",
+  );
+  fs.writeFileSync(layoutToml, '[Layout.IndentationStyle]\nstyle = "spaces"\n');
+  assert.strictEqual(
+    layoutFormat("a.html.erb", tabbed),
+    spaced,
+    "the toml beats .editorconfig",
+  );
+  fs.writeFileSync(
+    layoutToml,
+    "[Layout.TrailingWhitespace]\nenabled = false\n",
+  );
+  const trailing = {
+    "a.html.erb": ["<p>x \t\n  \n</p>  \n", "<p>x\n\n</p>\n"],
+    "a.html.haml": ["%p  \n   \n  %b x \n", "%p\n\n  %b x\n"],
+    "a.html.slim": ["p  \n   \n  b \n", "p\n\n  b\n"],
+  };
+  for (const [name, [untidy, tidy]] of Object.entries(trailing)) {
+    assert.strictEqual(
+      layoutFormat(name, untidy),
+      untidy,
+      `${name}: kept when off`,
+    );
+    fs.writeFileSync(layoutToml, "");
+    assert.strictEqual(
+      layoutFormat(name, untidy),
+      tidy,
+      `${name}: stripped by default`,
+    );
+    fs.writeFileSync(
+      layoutToml,
+      "[Layout.TrailingWhitespace]\nenabled = false\n",
+    );
+  }
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

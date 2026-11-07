@@ -108,12 +108,31 @@ Every result must be stable when formatted again, keep every non-whitespace char
 
 `format.enabled` and `format.align_comments` under `[erb]`, `[haml]` and `[slim]` in a `.ruby-templates.toml` turn formatting off or on and align comments, and win over the `rubyTemplates.*` settings; its global `exclude` leaves files unformatted.
 
-The indentation width comes from the editor's tab size, then `.editorconfig` (`indent_size`; `tab_width` for `indent_size = tab`), then 2. Indentation is always written in spaces and each line keeps its ending.
+The indentation width comes from the editor's tab size, then `.editorconfig` (`indent_size`; `tab_width` for `indent_size = tab`), then 2. Each line keeps its ending.
+
+Haml and Slim are indented with spaces. ERB can use tabs: one tab per indent level, whatever the width. The style comes from the first of these that sets it:
+
+1. `style` of `[Layout.IndentationStyle]` in a `.ruby-templates.toml` (`"spaces"` or `"tabs"`); `enabled = false` always gives spaces.
+2. The editor's `editor.insertSpaces` for the file. In an editor this always decides when the toml is silent, because the language server protocol always sends it (as it does the tab size). `.editorconfig` only counts there through an EditorConfig extension, which sets `insertSpaces` for the file.
+3. `.editorconfig`: `indent_style = tab` or `space`. Only the command line, which has no editor, reads it directly.
+4. Spaces.
 
 ```text title=".editorconfig"
 [*.{erb,haml,slim}]
+indent_style = space
 indent_size = 2
 ```
+
+```toml title=".ruby-templates.toml"
+[Layout.IndentationStyle]
+style = "tabs"
+```
+
+Only the leading whitespace the formatter writes becomes tabs. `<pre>`, `<textarea>`, `<script>`, `<style>`, `<xmp>` and `<listing>` bodies, Ruby inside tags, quoted attribute values and comments keep every byte. The lines of a tag that spans several lines move with its first line and keep their indentation relative to it exactly as written: only the first line's level becomes tabs, so an attribute lined up with spaces under the tag name stays lined up in any tab width. A file indented with tabs is left as it is under `style = "tabs"` and converted to spaces under `"spaces"`. _Format Selection_ applies the style to the lines it covers.
+
+## Trailing whitespace
+
+`Layout/TrailingWhitespace` is on for ERB, Haml and Slim: spaces and tabs at the end of a line go where they don't count, and whitespace-only lines become empty. With `[Layout.TrailingWhitespace] enabled = false` they stay as written; the places where they count (a `<pre>` body, an ERB comment, a Haml filter, Slim text) are never touched either way.
 
 ## Comments in ERB
 
@@ -147,4 +166,4 @@ The formatter also runs in CI with `npx ruby-templates format --check`; see [Com
 - Indenting embedded JavaScript or CSS by their own syntax.
 - Ruby formatting (use RuboCop).
 - Haml files with errors.
-- Tab-indented Slim files.
+- Tab-indented Slim and Haml files.

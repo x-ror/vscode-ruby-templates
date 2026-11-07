@@ -7,7 +7,7 @@
 use crate::erb::tags;
 use crate::erb::tags::{Block, PState, Paths, Tag, Token, OPTIONAL_END};
 use crate::format::blank_lines::{Body, LineInfo, LineRole};
-use crate::format::{skip, Indented, SkipKind, Skipped};
+use crate::format::{skip, Indented, Settings, SkipKind, Skipped};
 use crate::html::NO_END_TAG;
 use crate::ruby::strict_locals::RubyContext;
 use crate::ruby::BlockEffect;
@@ -66,9 +66,11 @@ struct Regions {
     units: Vec<UnitSpan>,
 }
 
-/// `text` with every line re-indented by `unit`, and trailing whitespace dropped.
+/// `text` with every line re-indented by the settings' unit, and trailing whitespace dropped when `trailing_whitespace` is on.
 /// With `align_comments`, the lines inside a comment move with the line it opens on instead of keeping their bytes.
-pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
+pub(crate) fn indent(text: &str, settings: &Settings, partial: bool, ruby: &RubyContext) -> Result<Indented, Skipped> {
+    let (unit, align_comments, trim_trailing) = (settings.indent_unit(), settings.align_comments, settings.trailing_whitespace);
+    let unit = unit.as_str();
     if let Some(reason) = doubt(text, partial, ruby) {
         return skip(SkipKind::Doubt, reason);
     }
@@ -79,7 +81,7 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
     let starts: Vec<usize> = lines.iter().map(|l| l.start).collect();
     let Regions { fixed, keep_end, units: unit_spans } = regions(text, &tokens, &starts, align_comments)?;
     let (roles, units) = assign_roles(&starts, unit_spans, &fixed);
-    let keeps_end = keeps_end(&lines, &keep_end);
+    let keeps_end = keeps_end(&lines, &keep_end, trim_trailing);
 
     let paired = paired_optional(&tokens);
     let levels = levels(text, Nesting::new(&tokens, &paired, partial), &lines, &roles);
@@ -90,7 +92,7 @@ pub(crate) fn indent(text: &str, unit: &str, partial: bool, align_comments: bool
         .collect();
     let decided = decide(&lines, &roles, &units, &levels.levels, unit);
     let infos = line_infos(&tokens, &starts, &roles, &levels);
-    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided), lines: infos, notes })
+    Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided, trim_trailing), lines: infos, notes })
 }
 
 /// Per line: whether a blank line may go, its level, what it opens (the last block or element its tags open, if the
@@ -240,16 +242,16 @@ fn assign_roles(starts: &[usize], mut unit_spans: Vec<UnitSpan>, fixed: &Ranges)
 }
 
 /// Whether each line keeps its trailing whitespace.
-fn keeps_end(lines: &[Line], keep_end: &Ranges) -> Vec<bool> {
+fn keeps_end(lines: &[Line], keep_end: &Ranges, trim_trailing: bool) -> Vec<bool> {
     let ends: Vec<usize> = lines.iter().map(|l| l.start + l.ws.len() + l.rest.len()).collect();
-    let mut keeps = vec![false; lines.len()];
+    let mut keeps = vec![!trim_trailing; lines.len()];
     for &(first, last) in keep_end {
         lines_starting_in(&ends, first, last).for_each(|line| keeps[line] = true);
     }
     keeps
 }
 
-fn render(capacity: usize, lines: &[Line], roles: &[Role], keeps_end: &[bool], decided: &[Option<String>]) -> String {
+fn render(capacity: usize, lines: &[Line], roles: &[Role], keeps_end: &[bool], decided: &[Option<String>], trim_trailing: bool) -> String {
     let mut out = String::with_capacity(capacity);
     for (i, line) in lines.iter().enumerate() {
         if i > 0 {
@@ -258,7 +260,7 @@ fn render(capacity: usize, lines: &[Line], roles: &[Role], keeps_end: &[bool], d
         let blank = line.rest.trim_matches([' ', '\t']).is_empty();
         let content = if !keeps_end[i] { line.rest.trim_end_matches([' ', '\t']) } else { line.rest };
         match &decided[i] {
-            _ if blank && roles[i] == Role::Markup => {}
+            _ if blank && trim_trailing && roles[i] == Role::Markup => {}
             Some(ws) if !content.is_empty() => out.push_str(ws),
             _ => out.push_str(line.ws),
         }
@@ -545,14 +547,20 @@ fn decide(lines: &[Line], roles: &[Role], units: &[Unit], levels: &[Option<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::format::IndentStyle;
 
     fn indent(text: &str, unit: &str, partial: bool) -> Result<Indented, Skipped> {
-        super::indent(text, unit, partial, false, &RubyContext::outside_project())
+        let settings = Settings { indent_style: if unit == "\t" { IndentStyle::Tabs } else { IndentStyle::Spaces }, ..Settings::default() };
+        super::indent(text, &settings, partial, &RubyContext::outside_project())
+    }
+
+    fn aligning() -> Settings {
+        Settings { align_comments: true, ..Settings::default() }
     }
 
     fn aligned(text: &str) -> String {
-        let once = super::indent(text, "  ", false, true, &RubyContext::outside_project()).unwrap_or_else(|e| panic!("{e}: {text}")).text;
-        let again = super::indent(&once, "  ", false, true, &RubyContext::outside_project()).map(|i| i.text);
+        let once = super::indent(text, &aligning(), false, &RubyContext::outside_project()).unwrap_or_else(|e| panic!("{e}: {text}")).text;
+        let again = super::indent(&once, &aligning(), false, &RubyContext::outside_project()).map(|i| i.text);
         assert_eq!(again.as_deref(), Ok(once.as_str()), "idempotent");
         once
     }

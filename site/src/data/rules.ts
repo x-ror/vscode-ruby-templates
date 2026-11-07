@@ -495,15 +495,20 @@ export const rules: Rule[] = [
     safe: true,
     safeNote:
       "Leading whitespace between tags renders as nothing. Content where whitespace counts is left alone.",
-    status: "partial",
-    phase: 1,
-    today:
-      "The width is available: the editor's tab size, then `.editorconfig` (`indent_size`, or `tab_width` for `indent_size = tab`), then 2. The formatter always writes spaces; choosing tabs is the planned part.",
+    status: "available",
+    onByDefault: ["erb"],
     config: text(
       "[Layout.IndentationStyle]",
       "enabled = true",
-      'style = "tabs" # or spaces, or keep',
+      'style = "tabs" # or "spaces"',
     ),
+    today:
+      'ERB only; Haml and Slim always use spaces, since Slim rejects mixed indentation and Haml wants it consistent. Each indent level the formatter writes is one tab with `style = "tabs"`, or the width in spaces (the default of 2) with `"spaces"`. Only the leading whitespace of the lines the formatter indents changes: `<pre>`, `<textarea>`, `<script>`, `<style>`, `<xmp>` and `<listing>` bodies, Ruby inside tags, quoted attribute values and comments keep every byte. The lines of a tag that spans several lines move with its first line and keep their indentation relative to it, as written, so a tag attribute lined up with spaces stays lined up. Without `style`, the style comes from the first of these that has one: the `editor.insertSpaces` setting, then `.editorconfig` (`indent_style = tab` or `space`), then spaces. In an editor `insertSpaces` always decides, because the language server protocol always sends it, as it does the tab size; `.editorconfig` counts only on the command line, or through an EditorConfig extension that sets `insertSpaces`. `style` in `.ruby-templates.toml` beats all of them, and `enabled = false` always writes spaces. The width is the editor\'s tab size, then `.editorconfig` (`indent_size`, or `tab_width` for `indent_size = tab`), then 2; it only matters for spaces. Format selection applies the style to the lines it covers.',
+    setting: {
+      label: "Always indent with spaces",
+      code: `[Layout.IndentationStyle]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -535,9 +540,15 @@ export const rules: Rule[] = [
     safeNote:
       "Whitespace that is content stays: `<pre>` and `<textarea>` bodies, ERB comments, Haml filters, and Slim text lines (`| text`, text after a tag).",
     status: "available",
-    phase: 1,
+    onByDefault: ["erb", "haml", "slim"],
+    config: text("[Layout.TrailingWhitespace]", "enabled = true"),
     today:
-      "The formatter does it in ERB, Haml and Slim, on Format Document, on save and in `ruby-templates format`. Phase 1 only moves it into the config file.",
+      "The formatter does it in ERB, Haml and Slim, on Format Document, on save and in `ruby-templates format`. It is on for all three; with `enabled = false` the spaces and tabs at the line ends stay as written, whitespace-only lines included.",
+    setting: {
+      label: "Turn it off",
+      code: `[Layout.TrailingWhitespace]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
