@@ -13,12 +13,13 @@ const bin = path.join(
   "release",
   "ruby-templates-ls",
 );
+// Slim keeps a `\n;` per source line; trailing blank lines dropped by the formatter only remove the last ones.
 const compile = (source) =>
   execFileSync(
     "ruby",
     ["-rslim", "-e", "print Slim::Engine.new.call(STDIN.read)"],
     { input: source, encoding: "utf8" },
-  );
+  ).replace(/(\n; )+_buf$/, "_buf");
 const format = (file) =>
   spawnSync(bin, ["--format", file], { encoding: "utf8" });
 
