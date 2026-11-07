@@ -64,11 +64,12 @@ const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'s
 
 const fn format_rule(
     name: &'static str,
+    languages: &'static [TemplateLang],
     on_by_default: &'static [TemplateLang],
     options: &'static [CountOption],
     choices: &'static [ChoiceOption],
 ) -> Rule {
-    Rule { name, languages: &[Erb, Haml, Slim], kind: Kind::Format, on_by_default, options, choices, alias: None }
+    Rule { name, languages, kind: Kind::Format, on_by_default, options, choices, alias: None }
 }
 
 pub const EMPTY_LINES: &str = "Layout/EmptyLines";
@@ -76,6 +77,9 @@ pub const TRAILING_EMPTY_LINES: &str = "Layout/TrailingEmptyLines";
 pub const AROUND_BLOCK_BODY: &str = "Layout/EmptyLinesAroundBlockBody";
 pub const AROUND_ELEMENT_BODY: &str = "Layout/EmptyLinesAroundElementBody";
 pub const AROUND_BRANCHES: &str = "Layout/EmptyLinesAroundBranches";
+pub const SPACE_INSIDE_ERB_TAG: &str = "Layout/SpaceInsideErbTag";
+pub const SPACE_AFTER_SCRIPT_MARKER: &str = "Layout/SpaceAfterScriptMarker";
+pub const ERB_COMMENT_SYNTAX: &str = "Style/ErbCommentSyntax";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -83,6 +87,7 @@ pub const STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_EMPTY_
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
+const TEMPLATES: &[TemplateLang] = &[Erb, Haml, Slim];
 
 pub const RULES: &[Rule] = &[
     lint("Syntax/Ruby", ALL, "ruby-syntax"),
@@ -108,12 +113,15 @@ pub const RULES: &[Rule] = &[
     lint("Html/VoidChildren", HAML_SLIM, "void-children"),
     lint("Rails/MissingPartial", ALL, "unresolved-render"),
     lint("Rails/StrictLocals", ALL, "strict-locals"),
-    format_rule(EMPTY_LINES, &[], &[CountOption { key: "max", default: 1 }], &[]),
+    format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
-    format_rule(TRAILING_EMPTY_LINES, HAML_SLIM, &[], &[]),
-    format_rule(AROUND_BLOCK_BODY, &[], &[], &[STYLE]),
-    format_rule(AROUND_ELEMENT_BODY, &[], &[], &[STYLE]),
-    format_rule(AROUND_BRANCHES, &[], &[], &[STYLE]),
+    format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
+    format_rule(AROUND_BLOCK_BODY, TEMPLATES, &[], &[], &[STYLE]),
+    format_rule(AROUND_ELEMENT_BODY, TEMPLATES, &[], &[], &[STYLE]),
+    format_rule(AROUND_BRANCHES, TEMPLATES, &[], &[], &[STYLE]),
+    format_rule(SPACE_INSIDE_ERB_TAG, &[Erb], &[], &[], &[]),
+    format_rule(SPACE_AFTER_SCRIPT_MARKER, HAML_SLIM, &[], &[], &[]),
+    format_rule(ERB_COMMENT_SYNTAX, &[Erb], &[], &[], &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {
@@ -143,7 +151,7 @@ mod tests {
             assert!(seen.insert(rule.name), "{} twice", rule.name);
             assert!(rule.alias.is_none_or(|alias| seen.insert(alias)), "{:?} twice", rule.alias);
         }
-        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Layout"]);
+        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Layout", "Style"]);
     }
 
     #[test]

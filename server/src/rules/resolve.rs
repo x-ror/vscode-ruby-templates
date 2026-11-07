@@ -4,7 +4,7 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
-    EMPTY_LINES_STYLE, RULES, STYLE, TRAILING_EMPTY_LINES,
+    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, STYLE, TRAILING_EMPTY_LINES,
 };
 use crate::format::{Settings, Style};
 use crate::glob::Glob;
@@ -33,6 +33,9 @@ pub struct ResolvedRules {
     around_block_body: Option<Style>,
     around_element_body: Option<Style>,
     around_branches: Option<Style>,
+    space_inside_erb_tag: bool,
+    space_after_script_marker: bool,
+    erb_comment_syntax: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -102,6 +105,9 @@ impl ResolvedRules {
             around_block_body: style(&files, &off, AROUND_BLOCK_BODY),
             around_element_body: style(&files, &off, AROUND_ELEMENT_BODY),
             around_branches: style(&files, &off, AROUND_BRANCHES),
+            space_inside_erb_tag: !off.contains(SPACE_INSIDE_ERB_TAG),
+            space_after_script_marker: !off.contains(SPACE_AFTER_SCRIPT_MARKER),
+            erb_comment_syntax: !off.contains(ERB_COMMENT_SYNTAX),
             off,
             files,
             excluded_by,
@@ -143,6 +149,9 @@ impl ResolvedRules {
             around_block_body: self.around_block_body,
             around_element_body: self.around_element_body,
             around_branches: self.around_branches,
+            space_inside_erb_tag: self.space_inside_erb_tag,
+            space_after_script_marker: self.space_after_script_marker,
+            erb_comment_syntax: self.erb_comment_syntax,
             ..base
         }
     }

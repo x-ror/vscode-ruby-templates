@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-_Format Document_, _Format Selection_ and format on save work for HTML ERB views, Haml and Slim. The formatter changes **only whitespace**: leading indentation, trailing whitespace, blank lines and the final newline. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
+_Format Document_, _Format Selection_ and format on save work for HTML ERB views, Haml and Slim. The formatter changes **only whitespace**: leading indentation, trailing whitespace, blank lines and the final newline, and, when you turn the rules on, the spaces at the edges of ERB tags and after Haml and Slim script markers. It never wraps or joins lines, never reorders attributes and never touches Ruby code.
 
 ## ERB
 
@@ -74,6 +74,27 @@ enabled = false
 ```
 
 Blank lines stay where whitespace counts: `<pre>`, `<xmp>`, `<listing>`, `<textarea>`, `<script>`, `<style>`, quoted attribute values, comments and the Ruby inside ERB tags; Haml filters; Slim text blocks and engine bodies. For Haml and Slim, the formatter also compares what the template compiles to before and after, ignoring line numbers, and keeps the blank lines of the file when removing or adding them would change it.
+
+## Spaces inside tags and after markers
+
+Three rules change the spaces on a line and never add or remove one; all are off until enabled, and they run before the re-indentation, in _Format Selection_ too.
+
+- `Layout/SpaceInsideErbTag` gives an ERB tag one space inside its delimiters: `<%=x%>` and `<%=  x  %>` become `<%= x %>`, `<%-x-%>` becomes `<%- x -%>`. Only tags on one line are changed; `<%#` comments, `<%%` literals and tags that span lines stay. The "Add spaces inside this ERB tag" code action and the `source.erbSpacing` source action do the same without the rule.
+- `Style/ErbCommentSyntax` turns `<% # note %>` into `<%# note %>`. The tag has to be nothing but comment, on every line if it has several, and stand alone on its lines: beside other content Rails comments out what follows a `<% #` tag, which `<%#` would bring back. `<%= # x %>`, `<%- # x -%>` (skipped to be conservative) and tags with Ruby before or after the comment stay.
+- `Layout/SpaceAfterScriptMarker` adds a space after the marker of a Ruby line: `-foo` and `=foo` become `- foo` and `= foo` (also `~`, `!=`, `&=`, `!~` and `&~` in Haml, `==` in Slim), and after a tag (`%p=x` and `p=x` become `%p= x` and `p= x`). Comments (`-#`, Slim's `/`), text, filters, attribute values and continuation lines stay, as do Haml's `==` and `\=` lines, which are text.
+
+```toml
+[Layout.SpaceInsideErbTag]
+enabled = true
+
+[Style.ErbCommentSyntax]
+enabled = true
+
+[Layout.SpaceAfterScriptMarker]
+enabled = true
+```
+
+A result is kept only when the Ruby of every ERB tag is the same afterwards, and when Haml or Slim compile it to the same template; otherwise the file is formatted without these rules and `--verbose` says so.
 
 ## Safe by construction
 

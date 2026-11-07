@@ -422,6 +422,62 @@ try {
     /:2:9: warning: `style` must be one of no_empty_lines, empty_lines, got "keep"/,
   );
 
+  // The in-line rules: spaces in ERB tags, `<% #` comments and the space after Haml and Slim script markers.
+  const inline = path.join(root, "inline");
+  fs.mkdirSync(inline);
+  const inlineToml = path.join(inline, ".ruby-templates.toml");
+  fs.writeFileSync(
+    path.join(inline, ".editorconfig"),
+    "root = true\n[*]\nindent_size = 2\n",
+  );
+  const inlineFormat = (name, text) =>
+    run(["format", "--stdin-filepath", path.join(inline, name)], text).stdout;
+  // Each: the text, the formatter's output with the rules on, and with them off (re-indented only).
+  const inlineTexts = {
+    "a.html.erb": [
+      "<div>\n<% # note %>\n<p><%=user.name%></p>\n</div>\n",
+      "<div>\n  <%# note %>\n  <p><%= user.name %></p>\n</div>\n",
+      "<div>\n  <% # note %>\n  <p><%=user.name%></p>\n</div>\n",
+    ],
+    "a.html.haml": [
+      "%div\n  -if a\n    %p=x\n    =render y\n",
+      "%div\n  - if a\n    %p= x\n    = render y\n",
+      "%div\n  -if a\n    %p=x\n    =render y\n",
+    ],
+    "a.html.slim": [
+      "div\n  -if a\n    p=x\n    =render y\n",
+      "div\n  - if a\n    p= x\n    = render y\n",
+      "div\n  -if a\n    p=x\n    =render y\n",
+    ],
+  };
+  fs.writeFileSync(inlineToml, "");
+  for (const [name, [messy, , off]] of Object.entries(inlineTexts)) {
+    assert.strictEqual(
+      inlineFormat(name, messy),
+      off,
+      `${name}: off by default`,
+    );
+  }
+  fs.writeFileSync(
+    inlineToml,
+    [
+      "Layout.SpaceInsideErbTag",
+      "Style.ErbCommentSyntax",
+      "Layout.SpaceAfterScriptMarker",
+    ]
+      .map((rule) => `[${rule}]\nenabled = true\n`)
+      .join(""),
+  );
+  for (const [name, [messy, tidy]] of Object.entries(inlineTexts)) {
+    assert.strictEqual(inlineFormat(name, messy), tidy, name);
+    assert.strictEqual(inlineFormat(name, tidy), tidy, `${name}: stable`);
+  }
+  // A rule applies to its languages only.
+  assert.strictEqual(
+    inlineFormat("b.html.slim", "p\n  <%=x%>\n"),
+    "p\n  <%=x%>\n",
+  );
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
