@@ -1,7 +1,7 @@
-//! The indentation width of a file, from the project's `.editorconfig`. The editor's tab size goes on top in the
-//! language server (`Settings::with_editor`). Every other property is ignored and listed in the notes.
+//! The indentation width and style of a file, from the project's `.editorconfig`. The editor's tab size and `insertSpaces` go on top
+//! in the language server (`Settings::with_editor`). Every other property is ignored and listed in the notes.
 
-use crate::format::Settings;
+use crate::format::{IndentStyle, Settings};
 use crate::glob::Glob;
 use crate::util::slash_path;
 use std::path::Path;
@@ -15,14 +15,18 @@ pub struct Resolved {
 pub fn settings_for(path: &Path) -> Resolved {
     let mut notes = Vec::new();
     let defaults = Settings::default();
-    let indent_size = editorconfig_indent_size(path, &mut notes).unwrap_or(defaults.indent_size);
-    Resolved { settings: Settings { indent_size, ..defaults }, notes }
+    let (size, style) = editorconfig_indent(path, &mut notes);
+    let settings =
+        Settings { indent_size: size.unwrap_or(defaults.indent_size), indent_style: style.unwrap_or(defaults.indent_style), ..defaults };
+    Resolved { settings, notes }
 }
 
-/// The indentation width from the `.editorconfig` properties that apply to `path`: files from the root (or the topmost `root = true`) down,
-/// later sections and nearer files winning, as the EditorConfig spec has it.
-fn editorconfig_indent_size(path: &Path, notes: &mut Vec<String>) -> Option<usize> {
-    path.file_name()?;
+/// The indentation width and style from the `.editorconfig` properties that apply to `path`: files from the root (or the topmost
+/// `root = true`) down, later sections and nearer files winning, as the EditorConfig spec has it.
+fn editorconfig_indent(path: &Path, notes: &mut Vec<String>) -> (Option<usize>, Option<IndentStyle>) {
+    if path.file_name().is_none() {
+        return (None, None);
+    }
     let mut properties = Vec::new();
     for (dir, text) in editorconfig_files(path).iter().rev() {
         let Ok(relative) = path.strip_prefix(dir) else { continue };
@@ -33,7 +37,7 @@ fn editorconfig_indent_size(path: &Path, notes: &mut Vec<String>) -> Option<usiz
     for (key, value) in properties.iter().filter(|(k, v)| v != "unset" && !is_understood(k, v)) {
         notes.push(format!(".editorconfig: ignored {key} = {value}"));
     }
-    indent_size(&properties)
+    (indent_size(&properties), indent_style(&properties))
 }
 
 /// The folders above `path` that hold an `.editorconfig`, with its text: nearest first, up to the first `root = true`.
@@ -74,8 +78,20 @@ fn read_matching_sections(text: &str, relative: &str, properties: &mut Vec<(Stri
     read
 }
 
+fn property<'a>(properties: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| *v != "unset")
+}
+
+fn indent_style(properties: &[(String, String)]) -> Option<IndentStyle> {
+    match property(properties, "indent_style") {
+        Some("tab") => Some(IndentStyle::Tabs),
+        Some("space") => Some(IndentStyle::Spaces),
+        _ => None,
+    }
+}
+
 fn indent_size(properties: &[(String, String)]) -> Option<usize> {
-    let get = |key: &str| properties.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| *v != "unset");
+    let get = |key: &str| property(properties, key);
     let number = |key: &str| get(key).and_then(positive_number);
     let tab_width = number("tab_width");
     let tabs = get("indent_style") == Some("tab");
@@ -87,7 +103,7 @@ fn indent_size(properties: &[(String, String)]) -> Option<usize> {
     }
 }
 
-/// Whether `indent_size` reads this property; any other is listed in the notes.
+/// Whether the settings read this property; any other is listed in the notes.
 fn is_understood(key: &str, value: &str) -> bool {
     match key {
         "indent_style" => matches!(value, "space" | "tab"),
@@ -165,6 +181,18 @@ mod tests {
         let project = Project::new("root", &files);
         assert_eq!(project.settings("app/a.html.erb").settings.indent_size, 3, "nothing above the root");
         assert_eq!(project.settings("app/lib/x/b.html.erb").settings.indent_size, 2, "unset falls back to the default");
+    }
+
+    #[test]
+    fn editorconfig_indent_style_sets_the_style() {
+        let text = "[*]\nindent_style = tab\n[*.slim]\nindent_style = space\n[legacy/*]\nindent_style = unset\n";
+        let project = Project::new("style", &[(".editorconfig", text), ("a.html.erb", ""), ("b.html.slim", ""), ("legacy/c.html.erb", "")]);
+        let style = |file: &str| project.settings(file).settings.indent_style;
+        assert_eq!(
+            (style("a.html.erb"), style("b.html.slim"), style("legacy/c.html.erb")),
+            (IndentStyle::Tabs, IndentStyle::Spaces, IndentStyle::Spaces)
+        );
+        assert!(project.settings("a.html.erb").notes.iter().all(|n| !n.contains("ignored")), "indent_style is understood");
     }
 
     #[test]

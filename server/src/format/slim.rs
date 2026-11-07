@@ -3,12 +3,13 @@
 //! owner line, and trailing whitespace goes where Slim ignores it. Every line stays; the blank ones that may go are reported.
 
 use crate::format::blank_lines::{code_role, drop_childless_openers, Body, LineInfo, LineRole};
-use crate::format::Indented;
+use crate::format::{Indented, Settings};
 use crate::slim::parser::{indent_width, parse, Role};
 use crate::util::{leading_ws, raw_lines, BOM};
 
-/// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0).
-pub(crate) fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> Option<Indented> {
+/// The formatted text, or `None` when Slim would reject the text (or `tab_size` is 0). Trailing whitespace stays unless `trim_trailing`.
+pub(crate) fn format(text: &str, settings: &Settings, extra_engines: &[String]) -> Option<Indented> {
+    let (tab_size, trim_trailing) = (settings.indent_size, settings.trailing_whitespace);
     if tab_size == 0 {
         return None;
     }
@@ -47,10 +48,12 @@ pub(crate) fn format(text: &str, tab_size: usize, extra_engines: &[String]) -> O
         };
         // A trailing `,` or `\` before the whitespace would turn into a continuation once stripped.
         let stripped = content.trim_end_matches(|c: char| c.is_ascii_whitespace());
-        let content = if info.keeps_trailing || stripped.ends_with([',', '\\']) { content } else { stripped };
+        let content = if !trim_trailing || info.keeps_trailing || stripped.ends_with([',', '\\']) { content } else { stripped };
         if !content.is_empty() {
             out.push_str(&" ".repeat(new_width));
             out.push_str(content);
+        } else if !trim_trailing {
+            out.push_str(ws);
         }
         out.push_str(cr);
     }
@@ -89,11 +92,11 @@ mod tests {
     use super::*;
 
     fn reindent(text: &str, width: usize, extra_engines: &[String]) -> Option<String> {
-        format(text, width, extra_engines).map(|indented| indented.text)
+        format(text, &Settings { indent_size: width, ..Settings::default() }, extra_engines).map(|indented| indented.text)
     }
 
     fn info(text: &str) -> Vec<(Option<usize>, LineRole)> {
-        format(text, 2, &[]).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
+        format(text, &Settings::default(), &[]).unwrap().lines.iter().map(|line| (line.depth, line.role)).collect()
     }
 
     fn fmt(text: &str) -> String {
@@ -147,7 +150,8 @@ mod tests {
         assert_eq!(fmt("div\n    | text\n\n\n        "), "div\n  | text\n\n\n");
         assert_eq!(fmt("p\r\n\r\n"), "p\r\n\r\n");
         assert_eq!(fmt("\u{feff}\n"), "\u{feff}\n");
-        let removable = |text: &str| format(text, 2, &[]).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
+        let removable =
+            |text: &str| format(text, &Settings::default(), &[]).unwrap().lines.iter().map(|line| line.removable).collect::<Vec<_>>();
         assert_eq!(removable("p\n\nq\n\n"), [false, true, false, true, true]);
         // Between lines of a text block or an engine body a blank line is text; after the block it is not.
         assert_eq!(removable("| a\n\n  b\n\np\n"), [false, false, false, true, false, true]);

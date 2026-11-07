@@ -81,10 +81,17 @@ pub const SPACE_INSIDE_ERB_TAG: &str = "Layout/SpaceInsideErbTag";
 pub const SPACE_AFTER_SCRIPT_MARKER: &str = "Layout/SpaceAfterScriptMarker";
 pub const ERB_COMMENT_SYNTAX: &str = "Style/ErbCommentSyntax";
 pub const SPACE_IN_HTML_TAG: &str = "Layout/SpaceInHtmlTag";
+pub const INDENTATION_STYLE: &str = "Layout/IndentationStyle";
+pub const TRAILING_WHITESPACE: &str = "Layout/TrailingWhitespace";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
 pub const STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_EMPTY_LINES, EMPTY_LINES_STYLE], default: NO_EMPTY_LINES };
+
+pub const SPACES: &str = "spaces";
+pub const TABS: &str = "tabs";
+/// Without `style` in the file, the editor's or `.editorconfig`'s style applies (`resolve::indent_style`); the default here is for display.
+pub const INDENT_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[SPACES, TABS], default: SPACES };
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
@@ -124,6 +131,8 @@ pub const RULES: &[Rule] = &[
     format_rule(SPACE_AFTER_SCRIPT_MARKER, HAML_SLIM, &[], &[], &[]),
     format_rule(ERB_COMMENT_SYNTAX, &[Erb], &[], &[], &[]),
     format_rule(SPACE_IN_HTML_TAG, &[Erb], &[], &[], &[]),
+    format_rule(INDENTATION_STYLE, &[Erb], &[Erb], &[], &[INDENT_STYLE]),
+    format_rule(TRAILING_WHITESPACE, TEMPLATES, TEMPLATES, &[], &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {

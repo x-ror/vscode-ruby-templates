@@ -213,9 +213,9 @@ pub(crate) mod tests {
     /// `text` through its language's re-indenter, which must leave it as it is, then the blank-line pass.
     fn tidy(lang: &str, text: &str, settings: &Settings) -> String {
         let indented = match lang {
-            "erb" => crate::format::erb::indent(text, "  ", false, false, &RubyContext::outside_project()).ok(),
-            "haml" => crate::format::haml::format(text, 2),
-            _ => crate::format::slim::format(text, 2, &[]),
+            "erb" => crate::format::erb::indent(text, &Settings::default(), false, &RubyContext::outside_project()).ok(),
+            "haml" => crate::format::haml::format(text, &Settings::default()),
+            _ => crate::format::slim::format(text, &Settings::default(), &[]),
         };
         let indented = indented.unwrap_or_else(|| panic!("{lang} refused {text:?}"));
         assert_eq!(indented.text, text, "{lang}: the input should be indented already");
