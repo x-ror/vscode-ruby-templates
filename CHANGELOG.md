@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 
 - A `.ruby-templates.toml` configures the project: `[Html.ImgAlt] enabled = false` turns a rule off, `include`/`exclude` globs limit it to some files, a department table (`[Html]`) switches its rules, `exclude` leaves files out of every check and the formatter, and `[erb]`, `[haml]`, `[slim]` and `[jbuilder]` take the `format.enabled`, `format.align_comments`, `diagnostics.enabled`, `disabled_diagnostics` and `extra_engines` settings. The nearest file wins key by key, `root = true` stops the search, and the file wins over the VS Code settings. Problems in the file show on it in the Problems panel and in the output, and make `ruby-templates check` exit with 1.
 - `ruby-templates check` and `format` read the `.ruby-templates.toml` files too: rules turned off, excluded files, `[erb] format.enabled = false` and `format.align_comments`.
