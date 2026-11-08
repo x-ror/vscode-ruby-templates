@@ -1136,6 +1136,47 @@ const check = (label, actual, expected) => {
     "12: Missing partial shared/_missing",
   ]);
 
+  const silentUri = fileUri(path.join(views, "silent", "show.html.haml"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: silentUri,
+        languageId: "haml",
+        version: 1,
+        text: '%p\n  - render "x"\n  = render "y"\n  - binding.irb\n',
+      },
+    },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  check("haml silent render and debugging", diagnostics(silentUri), [
+    "2: `render` in `-` outputs nothing; use `=`",
+    "4: `binding.irb` is debugging left in the view",
+  ]);
+  const silent = {
+    start: { line: 1, character: 4 },
+    end: { line: 1, character: 14 },
+  };
+  const silentFix = await send("textDocument/codeAction", {
+    textDocument: { uri: silentUri },
+    range: silent,
+    context: {
+      diagnostics: [{ range: silent, code: "Rails/SilentRender", message: "" }],
+    },
+  });
+  check(
+    "codeAction output a silent render",
+    silentFix.result?.map((a) => [
+      a.title,
+      a.edit.changes[silentUri].map(
+        (e) =>
+          `${e.range.start.character}-${e.range.end.character} "${e.newText}"`,
+      ),
+    ]),
+    [["Output the result", ['2-3 "="']]],
+  );
+
   await send(
     "textDocument/didOpen",
     {

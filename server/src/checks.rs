@@ -6,7 +6,7 @@ use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{controller_classes, partials, paths, render_refs};
+use crate::rails::{controller_classes, output_lints, partials, paths, render_refs};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -113,6 +113,7 @@ pub(crate) fn language_diagnostics(uri: &Uri, doc: &Doc, extra_engines: &[String
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
         out.retain(|d| util::code(d) != Some(slim::indent::code::VOID_CHILDREN));
     }
+    out.extend(output_lints::diagnostics(lang, text, extra_engines, ruby.grammar));
     if lang == TemplateLang::Erb && doc.html_host(uri) {
         out.extend(erb::html_diagnostics(text));
         out.extend(tags::diagnostics(text, is_partial(uri)));
@@ -443,7 +444,7 @@ mod tests {
             let rules: BTreeSet<&str> = lints().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
             assert_eq!(listed, rules, "{section}");
             let old_codes = regex::Regex::new(items["anyOf"][1]["pattern"].as_str().unwrap()).unwrap();
-            assert!(lints().all(|rule| old_codes.is_match(rule.alias.unwrap())), "{section}");
+            assert!(lints().all(|rule| rule.alias.is_none_or(|alias| old_codes.is_match(alias))), "{section}");
         }
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();

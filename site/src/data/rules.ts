@@ -1080,26 +1080,57 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/SilentRender",
+    today:
+      'In a tag that outputs nothing (`<% %>` in ERB, `-` in Haml and Slim), a `render` with arguments, also the block form (`render layout: "x" do`). Not reported when the result is assigned or passed on, or when the call is the last statement of a block, since the helper that takes the block may use its value. The quick fix turns the tag into an output tag.',
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.SilentRender]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
         file: ERB_FILE,
         before: text('<% render "users/card", user: @user %>'),
         after: text('<%= render "users/card", user: @user %>'),
+        faults: [
+          {
+            line: 1,
+            column: 4,
+            message: "`render` in `<% %>` outputs nothing; use `<%=`",
+            code: "Rails/SilentRender",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('- render "users/card", user: @user'),
         after: text('= render "users/card", user: @user'),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`render` in `-` outputs nothing; use `=`",
+            code: "Rails/SilentRender",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('- render "users/card", user: @user'),
         after: text('= render "users/card", user: @user'),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`render` in `-` outputs nothing; use `=`",
+            code: "Rails/SilentRender",
+          },
+        ],
       },
     ],
   },
@@ -1110,26 +1141,58 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/SilentHelper",
+    today:
+      "In a tag that outputs nothing, a call to one of these helpers, without a receiver: `link_to`, `link_to_if`, `link_to_unless`, `link_to_unless_current`, `button_to`, `mail_to`, `image_tag`, `content_tag`, `tag` and `tag.div`-style calls for HTML elements, `form_with`, `form_for`, `form_tag`, `fields_for`, `label_tag`, `text_field_tag`, `hidden_field_tag`, `submit_tag`, `simple_format`, the `number_to_*` formatters, `time_ago_in_words` and `distance_of_time_in_words`. Helpers with side effects, such as `content_for` and `provide`, helpers of your own and calls on a receiver (`form.fields_for`) are left alone. The quick fix turns the tag into an output tag.",
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.SilentHelper]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
         file: ERB_FILE,
         before: text('<% link_to "Home", root_path %>'),
         after: text('<%= link_to "Home", root_path %>'),
+        faults: [
+          {
+            line: 1,
+            column: 4,
+            message:
+              "`link_to` returns markup that `<% %>` throws away; use `<%=`",
+            code: "Rails/SilentHelper",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('- link_to "Home", root_path'),
         after: text('= link_to "Home", root_path'),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`link_to` returns markup that `-` throws away; use `=`",
+            code: "Rails/SilentHelper",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('- link_to "Home", root_path'),
         after: text('= link_to "Home", root_path'),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`link_to` returns markup that `-` throws away; use `=`",
+            code: "Rails/SilentHelper",
+          },
+        ],
       },
     ],
   },
@@ -1235,12 +1298,19 @@ enabled = false`,
   {
     name: "Rails/DebugOutput",
     summary:
-      "Debugging left in a view: `p`, `pp`, `puts`, `debug`, `binding.irb` and `binding.pry`.",
+      "Debugging left in a view: `p`, `pp`, `puts`, `debug`, `byebug`, `debugger`, `binding.irb` and `binding.pry`.",
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/DebugOutput",
+    today:
+      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, when the call is a whole statement or the whole of an output tag. A local variable named `p`, a method on a receiver (`form.p`, `obj.debug`) and a call used as an argument are not reported.",
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.DebugOutput]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1251,18 +1321,66 @@ enabled = false`,
           "<p><%= @user.name %></p>",
         ),
         after: text("<p><%= @user.name %></p>"),
+        faults: [
+          {
+            line: 1,
+            column: 5,
+            message: "`debug` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
+        faults: [
+          {
+            line: 2,
+            column: 4,
+            message: "`binding.irb` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text("= debug @user", "- binding.irb", "%p= @user.name"),
         after: text("%p= @user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`debug` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
+        faults: [
+          {
+            line: 2,
+            column: 3,
+            message: "`binding.irb` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text("= debug @user", "- binding.irb", "p = @user.name"),
         after: text("p = @user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 3,
+            message: "`debug` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
+        faults: [
+          {
+            line: 2,
+            column: 3,
+            message: "`binding.irb` is debugging left in the view",
+            code: "Rails/DebugOutput",
+          },
+        ],
       },
     ],
   },

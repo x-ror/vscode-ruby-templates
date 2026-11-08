@@ -8,6 +8,7 @@ pub mod i18n;
 pub mod inflect;
 pub mod ivars;
 pub mod model_columns;
+pub mod output_lints;
 pub mod partials;
 pub mod paths;
 pub mod project;

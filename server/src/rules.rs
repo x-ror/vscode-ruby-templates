@@ -59,7 +59,12 @@ impl Rule {
 }
 
 const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
-    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], alias: Some(alias) }
+    Rule { alias: Some(alias), ..new_lint(name, languages) }
+}
+
+/// A lint rule with no code from before 0.11 to accept.
+const fn new_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
+    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], alias: None }
 }
 
 const fn format_rule(
@@ -121,6 +126,9 @@ pub const RULES: &[Rule] = &[
     lint("Html/VoidChildren", HAML_SLIM, "void-children"),
     lint("Rails/MissingPartial", ALL, "unresolved-render"),
     lint("Rails/StrictLocals", ALL, "strict-locals"),
+    new_lint("Rails/SilentRender", TEMPLATES),
+    new_lint("Rails/SilentHelper", TEMPLATES),
+    new_lint("Rails/DebugOutput", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -178,6 +186,7 @@ mod tests {
         let re = regex::Regex::new(r#"pub(?:\(crate\))? const [A-Z_]+: &str = "([A-Z][A-Za-z]+/[A-Za-z]+)""#).unwrap();
         let sources = [
             include_str!("checks.rs"),
+            include_str!("rails/output_lints.rs"),
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),

@@ -19,7 +19,7 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
 }
 
 /// The Ruby the template compiles to; with `close`, the strict locals comment makes the method's parameters.
-fn compiled(lang: TemplateLang, text: &str, close: Option<Close>, extra_engines: &[String]) -> Option<Compiled> {
+pub(crate) fn compiled(lang: TemplateLang, text: &str, close: Option<Close>, extra_engines: &[String]) -> Option<Compiled> {
     match lang {
         TemplateLang::Erb => Some(erb::ruby::compiled(text, close)),
         TemplateLang::Slim => Some(slim::ruby::compiled(&slim::parser::parse(text, extra_engines))),

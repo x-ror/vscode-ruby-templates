@@ -15,8 +15,8 @@ export const LANGUAGE_NAMES: Record<Language, string> = {
 export interface Diagnostic {
   /** The rule name, `Department/Name`: the diagnostic's code. */
   code: string;
-  /** The code before 0.11, still accepted in `disabledDiagnostics`. */
-  formerly: string;
+  /** The code before 0.11, still accepted in `disabledDiagnostics`; none for a rule that is newer. */
+  formerly?: string;
   languages: Language[];
   summary: string;
   /** When it fires; backticks quote code, as in the server's messages. */
@@ -460,6 +460,56 @@ export const diagnostics: Diagnostic[] = [
     message: "missing local: :user for app/views/users/_card.html.erb",
     line: 1,
     column: 13,
+  },
+  {
+    code: "Rails/SilentRender",
+    languages: ["erb", "haml", "slim"],
+    summary: "A `render` in a tag that outputs nothing.",
+    explanation:
+      "A `<% %>` tag in ERB, and a `-` line in Haml and Slim, run Ruby and print nothing, so the partial `render` returns is thrown away. Reported for a `render` that is a whole statement, also in its block form. Not reported when the result is assigned or passed on. The quick fix changes the tag to `<%=` (`=` in Haml and Slim).",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<% render "users/card", user: @user %>
+`,
+    },
+    message: "`render` in `<% %>` outputs nothing; use `<%=`",
+    line: 1,
+    column: 4,
+  },
+  {
+    code: "Rails/SilentHelper",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      "A helper that returns markup, called in a tag that outputs nothing.",
+    explanation:
+      "`link_to`, `image_tag`, `content_tag`, `form_with` and the other helpers on the list return markup and do nothing else, so calling one in a `<% %>` tag (a `-` line in Haml and Slim) has no effect. Helpers with side effects (`content_for`, `provide`), your own helpers and calls on a receiver are not reported. The quick fix changes the tag to `<%=` (`=` in Haml and Slim).",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<% link_to "Home", root_path %>
+`,
+    },
+    message: "`link_to` returns markup that `<% %>` throws away; use `<%=`",
+    line: 1,
+    column: 4,
+  },
+  {
+    code: "Rails/DebugOutput",
+    languages: ["erb", "haml", "slim"],
+    summary: "Debugging left in a view.",
+    explanation:
+      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, as a statement or as the whole of an output tag. A local variable named `p`, a method on a receiver and a call used as an argument are not reported.",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<%= debug @user %>
+<p><%= @user.name %></p>
+`,
+    },
+    message: "`debug` is debugging left in the view",
+    line: 1,
+    column: 5,
   },
 ];
 
