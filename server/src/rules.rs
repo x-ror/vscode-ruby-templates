@@ -129,6 +129,10 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/SilentRender", TEMPLATES),
     new_lint("Rails/SilentHelper", TEMPLATES),
     new_lint("Rails/DebugOutput", TEMPLATES),
+    new_lint("Rails/InstanceVariableInPartial", TEMPLATES),
+    new_lint("Rails/UnusedStrictLocal", TEMPLATES),
+    new_lint("Rails/UnusedBlockArgument", TEMPLATES),
+    new_lint("Rails/RenderInLoop", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -187,6 +191,7 @@ mod tests {
         let sources = [
             include_str!("checks.rs"),
             include_str!("rails/output_lints.rs"),
+            include_str!("rails/view_lints.rs"),
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),

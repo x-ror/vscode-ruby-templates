@@ -511,6 +511,78 @@ export const diagnostics: Diagnostic[] = [
     line: 1,
     column: 5,
   },
+  {
+    code: "Rails/InstanceVariableInPartial",
+    languages: ["erb", "haml", "slim"],
+    summary: "An instance variable read inside a partial.",
+    explanation:
+      'A partial that reads `@user` works only for the controllers that set it. Pass it as a local instead (`render "users/card", user: @user`). Reported once per variable and file. Not reported when the partial assigns the variable itself, for `defined?(@user)`, for ActionView\'s own variables, and in partials under app/views/layouts. Rails projects only, in templates under app/views.',
+    example: {
+      file: "app/views/users/_card.html.erb",
+      lang: "erb",
+      code: `<p><%= @user.name %></p>
+`,
+    },
+    message:
+      "`@user` is read in a partial, so it works only where the controller sets it; pass it as a local",
+    line: 1,
+    column: 8,
+  },
+  {
+    code: "Rails/UnusedStrictLocal",
+    languages: ["erb", "haml", "slim"],
+    summary: "A local in the `locals:` comment that the partial never uses.",
+    explanation:
+      "Reads, assignments, `local_assigns[:name]`, `local_assigns.fetch(:name)`, `binding.local_variable_get(:name)`, `defined?(name)` and the default of another local count as use. Nothing is reported when the template passes `local_assigns` on as a whole or calls `binding`, `local_variables` or `eval`. The quick fix removes the local from the comment. Rails 7.1 or newer, in Rails projects, in templates under app/views.",
+    example: {
+      file: "app/views/users/_card.html.erb",
+      lang: "erb",
+      code: `<%# locals: (user:, compact: false) %>
+<p><%= user.name %></p>
+`,
+    },
+    message: "`compact` is declared in `locals:` but the partial never uses it",
+    line: 1,
+    column: 21,
+  },
+  {
+    code: "Rails/UnusedBlockArgument",
+    languages: ["erb", "haml", "slim"],
+    summary: "A block argument the block never uses.",
+    explanation:
+      "Looks at plain and optional block parameters, and at the whole block, which spans every tag between `do |…|` and `end`. Names starting with `_`, `it` and numbered parameters, destructured, `*rest`, keyword and `&block` parameters, and blocks that call `binding`, `local_variables` or `eval` are not reported. The quick fix prefixes the name with `_`. Rails projects only, in templates under app/views.",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<% @users.each do |user, index| %>
+  <li><%= user.name %></li>
+<% end %>
+`,
+    },
+    message:
+      "Block argument `index` is never used; remove it or rename it `_index`",
+    line: 1,
+    column: 26,
+  },
+  {
+    code: "Rails/RenderInLoop",
+    languages: ["erb", "haml", "slim"],
+    summary: "A partial rendered once per item inside a loop.",
+    explanation:
+      'Reported for `collection.each do |item|` and `each_with_index` whose whole body is `render "partial", name: item`, with a string literal for the partial. `render partial: "partial", collection: collection, as: :name` renders the same markup in one call. Loops that do anything else, other locals and other iterators are not reported. Rails projects only, in templates under app/views.',
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<% @users.each do |user| %>
+  <%= render "users/card", user: user %>
+<% end %>
+`,
+    },
+    message:
+      'Partial "users/card" is rendered once per item of a loop; use `render partial: "users/card", collection: @users, as: :user`',
+    line: 2,
+    column: 7,
+  },
 ];
 
 /** The codes each language's `disabledDiagnostics` setting in `package.json` accepts. */

@@ -1,9 +1,8 @@
 //! Calls whose result a view throws away (`<% render "x" %>`, `<% link_to … %>`) and debugging left in one, found in the
 //! Ruby the template compiles to and mapped back to the template.
 
-use crate::code_context;
 use crate::lang::TemplateLang;
-use crate::ruby::generated::{Compiled, IGNORED_ERROR};
+use crate::ruby::generated::Compiled;
 use crate::util::{self, LineIndex};
 use ruby_prism::{CallNode, Node, StatementsNode, Visit};
 use std::collections::BTreeMap;
@@ -74,15 +73,10 @@ struct Finding {
     end: usize,
 }
 
-pub(crate) fn diagnostics(lang: TemplateLang, text: &str, extra_engines: &[String], ruby: ruby_prism::Version) -> Vec<Diagnostic> {
-    let Some(compiled) = code_context::compiled(lang, text, None, extra_engines) else { return Vec::new() };
-    let options = ruby_prism::Options::default().version(ruby).build();
-    let result = ruby_prism::parse_with_options(compiled.source.as_bytes(), &options);
-    if result.errors().any(|e| e.message() != IGNORED_ERROR.as_bytes()) {
-        return Vec::new();
-    }
-    let mut finder = Finder { compiled: &compiled, env_guards: 0, found: BTreeMap::new() };
-    finder.visit(&result.node());
+/// The findings in `root`, the parse of `compiled`, the Ruby `text` compiles to.
+pub(crate) fn diagnostics(lang: TemplateLang, text: &str, compiled: &Compiled, root: &Node) -> Vec<Diagnostic> {
+    let mut finder = Finder { compiled, env_guards: 0, found: BTreeMap::new() };
+    finder.visit(root);
     let index = LineIndex::new(text);
     let marker = match lang {
         TemplateLang::Erb => ("`<% %>`", "`<%=`"),
@@ -284,6 +278,14 @@ fn classify(call: &CallNode) -> Option<(Kind, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::code_context;
+
+    fn diagnostics(lang: TemplateLang, text: &str, extra_engines: &[String], ruby: ruby_prism::Version) -> Vec<Diagnostic> {
+        let Some(compiled) = code_context::compiled(lang, text, None, extra_engines) else { return Vec::new() };
+        let options = ruby_prism::Options::default().version(ruby).build();
+        let Some(result) = compiled.parse(&options) else { return Vec::new() };
+        super::diagnostics(lang, text, &compiled, &result.node())
+    }
 
     /// (code, flagged text) of each finding.
     fn found(lang: TemplateLang, text: &str) -> Vec<(String, String)> {

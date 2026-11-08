@@ -18,4 +18,5 @@ pub mod routes;
 pub mod schema;
 pub mod slots;
 pub mod stimulus;
+pub mod view_lints;
 pub mod view_roots;

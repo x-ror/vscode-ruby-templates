@@ -715,7 +715,11 @@
                   "Rails/StrictLocals",
                   "Rails/SilentRender",
                   "Rails/SilentHelper",
-                  "Rails/DebugOutput"
+                  "Rails/DebugOutput",
+                  "Rails/InstanceVariableInPartial",
+                  "Rails/UnusedStrictLocal",
+                  "Rails/UnusedBlockArgument",
+                  "Rails/RenderInLoop"
                 ]
               },
               {
@@ -752,7 +756,11 @@
                   "Rails/StrictLocals",
                   "Rails/SilentRender",
                   "Rails/SilentHelper",
-                  "Rails/DebugOutput"
+                  "Rails/DebugOutput",
+                  "Rails/InstanceVariableInPartial",
+                  "Rails/UnusedStrictLocal",
+                  "Rails/UnusedBlockArgument",
+                  "Rails/RenderInLoop"
                 ]
               },
               {
@@ -806,7 +814,11 @@
                   "Rails/StrictLocals",
                   "Rails/SilentRender",
                   "Rails/SilentHelper",
-                  "Rails/DebugOutput"
+                  "Rails/DebugOutput",
+                  "Rails/InstanceVariableInPartial",
+                  "Rails/UnusedStrictLocal",
+                  "Rails/UnusedBlockArgument",
+                  "Rails/RenderInLoop"
                 ]
               },
               {
