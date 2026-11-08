@@ -2,6 +2,7 @@
 //! physical lines start a Slim line, which belong to another line's block or continuation, and
 //! where the Ruby code, tag and attribute name slots and line markers are.
 
+use crate::attributes::{Attribute, Element, Value};
 use crate::html::VOID_ELEMENTS;
 use crate::ruby::{comment_before, REGEXP_SPACE};
 use crate::util::closing_bracket;
@@ -136,6 +137,8 @@ pub struct Parsed {
     /// Line and (lower-cased) name of the first doctype Temple's xhtml format doesn't know.
     pub invalid_doctype: Option<(usize, String)>,
     pub pieces: Vec<Piece>,
+    /// Every tag with its attributes as written, in source order.
+    pub elements: Vec<Element>,
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +207,7 @@ pub fn parse(text: &str, extra_engines: &[String]) -> Parsed {
             repeated_attribute: None,
             invalid_doctype: None,
             pieces: Vec::new(),
+            elements: Vec::new(),
         },
         lines,
         starts,
@@ -602,7 +606,7 @@ impl<'a> Parser<'a> {
         self.pos = engine.attrs.start;
         self.end = engine.attrs.end;
         let first_piece = self.out.pieces.len();
-        self.parse_attributes(&mut Vec::new());
+        self.parse_attributes(&mut Vec::new(), &mut Element::default());
         if engine.name == "ruby" {
             // `RubyEngine` drops the attributes.
             self.out.pieces.truncate(first_piece);
@@ -636,6 +640,7 @@ impl<'a> Parser<'a> {
     /// Everything after the tag name; whether the tag needs its closing tag.
     fn parse_tag_rest(&mut self, name: &str) -> bool {
         let mut names = Vec::new();
+        let mut element = Element { name: name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
         // `.class` / `#id` shortcuts, `((?:\p{Word}|-|\/\d+|:(\w|-)+)*)` after each.
         loop {
             let r = self.rest();
@@ -663,12 +668,22 @@ impl<'a> Parser<'a> {
                 }
             }
             self.note_attribute(&mut names, if r.starts_with('#') { "id" } else { "class" });
+            if r.starts_with('#') {
+                let start = self.at() + 1;
+                element.attributes.push(Attribute {
+                    name: "id".into(),
+                    at: start..start + n - 1,
+                    in_data: false,
+                    value: Value::Text(start..start + n - 1),
+                });
+            }
             self.skip(n);
         }
         let r = self.rest();
         self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
         let first_attribute = self.out.pieces.len();
-        self.parse_attributes(&mut names);
+        self.parse_attributes(&mut names, &mut element);
+        self.out.elements.push(element);
         let attributes = &mut self.out.pieces[first_attribute..];
         if attributes.iter().any(|p| matches!(p, Piece::Splat { .. })) {
             for piece in attributes {
@@ -728,7 +743,7 @@ impl<'a> Parser<'a> {
         names.push(name);
     }
 
-    fn parse_attributes(&mut self, names: &mut Vec<&'a str>) {
+    fn parse_attributes(&mut self, names: &mut Vec<&'a str>, element: &mut Element) {
         let mut close = None;
         let t = trim_start(self.rest());
         if let Some(c) = t.chars().next().and_then(closing_bracket) {
@@ -744,32 +759,46 @@ impl<'a> Parser<'a> {
                 self.skip(ws + 1);
                 let (_, code, at) = self.ruby_code(close);
                 self.out.pieces.push(Piece::Splat { code, at });
+                element.open = true;
                 continue;
             }
             let name = attr_name_len(t);
             if name > 0 {
                 if let Some(value) = trim_start(&t[name..]).strip_prefix('=') {
                     self.note_attribute(names, &t[..name]);
+                    let name_at = self.at() + ws;
                     let value = trim_start(value.strip_prefix('=').unwrap_or(value));
                     self.skip(r.len() - value.len());
-                    if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                    let value = if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
                         self.skip(1);
                         self.out.pieces.push(Piece::Static(format!(" {}=\"", &t[..name]).into()));
-                        self.quoted_attribute(quote);
+                        let written = self.quoted_attribute(quote);
                         self.out.pieces.push(Piece::Static(Cow::Borrowed("\"")));
+                        written
                     } else {
                         let (taken, code, at) = self.ruby_code(close);
                         if taken == 0 {
                             self.fail_at("Invalid empty attribute".to_string(), self.column());
                         }
+                        let value = if code == "true" { Value::Literal } else { Value::Dynamic };
                         self.out.pieces.push(Piece::Attribute { name: t[..name].to_string(), code, splat: false, at });
-                    }
+                        value
+                    };
+                    let attribute = Attribute { name: t[..name].to_ascii_lowercase(), at: name_at..name_at + name, in_data: false, value };
+                    element.attributes.push(attribute);
                     continue;
                 }
             }
             let Some(close) = close else { break };
             if name > 0 && t[name..].chars().next().is_none_or(|c| is_space(c) || c == close) {
                 self.note_attribute(names, &t[..name]);
+                let at = self.at() + ws;
+                element.attributes.push(Attribute {
+                    name: t[..name].to_ascii_lowercase(),
+                    at: at..at + name,
+                    in_data: false,
+                    value: Value::Empty,
+                });
                 self.skip(ws + name);
             } else if t.starts_with(close) {
                 self.skip(ws + 1);
@@ -836,8 +865,10 @@ impl<'a> Parser<'a> {
         (taken, code, at)
     }
 
-    /// `parse_quoted_attribute`: the value is text with `#{}`, and may run across lines.
-    fn quoted_attribute(&mut self, quote: char) {
+    /// `parse_quoted_attribute`: the value is text with `#{}`, and may run across lines. Its text, when it is on one line
+    /// and has no interpolation.
+    fn quoted_attribute(&mut self, quote: char) -> Value {
+        let (line, first) = (self.i, self.pos);
         let mut segment = self.pos;
         let mut depth = 0;
         loop {
@@ -849,7 +880,7 @@ impl<'a> Parser<'a> {
                 self.interpolate(segment, self.pos);
                 self.out.lines[self.i].keeps_trailing = true;
                 if !self.expect_next_line() {
-                    return;
+                    return Value::Dynamic;
                 }
                 segment = self.pos;
                 continue;
@@ -863,7 +894,14 @@ impl<'a> Parser<'a> {
             self.skip(c.len_utf8());
         }
         self.interpolate(segment, self.pos);
+        let value = if line == self.i && !self.lines[line][first..self.pos].contains("#{") {
+            let start = self.starts[line] + first;
+            Value::Text(start..start + self.pos - first)
+        } else {
+            Value::Dynamic
+        };
         self.skip(1);
+        value
     }
 
     /// `parse_broken_line`: the stripped rest, plus following lines while it ends in `,` or `\`.

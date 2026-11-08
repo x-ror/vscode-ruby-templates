@@ -1,6 +1,7 @@
 //! What a Rails app tells about its templates: its folders, controllers, renders, routes, schema and locales.
 
 pub mod assets;
+pub mod attribute_lints;
 pub mod controller_classes;
 pub mod controllers;
 pub mod helper_defs;

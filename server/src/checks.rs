@@ -1,5 +1,6 @@
 //! The diagnostics of a template: its language's own checks plus the `render` checks against app/views.
 
+use crate::attributes;
 use crate::code_context::{self, render_filter};
 use crate::erb::output_control_flow::OUTPUT_CONTROL_FLOW;
 use crate::erb::{html_lint, tags};
@@ -7,7 +8,7 @@ use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{controller_classes, output_lints, partials, paths, render_refs, view_lints};
+use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, view_lints};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -62,7 +63,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby, rules.reports(OUTPUT_CONTROL_FLOW));
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(view_diagnostics(doc, rules, project, path, &ruby));
+        out.extend(view_diagnostics(doc, rules, project, path, &ruby, doc.html_host(uri)));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
     out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
@@ -72,9 +73,16 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     out
 }
 
-/// The lints on the Ruby a view compiles to, for Rails templates only: Padrino and Middleman write helper output to the
-/// buffer from `<% %>`, and an `.erb` outside app/views isn't a view.
-fn view_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &Path, ruby: &RubyContext) -> Vec<Diagnostic> {
+/// The lints on the Ruby a view compiles to and on its elements' attributes, for Rails templates only: Padrino and
+/// Middleman write helper output to the buffer from `<% %>`, and an `.erb` outside app/views isn't a view.
+fn view_diagnostics(
+    doc: &Doc,
+    rules: &ResolvedRules,
+    project: &Project,
+    path: &Path,
+    ruby: &RubyContext,
+    html_host: bool,
+) -> Vec<Diagnostic> {
     let wanted = [
         output_lints::SILENT_RENDER,
         output_lints::SILENT_HELPER,
@@ -83,6 +91,8 @@ fn view_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &
         view_lints::UNUSED_STRICT_LOCAL,
         view_lints::UNUSED_BLOCK_ARGUMENT,
         view_lints::RENDER_IN_LOOP,
+        attribute_lints::PERMANENT_REQUIRES_ID,
+        attribute_lints::UNKNOWN_CONTROLLER,
     ];
     let Some(views_root) = paths::views_root(path) else { return vec![] };
     if project.framework != Framework::Rails || project.is_gem_file(path) || !wanted.iter().any(|code| rules.reports(code)) {
@@ -101,6 +111,17 @@ fn view_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &
     };
     let mut out = output_lints::diagnostics(doc.lang, &doc.text, &compiled, &root);
     out.extend(view_lints::diagnostics(&doc.text, &view, &compiled, &root));
+    if rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER) {
+        // An ERB template that isn't HTML has no start tags to read.
+        let markup = if doc.lang != TemplateLang::Erb || html_host {
+            attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar)
+        } else {
+            Vec::new()
+        };
+        let elements: Vec<_> = markup.into_iter().chain(attributes::helper_elements(&compiled, &root)).collect();
+        let registered = || rules.reports(attribute_lints::UNKNOWN_CONTROLLER).then(|| stimulus::registered(path)).flatten();
+        out.extend(attribute_lints::diagnostics(&doc.text, &elements, registered));
+    }
     out
 }
 
@@ -564,6 +585,42 @@ mod tests {
         assert!(codes("app/views/users/show.html.erb", &options).is_empty());
         assert!(codes("app/views/layouts/_nav.html.erb", &options).is_empty());
         assert!(codes("lib/templates/_card.html.erb", &options).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attribute_lints_follow_the_project_and_the_controllers_it_has() {
+        let root = std::env::temp_dir().join(format!("rt-attribute-lints-{}", std::process::id()));
+        let controllers = root.join("app/javascript/controllers");
+        std::fs::create_dir_all(&controllers).unwrap();
+        std::fs::create_dir_all(root.join("app/views/users")).unwrap();
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("Gemfile.lock"), format!("{GEM_LOCK}    actionview (8.0.2)\n")).unwrap();
+        std::fs::write(controllers.join("search_controller.js"), "").unwrap();
+        let text = "<div data-turbo-permanent data-controller=\"serch hello\"></div>\n";
+        let codes = |name: &str, lang: TemplateLang, text: &str, options: &Options| {
+            let uri = crate::util::file_uri(root.join(name)).unwrap();
+            let doc = Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        let options = Options::default();
+        let both = ["Turbo/PermanentRequiresId", "Stimulus/UnknownController", "Stimulus/UnknownController"];
+        assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both);
+        let haml = "%div{data: {turbo_permanent: true, controller: \"hello\"}}\n";
+        assert_eq!(codes("app/views/users/show.html.haml", TemplateLang::Haml, haml, &options), both[..2]);
+        let slim = "div data-turbo-permanent=true data-controller=\"search\"\n";
+        assert_eq!(codes("app/views/users/show.html.slim", TemplateLang::Slim, slim, &options), both[..1]);
+        // Not a view, not HTML, or turned off.
+        assert!(codes("lib/templates/show.html.erb", TemplateLang::Erb, text, &options).is_empty());
+        assert!(codes("app/views/users/show.js.erb", TemplateLang::Erb, text, &options).is_empty());
+        let off = Options::from_init(Some(&serde_json::json!({ "erb": { "disabledDiagnostics": ["Stimulus/UnknownController"] } }))).0;
+        assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &off), both[..1]);
+        // Controllers loaded from somewhere this can't see.
+        std::fs::write(controllers.join("index.js"), "eagerLoadControllersFrom(\"components\", application)").unwrap();
+        assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both[..1]);
+        std::fs::remove_file(controllers.join("index.js")).unwrap();
+        std::fs::remove_dir_all(&controllers).unwrap();
+        assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both[..1], "no controllers folder");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

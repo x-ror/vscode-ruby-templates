@@ -6,6 +6,7 @@ pub mod erb;
 pub mod haml;
 mod inline;
 pub mod slim;
+mod turbo_attributes;
 
 use crate::checks::{language_diagnostics, ruby_context, Doc};
 use crate::lang::{html_host, is_partial, TemplateLang};
@@ -44,6 +45,8 @@ pub struct Settings {
     pub indent_style: IndentStyle,
     /// `Layout/TrailingWhitespace`: strip spaces and tabs at line ends where they don't count.
     pub trailing_whitespace: bool,
+    /// `Turbo/PreferTurboAttributes`: the one rule that changes the page; the others keep what the template compiles to.
+    pub prefer_turbo_attributes: bool,
 }
 
 impl Default for Settings {
@@ -62,6 +65,7 @@ impl Default for Settings {
             space_in_html_tag: false,
             indent_style: IndentStyle::Spaces,
             trailing_whitespace: true,
+            prefer_turbo_attributes: false,
         }
     }
 }
@@ -167,11 +171,20 @@ pub(crate) fn format_in(
     // The formatter refuses on errors, so it must see the ones the server shows: those of the project's Ruby.
     let ruby = ruby_context(uri, projects);
     let template = Template { uri, lang, plain_erb };
-    let formatted = format_once(template, text, settings, extra_engines, &ruby)?;
-    if formatted.text == text {
+    // The attribute renames come first, so every check below compares the result with the renamed text and still guards the rest.
+    let (renamed, refused) =
+        match settings.prefer_turbo_attributes.then(|| turbo_attributes::apply(lang, text, extra_engines, ruby.grammar)) {
+            Some(Ok(renamed)) => (renamed, None),
+            Some(Err(note)) => (None, Some(note)),
+            None => (None, None),
+        };
+    let source = renamed.as_deref().unwrap_or(text);
+    let mut formatted = format_once(template, source, settings, extra_engines, &ruby)?;
+    formatted.notes.extend(refused);
+    if formatted.text == source {
         return Ok(formatted);
     }
-    if let Some(broken) = broken_invariant(template, text, &formatted.text, settings, extra_engines, &ruby) {
+    if let Some(broken) = broken_invariant(template, source, &formatted.text, settings, extra_engines, &ruby) {
         return skip(SkipKind::Internal, broken);
     }
     Ok(formatted)
@@ -719,6 +732,38 @@ mod tests {
             let formatted = format_staged(template, text, Some(staged.to_string()), &inline(), &[], &ruby).unwrap();
             assert_eq!((formatted.text.as_str(), formatted.notes.as_slice()), (text, [note.to_string()].as_slice()), "{name} {text:?}");
         }
+    }
+
+    #[test]
+    fn turbo_attributes_are_renamed_first_and_only_when_asked() {
+        let on = Settings { prefer_turbo_attributes: true, ..Settings::default() };
+        for (name, text, want) in [
+            (
+                "a.html.erb",
+                "<div>\n<a href=\"/x\" data-method=\"delete\" data-confirm=\"Sure?\">x</a>\n</div>\n",
+                "<div>\n  <a href=\"/x\" data-turbo-method=\"delete\" data-turbo-confirm=\"Sure?\">x</a>\n</div>\n",
+            ),
+            (
+                "a.html.haml",
+                "%div\n    %a{data: {confirm: \"s\", method: :delete}} x\n",
+                "%div\n  %a{data: {turbo_confirm: \"s\", turbo_method: :delete}} x\n",
+            ),
+            ("a.html.slim", "div\n    button data-disable-with=\"s\" x\n", "div\n  button data-turbo-submits-with=\"s\" x\n"),
+        ] {
+            assert_eq!(fmt(name, text, &on).as_deref(), Ok(want), "{name}");
+            assert_eq!(fmt(name, want, &on).as_deref(), Ok(want), "{name}: stable");
+            let off = fmt(name, text, &Settings::default()).unwrap();
+            assert!(!off.contains("turbo"), "{name}: off by default: {off}");
+        }
+        // The other checks still guard the result: a file the formatter refuses keeps its attributes.
+        let broken = "%div\n    %a{data: {confirm: 1, method: 2}} x\n  %b\n";
+        assert_eq!(fmt("a.html.haml", broken, &on).map_err(|e| e.kind), Err(SkipKind::Doubt));
+        // The renames compose with the other in-line rules.
+        let both = Settings { space_in_html_tag: true, ..on };
+        assert_eq!(
+            fmt("a.html.erb", "<a  data-method=\"post\"  href=\"/x\" >x</a>\n", &both).as_deref(),
+            Ok("<a data-turbo-method=\"post\" href=\"/x\">x</a>\n")
+        );
     }
 
     #[test]

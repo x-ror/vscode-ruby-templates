@@ -1,6 +1,7 @@
 //! A port of `Haml::Parser` (Haml 7.5.1, `lib/haml/parser.rb`): the first error Haml raises, at the line it names,
 //! what each line is to Haml, and enough of the compiled nodes to tell whether two templates compile alike.
 
+use crate::attributes::{Attribute, Element, Value};
 use crate::html::VOID_ELEMENTS;
 use crate::ruby::generated::ruby_string_body;
 use crate::ruby::{CONTINUERS, REGEXP_SPACE, RUBY_WHITESPACE};
@@ -125,6 +126,9 @@ struct Parser<'a> {
     filter: FilterBody,
     /// Where the body of the open filter starts in `compiled`.
     filter_start: usize,
+    tags: Vec<Tag>,
+    /// The attributes of the `()` list of the tag being read.
+    list_attributes: Vec<Attribute>,
 }
 
 /// What a filter's body is to the Ruby Haml generates.
@@ -248,6 +252,13 @@ impl Compiled {
     }
 }
 
+/// A tag line: the attributes its `%name.class#id(list)` part spells out, and the Ruby of its `{}` hash.
+pub struct Tag {
+    pub element: Element,
+    /// The code between the braces, empty without a hash.
+    pub hash: Vec<Chunk>,
+}
+
 pub struct Parsed {
     /// The first error Haml raises for the template, at the line it reports.
     pub error: Option<Error>,
@@ -257,6 +268,8 @@ pub struct Parsed {
     pub roles: Vec<Role>,
     /// The Ruby Haml generates, in order. Only complete when the template has no error.
     pub pieces: Vec<Piece>,
+    /// Every tag line, in order; only filled by `parse_with_ruby`, and offsets are into the template without its BOM.
+    pub tags: Vec<Tag>,
     compiled: Vec<Compiled>,
 }
 
@@ -285,7 +298,7 @@ fn parse_as(text: &str, ruby: bool) -> Parsed {
             *role = Role::Inner { owner, counted };
         }
     }
-    Parsed { error, void_content, roles, pieces: parser.pieces, compiled: parser.compiled }
+    Parsed { error, void_content, roles, pieces: parser.pieces, tags: parser.tags, compiled: parser.compiled }
 }
 
 /// Whether Haml compiles `before` and `after` to the same source: both are free of errors and read the same nodes, at
@@ -459,6 +472,8 @@ impl<'a> Parser<'a> {
             counted_at_end: false,
             filter: FilterBody::None,
             filter_start: 0,
+            tags: Vec::new(),
+            list_attributes: Vec::new(),
         }
     }
 
@@ -896,6 +911,7 @@ impl<'a> Parser<'a> {
         let mut rest =
             Rest { text: text[head_len..].to_string(), line: self.line.index, column: self.line_column(&text[head_len..], text) };
         let (mut hash, mut list, mut reference) = (false, false, false);
+        self.list_attributes.clear();
         // The line the last attribute group ends on, which Haml reports some errors at.
         let mut last_line = self.line.index;
         let (mut object, mut list_hash, mut hash_code) = (Vec::new(), Vec::new(), Vec::new());
@@ -918,6 +934,11 @@ impl<'a> Parser<'a> {
                 }
                 _ => break,
             }
+        }
+        if self.ruby {
+            let shorthand = &text[attributes_start..head_len];
+            let element = self.element(name, shorthand, self.line.indent() + attributes_start, reference);
+            self.tags.push(Tag { element, hash: hash_code.clone() });
         }
         let content = tag_content(&rest.text);
         // This reads the next line's indentation before any Ruby lines are joined.
@@ -967,6 +988,38 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// The template offset of byte `column` of line `line`; none on a line `|` multiline rewrote.
+    fn offset_at(&self, line: usize, column: usize) -> Option<usize> {
+        let rewritten = self.pipe_joined.get(line).copied().unwrap_or(false);
+        self.line_starts.get(line).filter(|_| !rewritten).map(|start| start + column)
+    }
+
+    /// The tag's attributes that are not in its `{}` hash: an `#id` in `shorthand` (at `column` of the line), an object
+    /// reference (which sets the id) and the `()` list. Open when `|` multiline rewrote the line: its offsets are not the template's.
+    fn element(&mut self, name: &str, shorthand: &str, column: usize, reference: bool) -> Element {
+        let line = self.line.index;
+        let mut element = Element { name: name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
+        if self.pipe_joined.get(line).copied().unwrap_or(true) {
+            return Element { open: true, ..element };
+        }
+        for (at, _) in shorthand.match_indices('#') {
+            let id = &shorthand[at + 1..];
+            let len = id.find(['.', '#', '@']).unwrap_or(id.len());
+            let start = self.line_starts[line] + column + at + 1;
+            element.attributes.push(Attribute {
+                name: "id".into(),
+                at: start..start + len,
+                in_data: false,
+                value: Value::Text(start..start + len),
+            });
+        }
+        if reference {
+            element.attributes.push(Attribute { name: "id".into(), at: 0..0, in_data: false, value: Value::Dynamic });
+        }
+        element.attributes.append(&mut self.list_attributes);
+        element
+    }
+
     /// `parse_old_attributes`: what follows the `{...}` that starts `rest`, which may close on a later line, and the
     /// Ruby between the braces.
     fn skip_hash(&mut self, rest: &Rest) -> Result<(Rest, usize, Vec<Chunk>), Halt> {
@@ -1003,12 +1056,14 @@ impl<'a> Parser<'a> {
         let mut continuations = 0;
         let mut hash = Vec::new();
         loop {
-            let mut dynamic = Vec::new();
-            let scanned = scan_attribute_list(&segment, &mut dynamic);
+            let mut attributes = Vec::new();
+            let scanned = scan_attribute_list(&segment, &mut attributes);
             if self.ruby {
-                for attribute in &dynamic {
+                for attribute in attributes.iter().filter(|attribute| attribute.ruby) {
                     hash.extend(self.dynamic_attribute(&segment, line, column, attribute));
                 }
+                let spelled = attributes.iter().map(|attribute| self.list_attribute(&segment, line, column, attribute)).collect::<Vec<_>>();
+                self.list_attributes.extend(spelled);
             }
             match scanned {
                 AttributeList::Closed(end) => {
@@ -1038,11 +1093,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// An attribute of a `(...)` list as the template spells it; `segment` starts at `column` of `line`.
+    fn list_attribute(&self, segment: &str, line: usize, column: usize, attribute: &ListAttribute) -> Attribute {
+        let name = segment[attribute.name.clone()].to_ascii_lowercase();
+        let (Some(start), Some(end)) =
+            (self.offset_at(line, column + attribute.name.start), self.offset_at(line, column + attribute.name.end))
+        else {
+            return Attribute { name, at: 0..0, in_data: false, value: Value::Dynamic };
+        };
+        let value = match &attribute.value {
+            None => Value::Empty,
+            Some(range) => {
+                let written = &segment[range.clone()];
+                let inner = written.strip_prefix(['"', '\'']).and_then(|quoted| quoted.strip_suffix(['"', '\'']));
+                match inner {
+                    Some(text) if !attribute.ruby => {
+                        let from = start + (range.start - attribute.name.start) + 1;
+                        Value::Text(from..from + text.len())
+                    }
+                    _ if written == "true" => Value::Literal,
+                    _ => Value::Dynamic,
+                }
+            }
+        };
+        Attribute { name, at: start..end, in_data: false, value }
+    }
+
     /// `"name" => value,` for an attribute of a `(...)` list, as Haml puts it in the hash it passes at run time.
-    fn dynamic_attribute(&self, segment: &str, line: usize, column: usize, attribute: &DynamicAttribute) -> Vec<Chunk> {
+    fn dynamic_attribute(&self, segment: &str, line: usize, column: usize, attribute: &ListAttribute) -> Vec<Chunk> {
         let name = format!("\"{}\" => ", &segment[attribute.name.clone()]);
-        let value = &segment[attribute.value.clone()];
-        let at = column + attribute.value.start;
+        let value_range = attribute.value.clone().unwrap_or_default();
+        let value = &segment[value_range.clone()];
+        let at = column + value_range.start;
         let ruby = match value.strip_prefix(['"', '\'']) {
             Some(quoted) => {
                 let inner = &quoted[..quoted.len() - 1];
@@ -1387,15 +1469,17 @@ enum AttributeList {
     Unbalanced,
 }
 
-/// An attribute of a `(...)` list whose value is Ruby: a variable, or a quoted string with `#{}`.
-struct DynamicAttribute {
+/// An attribute of a `(...)` list.
+struct ListAttribute {
     name: std::ops::Range<usize>,
-    value: std::ops::Range<usize>,
+    /// With its quotes; none for an attribute without a value.
+    value: Option<std::ops::Range<usize>>,
+    /// The value is Ruby: a variable, or a quoted string with `#{}`.
+    ruby: bool,
 }
 
-/// `parse_new_attribute` in a loop over one line of `(a=1 b="x#{y}" c)`, starting at an attribute. The attributes whose
-/// values are Ruby go to `dynamic`.
-fn scan_attribute_list(segment: &str, dynamic: &mut Vec<DynamicAttribute>) -> AttributeList {
+/// `parse_new_attribute` in a loop over one line of `(a=1 b="x#{y}" c)`, starting at an attribute.
+fn scan_attribute_list(segment: &str, attributes: &mut Vec<ListAttribute>) -> AttributeList {
     let mut at = 0;
     loop {
         let rest = &segment[at..];
@@ -1411,13 +1495,13 @@ fn scan_attribute_list(segment: &str, dynamic: &mut Vec<DynamicAttribute>) -> At
             match attribute_value_len(value) {
                 Ok((value_len, ruby)) => {
                     let start = segment.len() - value.len();
-                    if ruby {
-                        dynamic.push(DynamicAttribute { name, value: start..start + value_len });
-                    }
+                    attributes.push(ListAttribute { name, value: Some(start..start + value_len), ruby });
                     at = start + value_len;
                 }
                 Err(failure) => return failure,
             }
+        } else {
+            attributes.push(ListAttribute { name, value: None, ruby: false });
         }
         at = segment.len() - segment[at..].trim_start_matches(REGEXP_SPACE).len();
         if at == segment.len() {

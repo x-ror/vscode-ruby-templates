@@ -1,0 +1,379 @@
+//! An element's attributes as a template spells them, read alike from an ERB start tag, a Haml or Slim tag and the options
+//! of a Rails tag helper, for the rules that look for an attribute or rename one.
+
+use crate::code_context;
+use crate::erb::html_lint;
+use crate::lang::TemplateLang;
+use crate::rails::output_lints::TAG_BUILDER_ELEMENTS;
+use crate::ruby::generated::Compiled;
+use crate::util::BOM;
+use crate::{haml, slim};
+use ruby_prism::{CallNode, Location, Node, Visit};
+use std::ops::Range;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Element {
+    /// Lower-case: `a`, `div`.
+    pub name: String,
+    pub attributes: Vec<Attribute>,
+    /// ERB in the tag, a splat or a hash that isn't a literal may set attributes this reading doesn't see.
+    pub open: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Attribute {
+    /// As HTML spells it, lower-case: `data-controller`, also for `controller:` in a `data: {}` hash.
+    pub name: String,
+    /// Where the name is written; empty when the attribute is implied (an object reference sets the id) or can't be placed.
+    pub at: Range<usize>,
+    /// Written as a key of a `data: {}` hash.
+    pub in_data: bool,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Value {
+    /// No value: `<div hidden>`.
+    Empty,
+    /// Text the template spells out, without interpolation or ERB.
+    Text(Range<usize>),
+    /// A Ruby `true` or number: the attribute is set, to nothing that can be read.
+    Literal,
+    Dynamic,
+}
+
+impl Element {
+    pub fn attribute(&self, name: &str) -> Option<&Attribute> {
+        self.attributes.iter().find(|attribute| attribute.name == name)
+    }
+
+    /// Whether attributes may come from somewhere this reading doesn't see; a `data` attribute is a hash in Slim.
+    pub fn may_have_more(&self) -> bool {
+        self.open || self.attribute("data").is_some()
+    }
+
+    /// The same element `by` bytes further on.
+    pub fn shifted(mut self, by: usize) -> Self {
+        for attribute in &mut self.attributes {
+            attribute.at = attribute.at.start + by..attribute.at.end + by;
+            if let Value::Text(text) = &mut attribute.value {
+                *text = text.start + by..text.end + by;
+            }
+        }
+        self
+    }
+}
+
+/// The elements the template writes as markup: an ERB template's HTML start tags, a Haml or Slim template's tags. Tag
+/// helpers in Ruby code are `helper_elements`. None for a template its language's parser rejects.
+pub(crate) fn markup_elements(lang: TemplateLang, text: &str, extra_engines: &[String], grammar: ruby_prism::Version) -> Vec<Element> {
+    match lang {
+        TemplateLang::Erb => erb_elements(text),
+        TemplateLang::Haml => haml_elements(text, grammar),
+        TemplateLang::Slim => slim_elements(text, extra_engines),
+        _ => Vec::new(),
+    }
+}
+
+/// Every element of the template: its markup and its tag helpers.
+pub(crate) fn elements(lang: TemplateLang, text: &str, extra_engines: &[String], grammar: ruby_prism::Version) -> Vec<Element> {
+    let mut found = markup_elements(lang, text, extra_engines, grammar);
+    let Some(compiled) = code_context::compiled(lang, text, None, extra_engines) else { return found };
+    let options = ruby_prism::Options::default().version(grammar).build();
+    if let Some(parsed) = compiled.parse(&options) {
+        found.extend(helper_elements(&compiled, &parsed.node()));
+    }
+    found
+}
+
+fn erb_elements(text: &str) -> Vec<Element> {
+    let regions = html_lint::non_markup(text);
+    let attribute = |attribute: html_lint::Attribute| {
+        let value = match attribute.value {
+            None => Value::Empty,
+            Some((start, end)) if text[start..end].contains("<%") => Value::Dynamic,
+            Some((start, end)) => Value::Text(start..end),
+        };
+        Attribute { name: attribute.name, at: attribute.at.0..attribute.at.1, in_data: false, value }
+    };
+    let element = |tag: html_lint::StartTag| Element {
+        name: tag.name,
+        open: tag.dynamic,
+        attributes: tag.attrs.into_iter().filter(|attribute| !attribute.name.is_empty()).map(attribute).collect(),
+    };
+    html_lint::start_tags(text, &regions).into_iter().map(element).collect()
+}
+
+fn slim_elements(text: &str, extra_engines: &[String]) -> Vec<Element> {
+    let parsed = slim::parser::parse(text, extra_engines);
+    if parsed.valid {
+        parsed.elements
+    } else {
+        Vec::new()
+    }
+}
+
+fn haml_elements(text: &str, grammar: ruby_prism::Version) -> Vec<Element> {
+    let parsed = haml::parser::parse_with_ruby(text);
+    if parsed.error.is_some() {
+        return Vec::new();
+    }
+    let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
+    let options = ruby_prism::Options::default().version(grammar).build();
+    let element = |tag: haml::parser::Tag| {
+        let mut element = tag.element.shifted(bom_len);
+        if !tag.hash.is_empty() {
+            let compiled = haml::ruby::attribute_hash(&tag.hash, text);
+            read_haml_hash(&mut element, &compiled, &options);
+        }
+        element
+    };
+    parsed.tags.into_iter().map(element).collect()
+}
+
+fn read_haml_hash(element: &mut Element, compiled: &Compiled, options: &ruby_prism::ParseOptions) {
+    let Some(parsed) = compiled.parse(options) else {
+        element.open = true;
+        return;
+    };
+    let root = parsed.node();
+    let hash = root.as_program_node().and_then(|program| program.statements().body().iter().next());
+    match hash.as_ref().and_then(|node| node.as_hash_node()) {
+        Some(hash) => read_hash(element, hash.elements().iter(), compiled, false),
+        None => element.open = true,
+    }
+}
+
+/// The attributes the entries of a hash or keyword arguments set, by literal keys. A key that is no literal, a `**splat`
+/// and a `data:` that is no hash may set any.
+fn read_hash<'pr>(element: &mut Element, entries: impl Iterator<Item = Node<'pr>>, compiled: &Compiled, in_data: bool) {
+    for entry in entries {
+        let Some(assoc) = entry.as_assoc_node() else {
+            element.open = true;
+            continue;
+        };
+        let Some((key, at)) = literal_name(&assoc.key(), compiled) else {
+            element.open = true;
+            continue;
+        };
+        let value = assoc.value();
+        if key == "data" && !in_data {
+            match value.as_hash_node() {
+                Some(nested) => read_hash(element, nested.elements().iter(), compiled, true),
+                None => element.open = true,
+            }
+            continue;
+        }
+        let name = if in_data { format!("data-{}", key.replace('_', "-")) } else { key };
+        element.attributes.push(Attribute { name: name.to_ascii_lowercase(), at, in_data, value: value_of(&value, compiled) });
+    }
+}
+
+/// The template range of generated bytes the template wrote.
+fn span(compiled: &Compiled, at: &Location) -> Option<Range<usize>> {
+    compiled.template_span(at.start() as usize, at.end() as usize).map(|(start, end)| start..end)
+}
+
+/// The text of a symbol or string literal and where the template spells it, when the source is the text itself.
+fn literal_name(node: &Node, compiled: &Compiled) -> Option<(String, Range<usize>)> {
+    let (text, at) = match (node.as_symbol_node(), node.as_string_node()) {
+        (Some(symbol), _) => (symbol.unescaped().to_vec(), symbol.content_loc()),
+        (_, Some(string)) => (string.unescaped().to_vec(), string.content_loc()),
+        _ => return None,
+    };
+    let range = span(compiled, &at)?;
+    (range.len() == text.len()).then(|| (String::from_utf8_lossy(&text).into_owned(), range))
+}
+
+fn value_of(node: &Node, compiled: &Compiled) -> Value {
+    if let Some((_, range)) = literal_name(node, compiled) {
+        return Value::Text(range);
+    }
+    let is_literal = node.as_true_node().is_some() || node.as_integer_node().is_some() || node.as_float_node().is_some();
+    if is_literal {
+        Value::Literal
+    } else {
+        Value::Dynamic
+    }
+}
+
+/// The elements Rails tag helpers make from the Ruby of a template (`root`, the parse of `compiled`): `tag.div`,
+/// `content_tag`, `link_to`, the form and button helpers, with the attributes of their literal options.
+pub(crate) fn helper_elements(compiled: &Compiled, root: &Node) -> Vec<Element> {
+    let mut helpers = Helpers { compiled, found: Vec::new() };
+    helpers.visit(root);
+    helpers.found
+}
+
+struct Helpers<'a> {
+    compiled: &'a Compiled,
+    found: Vec<Element>,
+}
+
+impl Helpers<'_> {
+    fn element(&self, call: &CallNode) -> Option<Element> {
+        let name = String::from_utf8_lossy(call.name().as_slice()).into_owned();
+        let arguments: Vec<Node> = call.arguments().map(|list| list.arguments().iter().collect()).unwrap_or_default();
+        let element_name = match call.receiver() {
+            None => match name.as_str() {
+                "link_to" => "a".to_string(),
+                "button_to" | "button_tag" | "submit_tag" => "button".to_string(),
+                "form_with" | "form_for" | "form_tag" => "form".to_string(),
+                "content_tag" => arguments.first().and_then(|node| literal_name(node, self.compiled).map(|(text, _)| text))?,
+                _ => return None,
+            },
+            Some(receiver) if is_tag_builder(&receiver) && TAG_BUILDER_ELEMENTS.contains(&name.as_str()) => name,
+            Some(_) if matches!(name.as_str(), "submit" | "button") => "button".to_string(),
+            Some(_) => return None,
+        };
+        let mut element = Element { name: element_name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
+        let options = arguments.last();
+        let entries: Option<Vec<Node>> = options.and_then(|node| {
+            let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect());
+            keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
+        });
+        read_hash(&mut element, entries.into_iter().flatten(), self.compiled, false);
+        Some(element)
+    }
+}
+
+/// The `tag` of `tag.div`: the view helper, not a local variable or a call with a receiver.
+fn is_tag_builder(node: &Node) -> bool {
+    node.as_call_node().is_some_and(|call| call.receiver().is_none() && call.is_variable_call() && call.name().as_slice() == b"tag")
+}
+
+impl<'pr> Visit<'pr> for Helpers<'_> {
+    fn visit_call_node(&mut self, call: &CallNode<'pr>) {
+        self.found.extend(self.element(call));
+        ruby_prism::visit_call_node(self, call);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use TemplateLang::{Erb, Haml, Slim};
+
+    fn markup(lang: TemplateLang, text: &str) -> Vec<Element> {
+        markup_elements(lang, text, &[], ruby_prism::Version::Latest)
+    }
+
+    fn helpers(lang: TemplateLang, text: &str) -> Vec<Element> {
+        let compiled = code_context::compiled(lang, text, None, &[]).unwrap();
+        let options = ruby_prism::Options::default().version(ruby_prism::Version::Latest).build();
+        let parsed = compiled.parse(&options).unwrap();
+        helper_elements(&compiled, &parsed.node())
+    }
+
+    /// The names of an element's attributes, each with the text it is written as and its value's text.
+    fn spelled<'a>(text: &'a str, element: &'a Element) -> Vec<(&'a str, &'a str, Option<&'a str>)> {
+        let value = |value: &Value| match value {
+            Value::Text(range) => Some(&text[range.clone()]),
+            _ => None,
+        };
+        element.attributes.iter().map(|a| (a.name.as_str(), &text[a.at.clone()], value(&a.value))).collect()
+    }
+
+    #[test]
+    fn erb_start_tags_keep_where_each_name_is_written() {
+        let text = "<div class=\"a\" data-controller=\"x y\" hidden DATA-Turbo=\"<%= v %>\"></div>";
+        let elements = markup(Erb, text);
+        assert_eq!(elements.len(), 1);
+        assert_eq!(
+            spelled(text, &elements[0]),
+            [
+                ("class", "class", Some("a")),
+                ("data-controller", "data-controller", Some("x y")),
+                ("hidden", "hidden", None),
+                ("data-turbo", "DATA-Turbo", None)
+            ]
+        );
+        assert_eq!(elements[0].attributes[3].value, Value::Dynamic);
+        assert!(!elements[0].open);
+        assert!(markup(Erb, "<div <%= attrs %>>").remove(0).open);
+    }
+
+    #[test]
+    fn haml_tags_read_the_shorthand_the_list_and_the_hash() {
+        let text = "%a#main.x(href=\"/y\" data-confirm=\"Sure?\" hidden title=@t){data: {method: :delete}, \"data-a\" => 1, id: nil}\n";
+        let elements = markup(Haml, text);
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].name, "a");
+        assert_eq!(
+            spelled(text, &elements[0]),
+            [
+                ("id", "main", Some("main")),
+                ("href", "href", Some("/y")),
+                ("data-confirm", "data-confirm", Some("Sure?")),
+                ("hidden", "hidden", None),
+                ("title", "title", None),
+                ("data-method", "method", Some("delete")),
+                ("data-a", "data-a", None),
+                ("id", "id", None),
+            ]
+        );
+        assert!(elements[0].attributes[6..].iter().all(|a| a.value == Value::Literal || a.value == Value::Dynamic));
+        assert!(elements[0].attributes[5].in_data && !elements[0].attributes[6].in_data);
+        assert!(!elements[0].open);
+    }
+
+    #[test]
+    fn haml_hashes_that_are_not_literal_are_open() {
+        for text in ["%a{**opts}\n", "%a{data: opts}\n", "%a{key => 1}\n", "%a{\"x#{y}\" => 1}\n"] {
+            assert!(markup(Haml, text)[0].open, "{text}");
+        }
+        assert!(!markup(Haml, "%a{x: 1,\n  y: 2}\n")[0].open);
+        let wrapped = "%a{x: 1,\n  data: {controller: \"c\"}}\n";
+        let elements = markup(Haml, wrapped);
+        assert_eq!(spelled(wrapped, &elements[0])[1], ("data-controller", "controller", Some("c")));
+        assert!(markup(Haml, "%a(x=1)\n%b\n  %c.d\n").iter().all(|e| !e.open));
+        assert!(markup(Haml, "\u{feff}%a{id: 1}\n")[0].attributes[0].at == (6..8));
+        assert!(markup(Haml, "%a[@user]\n")[0].attribute("id").is_some());
+        assert!(markup(Haml, "%a{\n").is_empty(), "a template Haml rejects");
+    }
+
+    #[test]
+    fn slim_tags_read_shortcuts_quoted_and_ruby_values() {
+        let text = "a#main.x href=\"/y\" data-confirm=\"Sure?\" hidden=true title=@t data-i=\"#{i}\"\n";
+        let elements = markup(Slim, text);
+        assert_eq!(elements[0].name, "a");
+        assert_eq!(
+            spelled(text, &elements[0]),
+            [
+                ("id", "main", Some("main")),
+                ("href", "href", Some("/y")),
+                ("data-confirm", "data-confirm", Some("Sure?")),
+                ("hidden", "hidden", None),
+                ("title", "title", None),
+                ("data-i", "data-i", None),
+            ]
+        );
+        assert_eq!(elements[0].attributes[3].value, Value::Literal);
+        assert_eq!(elements[0].attributes[4].value, Value::Dynamic);
+        assert_eq!(elements[0].attributes[5].value, Value::Dynamic);
+        assert!(markup(Slim, "div *attrs\n")[0].open);
+        assert!(markup(Slim, "div data={a: 1}\n")[0].may_have_more());
+        let bracketed = "div[data-turbo-permanent id=\"p\"]\n";
+        assert_eq!(markup(Slim, bracketed)[0].attributes[0].value, Value::Empty);
+    }
+
+    #[test]
+    fn tag_helpers_make_elements_of_their_literal_options() {
+        let text = "<%= tag.div data: { turbo_permanent: true, \"controller\": \"a b\" }, id: nil do %>x<% end %>";
+        let elements = helpers(Erb, text);
+        assert_eq!(elements.len(), 1);
+        assert_eq!(
+            spelled(text, &elements[0]),
+            [("data-turbo-permanent", "turbo_permanent", None), ("data-controller", "controller", Some("a b")), ("id", "id", None)]
+        );
+        assert!(!elements[0].open);
+        let names = |text: &str| helpers(Erb, text).into_iter().map(|e| (e.name, e.open)).collect::<Vec<_>>();
+        assert_eq!(names("<%= link_to \"x\", path, **opts %>"), [("a".to_string(), true)]);
+        assert_eq!(names("<%= content_tag :section, \"x\", class: \"c\" %>"), [("section".to_string(), false)]);
+        assert_eq!(names("<%= f.submit \"Save\" %><%= button_to \"x\", y %>"), [("button".into(), false), ("button".into(), false)]);
+        assert_eq!(names("<%= form_with(model: x, html: y) %>"), [("form".to_string(), false)]);
+        for none in ["<%= tag.name %>", "<%= content_tag name %>", "<%= render \"x\", data: { a: 1 } %>", "<% tag = 1 %><%= tag.div %>"] {
+            assert_eq!(names(none), Vec::<(String, bool)>::new(), "{none}");
+        }
+    }
+}
