@@ -8,7 +8,7 @@ use tower_lsp_server::ls_types::{Diagnostic, Range};
 pub const RUBY_SYNTAX: &str = "Syntax/Ruby";
 
 /// Slim and Haml compile into a method body, where `yield` is valid; Prism, parsing it alone, says otherwise.
-const IGNORED_ERROR: &str = "Invalid yield";
+pub(crate) const IGNORED_ERROR: &str = "Invalid yield";
 
 /// Generated Ruby, and where each of its lines and verbatim runs of code came from.
 pub(crate) struct Compiled {
@@ -134,8 +134,14 @@ impl Compiled {
         Some(index.range(self.template_offset(at + start - from), self.template_offset(at + end.min(to) - from)))
     }
 
+    /// Whether the generated range `start..end` is the code of one verbatim run, less whitespace around it.
+    pub fn fills_run(&self, start: usize, end: usize) -> bool {
+        let Some(&(from, to, _)) = self.verbatim.get(self.verbatim.partition_point(|&(_, to, _)| to < end)) else { return false };
+        from <= start && self.source[from..start].trim().is_empty() && self.source[end..to].trim().is_empty()
+    }
+
     /// The template range of the generated range `start..end`, when one verbatim run holds all of it.
-    fn template_span(&self, start: usize, end: usize) -> Option<(usize, usize)> {
+    pub fn template_span(&self, start: usize, end: usize) -> Option<(usize, usize)> {
         let &(from, to, at) = self.verbatim.get(self.verbatim.partition_point(|&(_, to, _)| to < end))?;
         (from <= start && end <= to).then(|| (self.template_offset(at + start - from), self.template_offset(at + end - from)))
     }

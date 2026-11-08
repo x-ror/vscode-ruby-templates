@@ -6,7 +6,7 @@ use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{controller_classes, partials, paths, render_refs};
+use crate::rails::{controller_classes, output_lints, partials, paths, render_refs};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -59,6 +59,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
+        out.extend(output_diagnostics(doc, rules, project, path, ruby.grammar));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
     out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
@@ -66,6 +67,20 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
         d.source = Some(doc.lang.diagnostic_source().into());
     }
     out
+}
+
+/// The silent-output and debugging lints, for Rails templates only: Padrino and Middleman write helper output to the
+/// buffer from `<% %>`, and an `.erb` outside app/views isn't a view.
+fn output_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &Path, grammar: ruby_prism::Version) -> Vec<Diagnostic> {
+    let wanted = [output_lints::SILENT_RENDER, output_lints::SILENT_HELPER, output_lints::DEBUG_OUTPUT];
+    if project.framework != Framework::Rails
+        || project.is_gem_file(path)
+        || paths::views_root(path).is_none()
+        || !wanted.iter().any(|code| rules.reports(code))
+    {
+        return vec![];
+    }
+    output_lints::diagnostics(doc.lang, &doc.text, rules.extra_engines(), grammar)
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
@@ -443,7 +458,7 @@ mod tests {
             let rules: BTreeSet<&str> = lints().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
             assert_eq!(listed, rules, "{section}");
             let old_codes = regex::Regex::new(items["anyOf"][1]["pattern"].as_str().unwrap()).unwrap();
-            assert!(lints().all(|rule| old_codes.is_match(rule.alias.unwrap())), "{section}");
+            assert!(lints().all(|rule| rule.alias.is_none_or(|alias| old_codes.is_match(alias))), "{section}");
         }
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();
@@ -459,6 +474,33 @@ mod tests {
         ] {
             assert!(!literal.is_match(src.split("#[cfg(test)]").next().unwrap()), "coded(…, \"literal\")");
         }
+    }
+
+    #[test]
+    fn output_lints_run_in_rails_projects_only() {
+        let root = std::env::temp_dir().join(format!("rt-output-lints-{}", std::process::id()));
+        let (rails, padrino) = (root.join("rails"), root.join("padrino"));
+        for dir in [&rails, &padrino] {
+            std::fs::create_dir_all(dir.join("app/views")).unwrap();
+        }
+        std::fs::write(rails.join("Gemfile.lock"), format!("{GEM_LOCK}    actionview (8.0.2)\n")).unwrap();
+        std::fs::write(padrino.join("Gemfile.lock"), format!("{GEM_LOCK}    padrino-helpers (0.16.0)\n")).unwrap();
+        let codes = |dir: &Path, name: &str, options: &Options| {
+            let uri = crate::util::file_uri(dir.join(name)).unwrap();
+            let doc = Doc {
+                lang: TemplateLang::Erb,
+                text: "<% link_to \"/blog\" do %>x<% end %>".into(),
+                plain_erb: false,
+                percent_lines: false,
+                version: 0,
+            };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        let options = Options::default();
+        assert_eq!(codes(&rails, "app/views/a.html.erb", &options), ["Rails/SilentHelper"]);
+        assert!(codes(&padrino, "app/views/a.html.erb", &options).is_empty());
+        assert!(codes(&rails, "config/nginx.conf.erb", &options).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::erb::tags;
 use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::options::Options;
 use crate::rails::controllers::Target;
+use crate::rails::output_lints::{output_marker_edit, SILENT_HELPER, SILENT_RENDER};
 use crate::rails::project::{Project, Projects};
 use crate::rails::render_call::HamlPipes;
 use crate::rails::{
@@ -546,7 +547,8 @@ impl LanguageServer for Backend {
         for d in p.context.diagnostics.iter().filter(|d| util::code(d) == Some(STRICT_LOCALS)) {
             actions.extend(self.strict_locals_fixes(&project, &path, &doc, d).into_iter().map(CodeActionOrCommand::CodeAction));
         }
-        let unresolved = p.context.diagnostics.into_iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER));
+        let diagnostics = p.context.diagnostics;
+        let unresolved = diagnostics.iter().filter(|d| util::code(d) == Some(UNRESOLVED_RENDER)).cloned();
         let pipes = HamlPipes::new(doc.lang);
         let quick_fixes = unresolved.filter_map(|d| {
             let (line_start, line, start) = util::line_at(&doc.text, d.range.start);
@@ -572,6 +574,7 @@ impl LanguageServer for Backend {
             }))
         });
         actions.extend(quick_fixes);
+        actions.extend(silent_output_fixes(&uri, &doc, &diagnostics));
         Ok(Some(actions))
     }
 
@@ -1227,6 +1230,26 @@ fn helper_hover(h: &helpers::Helper) -> String {
         Some(url) => format!("{signature}\n\n[API docs]({url})"),
         None => signature,
     }
+}
+
+/// "Output it" for each silent render or helper, which turns its tag into an output tag.
+fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
+    let silent = |d: &&Diagnostic| matches!(util::code(d), Some(SILENT_RENDER | SILENT_HELPER));
+    diagnostics
+        .iter()
+        .filter(silent)
+        .filter_map(|d| {
+            let edit = output_marker_edit(doc.lang, &doc.text, d.range)?;
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Output the result".into(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d.clone()]),
+                edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), vec![edit])])), ..Default::default() }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }))
+        })
+        .collect()
 }
 
 /// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
