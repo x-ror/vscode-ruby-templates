@@ -100,9 +100,36 @@ enabled = true
 
 A result is kept only when the Ruby of every ERB tag and the name, attributes and values of every HTML tag are the same afterwards, and when Haml or Slim compile it to the same template; otherwise the file is formatted without these rules and `--verbose` says so.
 
+## Quotes, boolean attributes, void tags and tag names
+
+Four rules rewrite the markup of ERB templates (`Style/TagNameCase` also Slim's tag names) without changing what the browser makes of it; all are off until enabled, and they run before the other rules, in _Format Selection_ too.
+
+- `Style/AttributeQuotes` puts attribute values in double quotes (`style = "single_quotes"` for single) and quotes bare ones: `<div class='card' data-controller=toggle>` becomes `<div class="card" data-controller="toggle">`. A value that holds the quote (`title='say "hi"'`), an ERB tag whose Ruby holds it or prints raw output (`<%==`, `raw`, `html_safe`) and a bare value with a control tag (`href=<% if a %>…`) stay; a bare value with plain `<%= %>` output is quoted.
+- `Style/BooleanAttributes` writes `disabled="disabled"` and `disabled=""` as `disabled`, for the boolean attributes of the HTML standard on the elements they belong to. `disabled="false"` (still disabled), `hidden="until-found"`, values with ERB, custom elements and `<svg>` and `<math>` stay.
+- `Style/VoidTagClosing` writes `<br>` and `<img src="x">` without the slash (`style = "no_slash"`) or as `<br />` (`style = "slash"`). A slash inside an unquoted value (`src=a.png/`) or after an ERB tag, tags over several lines, `<svg>` and `<math>` stay.
+- `Style/TagNameCase` lower-cases tag names (`<DIV>` and `</DIV>`, `DIV.icon` in Slim), with the camel-case SVG elements as the SVG standard spells them (`linearGradient`, `foreignObject`, `clipPath`). In Slim, a name that lower case would turn into `doctype` or an embedded engine (`Javascript:`) stays, and so does a template that does not output HTML, like `index.xml.slim`.
+
+Tags in `<script>`, `<style>`, `<textarea>` and `<title>`, comments and ERB tags are not markup and stay. The formatter reads every tag again after the rewrite and keeps it only when each tag has the same name, attributes and values apart from what the rules change (for Slim, when Slim parses the file into the same pieces); otherwise the file is formatted without these rules and `--verbose` says so.
+
+```toml
+[Style.AttributeQuotes]
+enabled = true
+style = "double_quotes"
+
+[Style.BooleanAttributes]
+enabled = true
+
+[Style.VoidTagClosing]
+enabled = true
+style = "no_slash"
+
+[Style.TagNameCase]
+enabled = true
+```
+
 ## Safe by construction
 
-Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel. The one exception is `Turbo/PreferTurboAttributes`, below.
+Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel. The exceptions are `Turbo/PreferTurboAttributes`, below, and the four rules above, whose rewrites are the characters the formatter changes besides whitespace.
 
 ## Rails UJS attributes to Turbo's
 

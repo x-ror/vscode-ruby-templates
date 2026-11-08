@@ -494,6 +494,40 @@ try {
     "p\n  <%=x%>\n",
   );
 
+  // The style rules rewrite tags, and `style` picks quotes and the end of void tags; Slim gets the tag name case only.
+  const tagStyle = path.join(root, "tag-style");
+  fs.mkdirSync(tagStyle);
+  const tagStyleFormat = (name, text) =>
+    run(["format", "--stdin-filepath", path.join(tagStyle, name)], text).stdout;
+  const loud = "<DIV class='a' id=b><INPUT checked=\"checked\" /><BR/></DIV>\n";
+  fs.writeFileSync(path.join(tagStyle, ".ruby-templates.toml"), "");
+  assert.strictEqual(
+    tagStyleFormat("a.html.erb", loud),
+    loud,
+    "off by default",
+  );
+  fs.writeFileSync(
+    path.join(tagStyle, ".ruby-templates.toml"),
+    [
+      '[Style.AttributeQuotes]\nenabled = true\nstyle = "single_quotes"',
+      "[Style.BooleanAttributes]\nenabled = true",
+      '[Style.VoidTagClosing]\nenabled = true\nstyle = "slash"',
+      "[Style.TagNameCase]\nenabled = true",
+    ].join("\n") + "\n",
+  );
+  const quiet = "<div class='a' id='b'><input checked /><br /></div>\n";
+  assert.strictEqual(tagStyleFormat("a.html.erb", loud), quiet);
+  assert.strictEqual(tagStyleFormat("a.html.erb", quiet), quiet, "stable");
+  assert.strictEqual(
+    tagStyleFormat("a.html.slim", "DIV.a\n  SPAN x\n"),
+    "div.a\n    span x\n",
+  );
+  assert.strictEqual(
+    tagStyleFormat("a.xml.slim", "DIV.a\n"),
+    "DIV.a\n",
+    "XML output",
+  );
+
   // Layout/IndentationStyle (ERB tabs, from the file or .editorconfig) and Layout/TrailingWhitespace.
   const layout = path.join(root, "layout");
   fs.mkdirSync(layout);

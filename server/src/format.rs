@@ -6,14 +6,16 @@ pub mod erb;
 pub mod haml;
 mod inline;
 pub mod slim;
+mod tag_style;
 mod turbo_attributes;
 
 use crate::checks::{language_diagnostics, ruby_context, Doc};
-use crate::lang::{html_host, is_partial, TemplateLang};
+use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::Projects;
 use crate::ruby::strict_locals::RubyContext;
 use crate::util;
 use blank_lines::LineInfo;
+use std::borrow::Cow;
 use std::fmt;
 use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptions, Uri};
 
@@ -47,6 +49,14 @@ pub struct Settings {
     pub trailing_whitespace: bool,
     /// `Turbo/PreferTurboAttributes`: the one rule that changes the page; the others keep what the template compiles to.
     pub prefer_turbo_attributes: bool,
+    /// `Style/AttributeQuotes`; `None` leaves the quotes.
+    pub attribute_quotes: Option<Quote>,
+    /// `Style/BooleanAttributes`.
+    pub boolean_attributes: bool,
+    /// `Style/VoidTagClosing`; `None` leaves the tags.
+    pub void_tag_closing: Option<VoidClosing>,
+    /// `Style/TagNameCase`.
+    pub tag_name_case: bool,
 }
 
 impl Default for Settings {
@@ -66,6 +76,10 @@ impl Default for Settings {
             indent_style: IndentStyle::Spaces,
             trailing_whitespace: true,
             prefer_turbo_attributes: false,
+            attribute_quotes: None,
+            boolean_attributes: false,
+            void_tag_closing: None,
+            tag_name_case: false,
         }
     }
 }
@@ -75,6 +89,22 @@ impl Default for Settings {
 pub enum IndentStyle {
     Spaces,
     Tabs,
+}
+
+/// The quote an attribute value is written in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Quote {
+    Double,
+    Single,
+}
+
+/// How a void element's start tag ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VoidClosing {
+    /// `<br>`
+    NoSlash,
+    /// `<br />`
+    Slash,
 }
 
 /// How many blank lines the `EmptyLinesAround…` rules leave.
@@ -171,23 +201,34 @@ pub(crate) fn format_in(
     // The formatter refuses on errors, so it must see the ones the server shows: those of the project's Ruby.
     let ruby = ruby_context(uri, projects);
     let template = Template { uri, lang, plain_erb };
-    // The attribute renames come first, so every check below compares the result with the renamed text and still guards the rest.
-    let (renamed, refused) =
-        match settings.prefer_turbo_attributes.then(|| turbo_attributes::apply(lang, text, extra_engines, ruby.grammar)) {
-            Some(Ok(renamed)) => (renamed, None),
-            Some(Err(note)) => (None, Some(note)),
-            None => (None, None),
-        };
-    let source = renamed.as_deref().unwrap_or(text);
-    let mut formatted = format_once(template, source, settings, extra_engines, &ruby)?;
-    formatted.notes.extend(refused);
-    if formatted.text == source {
+    // The rewrites of attributes and tags come first, so every check below compares the result with their text and still guards the rest.
+    let mut notes = Vec::new();
+    let mut source = Cow::Borrowed(text);
+    if settings.prefer_turbo_attributes {
+        keep(turbo_attributes::apply(lang, &source, extra_engines, ruby.grammar), &mut source, &mut notes);
+    }
+    if tag_style::is_on(settings) {
+        let html = !matches!(lang, TemplateLang::Slim | TemplateLang::Skim) || slim_html_host(uri);
+        keep(tag_style::apply(lang, &source, settings, extra_engines, html), &mut source, &mut notes);
+    }
+    let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
+    formatted.notes.extend(notes);
+    if formatted.text == *source {
         return Ok(formatted);
     }
-    if let Some(broken) = broken_invariant(template, source, &formatted.text, settings, extra_engines, &ruby) {
+    if let Some(broken) = broken_invariant(template, &source, &formatted.text, settings, extra_engines, &ruby) {
         return skip(SkipKind::Internal, broken);
     }
     Ok(formatted)
+}
+
+/// Takes a rewrite stage's result as the text the rest works on, or its note when the stage refused.
+fn keep(stage: Result<Option<String>, String>, source: &mut Cow<str>, notes: &mut Vec<String>) {
+    match stage {
+        Ok(Some(rewritten)) => *source = Cow::Owned(rewritten),
+        Ok(None) => {}
+        Err(note) => notes.push(note),
+    }
 }
 
 /// What is being formatted: where it lives, its language, and whether it was opened as plain `erb`.

@@ -37,11 +37,22 @@ enum Shape {
     Unread(String),
 }
 
-/// A tag's whitespace runs and what each becomes.
-struct Parsed {
+/// A tag's whitespace runs and what each becomes, and where its attributes are written.
+pub(crate) struct Parsed {
     attributes: Vec<(String, Option<String>, bool)>,
     erb_blanks: Vec<(bool, bool)>,
     spaces: Vec<(Range<usize>, &'static str)>,
+    pub written: Vec<Written>,
+    /// The `/` right before the `>` (with the blanks before it, when it stands alone), unless it is part of a value or an ERB tag's name.
+    pub solidus: Option<Range<usize>>,
+    /// Where the last attribute, ERB tag or solidus ends; `None` for a tag with none.
+    pub content_end: Option<usize>,
+}
+
+/// An attribute as written: its name up to a trailing `/`, and its value with the quotes it has.
+pub(crate) struct Written {
+    pub name: Range<usize>,
+    pub value: Option<Range<usize>>,
 }
 
 /// The edits that give the attributes of each tag one space between them and none around `=` or before the `>`.
@@ -88,7 +99,7 @@ fn shapes(text: &str) -> Option<(Vec<Shape>, String)> {
 }
 
 /// The byte range of each start and end tag that is markup, `None` when the template's HTML can't be read.
-fn tag_spans(text: &str) -> Option<Vec<Range<usize>>> {
+pub(crate) fn tag_spans(text: &str) -> Option<Vec<Range<usize>>> {
     let mut text_until: Option<String> = None;
     let mut spans: Vec<Range<usize>> = Vec::new();
     for token in tokens(text)? {
@@ -138,13 +149,19 @@ fn blanked(text: &str, range: Range<usize>, erb: &[ErbTag]) -> String {
     out
 }
 
+/// Where the name of the tag at `span` is written.
+pub(crate) fn name_range(text: &str, span: &Range<usize>) -> Range<usize> {
+    let start = span.start + 1 + usize::from(text[span.start + 1..].starts_with('/'));
+    let len = text[start..span.end].bytes().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
+    start..start + len
+}
+
 /// The tag's name and its attributes with the whitespace runs, or `None` where the tag is not plain enough to be sure of.
-fn read(text: &str, span: &Range<usize>, erb: &[ErbTag]) -> Option<(String, Parsed)> {
+pub(crate) fn read(text: &str, span: &Range<usize>, erb: &[ErbTag]) -> Option<(String, Parsed)> {
     let closing = text[span.start + 1..].starts_with('/');
-    let name_start = span.start + 1 + usize::from(closing);
-    let name_len =
-        text[name_start..span.end].bytes().take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.')).count();
-    let body = name_start + name_len..span.end.checked_sub(1)?;
+    let Range { start: name_start, end: name_end } = name_range(text, span);
+    let name_len = name_end - name_start;
+    let body = name_end..span.end.checked_sub(1)?;
     if !text[..span.end].ends_with('>') || text[body.clone()].chars().next().is_some_and(|c| !c.is_ascii_whitespace() && c != '/') {
         return None;
     }
@@ -217,7 +234,8 @@ fn parse(text: &str, pieces: &[Piece], erb: &[ErbTag]) -> Option<Parsed> {
     let blank = |i: Option<usize>| i.and_then(kind) == Some(Kind::Space);
     let erb_blanks =
         (0..pieces.len()).filter(|&i| pieces[i].kind == Kind::Erb).map(|i| (blank(i.checked_sub(1)), blank(Some(i + 1)))).collect();
-    let mut parsed = Parsed { attributes: Vec::new(), erb_blanks, spaces: Vec::new() };
+    let content_end = pieces.iter().rfind(|p| p.kind != Kind::Space).map(|p| p.range.end);
+    let mut parsed = Parsed { attributes: Vec::new(), erb_blanks, spaces: Vec::new(), written: Vec::new(), solidus: None, content_end };
     let mut i = 0;
     while i < pieces.len() {
         let separator = (kind(i) == Some(Kind::Space)).then_some(i);
@@ -239,11 +257,22 @@ fn parse(text: &str, pieces: &[Piece], erb: &[ErbTag]) -> Option<Parsed> {
             parsed.spaces.push((pieces[at].range.clone(), " "));
         }
         let name = joined(name_start, i);
+        let mut name_at = pieces[name_start].range.start..pieces[i - 1].range.end;
+        if i == pieces.len() && !has_erb(name_start, i) && name.ends_with('/') {
+            let solidus = name_at.end - 1;
+            let alone = solidus == name_at.start;
+            let blanks = separator.filter(|_| alone).map_or(solidus, |at| pieces[at].range.start);
+            parsed.solidus = Some(blanks..solidus + 1);
+            name_at.end = solidus;
+        }
         let plain_name = !has_erb(name_start, i) && !name.contains('/');
         let space_before = (kind(i) == Some(Kind::Space)).then_some(i);
         let eq = i + usize::from(space_before.is_some());
         if kind(eq) != Some(Kind::Eq) {
             parsed.attributes.push((name, None, separator.is_none()));
+            if !name_at.is_empty() {
+                parsed.written.push(Written { name: name_at, value: None });
+            }
             continue;
         }
         i = eq + 1;
@@ -266,6 +295,8 @@ fn parse(text: &str, pieces: &[Piece], erb: &[ErbTag]) -> Option<Parsed> {
         if let Some(at) = space_after.filter(|_| plain_value) {
             parsed.spaces.push((pieces[at].range.clone(), ""));
         }
+        let value = pieces[value_start].range.start..pieces[i - 1].range.end;
+        parsed.written.push(Written { name: name_at, value: Some(value) });
         parsed.attributes.push((name, Some(joined(value_start, i)), separator.is_none()));
     }
     Some(parsed)
