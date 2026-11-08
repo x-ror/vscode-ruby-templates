@@ -186,6 +186,22 @@ pub fn fuzzy_match(name: &str, query: &str) -> bool {
     query.chars().all(|q| chars.any(|c| c == q))
 }
 
+/// The fewest insertions, deletions and substitutions of one character that turn `a` into `b`.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(ca != cb)).min(above + 1).min(row[j] + 1);
+            diagonal = above;
+        }
+    }
+    row[b.len()]
+}
+
 /// Attach a stable `code` so users can filter or disable the diagnostic.
 pub fn coded(mut d: Diagnostic, code: &str) -> Diagnostic {
     d.code = Some(NumberOrString::String(code.into()));
@@ -364,6 +380,15 @@ pub fn raw_lines(text: &str) -> impl Iterator<Item = (usize, &str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_distance_counts_single_character_changes() {
+        assert_eq!(edit_distance("serch", "search"), 1);
+        assert_eq!(edit_distance("search", "serach"), 2);
+        assert_eq!(edit_distance("", "ab"), 2);
+        assert_eq!(edit_distance("same", "same"), 0);
+        assert_eq!(edit_distance("kitten", "sitting"), 3);
+    }
 
     #[cfg(unix)]
     const AWKWARD_NAMES: [&str; 8] = ["my app", "a@b", "c+d", "e#f", "g%h", "i%20j", "q?r", "caf\u{e9} \u{1f600}"];

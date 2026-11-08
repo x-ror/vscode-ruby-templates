@@ -119,13 +119,15 @@ async function doStart(context) {
   const command = findServer(context);
   log(`starting language server: ${command}`);
 
-  // The server caches app/views listings and parsed locales, and a changed Gemfile.lock or .ruby-version changes its framework gates and the Ruby grammar, and a .ruby-templates.toml changes which rules apply; these events invalidate them. The folder globs
+  // The server caches app/views listings, parsed locales and the Stimulus controllers app/javascript registers, and a changed Gemfile.lock or .ruby-version changes its framework gates and the Ruby grammar, and a .ruby-templates.toml changes which rules apply; these events invalidate them. The folder globs
   // catch deleting/renaming a whole app/ or config/ tree, which VS Code reports as one event for the folder.
   // Created once: restarts reuse them instead of piling up live watchers.
   if (!watchers) {
     watchers = [
       "**/app/views/**",
       "**/config/locales/**",
+      "**/app/javascript/**",
+      "**/config/importmap.rb",
       "**/Gemfile.lock",
       "**/.ruby-version",
       "**/.ruby-templates.toml",

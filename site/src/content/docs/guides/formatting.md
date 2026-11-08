@@ -102,7 +102,18 @@ A result is kept only when the Ruby of every ERB tag and the name, attributes an
 
 ## Safe by construction
 
-Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel.
+Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel. The one exception is `Turbo/PreferTurboAttributes`, below.
+
+## Rails UJS attributes to Turbo's
+
+`Turbo/PreferTurboAttributes` is the one rule that changes the page, so it is off until enabled and its renames are the only characters the formatter changes besides whitespace. It turns `data-method` into `data-turbo-method` and `data-confirm` into `data-turbo-confirm` on links, and `data-disable-with` into `data-turbo-submits-with` on submit buttons (`<button>` with no `type` or `type="submit"`, `<input type="submit">`), in markup and in the `data: { }` options of `link_to`, `tag`, `content_tag`, `submit_tag`, `button_tag`, `button_to` and `submit`/`button` on a form builder (`confirm:` becomes `turbo_confirm:`, `method:` `turbo_method:`, `disable_with:` `turbo_submits_with:`). They work only in an app that runs Turbo; the old ones work only with Rails UJS.
+
+Left alone: a `data-confirm` on a link that sends no method (Turbo asks to confirm only a link with `data-turbo-method`), the confirm of `button_to` (Turbo reads it from the form), `link_to … method: :delete` (not a data attribute), an element that has the Turbo attribute already, other elements and button types, and anything that is not written out as a name or a literal key. The renames are made first. The formatter then reads every element's attributes before and after and keeps the rewrite only when nothing but the renamed attributes differs; its usual checks apply to the renamed text, so the rest of the file is guarded as for any other rule. _Format Selection_ applies the rule to the lines it covers.
+
+```toml
+[Turbo.PreferTurboAttributes]
+enabled = true
+```
 
 ## Indentation width and line endings
 

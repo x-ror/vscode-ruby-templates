@@ -1,16 +1,30 @@
 //! Stimulus identifiers in `data-*` attributes → app/javascript/controllers files.
 
-use crate::rails::paths::app_root;
+use crate::rails::paths::{app_root, rails_root};
 use crate::util::slash_path;
+use dashmap::DashMap;
 use regex::Regex;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 /// Where stimulus-loading finds the controllers, below `app`.
-const CONTROLLERS_DIR: &str = "javascript/controllers";
-/// The file name endings stimulus-loading registers as controllers.
-const CONTROLLER_SUFFIXES: [&str; 4] = ["_controller.js", "_controller.ts", "-controller.js", "-controller.ts"];
+pub const CONTROLLERS_DIR: &str = "javascript/controllers";
+/// The file name endings that register as controllers: stimulus-loading takes `.js`, bundlers the other script extensions.
+const CONTROLLER_SUFFIXES: [&str; 10] = [
+    "_controller.js",
+    "_controller.mjs",
+    "_controller.jsx",
+    "_controller.ts",
+    "_controller.tsx",
+    "-controller.js",
+    "-controller.mjs",
+    "-controller.jsx",
+    "-controller.ts",
+    "-controller.tsx",
+];
+const SCRIPT_EXTENSIONS: [&str; 7] = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts"];
 
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
@@ -41,6 +55,22 @@ static METHOD: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+// How controllers get registered besides file names: `application.register("name", …)`, stimulus-loading from a folder, a
+// bundler's context or glob of files.
+static REGISTER_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\.register\(").unwrap());
+static REGISTER_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"\.register\(\s*["']([^"']+)["']"#).unwrap());
+static LOAD_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:eager|lazy)LoadControllersFrom\(").unwrap());
+static LOAD_FROM_CONTROLLERS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\b(?:eager|lazy)LoadControllersFrom\(\s*["']controllers["']"#).unwrap());
+static GLOB_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(?:require\.context|import\.meta\.glob(?:Eager)?)\(").unwrap());
+static GLOB_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\b(?:require\.context|import\.meta\.glob(?:Eager)?)\(\s*["']([^"']+)["']"#).unwrap());
+// The line importmap-rails generates for the folder stimulus-loading reads.
+static DEFAULT_PIN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^pin_all_from\s*\(?\s*["']app/javascript/controllers["']\s*,\s*under:\s*["']controllers["']"#).unwrap());
+// `const application = Application.start()`, however the script names it.
+static APPLICATION_VARIABLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(\w+)\s*=\s*(?:Application\.start\(|new\s+Application\b)").unwrap());
 static CLASS_BODY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\b[^{]*\{").unwrap());
 const NOT_ACTIONS: &[&str] =
     &["if", "for", "while", "switch", "catch", "return", "function", "constructor", "initialize", "connect", "disconnect"];
@@ -287,6 +317,156 @@ pub fn controllers(current: &Path) -> Vec<String> {
     out
 }
 
+/// What the app registers as Stimulus controllers.
+#[derive(Debug)]
+pub struct Registered {
+    /// Its controller files and the literal names its scripts register.
+    pub names: Vec<String>,
+    controllers: PathBuf,
+    /// stimulus-loading is in use, so an engine's importmap pins may add controllers under a folder of their own.
+    engines: bool,
+}
+
+impl Registered {
+    #[cfg(test)]
+    pub fn new(names: Vec<String>) -> Self {
+        Registered { names, controllers: PathBuf::new(), engines: false }
+    }
+
+    /// Whether `name` is registered, or is namespaced by a folder this app doesn't have (`x--foo`), which an engine's pin
+    /// `under: "controllers/x"` can fill without a file in the app.
+    pub fn knows(&self, name: &str) -> bool {
+        let engine_namespace =
+            name.rsplit_once("--").is_some_and(|(namespace, _)| !self.controllers.join(namespace.replace("--", "/")).is_dir());
+        self.names.iter().any(|known| known == name) || (self.engines && engine_namespace)
+    }
+}
+
+/// `registered` per app folder: it walks app/javascript and reads its scripts, which each diagnostics run would repeat.
+static REGISTERED: LazyLock<DashMap<PathBuf, Option<Arc<Registered>>>> = LazyLock::new(DashMap::new);
+
+/// Drops what `registered` remembers, when a watched file may have changed it.
+pub fn clear_cache() {
+    REGISTERED.clear();
+}
+
+/// What the app registers, remembered until `clear_cache`. `None` when that can't be told: no controllers folder, or
+/// controllers loaded from another folder, an importmap pin, a library or a computed name.
+pub fn registered(current: &Path) -> Option<Arc<Registered>> {
+    let app = app_root(current)?;
+    if let Some(found) = REGISTERED.get(&app) {
+        return found.clone();
+    }
+    let found = scan_registered(current).map(Arc::new);
+    REGISTERED.insert(app, found.clone());
+    found
+}
+
+fn scan_registered(current: &Path) -> Option<Registered> {
+    let javascript = app_root(current)?.join("javascript");
+    let controllers_dir = javascript.join("controllers");
+    if !controllers_dir.is_dir() {
+        return None;
+    }
+    let importmap = std::fs::read_to_string(rails_root(current)?.join("config/importmap.rb")).ok();
+    if importmap.as_deref().is_some_and(loads_from_elsewhere) {
+        return None;
+    }
+    let mut names = controllers(current);
+    let mut engines = importmap.is_some();
+    let files = WalkDir::new(&javascript).into_iter().filter_entry(|entry| entry.file_name() != "node_modules").flatten();
+    for file in files.filter(|entry| is_loader_file(entry.path())) {
+        let source = std::fs::read_to_string(file.path()).ok()?;
+        names.extend(loader_names(&source, file.path().parent()?, &controllers_dir)?);
+        engines |= LOAD_CALL.is_match(&source);
+    }
+    names.sort();
+    names.dedup();
+    Some(Registered { names, controllers: controllers_dir, engines })
+}
+
+fn is_loader_file(path: &Path) -> bool {
+    let is_script = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| SCRIPT_EXTENSIONS.contains(&ext));
+    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    path.is_file() && is_script && !CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+}
+
+/// Whether importmap.rb pins controllers other than the ones in app/javascript/controllers under `controllers/`.
+fn loads_from_elsewhere(importmap: &str) -> bool {
+    let lines = importmap.lines().map(str::trim).filter(|line| !line.starts_with('#') && line.contains("controllers"));
+    lines.into_iter().any(|line| !DEFAULT_PIN.is_match(line))
+}
+
+/// The names the script `dir/…` registers; `None` when it loads controllers from outside the controllers folder, registers
+/// one under a name it computes, or hands the application to code that may register any.
+fn loader_names(source: &str, dir: &Path, controllers_dir: &Path) -> Option<Vec<String>> {
+    let count = |re: &Regex| re.find_iter(source).count();
+    let names: Vec<String> = REGISTER_NAME.captures_iter(source).map(|cap| cap[1].to_string()).collect();
+    let paths: Vec<&str> = GLOB_PATH.captures_iter(source).filter_map(|cap| cap.get(1)).map(|path| path.as_str()).collect();
+    let readable = names.len() == count(&REGISTER_CALL)
+        && count(&LOAD_FROM_CONTROLLERS) == count(&LOAD_CALL)
+        && paths.len() == count(&GLOB_CALL)
+        && paths.iter().all(|path| is_inside(dir, path, controllers_dir))
+        && application_stays_home(source);
+    readable.then_some(names)
+}
+
+/// Whether `path`, relative to `dir`, lies in the controllers folder.
+fn is_inside(dir: &Path, path: &str, controllers_dir: &Path) -> bool {
+    if !path.starts_with('.') {
+        return false;
+    }
+    let mut resolved = PathBuf::new();
+    for part in dir.join(path).components() {
+        match part {
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            Component::CurDir => {}
+            other => resolved.push(other),
+        }
+    }
+    resolved.starts_with(controllers_dir)
+}
+
+/// The Stimulus application is only registered on, loaded from a context or handed to stimulus-loading: not to a library
+/// (`registerPolarisControllers(application)`, `lib.install(application)`) that registers controllers by names unseen here.
+fn application_stays_home(source: &str) -> bool {
+    let mut names = vec!["application".to_string()];
+    names.extend(APPLICATION_VARIABLE.captures_iter(source).map(|cap| cap[1].to_string()));
+    names.iter().all(|name| {
+        let name = regex::escape(name);
+        let passed = Regex::new(&format!(r"[(,]\s*{name}\s*[,)]")).unwrap();
+        let loaded = Regex::new(&format!(r"\b{name}\.load\(\s*(\w*)")).unwrap();
+        passed.find_iter(source).all(|at| callee_before(source, at.start()).is_some_and(is_loader_call))
+            && loaded.captures_iter(source).all(|cap| &cap[1] == "definitionsFromContext")
+    })
+}
+
+fn is_loader_call(callee: &str) -> bool {
+    callee.ends_with("LoadControllersFrom") || callee == "registerControllers"
+}
+
+/// The name of the call whose arguments hold byte `at`: the identifier before the nearest unclosed `(`.
+fn callee_before(source: &str, at: usize) -> Option<&str> {
+    let mut depth = 0;
+    let open = source[..=at].char_indices().rev().find_map(|(i, c)| match c {
+        ')' => {
+            depth += 1;
+            None
+        }
+        '(' if depth == 0 => Some(i),
+        '(' => {
+            depth -= 1;
+            None
+        }
+        _ => None,
+    })?;
+    let head = source[..open].trim_end();
+    let start = head.rfind(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '$'))).map_or(0, |i| i + 1);
+    Some(&head[start..])
+}
+
 /// Every controller identifier on `line`: its byte range and the identifier Stimulus would register.
 pub fn identifiers(line: &str) -> Vec<(usize, usize, String)> {
     let named = |(s, e): (usize, usize)| (s, e, line[s..e].to_string());
@@ -489,6 +669,107 @@ export default class extends Controller {
         assert_eq!(targets(source), ["name", "output"]);
         assert_eq!(methods(source), ["greet", "reset", "submit", "search"]);
         assert!(targets("export default class extends Controller {}").is_empty());
+    }
+
+    #[test]
+    fn loader_files_register_names_or_hide_the_controllers() {
+        let (javascript, controllers) = (Path::new("/app/javascript"), Path::new("/app/javascript/controllers"));
+        let names = |source: &str, dir: &Path| loader_names(source, dir, controllers);
+        let register = "import A from \"./a_controller\"\napplication.register(\"a\", A)\napplication.register('b-c', B)\n";
+        assert_eq!(names(register, controllers), Some(vec!["a".to_string(), "b-c".to_string()]));
+        assert_eq!(names("eagerLoadControllersFrom(\"controllers\", application)", controllers), Some(vec![]));
+        assert_eq!(names("lazyLoadControllersFrom('controllers', application)", javascript), Some(vec![]));
+        assert_eq!(
+            names("application.load(definitionsFromContext(require.context(\".\", true, /_controller\\.js$/)))", controllers),
+            Some(vec![])
+        );
+        assert_eq!(
+            names("registerControllers(application, import.meta.glob(\"./**/*_controller.js\", { eager: true }))", controllers),
+            Some(vec![])
+        );
+        assert_eq!(names("import.meta.glob(\"./controllers/**/*_controller.js\")", javascript), Some(vec![]));
+        let packs = Path::new("/app/javascript/packs");
+        assert_eq!(names("import.meta.glob(\"../controllers/*_controller.js\")", packs), Some(vec![]));
+        assert_eq!(
+            names("const application = Application.start()\nwindow.Stimulus = application\nexport { application }", controllers),
+            Some(vec![])
+        );
+        for (source, dir) in [
+            ("application.register(name, Controller)", controllers),
+            ("controllers.forEach((c) => application.register(c.name, c))", controllers),
+            ("eagerLoadControllersFrom(\"components\", application)", controllers),
+            ("eagerLoadControllersFrom(folder, application)", controllers),
+            ("import.meta.glob(\"../components/**/*_controller.js\")", controllers),
+            ("import.meta.glob(\"./**/*_controller.js\")", javascript),
+            ("import.meta.glob(\"../**/*_controller.js\")", packs),
+            ("require.context(path, true)", controllers),
+            // A library may register any name.
+            ("registerPolarisControllers(application)", controllers),
+            ("lib.install(application)", controllers),
+            ("register(1, application)", controllers),
+            ("application.load(definitions)", controllers),
+            ("const app = Application.start()\nregisterAll(app, 1)", controllers),
+            ("console.log(\n  application )", controllers),
+        ] {
+            assert_eq!(names(source, dir), None, "{source}");
+        }
+        assert!(!loads_from_elsewhere(
+            "pin \"application\"\npin_all_from \"app/javascript/controllers\", under: \"controllers\"\n# pin \"controllers/x\"\n"
+        ));
+        assert!(loads_from_elsewhere("pin_all_from \"app/components\", under: \"controllers\"\n"));
+        assert!(loads_from_elsewhere("pin \"controllers/vendor_controller\", to: \"v.js\"\n"));
+    }
+
+    #[test]
+    fn registered_controllers_come_from_files_and_loaders_anywhere_in_app_javascript() {
+        let root = std::env::temp_dir().join(format!("rt-stimulus-registered-{}", std::process::id()));
+        let javascript = root.join("app/javascript");
+        let view = root.join("app/views/users/index.html.erb");
+        let names = || scan_registered(&view).map(|found| found.names);
+        assert!(names().is_none(), "no controllers folder");
+        std::fs::create_dir_all(javascript.join("controllers/admin")).unwrap();
+        std::fs::create_dir_all(javascript.join("packs")).unwrap();
+        std::fs::create_dir_all(javascript.join("node_modules/lib")).unwrap();
+        std::fs::write(javascript.join("controllers/admin/users_controller.tsx"), "").unwrap();
+        std::fs::write(javascript.join("controllers/hello_controller.js"), "application.register('not-a-loader', X)").unwrap();
+        std::fs::write(javascript.join("controllers/index.js"), "application.register(\"clipboard\", Clipboard)").unwrap();
+        std::fs::write(javascript.join("controllers/admin/index.js"), "application.register(\"admin-tabs\", Tabs)").unwrap();
+        std::fs::write(javascript.join("packs/application.js"), "application.register(\"dropdown\", Dropdown)").unwrap();
+        std::fs::write(javascript.join("node_modules/lib/index.js"), "x.register(computed)").unwrap();
+        let all = ["admin--users", "admin-tabs", "clipboard", "dropdown", "hello"].map(String::from).to_vec();
+        assert_eq!(names(), Some(all));
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config/importmap.rb"), "pin_all_from \"app/javascript/controllers\", under: \"controllers\"\n").unwrap();
+        assert!(names().is_some());
+        std::fs::write(root.join("config/importmap.rb"), "pin_all_from \"app/components\", under: \"controllers\"\n").unwrap();
+        assert_eq!(names(), None);
+        std::fs::remove_file(root.join("config/importmap.rb")).unwrap();
+        std::fs::write(javascript.join("packs/stimulus.js"), "import lib from \"lib\"\nlib.install(application)").unwrap();
+        assert_eq!(names(), None, "a library registers for the app");
+        std::fs::remove_file(javascript.join("packs/stimulus.js")).unwrap();
+        // Remembered until the cache is cleared.
+        assert!(registered(&view).is_some());
+        std::fs::write(javascript.join("packs/stimulus.js"), "application.register(computed(), X)").unwrap();
+        assert!(registered(&view).is_some());
+        clear_cache();
+        assert!(registered(&view).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+        clear_cache();
+    }
+
+    #[test]
+    fn engine_namespaces_are_unknown_to_the_app_with_stimulus_loading() {
+        let root = std::env::temp_dir().join(format!("rt-stimulus-engines-{}", std::process::id()));
+        let view = root.join("app/views/users/index.html.erb");
+        std::fs::create_dir_all(root.join("app/javascript/controllers/admin")).unwrap();
+        std::fs::write(root.join("app/javascript/controllers/index.js"), "eagerLoadControllersFrom(\"controllers\", application)").unwrap();
+        let found = scan_registered(&view).unwrap();
+        assert!(found.knows("blog--posts"), "an engine can pin controllers/blog");
+        assert!(!found.knows("admin--posts"), "the app has an admin folder");
+        assert!(!found.knows("posts"), "only namespaced names");
+        std::fs::remove_file(root.join("app/javascript/controllers/index.js")).unwrap();
+        assert!(!scan_registered(&view).unwrap().knows("blog--posts"), "no stimulus-loading");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

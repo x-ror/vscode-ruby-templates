@@ -600,6 +600,44 @@ export const diagnostics: Diagnostic[] = [
     line: 1,
     column: 3,
   },
+  {
+    code: "Turbo/PermanentRequiresId",
+    languages: ["erb", "haml", "slim"],
+    summary: "An element with `data-turbo-permanent` and no `id`.",
+    explanation:
+      "Turbo keeps a permanent element across visits by matching its `id` on the next page, so without one the attribute does nothing. Read from ERB start tags, Haml and Slim tags, and the options of `tag.div`, `content_tag`, `link_to` and the form and button helpers; any value counts. An `id` of any kind (`#id` in Haml and Slim, an object reference such as `%div[@user]`) satisfies it. Nothing is reported where attributes may come from code that can't be read: ERB inside the start tag, a Haml `**attrs` or `data: attrs`, a Slim `*attrs` or `data=` hash, a helper's `**options`, or a value that isn't a literal. Rails projects only, in templates under app/views.",
+    example: {
+      file: "app/views/layouts/application.html.erb",
+      lang: "erb",
+      code: `<div data-turbo-permanent>
+  <%= render 'shared/player' %>
+</div>
+`,
+    },
+    message:
+      "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it",
+    line: 1,
+    column: 6,
+  },
+  {
+    code: "Stimulus/UnknownController",
+    languages: ["erb", "haml", "slim"],
+    summary: "A `data-controller` name that no Stimulus controller has.",
+    explanation:
+      'Each name in a static `data-controller` (also `data: { controller: "…" }` in Haml and in the options of `tag`, `content_tag`, `link_to`, `button_to` and the form helpers) must be a controller file in app/javascript/controllers (`search_controller.js`, `admin/users_controller.js` for `admin--users`; `-controller`, `.ts`, `.jsx`, `.tsx` and `.mjs` too) or a name a script in app/javascript registers with `application.register("name", …)`. The closest controller within two edits is offered. Nothing is reported when the app has no app/javascript/controllers folder, loads controllers from another folder (`eagerLoadControllersFrom("components", …)`, a context or glob outside the controllers folder, an importmap pin), registers one under a name the code computes, and not for a name with ERB or interpolation. Rails projects only, in templates under app/views.',
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<div data-controller="serch">
+  <%= text_field_tag :q %>
+</div>
+`,
+    },
+    message:
+      "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?",
+    line: 1,
+    column: 23,
+  },
 ];
 
 /** The codes each language's `disabledDiagnostics` setting in `package.json` accepts. */

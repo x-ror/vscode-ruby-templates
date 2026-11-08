@@ -88,6 +88,7 @@ pub const ERB_COMMENT_SYNTAX: &str = "Style/ErbCommentSyntax";
 pub const SPACE_IN_HTML_TAG: &str = "Layout/SpaceInHtmlTag";
 pub const INDENTATION_STYLE: &str = "Layout/IndentationStyle";
 pub const TRAILING_WHITESPACE: &str = "Layout/TrailingWhitespace";
+pub const PREFER_TURBO_ATTRIBUTES: &str = "Turbo/PreferTurboAttributes";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -134,6 +135,8 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/UnusedBlockArgument", TEMPLATES),
     new_lint("Rails/RenderInLoop", TEMPLATES),
     new_lint("Rails/OutputControlFlow", &[Erb]),
+    new_lint("Turbo/PermanentRequiresId", TEMPLATES),
+    new_lint("Stimulus/UnknownController", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -146,6 +149,8 @@ pub const RULES: &[Rule] = &[
     format_rule(SPACE_IN_HTML_TAG, &[Erb], &[], &[], &[]),
     format_rule(INDENTATION_STYLE, &[Erb], &[Erb], &[], &[INDENT_STYLE]),
     format_rule(TRAILING_WHITESPACE, TEMPLATES, TEMPLATES, &[], &[]),
+    // Renames HTML attributes, which only an app that runs Turbo and not Rails UJS wants.
+    format_rule(PREFER_TURBO_ATTRIBUTES, TEMPLATES, &[], &[], &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {
@@ -175,7 +180,7 @@ mod tests {
             assert!(seen.insert(rule.name), "{} twice", rule.name);
             assert!(rule.alias.is_none_or(|alias| seen.insert(alias)), "{:?} twice", rule.alias);
         }
-        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Layout", "Style"]);
+        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Turbo", "Stimulus", "Layout", "Style"]);
     }
 
     #[test]
@@ -193,6 +198,7 @@ mod tests {
             include_str!("checks.rs"),
             include_str!("rails/output_lints.rs"),
             include_str!("rails/view_lints.rs"),
+            include_str!("rails/attribute_lints.rs"),
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),

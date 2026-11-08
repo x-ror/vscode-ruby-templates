@@ -4,8 +4,8 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
-    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, RULES, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG,
-    SPACE_IN_HTML_TAG, STYLE, TABS, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE,
+    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES, SPACE_AFTER_SCRIPT_MARKER,
+    SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, STYLE, TABS, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE,
 };
 use crate::format::{IndentStyle, Settings, Style};
 use crate::glob::Glob;
@@ -41,6 +41,7 @@ pub struct ResolvedRules {
     /// `Layout/IndentationStyle`: `Spaces` when the rule is off, the file's `style` when it sets one, else `None`: the editor's or `.editorconfig`'s.
     indent_style: Option<IndentStyle>,
     trailing_whitespace: bool,
+    prefer_turbo_attributes: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -116,6 +117,7 @@ impl ResolvedRules {
             space_in_html_tag: !off.contains(SPACE_IN_HTML_TAG),
             indent_style: indent_style(&files, &off),
             trailing_whitespace: !off.contains(TRAILING_WHITESPACE),
+            prefer_turbo_attributes: !off.contains(PREFER_TURBO_ATTRIBUTES),
             off,
             files,
             excluded_by,
@@ -163,6 +165,7 @@ impl ResolvedRules {
             space_in_html_tag: self.space_in_html_tag,
             indent_style: self.indent_style.unwrap_or(base.indent_style),
             trailing_whitespace: self.trailing_whitespace,
+            prefer_turbo_attributes: self.prefer_turbo_attributes,
             ..base
         }
     }

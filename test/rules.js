@@ -1,6 +1,6 @@
 // The examples on the site's rules page are tests: for every available autofix rule, format each `before` with the
 // rule switched on in a .ruby-templates.toml and expect `after`. For every available warning, `check` prints, for `before`, a line
-// with each fault's message that is missing with the rule switched off, and the same output for `after` either way. A partial rule's examples show what it will do.
+// with each fault's message that is missing with the rule switched off, and the same output for `after` either way. An example with a note is skipped, unless it lists the project `files` it needs. A partial rule's examples show what it will do.
 import assert from "assert";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -76,13 +76,18 @@ try {
   )) {
     const folders = { true: folder(rule, true), false: folder(rule, false) };
     for (const example of rule.examples.filter(
-      (e) => !e.afterFile && !e.note,
+      (e) => !e.afterFile && (!e.note || e.files),
     )) {
       const label = `${rule.name} (${example.lang})`;
       const printed = (text, enabled) => {
         const file = path.join(folders[enabled], example.file);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, text);
+        for (const [name, content] of Object.entries(example.files ?? {})) {
+          const needed = path.join(folders[enabled], name);
+          fs.mkdirSync(path.dirname(needed), { recursive: true });
+          fs.writeFileSync(needed, content);
+        }
         const run = spawnSync(bin, ["check", file], { encoding: "utf8" });
         assert.ok(
           run.status === 0 || run.status === 1,

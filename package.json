@@ -720,7 +720,9 @@
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
-                  "Rails/OutputControlFlow"
+                  "Rails/OutputControlFlow",
+                  "Turbo/PermanentRequiresId",
+                  "Stimulus/UnknownController"
                 ]
               },
               {
@@ -761,7 +763,9 @@
                   "Rails/InstanceVariableInPartial",
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
-                  "Rails/RenderInLoop"
+                  "Rails/RenderInLoop",
+                  "Turbo/PermanentRequiresId",
+                  "Stimulus/UnknownController"
                 ]
               },
               {
@@ -819,7 +823,9 @@
                   "Rails/InstanceVariableInPartial",
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
-                  "Rails/RenderInLoop"
+                  "Rails/RenderInLoop",
+                  "Turbo/PermanentRequiresId",
+                  "Stimulus/UnknownController"
                 ]
               },
               {

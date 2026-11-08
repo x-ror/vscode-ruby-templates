@@ -1,5 +1,6 @@
 //! Shared by the language server (`ruby-templates-ls`) and the command line (`ruby-templates`).
 
+mod attributes;
 mod checks;
 pub mod cli;
 mod code_context;

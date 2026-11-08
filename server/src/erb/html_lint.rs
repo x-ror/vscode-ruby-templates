@@ -74,17 +74,20 @@ pub fn inside(regions: &[(usize, usize)], at: usize) -> bool {
     next > 0 && at < regions[next - 1].1
 }
 
-struct Attribute {
-    name: String,
-    value: Option<(usize, usize)>,
+pub(crate) struct Attribute {
+    /// Lower-case.
+    pub name: String,
+    /// Where the name is written.
+    pub at: (usize, usize),
+    pub value: Option<(usize, usize)>,
 }
 
-struct StartTag {
-    name: String,
-    start: usize,
-    attrs: Vec<Attribute>,
+pub(crate) struct StartTag {
+    pub name: String,
+    pub start: usize,
+    pub attrs: Vec<Attribute>,
     /// ERB in an attribute-name position (`<img <%= attrs %>>`) may add any attribute.
-    dynamic: bool,
+    pub dynamic: bool,
 }
 
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
@@ -106,7 +109,7 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
 }
 
 /// Start tags in markup, with their attributes.
-fn start_tags(text: &str, regions: &[(usize, usize)]) -> Vec<StartTag> {
+pub(crate) fn start_tags(text: &str, regions: &[(usize, usize)]) -> Vec<StartTag> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(cap) = START_TAG.captures_at(text, from) {
@@ -148,6 +151,7 @@ fn parse_attributes(text: &str, regions: &[(usize, usize)], start: usize, mut po
         }
         let name_end = rest.find(|c: char| c.is_whitespace() || matches!(c, '=' | '>' | '/' | '<')).map_or(text.len(), |e| pos + e);
         let attr = text[pos..name_end].to_ascii_lowercase();
+        let at = (pos, name_end);
         pos = if name_end > pos { name_end } else { next_char(text, pos) };
         let mut value = None;
         if text[pos..].trim_start().starts_with('=') {
@@ -178,7 +182,7 @@ fn parse_attributes(text: &str, regions: &[(usize, usize)], start: usize, mut po
             value = Some(v);
             pos = end;
         }
-        tag.attrs.push(Attribute { name: attr, value });
+        tag.attrs.push(Attribute { name: attr, at, value });
     }
 }
 

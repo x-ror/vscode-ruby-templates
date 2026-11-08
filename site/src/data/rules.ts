@@ -38,6 +38,8 @@ export interface Example {
   faults?: Fault[];
   /** Context the listings need, such as the partial a `render` talks to; backticks quote code. */
   note?: string;
+  /** The project files the note speaks of, by path; the examples test writes them next to the template. */
+  files?: Record<string, string>;
 }
 
 export interface Rule {
@@ -85,6 +87,10 @@ const LOOP_MESSAGE =
   'Partial "users/card" is rendered once per item of a loop; use `render partial: "users/card", collection: @users, as: :user`';
 const ARGUMENT_MESSAGE =
   "Block argument `index` is never used; rename it `_index`";
+const PERMANENT_MESSAGE =
+  "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
+const CONTROLLER_MESSAGE =
+  "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?";
 
 /** The template, message and position the diagnostics reference shows for `code`. */
 function reported(code: string) {
@@ -1708,21 +1714,24 @@ enabled = false`,
     type: "autofix",
     safe: false,
     safeNote:
-      "It renames HTML attributes. The page behaves the same only in an app that runs Turbo and not Rails UJS, which is what the rule assumes.",
-    status: "planned",
-    phase: 2,
+      "It renames HTML attributes, which changes the page: the new ones work only in an app that runs Turbo, the old ones only with Rails UJS, so an app that still relies on UJS for a link or button loses it. That is why the rule is off until enabled. The formatter reads every element's attributes before and after and refuses the rewrite unless only the renamed ones differ, then checks the renamed text as it checks any file, so nothing else changes.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Turbo.PreferTurboAttributes]", "enabled = true"),
+    today:
+      'On links (`<a>`, `link_to`, `tag.a`, `content_tag :a`), `data-method` becomes `data-turbo-method`, and `data-confirm` becomes `data-turbo-confirm` when the link sends a method, since Turbo asks to confirm only such a link. On submit buttons (`<button>` with no `type` or `type="submit"`, `<input type="submit">`, `submit_tag`, `button_tag`, `button_to`, and `submit` or `button` on the builder of a `form_with`, `form_for` or `fields_for` block), `data-disable-with` becomes `data-turbo-submits-with`. In the options of a helper, the keys of `data: { }` are renamed in the spelling they have (`confirm:` becomes `turbo_confirm:`, `"disable-with" =>` becomes `"turbo-submits-with" =>`), as is a key such as `"data-method" =>`. Left alone: a `data-confirm` on a link without a method, `button_to`\'s confirm, which Turbo reads from the form, `link_to … method: :delete`, which is not a data attribute, an attribute whose Turbo name the element has already, a button of another `type` or whose attributes are not all readable, `disable_with: false` and a `confirm:` with no value (which reads a variable), other elements, and keys and attribute names that are not literal. It runs before the other formatter rules, whose checks then apply to the renamed text. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "erb",
         file: ERB_FILE,
         before: text(
           '<%= link_to "Delete", user_path(user), data: { confirm: "Sure?", method: :delete } %>',
-          '<%= form.submit "Save", data: { disable_with: "Saving..." } %>',
+          '<%= submit_tag "Save", data: { disable_with: "Saving..." } %>',
           '<a href="/users/1" data-confirm="Sure?" data-method="delete">Delete</a>',
         ),
         after: text(
           '<%= link_to "Delete", user_path(user), data: { turbo_confirm: "Sure?", turbo_method: :delete } %>',
-          '<%= form.submit "Save", data: { turbo_submits_with: "Saving..." } %>',
+          '<%= submit_tag "Save", data: { turbo_submits_with: "Saving..." } %>',
           '<a href="/users/1" data-turbo-confirm="Sure?" data-turbo-method="delete">Delete</a>',
         ),
       },
@@ -1731,9 +1740,11 @@ enabled = false`,
         file: HAML_FILE,
         before: text(
           '= link_to "Delete", user_path(user), data: { confirm: "Sure?", method: :delete }',
+          '%input{type: "submit", data: {disable_with: "Saving..."}}',
         ),
         after: text(
           '= link_to "Delete", user_path(user), data: { turbo_confirm: "Sure?", turbo_method: :delete }',
+          '%input{type: "submit", data: {turbo_submits_with: "Saving..."}}',
         ),
       },
       {
@@ -1741,9 +1752,11 @@ enabled = false`,
         file: SLIM_FILE,
         before: text(
           '= link_to "Delete", user_path(user), data: { confirm: "Sure?", method: :delete }',
+          'a href="/users/1" data-method="delete" data-confirm="Sure?" Delete',
         ),
         after: text(
           '= link_to "Delete", user_path(user), data: { turbo_confirm: "Sure?", turbo_method: :delete }',
+          'a href="/users/1" data-turbo-method="delete" data-turbo-confirm="Sure?" Delete',
         ),
       },
     ],
@@ -1755,8 +1768,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Turbo/PermanentRequiresId",
+    today:
+      "Reported on the attribute, in ERB start tags, Haml and Slim tags, and the literal options of `tag.div`, `content_tag`, `link_to` and the form and button helpers. Any value counts, as Turbo looks only for the attribute. An `id` of any value satisfies it, so does `#id` in Haml and Slim and an object reference such as `%div[@user]`. Not reported where attributes may come from code that can't be read (ERB inside the start tag, a Haml `**attrs` or `data: attrs`, a Slim `*attrs` or `data=` hash, a helper's `**options`) or when the value is not a literal (`data: { turbo_permanent: flag }`). Rails projects only, in templates under app/views.",
+    setting: {
+      label: "Turn it off",
+      code: `[Turbo.PermanentRequiresId]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1771,6 +1791,14 @@ enabled = false`,
           "  <%= render 'shared/player' %>",
           "</div>",
         ),
+        faults: [
+          {
+            line: 1,
+            column: 6,
+            message: PERMANENT_MESSAGE,
+            code: "Turbo/PermanentRequiresId",
+          },
+        ],
       },
       {
         lang: "haml",
@@ -1783,6 +1811,14 @@ enabled = false`,
           "#player{data: {turbo_permanent: true}}",
           "  = render 'shared/player'",
         ),
+        faults: [
+          {
+            line: 1,
+            column: 13,
+            message: PERMANENT_MESSAGE,
+            code: "Turbo/PermanentRequiresId",
+          },
+        ],
       },
       {
         lang: "slim",
@@ -1795,6 +1831,14 @@ enabled = false`,
           "#player data-turbo-permanent=true",
           "  = render 'shared/player'",
         ),
+        faults: [
+          {
+            line: 1,
+            column: 5,
+            message: PERMANENT_MESSAGE,
+            code: "Turbo/PermanentRequiresId",
+          },
+        ],
       },
     ],
   },
@@ -1805,8 +1849,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Stimulus/UnknownController",
+    today:
+      'Each name in a static `data-controller` (ERB, Haml and Slim attributes, `data: { controller: "…" }` in Haml and in the options of `tag`, `content_tag`, `link_to`, `button_to` and the form helpers) must be a file in app/javascript/controllers (`search_controller.js`, `admin/users_controller.js` for `admin--users`; `-controller`, `.ts`, `.jsx`, `.tsx` and `.mjs` too) or a name a script in app/javascript registers with `application.register("name", …)`; the closest controller within two edits is offered. Nothing is reported when the app has no app/javascript/controllers folder, when controllers are loaded from another folder (`eagerLoadControllersFrom("components", …)`, a context or glob outside the controllers folder, an importmap pin) or registered under a name the code computes, or for a name with ERB or interpolation in it. Rails projects only, in templates under app/views.',
+    setting: {
+      label: "Turn it off",
+      code: `[Stimulus.UnknownController]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1822,6 +1873,15 @@ enabled = false`,
           "</div>",
         ),
         note: "`app/javascript/controllers/search_controller.js` exists.",
+        files: { "app/javascript/controllers/search_controller.js": "" },
+        faults: [
+          {
+            line: 1,
+            column: 23,
+            message: CONTROLLER_MESSAGE,
+            code: "Stimulus/UnknownController",
+          },
+        ],
       },
       {
         lang: "haml",
@@ -1834,12 +1894,30 @@ enabled = false`,
           '%div{data: {controller: "search"}}',
           "  = text_field_tag :q",
         ),
+        files: { "app/javascript/controllers/search_controller.js": "" },
+        faults: [
+          {
+            line: 1,
+            column: 26,
+            message: CONTROLLER_MESSAGE,
+            code: "Stimulus/UnknownController",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('div data-controller="serch"', "  = text_field_tag :q"),
         after: text('div data-controller="search"', "  = text_field_tag :q"),
+        files: { "app/javascript/controllers/search_controller.js": "" },
+        faults: [
+          {
+            line: 1,
+            column: 22,
+            message: CONTROLLER_MESSAGE,
+            code: "Stimulus/UnknownController",
+          },
+        ],
       },
     ],
   },

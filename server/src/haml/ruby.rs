@@ -23,6 +23,16 @@ pub fn compiled(text: &str, parsed: &Parsed, comment: Option<&Comment>) -> Compi
     compile(&parsed.pieces, bom_len, last_line, &wrapper)
 }
 
+/// A tag's `{}` attribute hash as Ruby, with the code the template wrote between the braces where it was written.
+pub fn attribute_hash(code: &[Chunk], text: &str) -> Compiled {
+    let bom_len = if text.starts_with(BOM) { BOM.len_utf8() } else { 0 };
+    let mut generator = Generator { out: Compiled::new(), separate: false, bom_len };
+    generator.out.push("{", 0);
+    generator.chunks(code);
+    generator.out.push("}", 0);
+    generator.out
+}
+
 /// Temple joins the code parts it generates with `; `, and a newline is a part of its own.
 struct Generator {
     out: Compiled,
