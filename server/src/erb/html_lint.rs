@@ -16,9 +16,9 @@ pub mod code {
     pub const DUPLICATE_ID: &str = "Html/DuplicateId";
 }
 
-const ALT_RULE: &str = "the alt attribute must be specified (HTML 4.8.4.4.1)";
+pub(crate) const ALT_RULE: &str = "the alt attribute must be specified (HTML 4.8.4.4.1)";
 /// Set by a markup generator that couldn't get alt text; conformance checkers ignore the missing `alt` then (4.8.4.4).
-const NO_ALT_AVAILABLE: &str = "generator-unable-to-provide-required-alt";
+pub(crate) const NO_ALT_AVAILABLE: &str = "generator-unable-to-provide-required-alt";
 
 static START_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<([a-zA-Z][\w:-]*)").unwrap());
 static IMAGE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bimage_tag\b").unwrap());
@@ -88,6 +88,8 @@ pub(crate) struct StartTag {
     pub attrs: Vec<Attribute>,
     /// ERB in an attribute-name position (`<img <%= attrs %>>`) may add any attribute.
     pub dynamic: bool,
+    /// The text up to the element's own end tag, when nothing else is inside.
+    pub text: Option<(usize, usize)>,
 }
 
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
@@ -121,9 +123,16 @@ pub(crate) fn start_tags(text: &str, regions: &[(usize, usize)]) -> Vec<StartTag
         let name = name.as_str().to_ascii_lowercase();
         let Some((tag, end)) = parse_attributes(text, regions, whole.start(), whole.end(), &name) else { continue };
         from = end;
-        out.push(tag);
+        out.push(StartTag { text: text_until_end_tag(text, end, &tag.name), ..tag });
     }
     out
+}
+
+/// `from..` up to the end tag of `name` when only text lies between.
+fn text_until_end_tag(text: &str, from: usize, name: &str) -> Option<(usize, usize)> {
+    let end = from + text[from..].find('<')?;
+    let closes = text[end..].strip_prefix("</").is_some_and(|after| names_tag(after, name));
+    (closes && end > from).then_some((from, end))
 }
 
 /// The byte just past the character at `pos`.
@@ -133,7 +142,7 @@ fn next_char(text: &str, pos: usize) -> usize {
 
 /// Attributes from byte `pos` to the tag's `>`; `None` for a tag that never closes.
 fn parse_attributes(text: &str, regions: &[(usize, usize)], start: usize, mut pos: usize, name: &str) -> Option<(StartTag, usize)> {
-    let mut tag = StartTag { name: name.to_string(), start, attrs: Vec::new(), dynamic: false };
+    let mut tag = StartTag { name: name.to_string(), start, attrs: Vec::new(), dynamic: false, text: None };
     loop {
         pos = text.len() - text[pos..].trim_start().len();
         let rest = &text[pos..];
@@ -210,6 +219,12 @@ fn image_tags_without_alt<'a>(text: &'a str, spans: &'a [(usize, usize)], index:
     })
 }
 
+pub(crate) fn duplicate_id_message(id: &str, first_line: usize) -> String {
+    format!(
+        "Duplicate id `{id}` (first on line {first_line}): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)"
+    )
+}
+
 /// Static ids used twice that no ERB branch separates; `<template>` content isn't in the document yet.
 fn duplicate_ids(
     text: &str,
@@ -233,10 +248,7 @@ fn duplicate_ids(
         let id = &text[s..e];
         if let Some(first) = seen.insert(id, s) {
             if !branch_between(text, spans, first, s) {
-                let message = format!(
-                    "Duplicate id `{id}` (first on line {}): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
-                    index.line_of(first) + 1
-                );
+                let message = duplicate_id_message(id, index.line_of(first) + 1);
                 out.push(coded(warning(index.range(s, e), message), code::DUPLICATE_ID));
             }
         }

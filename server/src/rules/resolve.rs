@@ -413,7 +413,7 @@ mod tests {
     fn a_rule_is_off_outside_its_languages() {
         let project = Project::new("langs", &[("a.html.haml", "")]);
         let haml = project.resolve("a.html.haml", TemplateLang::Haml, &Options::default());
-        assert!(!haml.reports(IMG) && haml.reports("Html/VoidChildren"));
+        assert!(!haml.reports("Html/UnclosedElement") && haml.reports("Html/VoidChildren"));
     }
 
     #[test]

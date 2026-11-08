@@ -15,7 +15,11 @@ use std::ops::Range;
 pub(crate) struct Element {
     /// Lower-case: `a`, `div`.
     pub name: String,
+    /// Where the name is written; empty when it is implied (`.card` is a `div`).
+    pub at: Range<usize>,
     pub attributes: Vec<Attribute>,
+    /// The text that is all of the element's content, when the template spells it out: no ERB, interpolation or child.
+    pub text: Option<Range<usize>>,
     /// ERB in the tag, a splat or a hash that isn't a literal may set attributes this reading doesn't see.
     pub open: bool,
 }
@@ -49,17 +53,20 @@ impl Element {
         self.attributes.iter().find(|attribute| attribute.name == name)
     }
 
-    /// Whether attributes may come from somewhere this reading doesn't see; a `data` attribute is a hash in Slim.
+    /// Whether attributes may come from somewhere this reading doesn't see; `data` and `aria` attributes are hashes in Slim.
     pub fn may_have_more(&self) -> bool {
-        self.open || self.attribute("data").is_some()
+        self.open || self.attribute("data").is_some() || self.attribute("aria").is_some()
     }
 
     /// The same element `by` bytes further on.
     pub fn shifted(mut self, by: usize) -> Self {
+        let shift = |range: &Range<usize>| range.start + by..range.end + by;
+        self.at = shift(&self.at);
+        self.text = self.text.as_ref().map(shift);
         for attribute in &mut self.attributes {
-            attribute.at = attribute.at.start + by..attribute.at.end + by;
+            attribute.at = shift(&attribute.at);
             if let Value::Text(text) = &mut attribute.value {
-                *text = text.start + by..text.end + by;
+                *text = shift(text);
             }
         }
         self
@@ -99,6 +106,8 @@ fn erb_elements(text: &str) -> Vec<Element> {
         Attribute { name: attribute.name, at: attribute.at.0..attribute.at.1, in_data: false, value }
     };
     let element = |tag: html_lint::StartTag| Element {
+        at: tag.start + "<".len()..tag.start + "<".len() + tag.name.len(),
+        text: tag.text.map(|(start, end)| start..end),
         name: tag.name,
         open: tag.dynamic,
         attributes: tag.attrs.into_iter().filter(|attribute| !attribute.name.is_empty()).map(attribute).collect(),
@@ -141,14 +150,17 @@ fn read_haml_hash(element: &mut Element, compiled: &Compiled, options: &ruby_pri
     let root = parsed.node();
     let hash = root.as_program_node().and_then(|program| program.statements().body().iter().next());
     match hash.as_ref().and_then(|node| node.as_hash_node()) {
-        Some(hash) => read_hash(element, hash.elements().iter(), compiled, false),
+        Some(hash) => read_hash(element, hash.elements().iter(), compiled, None),
         None => element.open = true,
     }
 }
 
-/// The attributes the entries of a hash or keyword arguments set, by literal keys. A key that is no literal, a `**splat`
-/// and a `data:` that is no hash may set any.
-fn read_hash<'pr>(element: &mut Element, entries: impl Iterator<Item = Node<'pr>>, compiled: &Compiled, in_data: bool) {
+/// Hash attributes whose keys are attributes with the hash's name as prefix: `data: { a: 1 }` is `data-a`.
+const PREFIXED_HASHES: [&str; 2] = ["data", "aria"];
+
+/// The attributes the entries of a hash or keyword arguments set, by literal keys; `prefix` is the `data` or `aria` hash
+/// they are in. A key that is no literal, a `**splat` and a `data:` or `aria:` that is no hash may set any.
+fn read_hash<'pr>(element: &mut Element, entries: impl Iterator<Item = Node<'pr>>, compiled: &Compiled, prefix: Option<&str>) {
     for entry in entries {
         let Some(assoc) = entry.as_assoc_node() else {
             element.open = true;
@@ -159,14 +171,15 @@ fn read_hash<'pr>(element: &mut Element, entries: impl Iterator<Item = Node<'pr>
             continue;
         };
         let value = assoc.value();
-        if key == "data" && !in_data {
+        if let Some(hash) = PREFIXED_HASHES.iter().find(|hash| key == **hash).filter(|_| prefix.is_none()) {
             match value.as_hash_node() {
-                Some(nested) => read_hash(element, nested.elements().iter(), compiled, true),
+                Some(nested) => read_hash(element, nested.elements().iter(), compiled, Some(hash)),
                 None => element.open = true,
             }
             continue;
         }
-        let name = if in_data { format!("data-{}", key.replace('_', "-")) } else { key };
+        let name = prefix.map_or(key.clone(), |prefix| format!("{prefix}-{}", key.replace('_', "-")));
+        let in_data = prefix == Some("data");
         element.attributes.push(Attribute { name: name.to_ascii_lowercase(), at, in_data, value: value_of(&value, compiled) });
     }
 }
@@ -224,6 +237,7 @@ impl Helpers<'_> {
         let element_name = match call.receiver() {
             None => match name.as_str() {
                 "link_to" => "a".to_string(),
+                "image_tag" => "img".to_string(),
                 "button_to" | "button_tag" | "submit_tag" => "button".to_string(),
                 "form_with" | "form_for" | "form_tag" => "form".to_string(),
                 "content_tag" => arguments.first().and_then(|node| literal_name(node, self.compiled).map(|(text, _)| text))?,
@@ -234,24 +248,37 @@ impl Helpers<'_> {
             Some(_) => return None,
         };
         let is_form = element_name == "form" && call.receiver().is_none();
-        let mut element = Element { name: element_name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
-        let options = arguments.last();
-        let entries: Vec<Node> = options
-            .and_then(|node| {
-                let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect());
-                keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
-            })
-            .unwrap_or_default();
+        let is_content_tag = call.receiver().is_none() && name == "content_tag";
+        let text_argument = usize::from(is_content_tag);
+        let at = if is_content_tag {
+            arguments.first().and_then(|node| literal_name(node, self.compiled)).map(|(_, at)| at)
+        } else {
+            call.message_loc().and_then(|loc| span(self.compiled, &loc))
+        };
+        let text = arguments.get(text_argument).filter(|_| call.block().is_none()).and_then(|node| literal_name(node, self.compiled));
+        let mut element = Element {
+            name: element_name.to_ascii_lowercase(),
+            at: at.unwrap_or_default(),
+            text: text.map(|(_, range)| range),
+            ..Element::default()
+        };
+        let options = arguments.last().and_then(|node| {
+            let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect::<Vec<_>>());
+            keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
+        });
+        // The second argument of `image_tag` is its options: a variable there may hold `alt`.
+        element.open = name == "image_tag" && arguments.len() > 1 && options.is_none();
+        let entries = options.unwrap_or_default();
         // A form's `html:` options are the form tag's own attributes, and `form_for` always gives the form an id.
         let (html, rest): (Vec<Node>, Vec<Node>) = entries.into_iter().partition(|entry| is_form && self.is_html_option(entry));
-        read_hash(&mut element, rest.into_iter(), self.compiled, false);
+        read_hash(&mut element, rest.into_iter(), self.compiled, None);
         for entry in html {
             match entry
                 .as_assoc_node()
                 .map(|assoc| assoc.value())
                 .and_then(|value| value.as_hash_node().map(|hash| hash.elements().iter().collect::<Vec<_>>()))
             {
-                Some(nested) => read_hash(&mut element, nested.into_iter(), self.compiled, false),
+                Some(nested) => read_hash(&mut element, nested.into_iter(), self.compiled, None),
                 None => element.open = true,
             }
         }

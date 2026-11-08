@@ -215,6 +215,21 @@ try {
   );
   fs.rmSync(lock);
 
+  // The HTML and accessibility rules run in Haml and Slim without a Rails project, and a same-line duplicate id is safe.
+  const html = path.join(root, "html");
+  fs.mkdirSync(html);
+  const linted = path.join(html, "show.html.slim");
+  fs.writeFileSync(linted, 'iframe src="x"\ndiv#a: span#a x\na.btn Menu\n');
+  r = run(["check", linted]);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  for (const message of [
+    "`<iframe>` without `title`",
+    "Duplicate id `a`",
+    "`<a>` without `href`",
+  ]) {
+    assert.ok(r.stdout.includes(message), `${message}: ${r.stdout}`);
+  }
+
   // .ruby-templates.toml: rules, switches, nesting, exclusions and its own problems.
   const project = path.join(root, "toml");
   fs.mkdirSync(path.join(project, "vendor"), { recursive: true });

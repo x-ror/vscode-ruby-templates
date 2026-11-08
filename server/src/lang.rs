@@ -116,6 +116,11 @@ pub fn slim_html_host(uri: &Uri) -> bool {
     host_format(&file_name(uri).to_ascii_lowercase(), ".slim").is_none_or(is_html_format)
 }
 
+/// `slim_html_host` for Haml, whose `x.xml.haml` is not HTML.
+pub fn haml_html_host(uri: &Uri) -> bool {
+    host_format(&file_name(uri).to_ascii_lowercase(), ".haml").is_none_or(is_html_format)
+}
+
 pub fn is_partial(uri: &Uri) -> bool {
     uri.path().as_str().rsplit('/').next().is_some_and(|f| f.starts_with('_'))
 }
