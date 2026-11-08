@@ -208,7 +208,11 @@ pub(crate) fn format_in(
         keep(turbo_attributes::apply(lang, &source, extra_engines, ruby.grammar), &mut source, &mut notes);
     }
     if tag_style::is_on(settings) {
-        let html = !matches!(lang, TemplateLang::Slim | TemplateLang::Skim) || slim_html_host(uri);
+        let html = match lang {
+            TemplateLang::Slim | TemplateLang::Skim => slim_html_host(uri),
+            TemplateLang::Erb => html_host(uri, plain_erb, &source),
+            _ => true,
+        };
         keep(tag_style::apply(lang, &source, settings, extra_engines, html), &mut source, &mut notes);
     }
     let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;

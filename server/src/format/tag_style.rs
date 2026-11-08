@@ -5,7 +5,7 @@
 use super::inline::replaced;
 use super::{Quote, Settings, VoidClosing};
 use crate::erb::ruby::{self, ErbTag};
-use crate::erb::tag_spacing::{name_range, read, tag_spans, Parsed, Written};
+use crate::erb::tag_spacing::{name_range, raw_end_names, read, tag_spans, Parsed, Written};
 use crate::erb::Edit;
 use crate::html::{canonical_tag_name, BOOLEAN_ATTRIBUTE_ELEMENTS, VOID_ELEMENTS};
 use crate::lang::TemplateLang;
@@ -13,8 +13,6 @@ use crate::slim::parser::{self, Piece, SLIM_ENGINES};
 use std::ops::Range;
 
 const REFUSED: &str = "tag style kept: rewriting it would change more than quotes, boolean attributes, void tag closing and tag name case";
-/// Code that may print a quote character in a value, which Rails would escape.
-const UNESCAPING: [&str; 3] = ["raw", "html_safe", "safe_concat"];
 const SLASH_ENDING: &str = " /";
 
 pub(super) fn is_on(settings: &Settings) -> bool {
@@ -22,7 +20,7 @@ pub(super) fn is_on(settings: &Settings) -> bool {
 }
 
 /// `text` rewritten; `Ok(None)` when nothing changes, and a note when the rewrite is refused. `html` is false for a template
-/// that outputs XML, where case counts.
+/// that outputs something else, such as XML, where case counts.
 pub(super) fn apply(
     lang: TemplateLang,
     text: &str,
@@ -31,7 +29,7 @@ pub(super) fn apply(
     html: bool,
 ) -> Result<Option<String>, String> {
     let styled = match lang {
-        TemplateLang::Erb => erb_styled(text, settings),
+        TemplateLang::Erb if html => erb_styled(text, settings),
         TemplateLang::Slim | TemplateLang::Skim if settings.tag_name_case && html => rewritten(text, slim_edits(text, extra_engines)),
         _ => return Ok(None),
     };
@@ -66,13 +64,13 @@ fn erb_edits(text: &str, settings: &Settings) -> Vec<Edit> {
     let Some(spans) = tag_spans(text) else { return Vec::new() };
     let erb = ruby::tags(text);
     let mut edits = Vec::new();
+    if settings.tag_name_case {
+        edits.extend(raw_end_names(text).into_iter().filter_map(|at| renamed(text, at)));
+    }
     for (span, foreign) in spans.iter().zip(foreign_tags(text, &spans)) {
         let name_at = name_range(text, span);
         if settings.tag_name_case {
-            let canonical = canonical_tag_name(&text[name_at.clone()]);
-            if canonical != text[name_at.clone()] {
-                edits.push((name_at.clone(), canonical));
-            }
+            edits.extend(renamed(text, name_at.clone()));
         }
         let closing = text[span.start + 1..].starts_with('/');
         let name = text[name_at.clone()].to_ascii_lowercase();
@@ -86,6 +84,12 @@ fn erb_edits(text: &str, settings: &Settings) -> Vec<Edit> {
         edits.extend(closing_edit);
     }
     edits
+}
+
+/// The edit that spells the tag name written at `at` as HTML does.
+fn renamed(text: &str, at: Range<usize>) -> Option<Edit> {
+    let canonical = canonical_tag_name(&text[at.clone()]);
+    (canonical != text[at.clone()]).then_some((at, canonical))
 }
 
 /// For each tag, whether it is `<svg>`, `<math>` or inside one, where HTML's rules for attributes and void elements don't hold.
@@ -125,12 +129,11 @@ fn attribute_edits(text: &str, erb: &[ErbTag], element: &str, foreign: bool, att
     if quoted && text[value.start..].starts_with(target) {
         return Vec::new();
     }
-    let in_value: Vec<&ErbTag> = erb.iter().filter(|tag| tag.start >= inner.start && tag.end <= inner.end).collect();
-    let may_print_quote =
-        in_value.iter().any(|tag| tag.indicator == Some("==") || UNESCAPING.iter().any(|word| text[tag.code.clone()].contains(word)));
-    // An unquoted value with ERB gets quotes only when it is plain output: Rails escapes both quotes, a control tag may add more.
-    let plain_output = in_value.iter().all(|tag| tag.indicator == Some("="));
-    if text[inner].contains(target) || may_print_quote || (!quoted && !plain_output) {
+    // Helpers return output with quotes of their own, and a bare value's output may be empty or hold blanks.
+    let has_output =
+        erb.iter().any(|tag| tag.start >= inner.start && tag.end <= inner.end && tag.indicator.is_some_and(|i| i.contains('=')));
+    let breaks_lines = text[value.clone()].contains(['\n', '\r']);
+    if text[inner.clone()].contains(target) || breaks_lines || (quoted && has_output) || (!quoted && text[inner].contains("<%")) {
         return Vec::new();
     }
     let target = target.to_string();
@@ -162,8 +165,14 @@ fn void_edit(text: &str, erb: &[ErbTag], parsed: &Parsed, name_at: &Range<usize>
         (VoidClosing::Slash, Some(solidus)) => (solidus.clone(), SLASH_ENDING),
         (VoidClosing::Slash, None) => {
             let content_end = parsed.content_end.unwrap_or(name_at.end);
-            // A value that ends in `/` isn't a self-closing slash, and neither is the one after an ERB tag.
-            if text[..content_end].ends_with('/') {
+            // A value that ends in `/` isn't a self-closing slash, and a bare value ending in an ERB tag may print nothing, which
+            // the ` /` would then become.
+            let bare_value_with_erb = parsed
+                .written
+                .last()
+                .and_then(|a| a.value.as_ref())
+                .is_some_and(|value| !text[value.start..].starts_with(['"', '\'']) && erb.iter().any(|tag| tag.end == value.end));
+            if text[..content_end].ends_with('/') || bare_value_with_erb {
                 return None;
             }
             (content_end..body_end, SLASH_ENDING)
@@ -219,13 +228,18 @@ fn shapes(text: &str, settings: &Settings) -> Option<(Vec<Shape>, String)> {
             Shape::Read { name, attributes, solidus: parsed.solidus.is_some() && !rewrites_slash }
         })
         .collect();
+    // The end tags of text elements are between the spans; their name's case is what Style/TagNameCase changes.
+    let mut between = text.to_string();
+    if settings.tag_name_case {
+        raw_end_names(text).into_iter().for_each(|at| between[at].make_ascii_lowercase());
+    }
     let mut outside = String::new();
     let mut done = 0;
     for span in &spans {
-        outside.push_str(&text[done..span.start]);
+        outside.push_str(&between[done..span.start]);
         done = span.end;
     }
-    outside.push_str(&text[done..]);
+    outside.push_str(&between[done..]);
     Some((shapes, outside))
 }
 
@@ -321,21 +335,19 @@ mod tests {
     }
 
     #[test]
-    fn erb_in_values_is_quoted_only_as_plain_output() {
-        assert_eq!(
-            quotes("<a href='<%= url %>' class=<%= cls %> id=u<%= id %>>", Quote::Double),
-            "<a href=\"<%= url %>\" class=\"<%= cls %>\" id=\"u<%= id %>\">"
-        );
+    fn values_with_erb_keep_their_quotes_unless_it_is_control_flow() {
         assert_eq!(quotes("<a class='<% if a %>b<% end %>'>", Quote::Double), "<a class=\"<% if a %>b<% end %>\">");
-        for text in [
-            "<a class=<% if a %>b<% end %>>",
-            "<a href=<%== url %>>",
-            "<a href='<%== url %>'>",
-            "<a href='<%= raw url %>'>",
-            "<a href='<%= url.html_safe %>'>",
-            "<a href=<%= x %>\"y\">",
+        for (text, style) in [
+            ("<a title='<%= link_to \"x\", y %>' data-content='<%= render @x %>'>", Quote::Double),
+            ("<a title=\"<%= t(:help_html) %>\">", Quote::Single),
+            ("<a href='<%== url %>'>", Quote::Double),
+            ("<input value=<%= q %> class=<%= cls %> id=u<%= id %>>", Quote::Double),
+            ("<a class=<% if a %>b<% end %>>", Quote::Double),
+            ("<a href=<%= x %>\"y\">", Quote::Double),
+            ("<a class='a\n  b'>", Quote::Double),
+            ("<a class=\"<% if a %>b\n<% end %>\">", Quote::Single),
         ] {
-            assert_eq!(quotes(text, Quote::Double), text, "{text}");
+            assert_eq!(quotes(text, style), text, "{text}");
         }
     }
 
@@ -422,6 +434,7 @@ mod tests {
             ("<img src=a.png/>", VoidClosing::NoSlash),
             ("<img src=a.png/>", VoidClosing::Slash),
             ("<img src=<%= u %>/>", VoidClosing::Slash),
+            ("<input value=<%= x %>>", VoidClosing::Slash),
             ("<img <%= attrs %>/>", VoidClosing::NoSlash),
             ("<img <%= attrs %> />", VoidClosing::NoSlash),
             ("<img\n  src=\"a\"\n/>", VoidClosing::NoSlash),
@@ -447,10 +460,15 @@ mod tests {
             case("<linearGradient></linearGradient><My-Element></My-Element><BR/>"),
             "<linearGradient></linearGradient><my-element></my-element><br/>"
         );
-        for text in ["<script>if (a<B) {}</SCRIPT>", "<!-- <DIV> -->", "<%= '<DIV>' %>", "<p>a < B and c</p>"] {
+        for text in ["<!-- <DIV> -->", "<%= '<DIV>' %>", "<p>a < B and c</p>"] {
             assert_eq!(case(text), text, "{text}");
         }
-        assert_eq!(case("<SCRIPT>a</SCRIPT>"), "<script>a</SCRIPT>", "the end tag of a text element is not read as a tag");
+        assert_eq!(
+            case("<SCRIPT>a</SCRIPT><Title>t</TITLE><STYLE></Style><TEXTAREA></TextArea>"),
+            "<script>a</script><title>t</title><style></style><textarea></textarea>"
+        );
+        let on = Settings { tag_name_case: true, space_in_html_tag: true, ..Settings::default() };
+        assert_eq!(erb("<SCRIPT  >a</SCRIPT>", &on), "<script  >a</script>");
     }
 
     #[test]
@@ -464,7 +482,7 @@ mod tests {
         };
         assert_eq!(
             erb("<INPUT type='checkbox' checked='checked' disabled=disabled name=<%= n %> />\n<BR/>\n", &all),
-            "<input type=\"checkbox\" checked disabled name=\"<%= n %>\">\n<br>\n"
+            "<input type=\"checkbox\" checked disabled name=<%= n %> />\n<br>\n"
         );
         let slash = Settings { void_tag_closing: Some(VoidClosing::Slash), ..all };
         assert_eq!(erb("<input value=a disabled=''>", &slash), "<input value=\"a\" disabled />");
@@ -536,6 +554,7 @@ mod tests {
         let settings = Settings { tag_name_case: true, ..Settings::default() };
         assert_eq!(apply(TemplateLang::Slim, "DIV\n", &settings, &[], false), Ok(None), "XML output");
         assert_eq!(apply(TemplateLang::Slim, "DIV\n", &Settings::default(), &[], true), Ok(None));
+        assert_eq!(apply(TemplateLang::Erb, "<DIV>\n", &settings, &[], false), Ok(None), "not HTML");
         assert_eq!(apply(TemplateLang::Haml, "%DIV\n", &settings, &[], true), Ok(None));
     }
 }

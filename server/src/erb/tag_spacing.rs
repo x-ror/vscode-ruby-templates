@@ -98,6 +98,15 @@ fn shapes(text: &str) -> Option<(Vec<Shape>, String)> {
     Some((shapes, outside))
 }
 
+/// Where the end tags of `<script>`, `<style>`, `<textarea>` and `<title>` write their names; `tag_spans` leaves them out.
+pub(crate) fn raw_end_names(text: &str) -> Vec<Range<usize>> {
+    let ends = tokens(text).unwrap_or_default().into_iter().filter_map(|token| match token {
+        Token::Raw { tag, close: Some((close_start, _)) } => Some(close_start + "</".len()..close_start + "</".len() + tag.name.len()),
+        _ => None,
+    });
+    ends.collect()
+}
+
 /// The byte range of each start and end tag that is markup, `None` when the template's HTML can't be read.
 pub(crate) fn tag_spans(text: &str) -> Option<Vec<Range<usize>>> {
     let mut text_until: Option<String> = None;

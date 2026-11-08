@@ -842,7 +842,7 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "The attribute values are the same, in quotes or not. A value that contains the quote character is left alone, and so is one with ERB that could print it: Ruby code with the quote, `<%==`, `raw` and `html_safe`. The formatter reads every tag again and keeps the rewrite only when each has the same name, attributes and values.",
+      "The attribute values are the same, in quotes or not. A value that contains the quote character, spans lines, or holds ERB output (`<%=`, `<%==`: helpers return text with quotes of their own) keeps its quotes, and a bare value with any ERB tag is not quoted, since its output may be empty or hold blanks. The formatter reads every tag again and keeps the rewrite only when each has the same name, attributes and values.",
     status: "available",
     onByDefault: [],
     config: text(
@@ -851,7 +851,7 @@ enabled = false`,
       'style = "double_quotes" # or single_quotes',
     ),
     today:
-      'In the start tags of ERB templates, `class=\'card\'` and `data-controller=toggle` become `class="card"` and `data-controller="toggle"` (or the other way with `single_quotes`). A value with the target quote in it (`title=\'say "hi"\'`), a tag with a quote in an unquoted value (`title=it\'s`) or one the reader gives up on, an ERB tag whose Ruby holds the quote or prints raw output (`<%==`, `raw`, `html_safe`), an unquoted value with an ERB tag that is not plain output (`href=<% if a %>…`), an attribute name with ERB, and everything that is not markup (the bodies of `<script>`, `<style>`, `<textarea>`, `<title>` and the like, comments, `<%= %>` code) stay. An unquoted value with plain `<%= %>` output is quoted: the quotes only hold together output that has a space, which Rails would otherwise cut into attributes. Format selection applies it to the lines it covers.',
+      "In the start tags of ERB templates, `class='card'` and `data-controller=toggle` become `class=\"card\"` and `data-controller=\"toggle\"` (or the other way with `single_quotes`). A value with the target quote in it (`title='say \"hi\"'`), a value over several lines, a quoted value with an output tag (`title='<%= link_to … %>'`), a bare value with any ERB tag (`value=<%= q %>`, `href=<% if a %>…`), a tag with a quote in a bare value (`title=it's`) or one the reader gives up on, an attribute name with ERB, and everything that is not markup (the bodies of `<script>`, `<style>`, `<textarea>`, `<title>` and the like, comments, `<%= %>` code) stay. A quoted value with only control tags (`class='<% if a %>b<% end %>'`) is converted. Format selection applies it to the lines it covers.",
     examples: [
       {
         lang: "erb",
@@ -909,7 +909,7 @@ enabled = false`,
       'style = "no_slash" # or slash',
     ),
     today:
-      "Void elements (`area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `source`, `track`, `wbr`) lose the `/` (and the blanks before it) with `no_slash`, or end in ` />` with `slash`. A slash that is part of an unquoted value (`<img src=a.png/>`), one right after an ERB tag, a tag with a line break before the `>`, anything inside `<svg>` or `<math>`, end tags and non-void elements (`<div/>` is not self-closing in HTML) stay. Format selection applies it to the lines it covers.",
+      "Void elements (`area`, `base`, `br`, `col`, `embed`, `hr`, `img`, `input`, `link`, `meta`, `source`, `track`, `wbr`) lose the `/` (and the blanks before it) with `no_slash`, or end in ` />` with `slash`. A slash that is part of an unquoted value (`<img src=a.png/>`), one right after an ERB tag, a `slash` ending after a bare value that ends in an ERB tag (`<input value=<%= x %>>`: empty output would make `/` the value), a tag with a line break before the `>`, anything inside `<svg>` or `<math>`, end tags and non-void elements (`<div/>` is not self-closing in HTML) stay. Format selection applies it to the lines it covers.",
     examples: [
       {
         lang: "erb",
@@ -932,7 +932,7 @@ enabled = false`,
     onByDefault: [],
     config: text("[Style.TagNameCase]", "enabled = true"),
     today:
-      "Tag names of start and end tags in ERB, and of tags in Slim, become lower case; `foreignObject`, `linearGradient`, `clipPath` and the other SVG elements the HTML parser spells in camel case get that spelling wherever they are written, since a partial may hold only the inside of an `<svg>`. Custom elements are lower-cased too. The end tag of `<script>`, `<style>`, `<textarea>` and `<title>` is not read as a tag and stays. In Slim, a name that lower case would turn into `doctype` or an embedded engine (`Javascript:`), and a template that does not output HTML (`.xml.slim`), stay. Format selection applies it to the lines it covers.",
+      "Tag names of start and end tags in ERB, and of tags in Slim, become lower case; `foreignObject`, `linearGradient`, `clipPath` and the other SVG elements the HTML parser spells in camel case get that spelling wherever they are written, since a partial may hold only the inside of an `<svg>`. Custom elements are lower-cased too. In Slim, a name that lower case would turn into `doctype` or an embedded engine (`Javascript:`), and a template that does not output HTML (`.xml.slim`), stay. Format selection applies it to the lines it covers.",
     examples: [
       {
         lang: "erb",
