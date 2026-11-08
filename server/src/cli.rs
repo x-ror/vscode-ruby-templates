@@ -39,7 +39,9 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         (all off) set spaces inside ERB and HTML tags and after Haml and Slim script markers. Layout/IndentationStyle
         (ERB; spaces unless .editorconfig or its style say tabs) and Layout/TrailingWhitespace (on) set the indent
         character and whether line-end whitespace goes. Turbo/PreferTurboAttributes (off) renames the Rails UJS
-        attributes data-confirm, data-method and data-disable-with to Turbo's. Nothing else changes;
+        attributes data-confirm, data-method and data-disable-with to Turbo's. Style/AttributeQuotes, Style/BooleanAttributes,
+        Style/VoidTagClosing and Style/TagNameCase (all off) set attribute quotes, boolean attributes, the end of void
+        tags and the case of tag names. Nothing else changes;
         a file whose structure is in doubt is left as it is, with the reason on stderr. Without --check or --write
         the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.

@@ -93,6 +93,10 @@ pub const SPACE_IN_HTML_TAG: &str = "Layout/SpaceInHtmlTag";
 pub const INDENTATION_STYLE: &str = "Layout/IndentationStyle";
 pub const TRAILING_WHITESPACE: &str = "Layout/TrailingWhitespace";
 pub const PREFER_TURBO_ATTRIBUTES: &str = "Turbo/PreferTurboAttributes";
+pub const ATTRIBUTE_QUOTES: &str = "Style/AttributeQuotes";
+pub const BOOLEAN_ATTRIBUTES: &str = "Style/BooleanAttributes";
+pub const VOID_TAG_CLOSING: &str = "Style/VoidTagClosing";
+pub const TAG_NAME_CASE: &str = "Style/TagNameCase";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -102,6 +106,14 @@ pub const SPACES: &str = "spaces";
 pub const TABS: &str = "tabs";
 /// Without `style` in the file, the editor's or `.editorconfig`'s style applies (`resolve::indent_style`); the default here is for display.
 pub const INDENT_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[SPACES, TABS], default: SPACES };
+
+pub const DOUBLE_QUOTES: &str = "double_quotes";
+pub const SINGLE_QUOTES: &str = "single_quotes";
+pub const QUOTE_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[DOUBLE_QUOTES, SINGLE_QUOTES], default: DOUBLE_QUOTES };
+
+pub const NO_SLASH: &str = "no_slash";
+pub const SLASH: &str = "slash";
+pub const VOID_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_SLASH, SLASH], default: NO_SLASH };
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
@@ -160,7 +172,11 @@ pub const RULES: &[Rule] = &[
     format_rule(TRAILING_WHITESPACE, TEMPLATES, TEMPLATES, &[], &[]),
     // Renames HTML attributes, which only an app that runs Turbo and not Rails UJS wants.
     format_rule(PREFER_TURBO_ATTRIBUTES, TEMPLATES, &[], &[], &[]),
-    // A style preference: templates written either way are fine.
+    // Style preferences: templates written either way are fine.
+    format_rule(ATTRIBUTE_QUOTES, &[Erb], &[], &[], &[QUOTE_STYLE]),
+    format_rule(BOOLEAN_ATTRIBUTES, &[Erb], &[], &[], &[]),
+    format_rule(VOID_TAG_CLOSING, &[Erb], &[], &[], &[VOID_STYLE]),
+    format_rule(TAG_NAME_CASE, &[Erb, Slim], &[], &[], &[]),
     off_by_default_lint("Style/ErbTrimMode", &[Erb]),
 ];
 

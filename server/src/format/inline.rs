@@ -52,7 +52,7 @@ fn erb_staged(text: &str, settings: &Settings) -> String {
 }
 
 /// `text` with `edits`, which are in order and don't overlap, applied.
-fn replaced(text: &str, edits: &[Edit]) -> String {
+pub(super) fn replaced(text: &str, edits: &[Edit]) -> String {
     let mut out = String::with_capacity(text.len() + edits.len());
     let mut done = 0;
     for (range, with) in edits {

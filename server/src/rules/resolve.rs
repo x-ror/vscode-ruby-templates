@@ -3,11 +3,12 @@
 
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
-    by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, EMPTY_LINES,
-    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES, SPACE_AFTER_SCRIPT_MARKER,
-    SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, STYLE, TABS, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE,
+    by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, ATTRIBUTE_QUOTES,
+    BOOLEAN_ATTRIBUTES, EMPTY_LINES, EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES,
+    RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE,
+    TRAILING_EMPTY_LINES, TRAILING_WHITESPACE, VOID_TAG_CLOSING,
 };
-use crate::format::{IndentStyle, Settings, Style};
+use crate::format::{IndentStyle, Quote, Settings, Style, VoidClosing};
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
 use crate::options::Options;
@@ -42,6 +43,10 @@ pub struct ResolvedRules {
     indent_style: Option<IndentStyle>,
     trailing_whitespace: bool,
     prefer_turbo_attributes: bool,
+    attribute_quotes: Option<Quote>,
+    boolean_attributes: bool,
+    void_tag_closing: Option<VoidClosing>,
+    tag_name_case: bool,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -118,6 +123,22 @@ impl ResolvedRules {
             indent_style: indent_style(&files, &off),
             trailing_whitespace: !off.contains(TRAILING_WHITESPACE),
             prefer_turbo_attributes: !off.contains(PREFER_TURBO_ATTRIBUTES),
+            attribute_quotes: enabled_choice(&files, &off, ATTRIBUTE_QUOTES).map(|word| {
+                if word == SINGLE_QUOTES {
+                    Quote::Single
+                } else {
+                    Quote::Double
+                }
+            }),
+            boolean_attributes: !off.contains(BOOLEAN_ATTRIBUTES),
+            void_tag_closing: enabled_choice(&files, &off, VOID_TAG_CLOSING).map(|word| {
+                if word == SLASH {
+                    VoidClosing::Slash
+                } else {
+                    VoidClosing::NoSlash
+                }
+            }),
+            tag_name_case: !off.contains(TAG_NAME_CASE),
             off,
             files,
             excluded_by,
@@ -166,6 +187,10 @@ impl ResolvedRules {
             indent_style: self.indent_style.unwrap_or(base.indent_style),
             trailing_whitespace: self.trailing_whitespace,
             prefer_turbo_attributes: self.prefer_turbo_attributes,
+            attribute_quotes: self.attribute_quotes,
+            boolean_attributes: self.boolean_attributes,
+            void_tag_closing: self.void_tag_closing,
+            tag_name_case: self.tag_name_case,
             ..base
         }
     }
@@ -220,11 +245,15 @@ fn indent_style(files: &[Arc<ConfigFile>], off: &HashSet<String>) -> Option<Inde
     set_choice(files, rule, &INDENT_STYLE).map(|word| if word == TABS { IndentStyle::Tabs } else { IndentStyle::Spaces })
 }
 
+/// The word of the one choice option of a rule; `None` when the rule is off.
+fn enabled_choice(files: &[Arc<ConfigFile>], off: &HashSet<String>, name: &str) -> Option<&'static str> {
+    let rule = by_name(name).filter(|rule| !off.contains(rule.name))?;
+    Some(choice(files, rule, rule.choices.first()?))
+}
+
 /// The `style` of an `EmptyLinesAround…` rule; `None` when the rule is off.
 fn style(files: &[Arc<ConfigFile>], off: &HashSet<String>, name: &str) -> Option<Style> {
-    let rule = by_name(name).filter(|rule| !off.contains(rule.name))?;
-    let option = rule.choices.iter().find(|option| option.key == STYLE.key)?;
-    Some(if choice(files, rule, option) == EMPTY_LINES_STYLE { Style::EmptyLines } else { Style::NoEmptyLines })
+    enabled_choice(files, off, name).map(|word| if word == EMPTY_LINES_STYLE { Style::EmptyLines } else { Style::NoEmptyLines })
 }
 
 /// The nearest file that sets the rule's `enabled` or its department's decides, the rule's beating the department's within

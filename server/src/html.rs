@@ -255,6 +255,83 @@ pub const BOOLEAN_ATTRIBUTES: &[&str] = &[
     "selected",
 ];
 
+/// Boolean attributes with the elements they belong to (HTML 2.4.2 and the element sections); no elements: any element.
+pub const BOOLEAN_ATTRIBUTE_ELEMENTS: &[(&str, &[&str])] = &[
+    ("allowfullscreen", &["iframe"]),
+    ("async", &["script"]),
+    ("autofocus", &[]),
+    ("autoplay", &["audio", "video"]),
+    ("checked", &["input"]),
+    ("controls", &["audio", "video"]),
+    ("default", &["track"]),
+    ("defer", &["script"]),
+    ("disabled", &["button", "fieldset", "input", "optgroup", "option", "select", "textarea"]),
+    ("formnovalidate", &["button", "input"]),
+    ("hidden", &[]),
+    ("inert", &[]),
+    ("ismap", &["img"]),
+    ("itemscope", &[]),
+    ("loop", &["audio", "video"]),
+    ("multiple", &["input", "select"]),
+    ("muted", &["audio", "video"]),
+    ("nomodule", &["script"]),
+    ("novalidate", &["form"]),
+    ("open", &["details", "dialog"]),
+    ("playsinline", &["video"]),
+    ("readonly", &["input", "textarea"]),
+    ("required", &["input", "select", "textarea"]),
+    ("reversed", &["ol"]),
+    ("selected", &["option"]),
+];
+
+/// The SVG elements the HTML parser spells in camel case (13.2.6.5, "adjust SVG element names").
+const SVG_CAMEL_CASE_ELEMENTS: &[&str] = &[
+    "altGlyph",
+    "altGlyphDef",
+    "altGlyphItem",
+    "animateColor",
+    "animateMotion",
+    "animateTransform",
+    "clipPath",
+    "feBlend",
+    "feColorMatrix",
+    "feComponentTransfer",
+    "feComposite",
+    "feConvolveMatrix",
+    "feDiffuseLighting",
+    "feDisplacementMap",
+    "feDistantLight",
+    "feDropShadow",
+    "feFlood",
+    "feFuncA",
+    "feFuncB",
+    "feFuncG",
+    "feFuncR",
+    "feGaussianBlur",
+    "feImage",
+    "feMerge",
+    "feMergeNode",
+    "feMorphology",
+    "feOffset",
+    "fePointLight",
+    "feSpecularLighting",
+    "feSpotLight",
+    "feTile",
+    "feTurbulence",
+    "foreignObject",
+    "glyphRef",
+    "linearGradient",
+    "radialGradient",
+    "textPath",
+];
+
+/// A tag name as HTML spells it: lower case, but for the SVG elements above, wherever they are written (a partial may hold
+/// only the inside of an `<svg>`).
+pub fn canonical_tag_name(written: &str) -> String {
+    let lower = written.to_ascii_lowercase();
+    SVG_CAMEL_CASE_ELEMENTS.iter().find(|svg| svg.eq_ignore_ascii_case(&lower)).map_or(lower, |svg| (*svg).to_string())
+}
+
 /// `aria-` attribute names without the prefix: the keys of a Haml `aria: {…}` hash.
 pub const ARIA_KEYS: &[&str] = &[
     "activedescendant",
