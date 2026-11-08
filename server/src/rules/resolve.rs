@@ -4,11 +4,11 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, ATTRIBUTE_QUOTES,
-    BOOLEAN_ATTRIBUTES, EMPTY_LINES, EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES,
-    RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE,
-    TRAILING_EMPTY_LINES, TRAILING_WHITESPACE, VOID_TAG_CLOSING,
+    BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, EMPTY_LINES, EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES,
+    IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER,
+    SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE, VOID_TAG_CLOSING,
 };
-use crate::format::{IndentStyle, Quote, Settings, Style, VoidClosing};
+use crate::format::{AttributeStyle, IndentStyle, Quote, Settings, Style, VoidClosing};
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
 use crate::options::Options;
@@ -47,6 +47,9 @@ pub struct ResolvedRules {
     boolean_attributes: bool,
     void_tag_closing: Option<VoidClosing>,
     tag_name_case: bool,
+    implicit_div: bool,
+    classes_before_ids: bool,
+    hash_attributes: Option<AttributeStyle>,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -139,6 +142,15 @@ impl ResolvedRules {
                 }
             }),
             tag_name_case: !off.contains(TAG_NAME_CASE),
+            implicit_div: !off.contains(IMPLICIT_DIV),
+            classes_before_ids: !off.contains(CLASSES_BEFORE_IDS),
+            hash_attributes: enabled_choice(&files, &off, HASH_ATTRIBUTES).map(|word| {
+                if word == HTML_ATTRIBUTES {
+                    AttributeStyle::Html
+                } else {
+                    AttributeStyle::RubyHash
+                }
+            }),
             off,
             files,
             excluded_by,
@@ -191,6 +203,9 @@ impl ResolvedRules {
             boolean_attributes: self.boolean_attributes,
             void_tag_closing: self.void_tag_closing,
             tag_name_case: self.tag_name_case,
+            implicit_div: self.implicit_div,
+            classes_before_ids: self.classes_before_ids,
+            hash_attributes: self.hash_attributes,
             ..base
         }
     }

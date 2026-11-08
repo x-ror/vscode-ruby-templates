@@ -255,6 +255,8 @@ impl Compiled {
 /// A tag line: the attributes its `%name.class#id(list)` part spells out, and the Ruby of its `{}` hash.
 pub struct Tag {
     pub element: Element,
+    /// Where the `.class#id` part is, empty (but placed) without one; `0..0` when `|` multiline rewrote the line.
+    pub head: std::ops::Range<usize>,
     /// The code between the braces, empty without a hash.
     pub hash: Vec<Chunk>,
 }
@@ -939,7 +941,10 @@ impl<'a> Parser<'a> {
             let shorthand = &text[attributes_start..head_len];
             let name_column = text.starts_with('%').then(|| self.line.indent() + attributes_start - name.len());
             let element = self.element(name, name_column, shorthand, self.line.indent() + attributes_start, reference);
-            self.tags.push(Tag { element, hash: hash_code.clone() });
+            let readable = !self.pipe_joined.get(self.line.index).copied().unwrap_or(true);
+            let head_start = if readable { self.line_starts[self.line.index] + self.line.indent() + attributes_start } else { 0 };
+            let head = head_start..head_start + if readable { head_len - attributes_start } else { 0 };
+            self.tags.push(Tag { element, head, hash: hash_code.clone() });
         }
         let content = tag_content(&rest.text);
         if self.ruby && content.action.is_none() && !content.parse && !content.value.is_empty() {

@@ -3,6 +3,7 @@
 import assert from "assert";
 import { execFileSync, spawnSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const bin = path.join(
@@ -112,3 +113,80 @@ if (hasGem("slim")) checkSlim();
 else console.log("slim formatting: skipped (`ruby -rslim` unavailable)");
 if (hasGem("haml")) checkHaml();
 else console.log("haml formatting: skipped (`ruby -rhaml` unavailable)");
+
+// The Style/ImplicitDiv, ClassesBeforeIds and HashAttributes rules rewrite tags: the page must come out the same.
+const styledDir = path.join(dir, "styled");
+const renderHaml = (source) =>
+  execFileSync(
+    "ruby",
+    [
+      "-rhaml",
+      "-e",
+      'class Ctx; def initialize; @t = "T&<"; @n = 3; end; def url; "/u?a=1&b=2"; end; end; print Haml::Template.new { STDIN.read }.render(Ctx.new)',
+    ],
+    { input: source, encoding: "utf8" },
+  );
+const withRules = (rules, work) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rt-style-"));
+  try {
+    fs.writeFileSync(
+      path.join(root, ".ruby-templates.toml"),
+      `root = true\n${rules}\n`,
+    );
+    work(root);
+  } finally {
+    fs.rmSync(root, { recursive: true });
+  }
+};
+function checkStyleRules() {
+  const run = (root, name, source) => {
+    const done = spawnSync(
+      cli,
+      ["format", "--verbose", "--stdin-filepath", path.join(root, name)],
+      { input: source, encoding: "utf8" },
+    );
+    assert.strictEqual(done.status, 0, `${name}: ${done.stderr}`);
+    assert.ok(
+      !/kept/.test(done.stderr),
+      `${name}: a rule was refused: ${done.stderr}`,
+    );
+    return done.stdout;
+  };
+  const haml = fs.readFileSync(path.join(styledDir, "markup.haml"), "utf8");
+  for (const style of ["ruby_hash", "html"]) {
+    const rules = `[Style.ImplicitDiv]\nenabled = true\n[Style.ClassesBeforeIds]\nenabled = true\n[Style.HashAttributes]\nenabled = true\nstyle = "${style}"`;
+    withRules(rules, (root) => {
+      const formatted = run(root, "markup.haml", haml);
+      assert.notStrictEqual(formatted, haml, `haml ${style}: should change`);
+      assert.strictEqual(
+        renderHaml(formatted),
+        renderHaml(haml),
+        `haml ${style}: rendered page changed`,
+      );
+      assert.strictEqual(
+        run(root, "markup.haml", formatted),
+        formatted,
+        `haml ${style}: not idempotent`,
+      );
+    });
+  }
+  if (hasGem("slim")) {
+    const slim = fs.readFileSync(path.join(styledDir, "markup.slim"), "utf8");
+    withRules("[Style.ImplicitDiv]\nenabled = true", (root) => {
+      const formatted = run(root, "markup.slim", slim);
+      assert.notStrictEqual(formatted, slim, "slim: should change");
+      assert.strictEqual(
+        compile(formatted),
+        compile(slim),
+        "slim: compiled output changed",
+      );
+      assert.strictEqual(
+        run(root, "markup.slim", formatted),
+        formatted,
+        "slim: not idempotent",
+      );
+    });
+  }
+  console.log("style rules keep the page ok");
+}
+if (hasGem("haml")) checkStyleRules();

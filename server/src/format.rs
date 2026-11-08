@@ -2,6 +2,7 @@
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
 pub(crate) mod blank_lines;
+mod element_style;
 pub mod erb;
 pub mod haml;
 mod inline;
@@ -57,6 +58,12 @@ pub struct Settings {
     pub void_tag_closing: Option<VoidClosing>,
     /// `Style/TagNameCase`.
     pub tag_name_case: bool,
+    /// `Style/ImplicitDiv`.
+    pub implicit_div: bool,
+    /// `Style/ClassesBeforeIds`.
+    pub classes_before_ids: bool,
+    /// `Style/HashAttributes`; `None` leaves the attributes.
+    pub hash_attributes: Option<AttributeStyle>,
 }
 
 impl Default for Settings {
@@ -80,6 +87,9 @@ impl Default for Settings {
             boolean_attributes: false,
             void_tag_closing: None,
             tag_name_case: false,
+            implicit_div: false,
+            classes_before_ids: false,
+            hash_attributes: None,
         }
     }
 }
@@ -96,6 +106,15 @@ pub enum IndentStyle {
 pub enum Quote {
     Double,
     Single,
+}
+
+/// How a Haml tag's attributes are written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributeStyle {
+    /// `%a{href: "/"}`
+    RubyHash,
+    /// `%a(href="/")`
+    Html,
 }
 
 /// How a void element's start tag ends.
@@ -214,6 +233,12 @@ pub(crate) fn format_in(
             _ => true,
         };
         keep(tag_style::apply(lang, &source, settings, extra_engines, html), &mut source, &mut notes);
+    }
+    if element_style::heads_are_on(settings) {
+        keep(element_style::heads(lang, &source, settings, extra_engines, ruby.grammar), &mut source, &mut notes);
+    }
+    if lang == TemplateLang::Haml {
+        keep(element_style::attributes(&source, settings, ruby.grammar), &mut source, &mut notes);
     }
     let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
     formatted.notes.extend(notes);
@@ -809,6 +834,26 @@ mod tests {
             fmt("a.html.erb", "<a  data-method=\"post\"  href=\"/x\" >x</a>\n", &both).as_deref(),
             Ok("<a data-turbo-method=\"post\" href=\"/x\">x</a>\n")
         );
+    }
+
+    #[test]
+    fn element_style_rules_compose_with_the_tag_and_layout_rules() {
+        let on = Settings {
+            implicit_div: true,
+            classes_before_ids: true,
+            hash_attributes: Some(AttributeStyle::Html),
+            tag_name_case: true,
+            max_empty_lines: Some(0),
+            ..Settings::default()
+        };
+        let haml = "%div#main.wide{role: \"main\"}\n\n\n    %div#a.b\n        %a{href: \"/x\", title: @t} x\n";
+        let want = ".wide#main(role=\"main\")\n  .b#a\n    %a(href=\"/x\" title=@t) x\n";
+        assert_eq!(fmt("a.html.haml", haml, &on).as_deref(), Ok(want));
+        assert_eq!(fmt("a.html.haml", want, &on).as_deref(), Ok(want), "stable");
+        let slim = "DIV#main.wide\n\n\n    div.card Hi\n    DIV.card\n";
+        assert_eq!(fmt("a.html.slim", slim, &on).as_deref(), Ok("#main.wide\n  .card Hi\n  .card\n"));
+        let off = Settings::default();
+        assert_eq!(fmt("a.html.haml", ".b#a{x: 1}\n%div.c\n", &off).as_deref(), Ok(".b#a{x: 1}\n%div.c\n"), "off by default");
     }
 
     #[test]

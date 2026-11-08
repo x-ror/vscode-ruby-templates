@@ -528,6 +528,17 @@ try {
     "XML output",
   );
 
+  // The Haml and Slim tag rules, with `style` picking the attribute syntax.
+  fs.writeFileSync(
+    path.join(tagStyle, ".ruby-templates.toml"),
+    '[Style.ImplicitDiv]\nenabled = true\n[Style.ClassesBeforeIds]\nenabled = true\n[Style.HashAttributes]\nenabled = true\nstyle = "html"\n',
+  );
+  assert.strictEqual(
+    tagStyleFormat("a.html.haml", '%div#a.b{href: "/"} x\n'),
+    '.b#a(href="/") x\n',
+  );
+  assert.strictEqual(tagStyleFormat("a.html.slim", "div#a.b x\n"), "#a.b x\n");
+
   // Layout/IndentationStyle (ERB tabs, from the file or .editorconfig) and Layout/TrailingWhitespace.
   const layout = path.join(root, "layout");
   fs.mkdirSync(layout);
