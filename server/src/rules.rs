@@ -133,6 +133,7 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/UnusedStrictLocal", TEMPLATES),
     new_lint("Rails/UnusedBlockArgument", TEMPLATES),
     new_lint("Rails/RenderInLoop", TEMPLATES),
+    new_lint("Rails/OutputControlFlow", &[Erb]),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -195,6 +196,7 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),
+            include_str!("erb/output_control_flow.rs"),
             include_str!("haml/indent.rs"),
             include_str!("slim/indent.rs"),
             include_str!("ruby/generated.rs"),

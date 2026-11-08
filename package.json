@@ -719,7 +719,8 @@
                   "Rails/InstanceVariableInPartial",
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
-                  "Rails/RenderInLoop"
+                  "Rails/RenderInLoop",
+                  "Rails/OutputControlFlow"
                 ]
               },
               {

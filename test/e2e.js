@@ -1177,6 +1177,48 @@ const check = (label, actual, expected) => {
     [["Output the result", ['2-3 "="']]],
   );
 
+  const controlFlowUri = fileUri(path.join(views, "silent", "flow.html.erb"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: controlFlowUri,
+        languageId: "erb",
+        version: 1,
+        text: "<%= if @user %>\n<p>hi</p>\n<% end %>\n",
+      },
+    },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  check("erb control flow in an output tag", diagnostics(controlFlowUri), [
+    "1: `if` in an output tag `<%=`: use `<% if … %>`",
+  ]);
+  const marker = {
+    start: { line: 0, character: 2 },
+    end: { line: 0, character: 3 },
+  };
+  const controlFlowFix = await send("textDocument/codeAction", {
+    textDocument: { uri: controlFlowUri },
+    range: marker,
+    context: {
+      diagnostics: [
+        { range: marker, code: "Rails/OutputControlFlow", message: "" },
+      ],
+    },
+  });
+  check(
+    "codeAction remove the output marker",
+    controlFlowFix.result?.map((a) => [
+      a.title,
+      a.edit.changes[controlFlowUri].map(
+        (e) =>
+          `${e.range.start.character}-${e.range.end.character} "${e.newText}"`,
+      ),
+    ]),
+    [["Use a code tag `<%`", ['2-3 ""']]],
+  );
+
   const partialUri = fileUri(path.join(views, "silent", "_card.html.haml"));
   await send(
     "textDocument/didOpen",

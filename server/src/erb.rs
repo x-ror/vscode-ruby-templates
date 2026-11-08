@@ -2,6 +2,7 @@
 
 pub mod complete;
 pub mod html_lint;
+pub mod output_control_flow;
 pub mod ruby;
 pub mod tag_spacing;
 pub mod tags;
@@ -86,8 +87,15 @@ pub fn comment_edits(text: &str, edge_space: bool) -> Vec<Edit> {
     out
 }
 
-pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool) -> Vec<Diagnostic> {
-    ruby::diagnostics(text, ruby.grammar, percent_lines, ruby.strict_locals.as_ref()).into_iter().map(|d| coded(d, RUBY_SYNTAX)).collect()
+/// With `name_output_control_flow`, `<%= if x %>` is reported as such and its `=` is left out of the Ruby that is checked,
+/// so the errors it causes don't show and the template's other errors still do.
+pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool, name_output_control_flow: bool) -> Vec<Diagnostic> {
+    let misuses = if name_output_control_flow { output_control_flow::find(text, ruby.grammar) } else { Vec::new() };
+    let readable = output_control_flow::without_markers(text, &misuses);
+    let errors = ruby::diagnostics(&readable, ruby.grammar, percent_lines, ruby.strict_locals.as_ref());
+    let mut out: Vec<Diagnostic> = errors.into_iter().map(|d| coded(d, RUBY_SYNTAX)).collect();
+    out.extend(output_control_flow::diagnostics(text, &misuses));
+    out
 }
 
 /// The `<%` Erubi leaves as text reaches an HTML host as text, where `<` followed by `%` is a parse error (13.2.5.6)
@@ -358,7 +366,7 @@ mod tests {
     use super::*;
 
     fn diagnostics(text: &str) -> Vec<Diagnostic> {
-        super::diagnostics(text, &RubyContext::outside_project(), false)
+        super::diagnostics(text, &RubyContext::outside_project(), false, false)
     }
 
     fn span(line: u32, start: u32, end: u32) -> Range {

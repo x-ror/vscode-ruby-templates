@@ -5,6 +5,7 @@ use crate::checks::{diagnostics_in, Doc, STRICT_LOCALS, UNRESOLVED_RENDER};
 use crate::code_context;
 use crate::code_context::{block_locals, code_at, line_roles, render_filter};
 use crate::completion::helpers_for;
+use crate::erb::output_control_flow::OUTPUT_CONTROL_FLOW;
 use crate::erb::tags;
 use crate::lang::{file_name, is_partial, TemplateLang};
 use crate::options::Options;
@@ -576,6 +577,7 @@ impl LanguageServer for Backend {
         });
         actions.extend(quick_fixes);
         actions.extend(silent_output_fixes(&uri, &doc, &diagnostics));
+        actions.extend(output_control_flow_fixes(&uri, &diagnostics));
         actions.extend(unused_variable_fixes(&uri, &doc, &project, &path, &diagnostics));
         Ok(Some(actions))
     }
@@ -1250,6 +1252,25 @@ fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<
                 is_preferred: Some(true),
                 ..Default::default()
             }))
+        })
+        .collect()
+}
+
+/// "Use a code tag" for each control-flow keyword in an output tag, which removes the `=`.
+fn output_control_flow_fixes(uri: &Uri, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
+    diagnostics
+        .iter()
+        .filter(|d| util::code(d) == Some(OUTPUT_CONTROL_FLOW))
+        .map(|d| {
+            let edit = TextEdit::new(d.range, String::new());
+            CodeActionOrCommand::CodeAction(CodeAction {
+                title: "Use a code tag `<%`".into(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d.clone()]),
+                edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), vec![edit])])), ..Default::default() }),
+                is_preferred: Some(true),
+                ..Default::default()
+            })
         })
         .collect()
 }

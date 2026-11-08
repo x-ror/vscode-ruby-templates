@@ -90,9 +90,9 @@ try {
         );
         return run.stdout.replaceAll(folders[enabled], "").split("\n");
       };
-      assert.ok(
-        printed(example.before, true).length >
-          printed(example.before, false).length,
+      assert.notDeepStrictEqual(
+        printed(example.before, true),
+        printed(example.before, false),
         `${label}: before is not reported`,
       );
       assert.deepStrictEqual(
