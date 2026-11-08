@@ -1,0 +1,17 @@
+%div.card
+  %div#details.wide
+    %p#intro.lead= @t
+  %section#profile.card.wide
+    %a.btn{href: "/users", target: "_blank"} Users
+    %a(href="/u?a=1&b=2" title=@t tabindex=0 data-n=@n) Link
+    %input(type="checkbox" checked disabled=true)
+    %input{type: "checkbox", checked: true}
+    %a{href: url, title: 'it"s', "data-n": @n} Quote
+    %a(title='it"s' xlink:href="#top") Quote
+    %div{class: "a"}
+    %div(class="b")
+    %div
+    %p.x(a="1"){b: 2}
+    %div#last.x.y#z
+    %div.y#w(role="r") text
+    %p#a#b.c.d

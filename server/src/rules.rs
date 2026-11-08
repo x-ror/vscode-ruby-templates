@@ -97,6 +97,9 @@ pub const ATTRIBUTE_QUOTES: &str = "Style/AttributeQuotes";
 pub const BOOLEAN_ATTRIBUTES: &str = "Style/BooleanAttributes";
 pub const VOID_TAG_CLOSING: &str = "Style/VoidTagClosing";
 pub const TAG_NAME_CASE: &str = "Style/TagNameCase";
+pub const IMPLICIT_DIV: &str = "Style/ImplicitDiv";
+pub const CLASSES_BEFORE_IDS: &str = "Style/ClassesBeforeIds";
+pub const HASH_ATTRIBUTES: &str = "Style/HashAttributes";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -114,6 +117,10 @@ pub const QUOTE_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[DOU
 pub const NO_SLASH: &str = "no_slash";
 pub const SLASH: &str = "slash";
 pub const VOID_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_SLASH, SLASH], default: NO_SLASH };
+
+pub const RUBY_HASH: &str = "ruby_hash";
+pub const HTML_ATTRIBUTES: &str = "html";
+pub const ATTRIBUTES_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[RUBY_HASH, HTML_ATTRIBUTES], default: RUBY_HASH };
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
@@ -177,6 +184,9 @@ pub const RULES: &[Rule] = &[
     format_rule(BOOLEAN_ATTRIBUTES, &[Erb], &[], &[], &[]),
     format_rule(VOID_TAG_CLOSING, &[Erb], &[], &[], &[VOID_STYLE]),
     format_rule(TAG_NAME_CASE, &[Erb, Slim], &[], &[], &[]),
+    format_rule(IMPLICIT_DIV, HAML_SLIM, &[], &[], &[]),
+    format_rule(CLASSES_BEFORE_IDS, &[Haml], &[], &[], &[]),
+    format_rule(HASH_ATTRIBUTES, &[Haml], &[], &[], &[ATTRIBUTES_STYLE]),
     off_by_default_lint("Style/ErbTrimMode", &[Erb]),
 ];
 

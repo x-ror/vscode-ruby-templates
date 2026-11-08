@@ -966,9 +966,13 @@ enabled = false`,
     languages: ["haml", "slim"],
     type: "autofix",
     safe: true,
-    safeNote: "Haml and Slim render a bare `.card` or `#main` as a `div`.",
-    status: "planned",
-    phase: 3,
+    safeNote:
+      "Haml and Slim render a bare `.card` or `#main` as a `div`. The formatter reads the file again and keeps the rewrite only when Haml or Slim compile it to the same template.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Style.ImplicitDiv]", "enabled = true"),
+    today:
+      '`%div.card` and `%div#main` in Haml, `div.card` and `div#main` in Slim lose the `div`. A `div` with no class or id shorthand right after it (`%div{class: "a"}`, `%div(class="a")`, `div class="a"`, a bare `div`), a name in other case (`%DIV.card`: it would be output as `<div>`), `%%div`, and a line over several lines with `|` stay. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "haml",
@@ -991,9 +995,12 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "Haml renders the same attributes whichever way round they are written.",
-    status: "planned",
-    phase: 3,
+      "Haml sorts the attributes it renders, so `class` comes before `id` whichever way round they are written. The classes and the ids keep their order among themselves. The formatter reads the file again and keeps the rewrite only when Haml compiles it to the same template.",
+    status: "available",
+    onByDefault: [],
+    config: text("[Style.ClassesBeforeIds]", "enabled = true"),
+    today:
+      "`%p#intro.lead` becomes `%p.lead#intro` and `#a.b.c` becomes `.b.c#a`, also with attributes after it. A head that is already in order, one with `@` in it, and a line over several lines with `|` stay. Format selection applies it to the lines it covers.",
     examples: [
       {
         lang: "haml",
@@ -1011,14 +1018,16 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "Only attributes with literal values are converted; anything else is left as it is.",
-    status: "planned",
-    phase: 3,
+      "Only attributes both syntaxes can say the same way are converted: strings without escapes or interpolation, numbers, `true`, and variables. Anything else leaves the tag as it is. The formatter reads the file again and keeps the rewrite only when Haml compiles it to the same template and each tag sets the same attributes.",
+    status: "available",
+    onByDefault: [],
     config: text(
       "[Style.HashAttributes]",
       "enabled = true",
       'style = "html" # or ruby_hash',
     ),
+    today:
+      '`style = "ruby_hash"` (the default) writes `%a(href="/" title=@t checked)` as `%a{href: "/", title: @t, checked: true}`, with `"data-n": …` for names that need quotes; `style = "html"` writes the hash as `%a(href="/" title=@t checked)`. A tag with both a hash and a list, a nested hash (`data: {…}`), a splat, a key that is not a literal name, a repeated name, a value that is a method call with a receiver or arguments, an expression, a string with `\\` or `#{}`, `:symbol` or a list, an attribute list or hash over several lines, and a tag in a line joined with `|` stay. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "haml",
