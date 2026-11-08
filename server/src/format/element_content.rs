@@ -70,6 +70,8 @@ fn erb_moved(text: &str, tags: &[String]) -> Option<Option<String>> {
         let content = &text[open..close];
         let blank_before = content.len() - content.trim_start_matches(SPACE).len();
         let blank_after = content.len() - content.trim_end_matches(SPACE).len();
+        let line_start = text[..element.start].rfind('\n').map_or(0, |at| at + 1);
+        let first_on_line = text[line_start..element.start].trim_matches(SPACE).is_empty();
         let on_one_line = !text[element.start..element.end].contains(['\n', '\r']);
         let inside_inline =
             elements.iter().any(|outer| outer.start < element.start && element.end <= outer.end && shows_line_breaks(&outer.name));
@@ -77,7 +79,7 @@ fn erb_moved(text: &str, tags: &[String]) -> Option<Option<String>> {
             .iter()
             .filter(|tag| tag.start >= element.start && tag.end <= element.end)
             .all(|tag| (tag.indicator == Some("=") || tag.is_comment()) && !text[tag.code.end..tag.end].starts_with('-'));
-        if !on_one_line || inside_inline || !plain_tags || content.trim_matches(SPACE).is_empty() {
+        if !first_on_line || !on_one_line || inside_inline || !plain_tags || content.trim_matches(SPACE).is_empty() {
             continue;
         }
         edits.push((open..open + blank_before, eol.to_string()));
@@ -89,7 +91,14 @@ fn erb_moved(text: &str, tags: &[String]) -> Option<Option<String>> {
     edits.sort_by_key(|(range, _)| range.start);
     let rewritten = replaced(text, &edits);
     let names = |text: &str| erb::tags::elements(text).into_iter().map(|element| element.name).collect::<Vec<_>>();
-    (same_non_whitespace(text, &rewritten) && names(text) == names(&rewritten)).then_some(Some(rewritten))
+    if !(same_non_whitespace(text, &rewritten) && names(text) == names(&rewritten)) {
+        return None;
+    }
+    // An element that follows its parent's start tag on a line is first on its own line only after the parent moved.
+    Some(Some(match erb_moved(&rewritten, tags) {
+        Some(Some(deeper)) => deeper,
+        _ => rewritten,
+    }))
 }
 
 /// A tag whose content moves: the line it is on, the line its content is on and the tag's depth.
@@ -121,7 +130,7 @@ fn haml_moved(text: &str, tags: &[String], settings: &Settings) -> Option<Option
     for tag in parsed.tags.iter().filter(|tag| tag.head != (0..0)) {
         let tag_line = layout.line_of(tag.head.start);
         let Line::Structural(depth) = lines[tag_line] else { continue };
-        let inside = in_line_break_context(&mut open, depth, &tag.element.name);
+        let inside = in_line_break_context(&mut open, depth, &tag.element.name, false);
         let Some(content) = tag.element.content.clone().filter(|_| !inside && is_listed(tags, &tag.element.name)) else { continue };
         if !haml_content_moves(body, &content) {
             continue;
@@ -145,7 +154,8 @@ fn haml_content_moves(text: &str, content: &Range<usize>) -> bool {
     let attached = !text[..content.start].ends_with(SPACE);
     let written = &text[content.clone()];
     match written.chars().next() {
-        Some('=' | '~' | '&' | '!') if attached => true,
+        Some('=' | '~') if attached => true,
+        Some('&' | '!') if attached => matches!(written[1..].chars().next(), Some('=' | ' ')) || written[1..].starts_with("#{"),
         Some('<' | '>' | '/') if attached => false,
         Some('#') => written.starts_with("#{"),
         Some('%' | '.' | '-' | '=' | '~' | '&' | '!' | '/' | ':' | '\\' | '|' | ',') | None => false,
@@ -199,15 +209,17 @@ fn slim_moved(text: &str, tags: &[String], settings: &Settings, extra_engines: &
         .collect();
     let layout = Layout::new(text, &lines, settings);
     let mut open = Vec::new();
+    let mut last_line = None;
     let mut edits = Vec::new();
     for element in &parsed.elements {
         let tag_line = layout.line_of(element.at.start);
         let Line::Structural(depth) = lines[tag_line] else { continue };
-        let inside = in_line_break_context(&mut open, depth, &element.name);
+        let inside = in_line_break_context(&mut open, depth, &element.name, last_line == Some(tag_line));
+        last_line = Some(tag_line);
         let Some(content) = element.content.clone().filter(|_| !inside && is_listed(tags, &element.name)) else { continue };
         let written = &text[content.clone()];
         let output = written.starts_with('=');
-        if output && written.trim_start_matches('=').starts_with('\'') {
+        if output && written.trim_start_matches('=').starts_with(['\'', '<', '>']) {
             continue;
         }
         if layout.stands_alone(layout.line_of(content.start), depth) {
@@ -222,8 +234,11 @@ fn slim_moved(text: &str, tags: &[String], settings: &Settings, extra_engines: &
 }
 
 /// Whether the element at `depth` is inside one that shows line breaks; `open` holds the elements above it.
-fn in_line_break_context(open: &mut Vec<(usize, String)>, depth: usize, name: &str) -> bool {
-    open.retain(|(above, _)| *above < depth);
+fn in_line_break_context(open: &mut Vec<(usize, String)>, depth: usize, name: &str, chained: bool) -> bool {
+    // Elements chained on one line (`pre: div`) share a depth, and the earlier ones contain the later.
+    if !chained {
+        open.retain(|(above, _)| *above < depth);
+    }
     let inside = open.iter().any(|(_, outer)| shows_line_breaks(outer));
     open.push((depth, name.to_string()));
     inside
@@ -341,13 +356,7 @@ mod tests {
             "<div>x\n",
             "<% if a %><div>x</div><% end %>\n",
         ] {
-            let moved = stage(TemplateLang::Erb, text);
-            // A listed element inside an `if` is fine to move; the rest is not touched.
-            if text.starts_with("<% if") {
-                assert_eq!(moved.as_deref(), Some("<% if a %><div>\nx\n</div><% end %>\n"), "{text:?}");
-            } else {
-                assert_eq!(moved, None, "{text:?}");
-            }
+            assert_eq!(stage(TemplateLang::Erb, text), None, "{text:?}");
         }
     }
 
@@ -359,11 +368,8 @@ mod tests {
     #[test]
     fn erb_only_the_listed_names_move() {
         let text = "<div>a</div><p>b</p><section>c</section>\n";
-        assert_eq!(stage(TemplateLang::Erb, text).as_deref(), Some("<div>\na\n</div><p>b</p><section>\nc\n</section>\n"));
-        assert_eq!(
-            apply(TemplateLang::Erb, text, &settings(&["p"]), &[]).unwrap().as_deref(),
-            Some("<div>a</div><p>\nb\n</p><section>c</section>\n")
-        );
+        assert_eq!(stage(TemplateLang::Erb, text).as_deref(), Some("<div>\na\n</div><p>b</p><section>c</section>\n"));
+        assert_eq!(apply(TemplateLang::Erb, text, &settings(&["p"]), &[]).unwrap().as_deref(), None);
         assert_eq!(apply(TemplateLang::Erb, text, &settings(&[]), &[]).unwrap(), None);
         assert_eq!(apply(TemplateLang::Erb, text, &settings(&["pre"]), &[]).unwrap(), None);
         assert_eq!(apply(TemplateLang::Erb, text, &Settings::default(), &[]).unwrap(), None);
@@ -457,6 +463,41 @@ mod tests {
             let inside_p = text == "%div\n  %p\n    %div x\n    %span y\n  %br\n";
             assert!(moved.is_none() || inside_p, "{text:?} -> {moved:?}");
         }
+    }
+
+    #[test]
+    fn haml_attached_bang_and_ampersand_must_be_markers() {
+        for text in ["%div!x\n", "%div&x\n", "%div&!x\n", "%div&\n", "%div!\n", "%div!!!\n", "%div!!x\n"] {
+            assert_eq!(stage(TemplateLang::Haml, text), None, "{text:?}");
+        }
+        assert_eq!(stage(TemplateLang::Haml, "%div& x\n").as_deref(), Some("%div\n  & x\n"));
+        assert_eq!(stage(TemplateLang::Haml, "%div!= x\n").as_deref(), Some("%div\n  != x\n"));
+    }
+
+    #[test]
+    fn slim_output_markers_with_whitespace_modifiers_stay() {
+        for text in ["div=> x\n", "div=< x\n", "div=<> x\n", "div==> x\n", "div==< x\n"] {
+            assert_eq!(stage(TemplateLang::Slim, text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn slim_chained_elements_keep_their_outer_ones_as_context() {
+        for text in ["pre: div\n  div x\n", "span: div\n  div x\n"] {
+            assert_eq!(stage(TemplateLang::Slim, text), None, "{text:?}");
+        }
+        assert_eq!(stage(TemplateLang::Slim, "ul: li\n  div x\n").as_deref(), Some("ul: li\n  div\n    | x\n"));
+    }
+
+    #[test]
+    fn erb_elements_move_only_when_they_start_their_line() {
+        for text in ["<li><div>x</div></li>\n", "<td><span></span><div>x</div></td>\n", "<%= link_to \"/\" do %><div>x</div><% end %>\n"] {
+            assert_eq!(stage(TemplateLang::Erb, text), None, "{text:?}");
+        }
+        assert_eq!(formatted("a.html.erb", "<ul>\n  <li><div>x</div></li>\n</ul>\n", &all()), "<ul>\n  <li><div>x</div></li>\n</ul>\n");
+        let nested = formatted("a.html.erb", "<div><div>x</div></div>\n", &all());
+        assert_eq!(nested, "<div>\n  <div>\n    x\n  </div>\n</div>\n");
+        assert_eq!(formatted("a.html.erb", &nested, &all()), nested);
     }
 
     #[test]

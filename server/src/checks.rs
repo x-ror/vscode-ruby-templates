@@ -101,10 +101,10 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
-    // Rails escapes nothing in a text or other non-HTML template, so nothing is left unescaped.
     if let Some(max) = rules.line_length() {
         out.extend(line_length::diagnostics(&doc.text, max));
     }
+    // Rails escapes nothing in a text or other non-HTML template, so nothing is left unescaped.
     out.retain(|d| (html || util::code(d) != Some(unsafe_output::UNSAFE_OUTPUT)) && util::code(d).is_none_or(|code| rules.reports(code)));
     for d in &mut out {
         d.source = Some(doc.lang.diagnostic_source().into());
