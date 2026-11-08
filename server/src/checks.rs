@@ -1,12 +1,12 @@
 //! The diagnostics of a template: its language's own checks plus the `render` checks against app/views.
 
-use crate::code_context::render_filter;
+use crate::code_context::{self, render_filter};
 use crate::erb::{html_lint, tags};
 use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{controller_classes, output_lints, partials, paths, render_refs};
+use crate::rails::{controller_classes, output_lints, partials, paths, render_refs, view_lints};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -21,6 +21,8 @@ use tower_lsp_server::ls_types::{Diagnostic, Uri};
 /// Diagnostic codes every language shares, with `ruby::generated::RUBY_SYNTAX`.
 pub(crate) const UNRESOLVED_RENDER: &str = "Rails/MissingPartial";
 pub(crate) const STRICT_LOCALS: &str = "Rails/StrictLocals";
+/// Layouts take what the controller sets; their partials are the page's frame.
+const LAYOUTS_FOLDER: &str = "layouts";
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 #[derive(Clone)]
@@ -59,7 +61,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby);
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(output_diagnostics(doc, rules, project, path, ruby.grammar));
+        out.extend(view_diagnostics(doc, rules, project, path, &ruby));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
     out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
@@ -69,18 +71,36 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     out
 }
 
-/// The silent-output and debugging lints, for Rails templates only: Padrino and Middleman write helper output to the
+/// The lints on the Ruby a view compiles to, for Rails templates only: Padrino and Middleman write helper output to the
 /// buffer from `<% %>`, and an `.erb` outside app/views isn't a view.
-fn output_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &Path, grammar: ruby_prism::Version) -> Vec<Diagnostic> {
-    let wanted = [output_lints::SILENT_RENDER, output_lints::SILENT_HELPER, output_lints::DEBUG_OUTPUT];
-    if project.framework != Framework::Rails
-        || project.is_gem_file(path)
-        || paths::views_root(path).is_none()
-        || !wanted.iter().any(|code| rules.reports(code))
-    {
+fn view_diagnostics(doc: &Doc, rules: &ResolvedRules, project: &Project, path: &Path, ruby: &RubyContext) -> Vec<Diagnostic> {
+    let wanted = [
+        output_lints::SILENT_RENDER,
+        output_lints::SILENT_HELPER,
+        output_lints::DEBUG_OUTPUT,
+        view_lints::INSTANCE_VARIABLE_IN_PARTIAL,
+        view_lints::UNUSED_STRICT_LOCAL,
+        view_lints::UNUSED_BLOCK_ARGUMENT,
+        view_lints::RENDER_IN_LOOP,
+    ];
+    let Some(views_root) = paths::views_root(path) else { return vec![] };
+    if project.framework != Framework::Rails || project.is_gem_file(path) || !wanted.iter().any(|code| rules.reports(code)) {
         return vec![];
     }
-    output_lints::diagnostics(doc.lang, &doc.text, rules.extra_engines(), grammar)
+    let Some(compiled) = code_context::compiled(doc.lang, &doc.text, None, rules.extra_engines()) else { return vec![] };
+    let options = ruby_prism::Options::default().version(ruby.grammar).build();
+    let Some(parsed) = compiled.parse(&options) else { return vec![] };
+    let root = parsed.node();
+    let in_layouts = path.strip_prefix(&views_root).is_ok_and(|relative| relative.starts_with(LAYOUTS_FOLDER));
+    let view = view_lints::View {
+        lang: doc.lang,
+        reads_controller_state: paths::is_partial_path(path) && !in_layouts,
+        strict_locals: ruby.strict_locals.as_ref().map(|rails| rails.close),
+        grammar: ruby.grammar,
+    };
+    let mut out = output_lints::diagnostics(doc.lang, &doc.text, &compiled, &root);
+    out.extend(view_lints::diagnostics(&doc.text, &view, &compiled, &root));
+    out
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
@@ -465,6 +485,7 @@ mod tests {
         for src in [
             include_str!("checks.rs"),
             include_str!("lsp.rs"),
+            include_str!("rails/view_lints.rs"),
             include_str!("ruby/generated.rs"),
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
@@ -500,6 +521,24 @@ mod tests {
         assert_eq!(codes(&rails, "app/views/a.html.erb", &options), ["Rails/SilentHelper"]);
         assert!(codes(&padrino, "app/views/a.html.erb", &options).is_empty());
         assert!(codes(&rails, "config/nginx.conf.erb", &options).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn view_lints_know_partials_and_layouts() {
+        let root = std::env::temp_dir().join(format!("rt-view-lints-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app/views")).unwrap();
+        std::fs::write(root.join("Gemfile.lock"), format!("{GEM_LOCK}    actionview (8.0.2)\n")).unwrap();
+        let codes = |name: &str, options: &Options| {
+            let uri = crate::util::file_uri(root.join(name)).unwrap();
+            let doc = Doc { lang: TemplateLang::Erb, text: "<%= @user %>".into(), plain_erb: false, percent_lines: false, version: 0 };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        let options = Options::default();
+        assert_eq!(codes("app/views/users/_card.html.erb", &options), ["Rails/InstanceVariableInPartial"]);
+        assert!(codes("app/views/users/show.html.erb", &options).is_empty());
+        assert!(codes("app/views/layouts/_nav.html.erb", &options).is_empty());
+        assert!(codes("lib/templates/_card.html.erb", &options).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1217,7 +1256,7 @@ mod tests {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let doc = Doc {
             lang: TemplateLang::Erb,
-            text: "<%# locals: (user, size:) -%>\n".into(),
+            text: "<%# locals: (user, size:) -%>\n<%= size %>\n".into(),
             plain_erb: false,
             percent_lines: false,
             version: 0,
@@ -1242,15 +1281,15 @@ mod tests {
         assert_eq!(broken_messages(), 0, "Rails 7.0: a plain comment");
         lock("7.1.0");
         let others = [
-            (TemplateLang::Haml, "html.haml", "-#", "%p"),
-            (TemplateLang::Slim, "html.slim", "/#", "p"),
-            (TemplateLang::Ruby, "json.jbuilder", "#", "json.x"),
+            (TemplateLang::Haml, "html.haml", "-#", "%p= size"),
+            (TemplateLang::Slim, "html.slim", "/#", "p = size"),
+            (TemplateLang::Ruby, "json.jbuilder", "#", "json.x size"),
         ];
         for (lang, ext, comment, body) in others {
             let file = root.join(format!("app/views/users/_card.{ext}"));
             let doc = Doc {
                 lang,
-                text: format!("{comment} locals: (user, size:)\n{body} x\n"),
+                text: format!("{comment} locals: (user, size:)\n{body}\n"),
                 plain_erb: false,
                 percent_lines: false,
                 version: 0,

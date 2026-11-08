@@ -70,6 +70,12 @@ impl Compiled {
         self.verbatim.push((from, from + len, offset));
     }
 
+    /// Prism's parse of the source; none when it has errors beyond `IGNORED_ERROR`, where findings would be guesses.
+    pub fn parse<'a>(&'a self, options: &'a ruby_prism::ParseOptions) -> Option<ruby_prism::ParseResult<'a>> {
+        let result = ruby_prism::parse_with_options(self.source.as_bytes(), options);
+        result.errors().all(|e| e.message() == IGNORED_ERROR.as_bytes()).then_some(result)
+    }
+
     /// The template byte ranges where the local `name` is read or assigned, among the code the template wrote.
     pub fn local_uses(&self, name: &str) -> prism::LocalUses {
         let uses = prism::local_uses(&self.source, name);

@@ -152,6 +152,32 @@ pub(crate) fn keyword_parameter_at(parameters: &str, name: &str) -> Option<usize
     declaration.found.filter(|found| found.parameter).map(|found| found.start - PARAMETERS_DEF.len())
 }
 
+/// Where each parameter of `parameters`, a method's parameter list, starts and ends (a default included), in order.
+pub(crate) fn parameter_spans(parameters: &str, version: ruby_prism::Version) -> Option<Vec<Span>> {
+    let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
+    let options = ruby_prism::Options::default().version(version).build();
+    let result = ruby_prism::parse_with_options(source.as_bytes(), &options);
+    if result.errors().next().is_some() {
+        return None;
+    }
+    let def = result.node().as_program_node()?.statements().body().iter().next()?.as_def_node()?;
+    let Some(list) = def.parameters() else { return Some(Vec::new()) };
+    let mut spans: Vec<Span> = list
+        .requireds()
+        .iter()
+        .chain(list.optionals().iter())
+        .chain(list.rest())
+        .chain(list.posts().iter())
+        .chain(list.keywords().iter())
+        .chain(list.keyword_rest())
+        .chain(list.block())
+        .map(|node| span(&node.location()))
+        .map(|(start, end)| (start - PARAMETERS_DEF.len(), end - PARAMETERS_DEF.len()))
+        .collect();
+    spans.sort_unstable();
+    Some(spans)
+}
+
 /// Where `parameters`, a method's parameter list, reads the parameter `name` in the defaults of the others.
 pub(crate) fn parameter_reads(parameters: &str, name: &str) -> Vec<(usize, usize)> {
     let source = format!("{PARAMETERS_DEF}{parameters}\n); end");
@@ -176,7 +202,7 @@ const PARAMETERS_DEF: &str = "def _(";
 /// The scope index of the one method in `def _(…); end`: the program is scope 0.
 const METHOD_SCOPE: usize = 1;
 
-type Span = (usize, usize);
+pub(crate) type Span = (usize, usize);
 
 fn span(at: &ruby_prism::Location) -> Span {
     (at.start() as usize, at.end() as usize)
@@ -215,6 +241,8 @@ macro_rules! visit_local_variables {
         }
     };
 }
+
+pub(crate) use visit_local_variables;
 
 /// The visits of every parameter and block-local name, each handed to `self.$on(name, location)`.
 macro_rules! visit_parameters {

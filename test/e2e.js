@@ -1177,6 +1177,57 @@ const check = (label, actual, expected) => {
     [["Output the result", ['2-3 "="']]],
   );
 
+  const partialUri = fileUri(path.join(views, "silent", "_card.html.haml"));
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: partialUri,
+        languageId: "haml",
+        version: 1,
+        text: "-# locals: (user:, size: 1)\n- items.each do |item, index|\n  %p= user.name + @title\n",
+      },
+    },
+    true,
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  check("haml partial variable lints", diagnostics(partialUri), [
+    "3: `@title` is read in a partial, so it works only where the controller sets it; pass it as a local",
+    "1: `size` is declared in `locals:` but the partial never uses it",
+    "2: Block argument `item` is never used; rename it `_item`",
+    "2: Block argument `index` is never used; rename it `_index`",
+  ]);
+  const fixes = async (code, range) => {
+    const result = await send("textDocument/codeAction", {
+      textDocument: { uri: partialUri },
+      range,
+      context: { diagnostics: [{ range, code, message: "" }] },
+    });
+    return result.result?.map((a) => [
+      a.title,
+      a.edit.changes[partialUri].map(
+        (e) =>
+          `${e.range.start.character}-${e.range.end.character} "${e.newText}"`,
+      ),
+    ]);
+  };
+  check(
+    "codeAction remove an unused local",
+    await fixes("Rails/UnusedStrictLocal", {
+      start: { line: 0, character: 19 },
+      end: { line: 0, character: 23 },
+    }),
+    [["Remove the local", ['17-26 ""']]],
+  );
+  check(
+    "codeAction prefix an unused block argument",
+    await fixes("Rails/UnusedBlockArgument", {
+      start: { line: 1, character: 23 },
+      end: { line: 1, character: 28 },
+    }),
+    [["Prefix the argument with `_`", ['23-23 "_"']]],
+  );
+
   await send(
     "textDocument/didOpen",
     {

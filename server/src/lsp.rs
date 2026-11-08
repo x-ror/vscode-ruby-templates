@@ -12,6 +12,7 @@ use crate::rails::controllers::Target;
 use crate::rails::output_lints::{output_marker_edit, SILENT_HELPER, SILENT_RENDER};
 use crate::rails::project::{Project, Projects};
 use crate::rails::render_call::HamlPipes;
+use crate::rails::view_lints::{remove_local_edit, UNUSED_BLOCK_ARGUMENT, UNUSED_STRICT_LOCAL};
 use crate::rails::{
     assets, controller_classes, controllers, helper_defs, i18n, ivars, model_columns, partials, paths, project, render_refs, routes,
     stimulus, view_roots,
@@ -575,6 +576,7 @@ impl LanguageServer for Backend {
         });
         actions.extend(quick_fixes);
         actions.extend(silent_output_fixes(&uri, &doc, &diagnostics));
+        actions.extend(unused_variable_fixes(&uri, &doc, &project, &path, &diagnostics));
         Ok(Some(actions))
     }
 
@@ -1242,6 +1244,33 @@ fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<
             let edit = output_marker_edit(doc.lang, &doc.text, d.range)?;
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: "Output the result".into(),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![d.clone()]),
+                edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), vec![edit])])), ..Default::default() }),
+                is_preferred: Some(true),
+                ..Default::default()
+            }))
+        })
+        .collect()
+}
+
+/// "Remove the local" for an unused strict local and "Prefix with `_`" for an unused block argument.
+fn unused_variable_fixes(uri: &Uri, doc: &Doc, project: &Project, path: &Path, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
+    diagnostics
+        .iter()
+        .filter_map(|d| {
+            let (title, edit) = match util::code(d)? {
+                UNUSED_BLOCK_ARGUMENT => {
+                    ("Prefix the argument with `_`", TextEdit::new(Range::new(d.range.start, d.range.start), "_".into()))
+                }
+                UNUSED_STRICT_LOCAL => {
+                    let ruby = project.ruby_context(path);
+                    ("Remove the local", remove_local_edit(&doc.text, d.range, ruby.strict_locals?.close, ruby.grammar)?)
+                }
+                _ => return None,
+            };
+            Some(CodeActionOrCommand::CodeAction(CodeAction {
+                title: title.into(),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![d.clone()]),
                 edit: Some(WorkspaceEdit { changes: Some(HashMap::from([(uri.clone(), vec![edit])])), ..Default::default() }),

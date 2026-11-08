@@ -152,10 +152,7 @@ pub fn unknown_to_all<'a>(candidates: &[&Signature], passed: &[&'a str]) -> Vec<
 
 /// The signature of `text`'s `locals:` comment, if it has one Prism parses.
 pub fn signature(text: &str, close: Close, ruby: ruby_prism::Version) -> Option<Signature> {
-    let comment = find(text, close)?;
-    let params = if comment.blank() { "" } else { comment.parameters.trim() };
-    let (locals, rest) = prism::keyword_parameters(params, ruby)?;
-    Some(Signature { params: params.to_string(), locals, rest })
+    find(text, close)?.signature(ruby)
 }
 
 pub fn file_signature(file: &Path, close: Close, ruby: ruby_prism::Version) -> Option<Signature> {
@@ -172,6 +169,27 @@ pub fn method_parameters(comment: Option<&Comment>) -> String {
 }
 
 impl Comment {
+    /// The parameters the comment declares, if Prism parses them.
+    pub fn signature(&self, ruby: ruby_prism::Version) -> Option<Signature> {
+        let params = if self.blank() { "" } else { self.parameters.trim() };
+        let (locals, rest) = prism::keyword_parameters(params, ruby)?;
+        Some(Signature { params: params.to_string(), locals, rest })
+    }
+
+    /// The byte range to delete from the template to drop the parameter `name`, with its comma.
+    pub fn undeclare(&self, name: &str, ruby: ruby_prism::Version) -> Option<ByteRange<usize>> {
+        let at = self.parameters_at?;
+        let start = self.parameter_at(name)? - at;
+        let spans = prism::parameter_spans(&self.parameters, ruby)?;
+        let index = spans.iter().position(|&(from, _)| from == start)?;
+        let (from, to) = match (index.checked_sub(1).map(|i| spans[i]), spans.get(index + 1)) {
+            (_, Some(&(next, _))) => (start, next),
+            (Some((_, previous_end)), None) => (previous_end, spans[index].1),
+            (None, None) => spans[index],
+        };
+        Some(at + from..at + to)
+    }
+
     /// The edit to the template that declares `name` with `value` as its default: a byte range and its replacement.
     pub fn declare(&self, name: &str, value: &str) -> (ByteRange<usize>, String) {
         match self.parameters_at {

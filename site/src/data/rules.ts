@@ -73,6 +73,18 @@ const text = (...lines: string[]) => `${lines.join("\n")}\n`;
 const ERB_FILE = "app/views/users/index.html.erb";
 const HAML_FILE = "app/views/users/index.html.haml";
 const SLIM_FILE = "app/views/users/index.html.slim";
+const PARTIAL_ERB_FILE = "app/views/users/_card.html.erb";
+const PARTIAL_HAML_FILE = "app/views/users/_card.html.haml";
+const PARTIAL_SLIM_FILE = "app/views/users/_card.html.slim";
+
+const IVAR_MESSAGE =
+  "`@user` is read in a partial, so it works only where the controller sets it; pass it as a local";
+const LOCAL_MESSAGE =
+  "`compact` is declared in `locals:` but the partial never uses it";
+const LOOP_MESSAGE =
+  'Partial "users/card" is rendered once per item of a loop; use `render partial: "users/card", collection: @users, as: :user`';
+const ARGUMENT_MESSAGE =
+  "Block argument `index` is never used; rename it `_index`";
 
 /** The template, message and position the diagnostics reference shows for `code`. */
 function reported(code: string) {
@@ -1199,53 +1211,124 @@ enabled = false`,
   {
     name: "Rails/InstanceVariableInPartial",
     summary:
-      "An instance variable inside a partial, which only works for the controller that sets it.",
+      "An instance variable read inside a partial, which only works for the controllers that set it.",
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/InstanceVariableInPartial",
+    today:
+      "The first read of each `@name` in a partial (a file starting with `_`), also inside `#{}`. Not reported: a variable the partial assigns itself (`@count = 0`, `@x ||= …`), `defined?(@name)`, ActionView's own (`@output_buffer`, `@virtual_path`, `@view_flow`, anything starting `@_`) and partials under app/views/layouts. Only in Rails projects, in templates under app/views.",
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.InstanceVariableInPartial]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
-        file: "app/views/users/_card.html.erb",
+        file: PARTIAL_ERB_FILE,
         before: text("<p><%= @user.name %></p>"),
         after: text("<%# locals: (user:) %>", "<p><%= user.name %></p>"),
-        afterFile: "app/views/users/_card.html.erb, called with user: @user",
+        faults: [
+          {
+            line: 1,
+            column: 8,
+            message: IVAR_MESSAGE,
+            code: "Rails/InstanceVariableInPartial",
+          },
+        ],
       },
       {
         lang: "haml",
-        file: "app/views/users/_card.html.haml",
+        file: PARTIAL_HAML_FILE,
         before: text("%p= @user.name"),
-        after: text("%p= user.name"),
-        afterFile: "app/views/users/_card.html.haml, called with user: @user",
+        after: text("-# locals: (user:)", "%p= user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 5,
+            message: IVAR_MESSAGE,
+            code: "Rails/InstanceVariableInPartial",
+          },
+        ],
       },
       {
         lang: "slim",
-        file: "app/views/users/_card.html.slim",
+        file: PARTIAL_SLIM_FILE,
         before: text("p = @user.name"),
-        after: text("p = user.name"),
-        afterFile: "app/views/users/_card.html.slim, called with user: @user",
+        after: text("/# locals: (user:)", "p = user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 5,
+            message: IVAR_MESSAGE,
+            code: "Rails/InstanceVariableInPartial",
+          },
+        ],
       },
     ],
   },
   {
     name: "Rails/UnusedStrictLocal",
     summary: "A local in the `locals:` comment that the partial never uses.",
-    languages: ["erb"],
+    languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/UnusedStrictLocal",
+    today:
+      'A keyword in the `locals:` comment (Rails 7.1+) that the template never reads, assigns or passes on: not even as `local_assigns[:name]`, `local_assigns.fetch(:name)`, `binding.local_variable_get(:name)`, `defined?(name)` or in the default of another local. Nothing is reported when the template uses `local_assigns` as a whole (`render "x", local_assigns`, `**local_assigns`), `binding`, `local_variables` or `eval`, and `**rest` and `&block` are never reported. The quick fix removes the local and its comma from the comment.',
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.UnusedStrictLocal]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
-        file: "app/views/users/_card.html.erb",
+        file: PARTIAL_ERB_FILE,
         before: text(
           "<%# locals: (user:, compact: false) %>",
           "<p><%= user.name %></p>",
         ),
         after: text("<%# locals: (user:) %>", "<p><%= user.name %></p>"),
+        faults: [
+          {
+            line: 1,
+            column: 21,
+            message: LOCAL_MESSAGE,
+            code: "Rails/UnusedStrictLocal",
+          },
+        ],
+      },
+      {
+        lang: "haml",
+        file: PARTIAL_HAML_FILE,
+        before: text("-# locals: (user:, compact: false)", "%p= user.name"),
+        after: text("-# locals: (user:)", "%p= user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 20,
+            message: LOCAL_MESSAGE,
+            code: "Rails/UnusedStrictLocal",
+          },
+        ],
+      },
+      {
+        lang: "slim",
+        file: PARTIAL_SLIM_FILE,
+        before: text("/# locals: (user:, compact: false)", "p = user.name"),
+        after: text("/# locals: (user:)", "p = user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 20,
+            message: LOCAL_MESSAGE,
+            code: "Rails/UnusedStrictLocal",
+          },
+        ],
       },
     ],
   },
@@ -1256,8 +1339,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/RenderInLoop",
+    today:
+      'Inside `collection.each do |item|` or `each_with_index`, a `render "partial/name", name: item` that is all the loop does: a string literal for the partial, the block variable as its only local, and nothing else in the body (no wrapping element, no other output or code). Not reported for `map` and other iterators, `render partial:`, a partial name that is not a literal or a render with more locals. In Haml and Slim the render must be the only line nested under the loop.',
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.RenderInLoop]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1270,6 +1360,14 @@ enabled = false`,
         after: text(
           '<%= render partial: "users/card", collection: @users, as: :user %>',
         ),
+        faults: [
+          {
+            line: 2,
+            column: 7,
+            message: LOOP_MESSAGE,
+            code: "Rails/RenderInLoop",
+          },
+        ],
       },
       {
         lang: "haml",
@@ -1281,6 +1379,14 @@ enabled = false`,
         after: text(
           '= render partial: "users/card", collection: @users, as: :user',
         ),
+        faults: [
+          {
+            line: 2,
+            column: 5,
+            message: LOOP_MESSAGE,
+            code: "Rails/RenderInLoop",
+          },
+        ],
       },
       {
         lang: "slim",
@@ -1292,6 +1398,14 @@ enabled = false`,
         after: text(
           '= render partial: "users/card", collection: @users, as: :user',
         ),
+        faults: [
+          {
+            line: 2,
+            column: 5,
+            message: LOOP_MESSAGE,
+            code: "Rails/RenderInLoop",
+          },
+        ],
       },
     ],
   },
@@ -1474,8 +1588,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 2,
+    status: "available",
+    code: "Rails/UnusedBlockArgument",
+    today:
+      "A plain or optional block parameter that nothing in the block reads, assigns or interpolates, nested blocks included. Not reported: names starting with `_`, `it` and numbered parameters, destructured, `*rest`, keyword and `&block` parameters, or a block that calls `binding`, `local_variables` or `eval`. The message suggests removing the argument when it is the block's only one, and the quick fix prefixes it with `_`.",
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.UnusedBlockArgument]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1490,18 +1611,42 @@ enabled = false`,
           "  <li><%= user.name %></li>",
           "<% end %>",
         ),
+        faults: [
+          {
+            line: 1,
+            column: 26,
+            message: ARGUMENT_MESSAGE,
+            code: "Rails/UnusedBlockArgument",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text("- @users.each do |user, index|", "  %li= user.name"),
         after: text("- @users.each do |user|", "  %li= user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 25,
+            message: ARGUMENT_MESSAGE,
+            code: "Rails/UnusedBlockArgument",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text("- @users.each do |user, index|", "  li = user.name"),
         after: text("- @users.each do |user|", "  li = user.name"),
+        faults: [
+          {
+            line: 1,
+            column: 25,
+            message: ARGUMENT_MESSAGE,
+            code: "Rails/UnusedBlockArgument",
+          },
+        ],
       },
     ],
   },
