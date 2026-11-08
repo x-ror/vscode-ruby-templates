@@ -1195,7 +1195,7 @@ const check = (label, actual, expected) => {
     "3: `@title` is read in a partial, so it works only where the controller sets it; pass it as a local",
     "1: `size` is declared in `locals:` but the partial never uses it",
     "2: Block argument `item` is never used; rename it `_item`",
-    "2: Block argument `index` is never used; remove it or rename it `_index`",
+    "2: Block argument `index` is never used; rename it `_index`",
   ]);
   const fixes = async (code, range) => {
     const result = await send("textDocument/codeAction", {

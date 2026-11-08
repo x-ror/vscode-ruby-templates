@@ -84,7 +84,7 @@ const LOCAL_MESSAGE =
 const LOOP_MESSAGE =
   'Partial "users/card" is rendered once per item of a loop; use `render partial: "users/card", collection: @users, as: :user`';
 const ARGUMENT_MESSAGE =
-  "Block argument `index` is never used; remove it or rename it `_index`";
+  "Block argument `index` is never used; rename it `_index`";
 
 /** The template, message and position the diagnostics reference shows for `code`. */
 function reported(code: string) {
@@ -1591,7 +1591,7 @@ enabled = false`,
     status: "available",
     code: "Rails/UnusedBlockArgument",
     today:
-      "A plain or optional block parameter that nothing in the block reads, assigns or interpolates, nested blocks included. Not reported: names starting with `_`, `it` and numbered parameters, destructured, `*rest`, keyword and `&block` parameters, or a block that calls `binding`, `local_variables` or `eval`. The message suggests removing the argument when it is the last one, and the quick fix prefixes it with `_`.",
+      "A plain or optional block parameter that nothing in the block reads, assigns or interpolates, nested blocks included. Not reported: names starting with `_`, `it` and numbered parameters, destructured, `*rest`, keyword and `&block` parameters, or a block that calls `binding`, `local_variables` or `eval`. The message suggests removing the argument when it is the block's only one, and the quick fix prefixes it with `_`.",
     setting: {
       label: "Turn it off",
       code: `[Rails.UnusedBlockArgument]

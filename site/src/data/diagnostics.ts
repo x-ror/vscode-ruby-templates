@@ -559,8 +559,7 @@ export const diagnostics: Diagnostic[] = [
 <% end %>
 `,
     },
-    message:
-      "Block argument `index` is never used; remove it or rename it `_index`",
+    message: "Block argument `index` is never used; rename it `_index`",
     line: 1,
     column: 26,
   },

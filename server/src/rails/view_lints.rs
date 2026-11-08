@@ -229,7 +229,7 @@ pub(crate) fn remove_local_edit(text: &str, range: Range, close: Close, grammar:
 
 struct Blocks<'a> {
     compiled: &'a Compiled,
-    /// (generated start, end, name, whether nothing follows it in the parameters)
+    /// (generated start, end, name, whether it is the block's only parameter)
     found: Vec<(usize, usize, String, bool)>,
 }
 
@@ -243,22 +243,17 @@ impl Blocks<'_> {
         if mentions.reflective {
             return;
         }
-        let last_start = list
-            .requireds()
-            .iter()
-            .chain(list.optionals().iter())
-            .chain(list.rest())
-            .chain(list.posts().iter())
-            .chain(list.keywords().iter())
-            .chain(list.keyword_rest())
-            .chain(list.block())
-            .map(|node| node.location().start())
-            .max();
+        // Removing one of several changes what the others receive (`|key, value|` on a hash).
+        let only_parameter = list.requireds().iter().count() + list.optionals().iter().count() == 1
+            && list.posts().iter().count() + list.keywords().iter().count() == 0
+            && list.rest().is_none()
+            && list.keyword_rest().is_none()
+            && list.block().is_none();
         let positional = list.requireds().iter().chain(list.optionals().iter()).chain(list.posts().iter());
         for (name, at) in positional.filter_map(|node| parameter_name(&node)) {
             let unused = !name.starts_with('_') && name != "it" && !mentions.names.contains(&name);
             if unused {
-                self.found.push((at.start() as usize, at.end() as usize, name, Some(at.start()) == last_start));
+                self.found.push((at.start() as usize, at.end() as usize, name, only_parameter));
             }
         }
     }
@@ -300,6 +295,12 @@ fn unused_block_arguments(index: &LineIndex, compiled: &Compiled, root: &Node) -
 /// What the engines wrap around the code and text of a tag: appends to the buffer, escaping and `.freeze`.
 const OUTPUT_GLUE: &[&str] = &["append=", "safe_append=", "safe_expr_append=", "<<", "to_s", "escape_html", "escape", "freeze"];
 
+const BUFFER_LOCAL: &str = "_buf";
+const COMPILER_LOCAL: &str = "_haml_compiler";
+const OUTPUT_BUFFER: &str = "@output_buffer";
+/// The namespaces the engines' generated escaping and buffer code names; a constant of the template's own is output.
+const ENGINE_CONSTANTS: &[&str] = &["Haml", "Temple", "Slim", "ActionView", "ERB"];
+
 /// A loop's body, which is only the one `render` and the code around it that writes its output.
 struct LoopBody<'a> {
     item: &'a str,
@@ -326,6 +327,29 @@ impl<'pr> Visit<'pr> for LoopBody<'pr> {
     fn visit_string_node(&mut self, node: &ruby_prism::StringNode<'pr>) {
         self.only_render &= node.unescaped().iter().all(u8::is_ascii_whitespace);
     }
+
+    fn visit_branch_node_enter(&mut self, node: Node<'pr>) {
+        self.only_render &= is_output_plumbing(&node);
+    }
+
+    fn visit_leaf_node_enter(&mut self, node: Node<'pr>) {
+        self.only_render &= is_output_plumbing(&node);
+    }
+}
+
+/// The nodes the engines write around an output tag; a condition, jump or assignment is none of them.
+fn is_output_plumbing(node: &Node) -> bool {
+    // Calls and strings are judged by their own visits.
+    node.as_call_node().is_some()
+        || node.as_string_node().is_some()
+        || node.as_statements_node().is_some()
+        || node.as_arguments_node().is_some()
+        || node.as_parentheses_node().is_some()
+        || node.as_instance_variable_read_node().is_some_and(|read| id_text(read.name()) == OUTPUT_BUFFER)
+        || node.as_constant_read_node().is_some_and(|read| ENGINE_CONSTANTS.contains(&id_text(read.name()).as_str()))
+        || node.as_constant_path_node().is_some()
+        || node.as_local_variable_read_node().is_some_and(|read| id_text(read.name()) == BUFFER_LOCAL)
+        || node.as_local_variable_write_node().is_some_and(|write| id_text(write.name()) == COMPILER_LOCAL)
 }
 
 struct Loops<'a> {
@@ -557,9 +581,11 @@ mod tests {
     fn unused_block_arguments_are_flagged_with_the_way_out() {
         let erb = "<% @users.each do |user, index| %>\n  <li><%= user.name %></li>\n<% end %>\n";
         assert_eq!(found(Erb, erb, false), one(UNUSED_BLOCK_ARGUMENT, "index"));
-        assert_eq!(run(Erb, erb, false)[0].message, "Block argument `index` is never used; remove it or rename it `_index`");
+        assert_eq!(run(Erb, erb, false)[0].message, "Block argument `index` is never used; rename it `_index`");
         assert_eq!(found(Haml, "- @users.each do |user, index|\n  %li= user.name\n", false), one(UNUSED_BLOCK_ARGUMENT, "index"));
         assert_eq!(found(Slim, "- @users.each do |user, index|\n  li = user.name\n", false), one(UNUSED_BLOCK_ARGUMENT, "index"));
+        let only = run(Erb, "<% a.each do |x| %>y<% end %>", false);
+        assert_eq!(only[0].message, "Block argument `x` is never used; remove it or rename it `_x`");
         let first = run(Erb, "<% a.each_with_index do |item, i| %><%= i %><% end %>", false);
         assert_eq!(first[0].message, "Block argument `item` is never used; rename it `_item`");
         assert_eq!(found(Erb, "<% a.each do |x = 1| %>y<% end %>", false), one(UNUSED_BLOCK_ARGUMENT, "x"));
@@ -647,6 +673,34 @@ mod tests {
         }
         assert_eq!(found_by(RENDER_IN_LOOP, Haml, "- a.each do |x|\n  %li= render \"card\", x: x\n"), none());
         assert_eq!(found_by(RENDER_IN_LOOP, Slim, "- a.each do |x|\n  li = render \"card\", x: x\n"), none());
+    }
+
+    #[test]
+    fn loops_with_conditions_or_code_around_the_render_are_left_alone() {
+        let render = "<%= render \"card\", user: user %>";
+        for body in [
+            format!("<% if user %>{render}<% end %>"),
+            format!("<% if @compact %>{render}<% end %>"),
+            format!("<% next unless user %>{render}"),
+            format!("<% break if @stop %>{render}"),
+            format!("<% x = 1 %>{render}"),
+            "<%= render \"card\", user: user if user %>".to_string(),
+            "<%= user && render(\"card\", user: user) %>".to_string(),
+            format!("<% case user %><% when nil %><% else %>{render}<% end %>"),
+            format!("<%= @title %>{render}"),
+            format!("<%= TITLE %>{render}"),
+            format!("<%= Site::TITLE %>{render}"),
+        ] {
+            let text = format!("<% a.each do |user| %>{body}<% end %>");
+            assert_eq!(found_by(RENDER_IN_LOOP, Erb, &text), none(), "{text}");
+        }
+        for text in [
+            "- a.each do |user|\n  = render \"card\", user: user if user\n",
+            "- a.each do |user|\n  - next unless user\n  = render \"card\", user: user\n",
+        ] {
+            assert_eq!(found_by(RENDER_IN_LOOP, Haml, text), none(), "{text}");
+            assert_eq!(found_by(RENDER_IN_LOOP, Slim, text), none(), "{text}");
+        }
     }
 
     #[test]
