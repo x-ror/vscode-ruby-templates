@@ -67,6 +67,10 @@ const fn new_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rul
     Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], alias: None }
 }
 
+const fn off_by_default_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
+    Rule { on_by_default: &[], ..new_lint(name, languages) }
+}
+
 const fn format_rule(
     name: &'static str,
     languages: &'static [TemplateLang],
@@ -139,6 +143,7 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/UnusedBlockArgument", TEMPLATES),
     new_lint("Rails/RenderInLoop", TEMPLATES),
     new_lint("Rails/OutputControlFlow", &[Erb]),
+    new_lint("Rails/UnsafeOutput", TEMPLATES),
     new_lint("Turbo/PermanentRequiresId", TEMPLATES),
     new_lint("Stimulus/UnknownController", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
@@ -155,6 +160,8 @@ pub const RULES: &[Rule] = &[
     format_rule(TRAILING_WHITESPACE, TEMPLATES, TEMPLATES, &[], &[]),
     // Renames HTML attributes, which only an app that runs Turbo and not Rails UJS wants.
     format_rule(PREFER_TURBO_ATTRIBUTES, TEMPLATES, &[], &[], &[]),
+    // A style preference: templates written either way are fine.
+    off_by_default_lint("Style/ErbTrimMode", &[Erb]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {
@@ -206,6 +213,8 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),
+            include_str!("erb/trim_mode.rs"),
+            include_str!("rails/unsafe_output.rs"),
             include_str!("element_lints.rs"),
             include_str!("erb/output_control_flow.rs"),
             include_str!("haml/indent.rs"),

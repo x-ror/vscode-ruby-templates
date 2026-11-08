@@ -6,6 +6,7 @@ pub mod output_control_flow;
 pub mod ruby;
 pub mod tag_spacing;
 pub mod tags;
+pub mod trim_mode;
 
 use crate::html::TOKENIZED_AS_TEXT;
 use crate::ruby::generated::RUBY_SYNTAX;

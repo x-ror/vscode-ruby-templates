@@ -8,7 +8,7 @@ use crate::haml;
 use crate::lang::{haml_html_host, html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, view_lints};
+use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, unsafe_output, view_lints};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -121,6 +121,7 @@ fn view_lints_root(rules: &ResolvedRules, project: &Project, path: &Path) -> Opt
         output_lints::SILENT_RENDER,
         output_lints::SILENT_HELPER,
         output_lints::DEBUG_OUTPUT,
+        unsafe_output::UNSAFE_OUTPUT,
         view_lints::INSTANCE_VARIABLE_IN_PARTIAL,
         view_lints::UNUSED_STRICT_LOCAL,
         view_lints::UNUSED_BLOCK_ARGUMENT,
@@ -152,6 +153,7 @@ fn view_diagnostics(
     };
     let mut out = output_lints::diagnostics(doc.lang, &doc.text, tree.compiled, &tree.root);
     out.extend(view_lints::diagnostics(&doc.text, &view, tree.compiled, &tree.root));
+    out.extend(unsafe_output::diagnostics(doc.lang, &doc.text, tree.compiled, &tree.root));
     if rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER) {
         let registered = || rules.reports(attribute_lints::UNKNOWN_CONTROLLER).then(|| stimulus::registered(path)).flatten();
         out.extend(attribute_lints::diagnostics(&doc.text, elements, registered));
@@ -220,6 +222,9 @@ pub(crate) fn language_diagnostics(
     // Void elements are an HTML rule; Slim itself renders `<img>x</img>` for `.xml.slim` and friends.
     if lang == TemplateLang::Slim && !slim_html_host(uri) {
         out.retain(|d| util::code(d) != Some(slim::indent::code::VOID_CHILDREN));
+    }
+    if lang == TemplateLang::Erb {
+        out.extend(erb::trim_mode::diagnostics(text));
     }
     if lang == TemplateLang::Erb && doc.html_host(uri) {
         out.extend(erb::html_diagnostics(text));
@@ -587,6 +592,8 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),
+            include_str!("erb/trim_mode.rs"),
+            include_str!("rails/unsafe_output.rs"),
             include_str!("haml/indent.rs"),
             include_str!("slim/indent.rs"),
         ] {
@@ -618,6 +625,29 @@ mod tests {
         assert_eq!(codes(&rails, "app/views/a.html.erb", &options), ["Rails/SilentHelper"]);
         assert!(codes(&padrino, "app/views/a.html.erb", &options).is_empty());
         assert!(codes(&rails, "config/nginx.conf.erb", &options).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unsafe_output_is_on_and_erb_trim_mode_off_until_enabled() {
+        let root = std::env::temp_dir().join(format!("rt-unsafe-output-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("Gemfile.lock", &format!("{GEM_LOCK}    actionview (8.0.2)\n")),
+                ("on/.ruby-templates.toml", "[Style.ErbTrimMode]\nenabled = true\n"),
+                ("on/app/views/a.html.erb", ""),
+                ("app/views/a.html.erb", ""),
+            ],
+        );
+        let codes = |file: &str| {
+            let text = "<%= raw @bio %>\n<% a -%>\n<% b %>\n<% c %>\n";
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            let found = diagnostics(&util::file_uri(root.join(file)).unwrap(), &doc, &Options::default());
+            found.iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        assert_eq!(codes("app/views/a.html.erb"), ["Rails/UnsafeOutput"]);
+        assert_eq!(codes("on/app/views/a.html.erb"), ["Style/ErbTrimMode", "Rails/UnsafeOutput"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

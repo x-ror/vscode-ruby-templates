@@ -674,6 +674,23 @@ export const diagnostics: Diagnostic[] = [
     column: 3,
   },
   {
+    code: "Rails/UnsafeOutput",
+    languages: ["erb", "haml", "slim"],
+    summary: "Output that skips Rails' HTML escaping.",
+    explanation:
+      "`raw x`, `x.html_safe` and `safe_concat x` are reported on the method name, and the unescaped output markers `<%==` (ERB), `!=` and `!~` (Haml) and `==` (Slim) on the marker. A `to_json` value gets the hint to use `json_escape`. Not reported when the value is certainly safe: a literal without interpolation, a `t` call with a literal key ending in `_html` or `.html`, or a call to `sanitize`, `safe_join`, `strip_tags`, `json_escape`, `j`, `escape_javascript`, `h`, `html_escape`, `link_to`, `content_tag`, `render`, `capture` and the like. Rails projects only, in templates under app/views.",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<%= raw @user.bio %>
+`,
+    },
+    message:
+      "`raw` outputs `@user.bio` without escaping; use `sanitize` if it holds user HTML",
+    line: 1,
+    column: 5,
+  },
+  {
     code: "Turbo/PermanentRequiresId",
     languages: ["erb", "haml", "slim"],
     summary: "An element with `data-turbo-permanent` and no `id`.",
@@ -710,6 +727,24 @@ export const diagnostics: Diagnostic[] = [
       "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?",
     line: 1,
     column: 23,
+  },
+  {
+    code: "Style/ErbTrimMode",
+    languages: ["erb"],
+    summary: "Both `%>` and `-%>` in one template.",
+    explanation:
+      "Every closer of the kind the template uses less is reported, `-%>` when there are as many of each. Comments (`<%#`) and literal `<%%` tags are not counted. Off by default: turn it on with `enabled = true` under `[Style.ErbTrimMode]` in .ruby-templates.toml.",
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<% @users.each do |user| -%>
+  <li><%= user.name %></li>
+<% end %>
+`,
+    },
+    message: "`-%>` here, but most closers in this template are `%>`",
+    line: 1,
+    column: 26,
   },
 ];
 

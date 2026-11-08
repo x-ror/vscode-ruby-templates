@@ -725,8 +725,10 @@
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
                   "Rails/OutputControlFlow",
+                  "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
-                  "Stimulus/UnknownController"
+                  "Stimulus/UnknownController",
+                  "Style/ErbTrimMode"
                 ]
               },
               {
@@ -774,6 +776,7 @@
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
+                  "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController"
                 ]
@@ -840,6 +843,7 @@
                   "Rails/UnusedStrictLocal",
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
+                  "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController"
                 ]
