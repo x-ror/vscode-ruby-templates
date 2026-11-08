@@ -967,7 +967,7 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "Haml and Slim render a bare `.card` or `#main` as a `div`. The formatter reads the file again and keeps the rewrite only when Haml or Slim compile it to the same template.",
+      'Haml and Slim render a bare `.card` or `#main` as a `div`, unless a Slim app changes the tag a bare shortcut makes (`Slim::Engine.set_options default_tag: "span"`): the rule assumes `div`, so leave it off there. The formatter reads the file again and keeps the rewrite only when Haml or Slim compile it to the same template.',
     status: "available",
     onByDefault: [],
     config: text("[Style.ImplicitDiv]", "enabled = true"),
@@ -1018,7 +1018,7 @@ enabled = false`,
     type: "autofix",
     safe: true,
     safeNote:
-      "Only attributes both syntaxes can say the same way are converted: strings without escapes or interpolation, numbers, `true`, and variables. Anything else leaves the tag as it is. The formatter reads the file again and keeps the rewrite only when Haml compiles it to the same template and each tag sets the same attributes.",
+      "Only attributes both syntaxes can say the same way are converted: strings without escapes or interpolation, numbers, `true`, `false`, `nil`, and variables. Anything else leaves the tag as it is, and so does a `data` or `aria` with a value that is not a literal hash, which may become `data-*` attributes at run time. The formatter reads the file again and keeps the rewrite only when Haml compiles it to the same template and each tag sets the same attributes.",
     status: "available",
     onByDefault: [],
     config: text(
@@ -1027,7 +1027,7 @@ enabled = false`,
       'style = "html" # or ruby_hash',
     ),
     today:
-      '`style = "ruby_hash"` (the default) writes `%a(href="/" title=@t checked)` as `%a{href: "/", title: @t, checked: true}`, with `"data-n": …` for names that need quotes; `style = "html"` writes the hash as `%a(href="/" title=@t checked)`. A tag with both a hash and a list, a nested hash (`data: {…}`), a splat, a key that is not a literal name, a repeated name, a value that is a method call with a receiver or arguments, an expression, a string with `\\` or `#{}`, `:symbol` or a list, an attribute list or hash over several lines, and a tag in a line joined with `|` stay. Format selection applies it to the lines it covers.',
+      '`style = "ruby_hash"` (the default) writes `%a(href="/" title=@t checked)` as `%a{href: "/", title: @t, checked: true}`, with `"data-n": …` for names that need quotes; `style = "html"` writes the hash as `%a(href="/" title=@t checked)`. A tag with both a hash and a list, a nested hash (`data: {…}`), `data` or `aria` with a variable or other value that is not a hash, a splat, a key that is not a literal name, a repeated name, a value that is a method call with a receiver or arguments, an expression, a string with `\\` or `#{}`, `:symbol` or a list, an attribute list or hash over several lines, and a tag in a line joined with `|` stay. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "haml",

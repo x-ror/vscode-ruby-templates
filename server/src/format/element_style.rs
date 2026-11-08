@@ -53,12 +53,22 @@ pub(super) fn attributes(text: &str, settings: &Settings, grammar: ruby_prism::V
     if edits.is_empty() {
         return Ok(None);
     }
-    let rewritten = replaced(body, &edits);
-    if same_tags(body, &rewritten, grammar, false) && pairs_of(body, &options) == pairs_of(&rewritten, &options) {
-        Ok(Some(format!("{bom}{rewritten}")))
-    } else {
-        Err(ATTRIBUTES_REFUSED.to_string())
-    }
+    let before = pairs_of(body, &options);
+    let keeps = |edits: &[Edit]| {
+        let rewritten = replaced(body, edits);
+        (same_tags(body, &rewritten, grammar, false) && before == pairs_of(&rewritten, &options)).then_some(rewritten)
+    };
+    // One tag the guard refuses must not cost the others their rewrite.
+    let kept = keeps(&edits).or_else(|| {
+        let passing: Vec<Edit> = edits.into_iter().filter(|edit| keeps(std::slice::from_ref(edit)).is_some()).collect();
+        keeps(&passing).filter(|_| !passing.is_empty())
+    });
+    kept.map(|rewritten| Some(format!("{bom}{rewritten}"))).ok_or_else(|| ATTRIBUTES_REFUSED.to_string())
+}
+
+/// `data` and `aria` with a value that is no hash may be one at run time, and Haml then writes `data-*` attributes.
+fn is_prefixed_hash_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("data") || name.eq_ignore_ascii_case("aria")
 }
 
 fn split_bom(text: &str) -> (&str, &str) {
@@ -296,7 +306,7 @@ fn read_list(line: &str) -> Option<(usize, Vec<Pair>)> {
             AttributeValue::Present
         };
         // A value runs on to a blank or the closing parenthesis; anything else is something this does not read.
-        if !line[at..].starts_with([' ', ')']) || pairs.iter().any(|(seen, _)| *seen == name) {
+        if !line[at..].starts_with([' ', ')']) || is_prefixed_hash_name(&name) || pairs.iter().any(|(seen, _)| *seen == name) {
             return None;
         }
         pairs.push((name, value));
@@ -361,7 +371,7 @@ fn read_hash(text: &str, at: usize, code: &[Chunk], options: &ruby_prism::ParseO
         let (name, _) = literal_name(&assoc.key(), &compiled)?;
         let well_named = attribute_name_len(&name) == Some(name.len());
         let value = hash_value(&assoc.value(), &compiled, text)?;
-        if !well_named || pairs.iter().any(|(seen, _)| *seen == name) {
+        if !well_named || is_prefixed_hash_name(&name) || pairs.iter().any(|(seen, _)| *seen == name) {
             return None;
         }
         pairs.push((name, value));
@@ -536,6 +546,8 @@ mod tests {
             "%a{href: \"a#{b}\"}\n",
             "%a{href: \"a\\\"b\"}\n",
             "%a{**opts}\n",
+            "%a{data: @h}\n",
+            "%a{\"aria\" => x}\n",
             "%a{data: {a: 1}}\n",
             "%a{href: \"x\", href: \"y\"}\n",
             "%a{href: @x ? 1 : 2}\n",
@@ -561,6 +573,8 @@ mod tests {
             "%a(href=\"x\"\n   title=\"y\")\n",
             "%a(href=x2y.z)\n",
             "%a()\n",
+            "%a(data=@h)\n",
+            "%a(ARIA=x)\n",
             "%a(a=\"b\"c=\"d\")\n",
             "%a(href=\"x\"){title: \"y\"}\n",
             "%a(href=1x)\n",
@@ -594,6 +608,13 @@ mod tests {
         }
         let options = ruby_prism::Options::default().build();
         assert_ne!(pairs_of("%p(a=@x)\n", &options), pairs_of("%p{a: @y}\n", &options));
+    }
+
+    #[test]
+    fn a_tag_that_stays_does_not_stop_the_others() {
+        let text = "%a{data: @h, href: \"/\"}\n%b{href: \"/b\"}\n";
+        assert_eq!(html_of(text), "%a{data: @h, href: \"/\"}\n%b(href=\"/b\")\n");
+        assert_eq!(ruby_hash_of("%a(data=@h)\n%b(x=\"1\")\n"), "%a(data=@h)\n%b{x: \"1\"}\n");
     }
 
     #[test]
