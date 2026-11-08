@@ -7,7 +7,7 @@ use crate::ruby::generated::{Compiled, IGNORED_ERROR};
 use crate::util::{self, LineIndex};
 use ruby_prism::{CallNode, Node, StatementsNode, Visit};
 use std::collections::BTreeMap;
-use tower_lsp_server::ls_types::{Diagnostic, Position, Range, TextEdit};
+use tower_lsp_server::ls_types::{Diagnostic, Range, TextEdit};
 
 pub(crate) const SILENT_RENDER: &str = "Rails/SilentRender";
 pub(crate) const SILENT_HELPER: &str = "Rails/SilentHelper";
@@ -81,13 +81,14 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, extra_engines: &[Strin
     if result.errors().any(|e| e.message() != IGNORED_ERROR.as_bytes()) {
         return Vec::new();
     }
-    let mut finder = Finder { compiled: &compiled, found: BTreeMap::new() };
+    let mut finder = Finder { compiled: &compiled, env_guards: 0, found: BTreeMap::new() };
     finder.visit(&result.node());
     let index = LineIndex::new(text);
     let marker = match lang {
         TemplateLang::Erb => ("`<% %>`", "`<%=`"),
         _ => ("`-`", "`=`"),
     };
+    let has_marker = |at: usize| has_silent_marker(lang, text, at);
     finder
         .found
         .into_iter()
@@ -95,8 +96,12 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, extra_engines: &[Strin
             let (start, end) = compiled.template_span(start, finding.end)?;
             let name = &finding.name;
             let (code, message) = match finding.kind {
-                Kind::Render => (SILENT_RENDER, format!("`{name}` in {} outputs nothing; use {}", marker.0, marker.1)),
-                Kind::Helper => (SILENT_HELPER, format!("`{name}` returns markup that {} throws away; use {}", marker.0, marker.1)),
+                Kind::Render if has_marker(start) => (SILENT_RENDER, format!("`{name}` in {} outputs nothing; use {}", marker.0, marker.1)),
+                Kind::Render => (SILENT_RENDER, format!("`{name}`'s output is discarded")),
+                Kind::Helper if has_marker(start) => {
+                    (SILENT_HELPER, format!("`{name}` returns markup that {} throws away; use {}", marker.0, marker.1))
+                }
+                Kind::Helper => (SILENT_HELPER, format!("`{name}` returns markup that is discarded")),
                 Kind::Debug => (DEBUG_OUTPUT, format!("`{name}` is debugging left in the view")),
             };
             Some(util::coded(util::warning(index.range(start, end), message), code))
@@ -104,24 +109,42 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, extra_engines: &[Strin
         .collect()
 }
 
-/// The edit that makes the silent tag around the call at `start` an output tag: `<%` to `<%=`, `-` to `=`; none when other
-/// code comes before the call in its tag.
-pub(crate) fn output_marker_edit(lang: TemplateLang, text: &str, start: Position) -> Option<TextEdit> {
-    let (line_start, line, column) = util::line_at(text, start);
-    let index = LineIndex::new(text);
+/// Whether the call at `offset` is in a tag that has a silent marker to change: `<%`, or a `-` line.
+fn has_silent_marker(lang: TemplateLang, text: &str, offset: usize) -> bool {
+    marker_before(lang, text, offset).is_some()
+}
+
+/// Where the silent marker of the tag around the call at `offset` is (ERB: just after `<%`) and its length, when only
+/// whitespace comes between it and the call.
+fn marker_before(lang: TemplateLang, text: &str, offset: usize) -> Option<(usize, usize)> {
     if lang == TemplateLang::Erb {
-        let call = line_start + column;
-        let after_open = text[..call].rfind("<%")? + 2;
-        let at = index.position(after_open);
-        return text[after_open..call].trim().is_empty().then(|| TextEdit::new(Range::new(at, at), "=".into()));
+        let after_open = text[..offset].rfind("<%")? + 2;
+        return text[after_open..offset].trim().is_empty().then_some((after_open, 0));
     }
-    let before = &line[..column];
-    let marker = line_start + before.rfind('-').filter(|_| before.trim() == "-")?;
-    Some(TextEdit::new(index.range(marker, marker + 1), "=".into()))
+    let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let before = &text[line_start..offset];
+    (before.trim() == "-").then(|| (line_start + before.rfind('-').unwrap_or(0), 1))
+}
+
+/// The edit that makes the silent tag around the call `call` an output tag: `<%` to `<%=`, `-` to `=`. None when the call
+/// is not alone in its tag or line, since `<%= a; b %>` would output only `b`; a block or a trailing `if`/`unless` is fine.
+pub(crate) fn output_marker_edit(lang: TemplateLang, text: &str, call: Range) -> Option<TextEdit> {
+    let start = util::position_to_offset(text, call.start)?;
+    let end = util::position_to_offset(text, call.end)?;
+    let (marker, length) = marker_before(lang, text, start)?;
+    let rest = &text[end..];
+    let rest = if lang == TemplateLang::Erb { &rest[..rest.find("%>")?] } else { rest.lines().next().unwrap_or("") };
+    if rest.contains([';', '\n']) {
+        return None;
+    }
+    let index = LineIndex::new(text);
+    Some(TextEdit::new(index.range(marker, marker + length), "=".into()))
 }
 
 struct Finder<'a> {
     compiled: &'a Compiled,
+    /// How many enclosing `if`/`unless` test `Rails.env`: debugging behind one is on purpose.
+    env_guards: usize,
     /// By start in the generated source.
     found: BTreeMap<usize, Finding>,
 }
@@ -141,12 +164,16 @@ impl Finder<'_> {
             self.call(&call, used);
         } else if let Some(branch) = node.as_if_node() {
             self.visit(&branch.predicate());
-            branch.statements().inspect(|body| self.statements(body, used));
-            branch.subsequent().inspect(|next| self.statement(next, used));
+            self.guarded(&branch.predicate(), |finder| {
+                branch.statements().inspect(|body| finder.statements(body, used));
+                branch.subsequent().inspect(|next| finder.statement(next, used));
+            });
         } else if let Some(branch) = node.as_unless_node() {
             self.visit(&branch.predicate());
-            branch.statements().inspect(|body| self.statements(body, used));
-            branch.else_clause().inspect(|clause| branch_else(self, clause, used));
+            self.guarded(&branch.predicate(), |finder| {
+                branch.statements().inspect(|body| finder.statements(body, used));
+                branch.else_clause().inspect(|clause| branch_else(finder, clause, used));
+            });
         } else if let Some(clause) = node.as_else_node() {
             branch_else(self, &clause, used);
         } else {
@@ -175,7 +202,19 @@ impl Finder<'_> {
         }
     }
 
+    /// Runs `visit` for the body of a branch on `predicate`.
+    fn guarded(&mut self, predicate: &Node, visit: impl FnOnce(&mut Self)) {
+        let (start, end) = (predicate.location().start() as usize, predicate.location().end() as usize);
+        let guard = self.compiled.source[start..end].contains("Rails.env");
+        self.env_guards += usize::from(guard);
+        visit(self);
+        self.env_guards -= usize::from(guard);
+    }
+
     fn record(&mut self, call: &CallNode, kind: Kind, name: String) {
+        if kind == Kind::Debug && self.env_guards > 0 {
+            return;
+        }
         let start = call.location().start() as usize;
         let end = call.block().map_or(call.location().end(), |block| block.location().start()) as usize;
         let end = start + self.compiled.source[start..end].trim_end().len();
@@ -188,6 +227,19 @@ fn branch_else(finder: &mut Finder, clause: &ruby_prism::ElseNode, used: bool) {
 }
 
 impl<'pr> Visit<'pr> for Finder<'_> {
+    fn visit_if_node(&mut self, node: &ruby_prism::IfNode<'pr>) {
+        self.visit(&node.predicate());
+        self.guarded(&node.predicate(), |finder| {
+            node.statements().inspect(|body| finder.statements(body, true));
+            node.subsequent().inspect(|next| finder.visit(next));
+        });
+    }
+
+    fn visit_unless_node(&mut self, node: &ruby_prism::UnlessNode<'pr>) {
+        self.visit(&node.predicate());
+        self.guarded(&node.predicate(), |finder| ruby_prism::visit_unless_node(finder, node));
+    }
+
     fn visit_statements_node(&mut self, node: &StatementsNode<'pr>) {
         self.statements(node, true);
     }
@@ -369,19 +421,60 @@ mod tests {
 
     #[test]
     fn the_fix_turns_the_tag_into_an_output_tag() {
-        let fixed = |lang, text: &str, flagged: &str| {
-            let offset = text.find(flagged).unwrap();
-            let edit = output_marker_edit(lang, text, LineIndex::new(text).position(offset))?;
+        let fixed = |lang, text: &str| {
+            let flagged = diagnostics(lang, text, &[], ruby_prism::Version::Latest);
+            let edit = output_marker_edit(lang, text, flagged.first()?.range)?;
             let index = LineIndex::new(text);
-            let (start, end) = (0..=text.len())
-                .filter(|&at| index.position(at) == edit.range.start || index.position(at) == edit.range.end)
-                .fold((usize::MAX, 0), |(lo, hi), at| (lo.min(at), hi.max(at)));
-            Some(format!("{}{}{}", &text[..start], edit.new_text, &text[end..]))
+            let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
+            Some(format!("{}{}{}", &text[..at(edit.range.start)], edit.new_text, &text[at(edit.range.end)..]))
         };
-        assert_eq!(fixed(TemplateLang::Erb, "<p>\n<%  render \"x\" -%>\n", "render").as_deref(), Some("<p>\n<%=  render \"x\" -%>\n"));
-        assert_eq!(fixed(TemplateLang::Erb, "<% a; render \"x\" %>", "render"), None);
-        assert_eq!(fixed(TemplateLang::Haml, "%p\n  - render \"x\"\n", "render").as_deref(), Some("%p\n  = render \"x\"\n"));
-        assert_eq!(fixed(TemplateLang::Slim, "- render \"x\"\n", "render").as_deref(), Some("= render \"x\"\n"));
-        assert_eq!(fixed(TemplateLang::Slim, "- a; render \"x\"\n", "render"), None);
+        use TemplateLang::{Erb, Haml, Slim};
+        assert_eq!(fixed(Erb, "<p>\n<%  render \"x\" -%>\n").as_deref(), Some("<p>\n<%=  render \"x\" -%>\n"));
+        assert_eq!(fixed(Erb, "<% render \"x\" if a %>").as_deref(), Some("<%= render \"x\" if a %>"));
+        assert_eq!(fixed(Erb, "<% render layout: \"x\" do %>y<% end %>").as_deref(), Some("<%= render layout: \"x\" do %>y<% end %>"));
+        assert_eq!(fixed(Erb, "<% a; render \"x\" %>"), None);
+        assert_eq!(fixed(Erb, "<% render \"a\"; render \"b\" %>"), None);
+        assert_eq!(fixed(Erb, "<% render \"a\"\n render \"b\" %>"), None);
+        assert_eq!(fixed(Haml, "%p\n  - render \"x\"\n").as_deref(), Some("%p\n  = render \"x\"\n"));
+        assert_eq!(fixed(Slim, "- render \"x\"\n").as_deref(), Some("= render \"x\"\n"));
+        assert_eq!(fixed(Slim, "- a; render \"x\"\n"), None);
+        assert_eq!(fixed(Slim, "- render \"a\"; render \"b\"\n"), None);
+    }
+
+    #[test]
+    fn debugging_behind_a_rails_env_test_is_on_purpose() {
+        use TemplateLang::{Erb, Haml, Slim};
+        for text in [
+            "<%= debug(params) if Rails.env.development? %>",
+            "<% if Rails.env.development? %><%= debug(params) %><% end %>",
+            "<% unless Rails.env.production? %><% binding.irb %><% end %>",
+            "<% if Rails.env.development? %><% if x %><% p 1 %><% end %><% end %>",
+            "<% binding.irb if Rails.env.test? %>",
+        ] {
+            assert!(found(Erb, text).is_empty(), "{text}");
+        }
+        assert!(found(
+            Haml,
+            "- if Rails.env.development?
+  = debug(params)
+"
+        )
+        .is_empty());
+        assert!(found(
+            Haml,
+            "= debug(params) if Rails.env.development?
+"
+        )
+        .is_empty());
+        assert!(found(Slim, "- if Rails.env.development?\n  = debug(params)\n").is_empty());
+        assert!(found(Slim, "- binding.irb if Rails.env.test?\n").is_empty());
+        assert_eq!(found(Erb, "<% if admin? %><%= debug(params) %><% end %>").len(), 1);
+    }
+
+    #[test]
+    fn the_message_names_a_marker_only_where_there_is_one() {
+        let message = |lang, text: &str| diagnostics(lang, text, &[], ruby_prism::Version::Latest)[0].message.clone();
+        assert_eq!(message(TemplateLang::Erb, "<% render \"x\" %>"), "`render` in `<% %>` outputs nothing; use `<%=`");
+        assert_eq!(message(TemplateLang::Haml, ":ruby\n  render \"x\"\n"), "`render`'s output is discarded");
     }
 }

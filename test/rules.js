@@ -63,6 +63,11 @@ try {
       path.join(dir, ".ruby-templates.toml"),
       `root = true\n[${rule.name.replace("/", ".")}]\nenabled = ${enabled}\n`,
     );
+    // Rails-only rules look for the framework here.
+    fs.writeFileSync(
+      path.join(dir, "Gemfile.lock"),
+      "GEM\n  specs:\n    actionview (8.0.2)\n",
+    );
     return dir;
   };
   let reported = 0;

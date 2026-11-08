@@ -1083,7 +1083,7 @@ enabled = false`,
     status: "available",
     code: "Rails/SilentRender",
     today:
-      'In a tag that outputs nothing (`<% %>` in ERB, `-` in Haml and Slim), a `render` with arguments, also the block form (`render layout: "x" do`). Not reported when the result is assigned or passed on, or when the call is the last statement of a block, since the helper that takes the block may use its value. The quick fix turns the tag into an output tag.',
+      'In a tag that outputs nothing (`<% %>` in ERB, `-` in Haml and Slim), a `render` with arguments, also the block form (`render layout: "x" do`). Not reported when the result is assigned or passed on, or when the call is the last statement of a block, since the helper that takes the block may use its value. Only in Rails projects, in templates under app/views, since Padrino and Middleman write helper output to the page from `<% %>`. The quick fix turns the tag into an output tag when the call is alone in its tag or line.',
     setting: {
       label: "Turn it off",
       code: `[Rails.SilentRender]
@@ -1144,7 +1144,7 @@ enabled = false`,
     status: "available",
     code: "Rails/SilentHelper",
     today:
-      "In a tag that outputs nothing, a call to one of these helpers, without a receiver: `link_to`, `link_to_if`, `link_to_unless`, `link_to_unless_current`, `button_to`, `mail_to`, `image_tag`, `content_tag`, `tag` and `tag.div`-style calls for HTML elements, `form_with`, `form_for`, `form_tag`, `fields_for`, `label_tag`, `text_field_tag`, `hidden_field_tag`, `submit_tag`, `simple_format`, the `number_to_*` formatters, `time_ago_in_words` and `distance_of_time_in_words`. Helpers with side effects, such as `content_for` and `provide`, helpers of your own and calls on a receiver (`form.fields_for`) are left alone. The quick fix turns the tag into an output tag.",
+      "In a tag that outputs nothing, a call to one of these helpers, without a receiver: `link_to`, `link_to_if`, `link_to_unless`, `link_to_unless_current`, `button_to`, `mail_to`, `image_tag`, `content_tag`, `tag` and `tag.div`-style calls for HTML elements, `form_with`, `form_for`, `form_tag`, `fields_for`, `label_tag`, `text_field_tag`, `hidden_field_tag`, `submit_tag`, `simple_format`, the `number_to_*` formatters, `time_ago_in_words` and `distance_of_time_in_words`. Helpers with side effects, such as `content_for` and `provide`, helpers of your own and calls on a receiver (`form.fields_for`) are left alone. Only in Rails projects, in templates under app/views, since Padrino and Middleman write helper output to the page from `<% %>`. The quick fix turns the tag into an output tag when the call is alone in its tag or line.",
     setting: {
       label: "Turn it off",
       code: `[Rails.SilentHelper]
@@ -1305,7 +1305,7 @@ enabled = false`,
     status: "available",
     code: "Rails/DebugOutput",
     today:
-      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, when the call is a whole statement or the whole of an output tag. A local variable named `p`, a method on a receiver (`form.p`, `obj.debug`) and a call used as an argument are not reported.",
+      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, when the call is a whole statement or the whole of an output tag. A local variable named `p`, a method on a receiver (`form.p`, `obj.debug`), a call used as an argument and a call under an `if` or `unless` that tests `Rails.env` are not reported. Only in Rails projects, in templates under app/views.",
     setting: {
       label: "Turn it off",
       code: `[Rails.DebugOutput]
@@ -1328,8 +1328,6 @@ enabled = false`,
             message: "`debug` is debugging left in the view",
             code: "Rails/DebugOutput",
           },
-        ],
-        faults: [
           {
             line: 2,
             column: 4,
@@ -1350,8 +1348,6 @@ enabled = false`,
             message: "`debug` is debugging left in the view",
             code: "Rails/DebugOutput",
           },
-        ],
-        faults: [
           {
             line: 2,
             column: 3,
@@ -1372,8 +1368,6 @@ enabled = false`,
             message: "`debug` is debugging left in the view",
             code: "Rails/DebugOutput",
           },
-        ],
-        faults: [
           {
             line: 2,
             column: 3,

@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-- `Rails/SilentRender` warns about a `render` in a tag that outputs nothing (`<% render "x" %>`, `- render "x"`), also in its block form, since the partial is thrown away. The quick fix "Output the result" makes the tag `<%=` (`=` in Haml and Slim). Not reported when the result is assigned or passed on, or when the call is the last statement of a block whose value the helper around it may use.
+- `Rails/SilentRender` warns about a `render` in a tag that outputs nothing (`<% render "x" %>`, `- render "x"`), also in its block form, since the partial is thrown away. The quick fix "Output the result" makes the tag `<%=` (`=` in Haml and Slim) when the call is alone in its tag or line. The three rules run in Rails projects only, under app/views. Not reported when the result is assigned or passed on, or when the call is the last statement of a block whose value the helper around it may use.
 - `Rails/SilentHelper` warns about a Rails helper that only returns markup (`link_to`, `button_to`, `image_tag`, `content_tag`, `tag.div`, `form_with`, `number_to_currency` and the like) called in a tag that outputs nothing, with the same quick fix. Helpers with side effects (`content_for`, `provide`), helpers of your own and calls on a receiver (`form.fields_for`) are left alone.
-- `Rails/DebugOutput` warns about `p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry` left in a view, in output and in statement tags. A local variable named `p`, `form.p` and a call used as an argument are not reported.
+- `Rails/DebugOutput` warns about `p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry` left in a view, in output and in statement tags. A local variable named `p`, `form.p`, a call used as an argument and a call under an `if` or `unless` that tests `Rails.env` are not reported.
 
 ## 0.11.0
 

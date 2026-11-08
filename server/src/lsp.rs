@@ -1232,8 +1232,6 @@ fn helper_hover(h: &helpers::Helper) -> String {
     }
 }
 
-/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
-/// `source.fixAll`, which many users run on save for other languages' linters.
 /// "Output it" for each silent render or helper, which turns its tag into an output tag.
 fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
     let silent = |d: &&Diagnostic| matches!(util::code(d), Some(SILENT_RENDER | SILENT_HELPER));
@@ -1241,7 +1239,7 @@ fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<
         .iter()
         .filter(silent)
         .filter_map(|d| {
-            let edit = output_marker_edit(doc.lang, &doc.text, d.range.start)?;
+            let edit = output_marker_edit(doc.lang, &doc.text, d.range)?;
             Some(CodeActionOrCommand::CodeAction(CodeAction {
                 title: "Output the result".into(),
                 kind: Some(CodeActionKind::QUICKFIX),
@@ -1254,6 +1252,8 @@ fn silent_output_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<
         .collect()
 }
 
+/// The source action that spaces every ERB tag in a file; `editor.codeActionsOnSave` can run it. Outside
+/// `source.fixAll`, which many users run on save for other languages' linters.
 const ERB_SPACING: CodeActionKind = CodeActionKind::new("source.erbSpacing");
 
 /// "Add spaces inside this ERB tag" for tags touching `range`, and the same for the whole file when `only` asks

@@ -466,7 +466,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "A `render` in a tag that outputs nothing.",
     explanation:
-      "A `<% %>` tag in ERB, and a `-` line in Haml and Slim, run Ruby and print nothing, so the partial `render` returns is thrown away. Reported for a `render` that is a whole statement, also in its block form. Not reported when the result is assigned or passed on. The quick fix changes the tag to `<%=` (`=` in Haml and Slim).",
+      "A `<% %>` tag in ERB, and a `-` line in Haml and Slim, run Ruby and print nothing, so the partial `render` returns is thrown away. Reported for a `render` that is a whole statement, also in its block form. Not reported when the result is assigned or passed on. Rails projects only, in templates under app/views. The quick fix changes the tag to `<%=` (`=` in Haml and Slim) when the call is alone in its tag or line.",
     example: {
       file: "app/views/users/index.html.erb",
       lang: "erb",
@@ -483,7 +483,7 @@ export const diagnostics: Diagnostic[] = [
     summary:
       "A helper that returns markup, called in a tag that outputs nothing.",
     explanation:
-      "`link_to`, `image_tag`, `content_tag`, `form_with` and the other helpers on the list return markup and do nothing else, so calling one in a `<% %>` tag (a `-` line in Haml and Slim) has no effect. Helpers with side effects (`content_for`, `provide`), your own helpers and calls on a receiver are not reported. The quick fix changes the tag to `<%=` (`=` in Haml and Slim).",
+      "`link_to`, `image_tag`, `content_tag`, `form_with` and the other helpers on the list return markup and do nothing else, so calling one in a `<% %>` tag (a `-` line in Haml and Slim) has no effect. Helpers with side effects (`content_for`, `provide`), your own helpers and calls on a receiver are not reported. Rails projects only, in templates under app/views. The quick fix changes the tag to `<%=` (`=` in Haml and Slim) when the call is alone in its tag or line.",
     example: {
       file: "app/views/users/index.html.erb",
       lang: "erb",
@@ -499,7 +499,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "Debugging left in a view.",
     explanation:
-      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, as a statement or as the whole of an output tag. A local variable named `p`, a method on a receiver and a call used as an argument are not reported.",
+      "`p`, `pp`, `puts` and `debug` with arguments, `byebug`, `debugger`, `binding.irb` and `binding.pry`, as a statement or as the whole of an output tag. A local variable named `p`, a method on a receiver, a call used as an argument and a call under an `if` or `unless` that tests `Rails.env` are not reported. Rails projects only, in templates under app/views.",
     example: {
       file: "app/views/users/index.html.erb",
       lang: "erb",
