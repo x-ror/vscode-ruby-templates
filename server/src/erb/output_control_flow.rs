@@ -1,7 +1,8 @@
 //! `<%= if x %>`: control flow in an output tag, where `<% if x %>` is meant. Erubi wraps the code of `<%=` in an
-//! expression, so a keyword that opens a construct the tag doesn't close is a syntax error that never names the `=`.
+//! expression, so a keyword that opens a construct the tag doesn't close is, almost always, a syntax error that never
+//! names the `=`. `<%= for x in y do %>` compiles (as a block opener) but prints the loop's value, so it is flagged too.
 
-use super::ruby::tags;
+use super::ruby::tags_with;
 use crate::ruby::prism;
 use crate::util::{coded, warning, LineIndex};
 use std::borrow::Cow;
@@ -23,17 +24,23 @@ pub struct Misuse {
     pub keyword: &'static str,
 }
 
-/// The output tags of `text` that start with a keyword they can't use.
-pub fn find(text: &str, ruby: ruby_prism::Version) -> Vec<Misuse> {
-    tags(text)
+/// Where the tag's code is parsed, as the compiled template has it: in a method and a block, so `yield` and `next` are valid.
+fn is_complete(code: &str, ruby: ruby_prism::Version) -> bool {
+    prism::syntax_errors(&format!("def _\n_ {{\n{code}\n}}\nend"), ruby).is_empty()
+}
+
+/// The output tags of `text` that start with a keyword they can't use; `percent_lines` as the Ruby compile reads them.
+pub fn find(text: &str, ruby: ruby_prism::Version, percent_lines: bool) -> Vec<Misuse> {
+    tags_with(text, percent_lines)
         .into_iter()
         .filter_map(|tag| {
             let indicator = tag.indicator.filter(|indicator| indicator.starts_with('='))?;
             let code = &text[tag.code.clone()];
             let code = code.trim_start_matches([' ', '\t', '\r', '\n']);
-            let word_end = code.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '?' | '!'))).unwrap_or(code.len());
+            let word_end =
+                code.find(|c: char| !(c.is_alphanumeric() || !c.is_ascii() || matches!(c, '_' | '?' | '!'))).unwrap_or(code.len());
             let keyword = *OPENING.iter().chain(&CONTINUING).find(|keyword| **keyword == &code[..word_end])?;
-            let closed = OPENING.contains(&keyword) && prism::syntax_errors(code, ruby).is_empty();
+            let closed = OPENING.contains(&keyword) && is_complete(code, ruby);
             let marker = tag.start + 2..tag.start + 2 + indicator.len();
             (!closed).then_some(Misuse { marker, keyword })
         })
@@ -71,7 +78,7 @@ mod tests {
     use super::*;
 
     fn keywords(text: &str) -> Vec<&'static str> {
-        find(text, ruby_prism::Version::Latest).into_iter().map(|misuse| misuse.keyword).collect()
+        find(text, ruby_prism::Version::Latest, false).into_iter().map(|misuse| misuse.keyword).collect()
     }
 
     #[test]
@@ -81,7 +88,15 @@ mod tests {
         }
         assert_eq!(keywords("<%= if @user %>\n<p>hi</p>\n<% end %>"), ["if"]);
         assert_eq!(keywords("<%==if x%>"), ["if"]);
+        assert_eq!(keywords("<%= for x in items do %>"), ["for"]);
         assert_eq!(keywords("<%=\n  unless x -%>"), ["unless"]);
+    }
+
+    #[test]
+    fn percent_lines_are_tags_only_when_asked() {
+        let text = "% if x\n<%= end %>\n";
+        assert_eq!(find(text, ruby_prism::Version::Latest, true).len(), 1);
+        assert_eq!(find("%= if x\n", ruby_prism::Version::Latest, true).len(), 0);
     }
 
     #[test]
@@ -100,6 +115,10 @@ mod tests {
             "<%= case x when 1 then \"a\" end %>",
             "<%= begin; x; rescue; y; end %>",
             "<%= x if y %>",
+            "<%= if content_for?(:title) then yield(:title) else \"App\" end %>",
+            "<%= begin; yield; rescue; \"\" end %>",
+            "<% items.each do |i| %><%= if i.hidden? then next end %><% end %>",
+            "<%= endé %><%= whenß %>",
             "<%= iffy %><%= end_date %><%= else_value %><%= for_each x %><%= x.end %>",
             "<%= form_with model: @user do |f| %>",
             "<% if x %><% end %>",
@@ -113,7 +132,7 @@ mod tests {
     #[test]
     fn the_marker_is_blanked_without_moving_anything() {
         let text = "<%= if a %>\n<%== end %>";
-        let misuses = find(text, ruby_prism::Version::Latest);
+        let misuses = find(text, ruby_prism::Version::Latest, false);
         assert_eq!(without_markers(text, &misuses), "<%  if a %>\n<%   end %>");
         assert!(matches!(without_markers("<% x %>", &[]), Cow::Borrowed(_)));
     }
@@ -121,7 +140,7 @@ mod tests {
     #[test]
     fn the_message_names_the_keyword_and_the_marker() {
         let text = "<%= if a %><%== end %>";
-        let found = diagnostics(text, &find(text, ruby_prism::Version::Latest));
+        let found = diagnostics(text, &find(text, ruby_prism::Version::Latest, false));
         let messages: Vec<_> = found.iter().map(|d| d.message.as_str()).collect();
         assert_eq!(messages, ["`if` in an output tag `<%=`: use `<% if … %>`", "`end` in an output tag `<%==`: use `<% end %>`"]);
         assert_eq!((found[0].range.start.character, found[0].range.end.character), (2, 3));

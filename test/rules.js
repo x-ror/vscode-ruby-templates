@@ -1,6 +1,6 @@
 // The examples on the site's rules page are tests: for every available autofix rule, format each `before` with the
-// rule switched on in a .ruby-templates.toml and expect `after`. For every available warning, `check` prints more for
-// `before` than with the rule switched off, and the same for `after`. A partial rule's examples show what it will do.
+// rule switched on in a .ruby-templates.toml and expect `after`. For every available warning, `check` prints, for `before`, a line
+// with each fault's message that is missing with the rule switched off, and the same output for `after` either way. A partial rule's examples show what it will do.
 import assert from "assert";
 import { spawnSync } from "child_process";
 import fs from "fs";
@@ -90,11 +90,16 @@ try {
         );
         return run.stdout.replaceAll(folders[enabled], "").split("\n");
       };
-      assert.notDeepStrictEqual(
-        printed(example.before, true),
-        printed(example.before, false),
-        `${label}: before is not reported`,
+      const without = printed(example.before, false);
+      const added = printed(example.before, true).filter(
+        (line) => !without.includes(line),
       );
+      for (const { message } of example.faults) {
+        assert.ok(
+          added.some((line) => line.includes(message)),
+          `${label}: ${message} is not reported`,
+        );
+      }
       assert.deepStrictEqual(
         printed(example.after, true),
         printed(example.after, false),

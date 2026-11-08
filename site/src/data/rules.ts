@@ -1502,7 +1502,7 @@ enabled = false`,
     status: "available",
     code: "Rails/OutputControlFlow",
     today:
-      "An ERB output tag (`<%=`, `<%==`) that starts with `if`, `unless`, `while`, `until`, `case`, `for` or `begin` and doesn't close it in the same tag, or with `else`, `elsif`, `when`, `end`, `rescue` or `ensure`. The quick fix removes the `=`. The Ruby syntax errors the `=` causes are not shown, so the message is the only one; other errors in the template still are. A complete expression (`<%= if a then b else c end %>`, `<%= x if y %>`) and `form_with … do` blocks are fine. Reported in every ERB template, as the syntax errors are. Haml and Slim accept `= if` with a nested block.",
+      "An ERB output tag (`<%=`, `<%==`) that starts with `if`, `unless`, `while`, `until`, `case`, `for` or `begin` and doesn't close it in the same tag, or with `else`, `elsif`, `when`, `end`, `rescue` or `ensure`. The quick fix removes the `=`. The Ruby syntax errors the `=` causes are not shown (`for x in y do` and `while c do` compile, but print the loop's value), so the message is the only one; other errors in the template still are. A complete expression (`<%= if a then b else c end %>`, `<%= x if y %>`) and `form_with … do` blocks are fine. Reported in every ERB template, as the syntax errors are. Haml and Slim accept `= if` with a nested block.",
     setting: {
       label: "Turn it off",
       code: `[Rails.OutputControlFlow]

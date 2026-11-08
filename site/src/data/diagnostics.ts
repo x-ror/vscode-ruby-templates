@@ -587,7 +587,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb"],
     summary: "Control flow in an output tag.",
     explanation:
-      "`<%= if @user %>` is not Ruby: an output tag holds an expression, so a tag that opens `if`, `unless`, `while`, `until`, `case`, `for` or `begin` without closing it, or that starts with `else`, `elsif`, `when`, `end`, `rescue` or `ensure`, needs `<%` instead. Reported on the `=`, with a quick fix that removes it; the Ruby syntax errors it would cause are not shown, the template's other errors are. A complete expression such as `<%= if a then b else c end %>` is not reported.",
+      "`<%= if @user %>` is a syntax error, or prints a loop's value (`<%= for x in y do %>`): an output tag holds an expression, so a tag that opens `if`, `unless`, `while`, `until`, `case`, `for` or `begin` without closing it, or that starts with `else`, `elsif`, `when`, `end`, `rescue` or `ensure`, needs `<%` instead. Reported on the `=`, with a quick fix that removes it; the Ruby syntax errors it would cause are not shown, the template's other errors are. A complete expression such as `<%= if a then b else c end %>` is not reported.",
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",

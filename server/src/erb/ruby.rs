@@ -50,7 +50,12 @@ impl ErbTag<'_> {
 
 /// Every tag Erubi finds in `text`; what follows the last one is text, even if it holds a `<%`.
 pub fn tags(text: &str) -> Vec<ErbTag<'_>> {
-    erubi_tags(text, false)
+    tags_with(text, false)
+}
+
+/// `tags`, reading `%` lines as code tags when `percent_lines`.
+pub fn tags_with(text: &str, percent_lines: bool) -> Vec<ErbTag<'_>> {
+    erubi_tags(text, percent_lines)
         .map(|tag| {
             let trimmed = tag.rspace.map_or(0, str::len);
             ErbTag { start: tag.whole.start, end: tag.whole.end - trimmed, indicator: tag.indicator, code: tag.code }

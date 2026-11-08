@@ -90,7 +90,7 @@ pub fn comment_edits(text: &str, edge_space: bool) -> Vec<Edit> {
 /// With `name_output_control_flow`, `<%= if x %>` is reported as such and its `=` is left out of the Ruby that is checked,
 /// so the errors it causes don't show and the template's other errors still do.
 pub fn diagnostics(text: &str, ruby: &RubyContext, percent_lines: bool, name_output_control_flow: bool) -> Vec<Diagnostic> {
-    let misuses = if name_output_control_flow { output_control_flow::find(text, ruby.grammar) } else { Vec::new() };
+    let misuses = if name_output_control_flow { output_control_flow::find(text, ruby.grammar, percent_lines) } else { Vec::new() };
     let readable = output_control_flow::without_markers(text, &misuses);
     let errors = ruby::diagnostics(&readable, ruby.grammar, percent_lines, ruby.strict_locals.as_ref());
     let mut out: Vec<Diagnostic> = errors.into_iter().map(|d| coded(d, RUBY_SYNTAX)).collect();
