@@ -153,7 +153,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "An attribute given twice on one tag.",
     explanation:
-      'Reported at the second one, for names written out in ERB start tags, Haml tags (the `(…)` list and the `{…}` hash) and Slim tags, and in the literal options of Rails tag helpers. `class` and `id` are left alone in Haml, Slim and the helpers, which merge them. An ERB start tag with ERB inside is left alone. Slim rejects a repeated attribute other than `class` itself, so there the message is Slim\'s own ("Multiple href attributes specified") and the severity is error. Templates that output HTML only.',
+      "Reported at the second one, for names written out in ERB start tags, Haml tags (the `(…)` list and the `{…}` hash) and Slim tags, and in the literal options of Rails tag helpers. In ERB markup the page gets both, so the second is reported; in Haml and the helpers a repeated key renders once, so the value that is dropped is reported. `class` and `id` are left alone in Haml, Slim and the helpers, which merge them. An ERB start tag with ERB inside is left alone. Slim rejects a repeated attribute itself, which is reported as `Syntax/Template`. Templates that output HTML only.",
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",
@@ -173,7 +173,7 @@ export const diagnostics: Diagnostic[] = [
     summary:
       "An `<a>` without an `href`, which is not a link and cannot be reached with the keyboard.",
     explanation:
-      "Reported on the tag name. `link_to` always has an `href` and is not checked. An `<a>` with a `name` or a `tabindex`, or whose attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`), is left alone. Templates that output HTML only.",
+      "Reported on the tag name. `link_to` always has an `href` and is not checked. An `<a>` with a `name`, a `tabindex`, an `id` and no text of its own, or an attribute ending in `:href` (`:href`, `x-bind:href`), and one inside an `<svg>`, is left alone, as is one whose attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`), is left alone. Templates that output HTML only.",
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",
@@ -191,7 +191,7 @@ export const diagnostics: Diagnostic[] = [
     summary:
       "An `<iframe>` without a `title`, which screen readers use to name it.",
     explanation:
-      "Reported on the tag name, also for `tag.iframe` and `content_tag :iframe`. An `aria-label`, `aria-labelledby` or `aria: { … }` names the frame as well. Not reported where attributes may come from code that can't be read. Templates that output HTML only.",
+      "Reported on the tag name, also for `tag.iframe` and `content_tag :iframe`. An `aria-label` or `aria-labelledby` (also in an `aria: { label: … }` hash) names the frame as well. Not reported where attributes may come from code that can't be read. Templates that output HTML only.",
     example: {
       file: "app/views/videos/show.html.erb",
       lang: "erb",
@@ -209,7 +209,7 @@ export const diagnostics: Diagnostic[] = [
     summary:
       'Link text that says nothing out of context: "click here", "here", "read more".',
     explanation:
-      'Reported on the text, for an `<a>` that holds only text and for a `link_to`, `tag.a` or `content_tag :a` given a string literal. The texts are "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label` or `aria-labelledby`, or with ERB, interpolation or other elements inside, is left alone. Templates that output HTML only.',
+      'Reported on the text, for an `<a>` that holds only text and for a `link_to`, `tag.a` or `content_tag :a` given a string literal. The texts are "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label`, `aria-labelledby` or `aria-describedby`, or with ERB, interpolation or other elements inside, is left alone. Templates that output HTML only.',
     example: {
       file: "app/views/pricing/show.html.erb",
       lang: "erb",
@@ -217,7 +217,7 @@ export const diagnostics: Diagnostic[] = [
 `,
     },
     message:
-      "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.4)",
+      "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.9, F84)",
     line: 1,
     column: 42,
   },
@@ -411,7 +411,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["haml", "slim"],
     summary: "Any other error the Haml or Slim parser raises.",
     explanation:
-      'The parser errors that have no code of their own. In Haml: "Invalid tag", "Invalid filter name" and "There\'s no Ruby code for = to evaluate." In Slim: "Unknown line indicator", "Illegal shortcut", "Invalid empty attribute", "Expected attribute", "Expected tag" for a block expansion with nothing after it (`ul:`), "Unexpected text after closed tag" and "Invalid doctype".',
+      'The parser errors that have no code of their own. In Haml: "Invalid tag", "Invalid filter name" and "There\'s no Ruby code for = to evaluate." In Slim: "Unknown line indicator", "Illegal shortcut", "Invalid empty attribute", "Expected attribute", "Expected tag" for a block expansion with nothing after it (`ul:`), "Unexpected text after closed tag", "Multiple id attributes specified" (for any repeated attribute) and "Invalid doctype".',
     example: {
       file: "app/views/users/show.html.haml",
       lang: "haml",

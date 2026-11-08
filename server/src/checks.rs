@@ -70,9 +70,34 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby, rules.reports(OUTPUT_CONTROL_FLOW));
-    out.extend(element_diagnostics(uri, doc, rules, &ruby));
+    let html = outputs_html(uri, doc);
+    let elements_wanted = html && ELEMENT_LINTS.iter().any(|code| rules.reports(code));
+    let views_root = path.as_deref().zip(project).and_then(|(path, project)| view_lints_root(rules, project, path));
+    // The Ruby of the template and its elements are read once for the element lints and the view lints.
+    let compiled = (elements_wanted || views_root.is_some())
+        .then(|| code_context::compiled(doc.lang, &doc.text, None, rules.extra_engines()))
+        .flatten();
+    let options = ruby_prism::Options::default().version(ruby.grammar).build();
+    let parsed = compiled.as_ref().and_then(|compiled| compiled.parse(&options));
+    let tree = compiled.as_ref().zip(parsed.as_ref()).map(|(compiled, parsed)| RubyTree { compiled, root: parsed.node() });
+    let attributes_wanted = views_root.is_some()
+        && (rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER));
+    // An ERB template that isn't HTML has no start tags to read.
+    let markup = if (elements_wanted || attributes_wanted) && (doc.lang != TemplateLang::Erb || html) {
+        attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar)
+    } else {
+        Vec::new()
+    };
+    let helpers =
+        tree.as_ref().filter(|_| elements_wanted || attributes_wanted).map(|tree| attributes::helper_elements(tree.compiled, &tree.root));
+    let helpers = helpers.unwrap_or_default();
+    if elements_wanted {
+        out.extend(element_lints::diagnostics(doc.lang, &doc.text, &markup, &helpers));
+    }
+    if let (Some(path), Some(views_root), Some(tree)) = (&path, &views_root, &tree) {
+        out.extend(view_diagnostics(doc, rules, path, views_root, tree, &[markup.as_slice(), helpers.as_slice()].concat(), &ruby));
+    }
     if let (Some(path), Some(project)) = (&path, project) {
-        out.extend(view_diagnostics(doc, rules, project, path, &ruby, doc.html_host(uri)));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
     out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
@@ -82,16 +107,16 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     out
 }
 
-/// The lints on the Ruby a view compiles to and on its elements' attributes, for Rails templates only: Padrino and
-/// Middleman write helper output to the buffer from `<% %>`, and an `.erb` outside app/views isn't a view.
-fn view_diagnostics(
-    doc: &Doc,
-    rules: &ResolvedRules,
-    project: &Project,
-    path: &Path,
-    ruby: &RubyContext,
-    html_host: bool,
-) -> Vec<Diagnostic> {
+/// The Ruby of a template, compiled and parsed.
+struct RubyTree<'a> {
+    compiled: &'a crate::ruby::generated::Compiled,
+    root: ruby_prism::Node<'a>,
+}
+
+/// The app/views root of a template that gets the lints on the Ruby it compiles to and on its elements' attributes: Rails
+/// templates only, since Padrino and Middleman write helper output to the buffer from `<% %>`, and an `.erb` outside
+/// app/views isn't a view. None when no such lint is on.
+fn view_lints_root(rules: &ResolvedRules, project: &Project, path: &Path) -> Option<PathBuf> {
     let wanted = [
         output_lints::SILENT_RENDER,
         output_lints::SILENT_HELPER,
@@ -103,54 +128,45 @@ fn view_diagnostics(
         attribute_lints::PERMANENT_REQUIRES_ID,
         attribute_lints::UNKNOWN_CONTROLLER,
     ];
-    let Some(views_root) = paths::views_root(path) else { return vec![] };
-    if project.framework != Framework::Rails || project.is_gem_file(path) || !wanted.iter().any(|code| rules.reports(code)) {
-        return vec![];
-    }
-    let Some(compiled) = code_context::compiled(doc.lang, &doc.text, None, rules.extra_engines()) else { return vec![] };
-    let options = ruby_prism::Options::default().version(ruby.grammar).build();
-    let Some(parsed) = compiled.parse(&options) else { return vec![] };
-    let root = parsed.node();
-    let in_layouts = path.strip_prefix(&views_root).is_ok_and(|relative| relative.starts_with(LAYOUTS_FOLDER));
+    let views_root = paths::views_root(path)?;
+    let applies = project.framework == Framework::Rails && !project.is_gem_file(path) && wanted.iter().any(|code| rules.reports(code));
+    applies.then_some(views_root)
+}
+
+/// The view lints; `elements` are the template's markup and helper elements.
+fn view_diagnostics(
+    doc: &Doc,
+    rules: &ResolvedRules,
+    path: &Path,
+    views_root: &Path,
+    tree: &RubyTree,
+    elements: &[attributes::Element],
+    ruby: &RubyContext,
+) -> Vec<Diagnostic> {
+    let in_layouts = path.strip_prefix(views_root).is_ok_and(|relative| relative.starts_with(LAYOUTS_FOLDER));
     let view = view_lints::View {
         lang: doc.lang,
         reads_controller_state: paths::is_partial_path(path) && !in_layouts,
         strict_locals: ruby.strict_locals.as_ref().map(|rails| rails.close),
         grammar: ruby.grammar,
     };
-    let mut out = output_lints::diagnostics(doc.lang, &doc.text, &compiled, &root);
-    out.extend(view_lints::diagnostics(&doc.text, &view, &compiled, &root));
+    let mut out = output_lints::diagnostics(doc.lang, &doc.text, tree.compiled, &tree.root);
+    out.extend(view_lints::diagnostics(&doc.text, &view, tree.compiled, &tree.root));
     if rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER) {
-        // An ERB template that isn't HTML has no start tags to read.
-        let markup = if doc.lang != TemplateLang::Erb || html_host {
-            attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar)
-        } else {
-            Vec::new()
-        };
-        let elements: Vec<_> = markup.into_iter().chain(attributes::helper_elements(&compiled, &root)).collect();
         let registered = || rules.reports(attribute_lints::UNKNOWN_CONTROLLER).then(|| stimulus::registered(path)).flatten();
-        out.extend(attribute_lints::diagnostics(&doc.text, &elements, registered));
+        out.extend(attribute_lints::diagnostics(&doc.text, elements, registered));
     }
     out
 }
 
-/// The element lints, for templates that output HTML (not `.js.erb`, `.text.erb` or `.xml.haml`) in any project.
-fn element_diagnostics(uri: &Uri, doc: &Doc, rules: &ResolvedRules, ruby: &RubyContext) -> Vec<Diagnostic> {
-    let html = match doc.lang {
+/// Whether the template outputs HTML (not `.js.erb`, `.text.erb` or `.xml.haml`), which the element lints need.
+fn outputs_html(uri: &Uri, doc: &Doc) -> bool {
+    match doc.lang {
         TemplateLang::Erb => doc.html_host(uri),
         TemplateLang::Haml => haml_html_host(uri),
         TemplateLang::Slim => slim_html_host(uri),
         _ => false,
-    };
-    if !html || !ELEMENT_LINTS.iter().any(|code| rules.reports(code)) {
-        return vec![];
     }
-    let markup = attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar);
-    let helpers = code_context::compiled(doc.lang, &doc.text, None, rules.extra_engines()).and_then(|compiled| {
-        let options = ruby_prism::Options::default().version(ruby.grammar).build();
-        compiled.parse(&options).map(|parsed| attributes::helper_elements(&compiled, &parsed.node()))
-    });
-    element_lints::diagnostics(doc.lang, &doc.text, &markup, &helpers.unwrap_or_default())
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.

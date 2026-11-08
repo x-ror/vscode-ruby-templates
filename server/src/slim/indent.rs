@@ -1,6 +1,5 @@
 //! Slim structure checks: indentation, bracket balance, embedded engines, branches and misuse of explicit `end`.
 
-use crate::element_lints::DUPLICATE_ATTRIBUTE;
 use crate::html::VOID_ELEMENTS;
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::slim;
@@ -69,7 +68,7 @@ fn check_structure(text: &str, extra_engines: &[String], ruby: ruby_prism::Versi
         let raw = lines[*line];
         let range = span_range(*line, raw, leading_ws(raw).len(), raw.len());
         // Temple raises this while compiling, so it carries no line; the tag's line stands in.
-        out.push(coded(error(range, format!("Multiple {name} attributes specified")), DUPLICATE_ATTRIBUTE));
+        out.push(coded(error(range, format!("Multiple {name} attributes specified")), code::SYNTAX_ERROR));
     }
     // Temple raises this after `EndInserter` and the attribute merger, so it only shows when they stay quiet.
     let explicit_end = parsed.pieces.iter().any(|p| matches!(p, Piece::Control { code, .. } if is_explicit_end(code)));
@@ -740,7 +739,7 @@ mod tests {
             assert_eq!(found.len(), 1, "{text:?}: {found:?}");
             assert_eq!(found[0].message, message, "{text:?}");
             assert_eq!(found[0].range.start.line, line, "{text:?}");
-            assert_eq!(found[0].code, Some(NumberOrString::String(DUPLICATE_ATTRIBUTE.to_string())), "{text:?}");
+            assert_eq!(found[0].code, Some(NumberOrString::String(code::SYNTAX_ERROR.to_string())), "{text:?}");
         }
         for text in [".a class=\"b\"\n", "a href=1\n  b href=2\n", "a X=1 x=2\n", "#alpha *{id: \"beta\"} t\n", "a b c b\n"] {
             let found: Vec<_> = diagnostics(text, &[]).into_iter().filter(|d| d.message.starts_with("Multiple")).collect();

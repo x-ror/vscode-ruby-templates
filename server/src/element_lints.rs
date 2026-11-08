@@ -19,17 +19,18 @@ pub(crate) const GENERIC_LINK_TEXT: &str = "A11y/GenericLinkText";
 /// What a link's accessible name can't be, in lower case with the punctuation left out (WCAG 2.4.4, technique F84).
 const GENERIC_LINK_TEXTS: [&str; 10] =
     ["click here", "here", "read more", "more", "learn more", "link", "this link", "click", "more info", "more information"];
-/// What labels an element; `aria` is a hash, which may hold either.
-const LABELS: [&str; 3] = ["aria-label", "aria-labelledby", "aria"];
-/// A link without `href` that a keyboard can still reach or that only marks a place.
+/// What names an element besides its content.
+const LABELS: [&str; 2] = ["aria-label", "aria-labelledby"];
+/// A link without `href` that a keyboard can still reach or that only marks a place (`id` too, when it has no content).
 const ANCHOR_EXCEPTIONS: [&str; 2] = ["name", "tabindex"];
 /// Haml and Slim merge these from the shorthand, the list and the hash instead of repeating them.
 const MERGED: [&str; 2] = ["class", "id"];
 
-/// The findings in a template's `markup` (its tags) and `helpers` (the elements Rails tag helpers make). Slim's repeated
-/// attributes are reported by its parser, which Slim itself rejects them with.
+/// The findings in a template's `markup` (its tags) and `helpers` (the elements Rails tag helpers make). A repeated attribute
+/// in Slim markup is not reported: Slim rejects it itself, and its parser reports that as `Syntax/Template`.
 pub(crate) fn diagnostics(lang: TemplateLang, text: &str, markup: &[Element], helpers: &[Element]) -> Vec<Diagnostic> {
     let index = LineIndex::new(text);
+    let lines: Vec<(usize, &str)> = lines_with_offsets(text).collect();
     let report = |at: &Range<usize>, message: String, code: &str| coded(warning(index.range(at.start, at.end), message), code);
     let mut out = Vec::new();
     if lang != TemplateLang::Erb {
@@ -37,16 +38,20 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, markup: &[Element], he
             out.extend(missing_alt(text, element).map(|(at, message)| report(&at, message, html_lint::code::IMG_MISSING_ALT)));
         }
         out.extend(
-            duplicate_ids(text, markup, &index).into_iter().map(|(at, message)| report(&at, message, html_lint::code::DUPLICATE_ID)),
+            duplicate_ids(text, &lines, markup, &index)
+                .into_iter()
+                .map(|(at, message)| report(&at, message, html_lint::code::DUPLICATE_ID)),
         );
     }
     for element in markup {
         if lang != TemplateLang::Slim {
             out.extend(
-                repeated_attributes(element, lang == TemplateLang::Erb).map(|(at, message)| report(&at, message, DUPLICATE_ATTRIBUTE)),
+                repeated_attributes(element, lang == TemplateLang::Erb)
+                    .into_iter()
+                    .map(|(at, message)| report(&at, message, DUPLICATE_ATTRIBUTE)),
             );
         }
-        out.extend(anchor_without_href(element).map(|at| {
+        out.extend(anchor_without_href(lang, text, &lines, &index, element).map(|at| {
             report(
                 &at,
                 "`<a>` without `href` is not a link and the keyboard can't reach it; use a `<button>` for an action".into(),
@@ -55,7 +60,7 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, markup: &[Element], he
         }));
     }
     for element in helpers {
-        out.extend(repeated_attributes(element, false).map(|(at, message)| report(&at, message, DUPLICATE_ATTRIBUTE)));
+        out.extend(repeated_attributes(element, false).into_iter().map(|(at, message)| report(&at, message, DUPLICATE_ATTRIBUTE)));
     }
     for element in markup.iter().chain(helpers) {
         out.extend(iframe_without_title(element).map(|at| {
@@ -86,11 +91,10 @@ fn missing_alt(text: &str, element: &Element) -> Option<(Range<usize>, String)> 
 
 /// Static ids used twice that no Ruby control flow separates. Both ids must sit in the same blocks and no `if`, `else`, loop
 /// or block may start between them, since one of them may then not be rendered; ids inside a template's shared blocks count.
-fn duplicate_ids(text: &str, elements: &[Element], index: &LineIndex) -> Vec<(Range<usize>, String)> {
-    let lines: Vec<(usize, &str)> = lines_with_offsets(text).collect();
+fn duplicate_ids(text: &str, lines: &[(usize, &str)], elements: &[Element], index: &LineIndex) -> Vec<(Range<usize>, String)> {
     let mut seen: HashMap<&str, usize> = HashMap::new();
     let mut out = Vec::new();
-    for element in elements {
+    for element in elements.iter().filter(|element| element.name != "template") {
         let mut ids = element.attributes.iter().filter(|attribute| attribute.name == "id");
         // Haml joins an `#id` and an `id:` into one id.
         let (Some(id), None) = (ids.next(), ids.next()) else { continue };
@@ -98,9 +102,13 @@ fn duplicate_ids(text: &str, elements: &[Element], index: &LineIndex) -> Vec<(Ra
         if range.is_empty() {
             continue;
         }
+        // A `<template>`'s content isn't in the document yet.
+        if ancestors(lines, index.line_of(range.start)).iter().any(|&line| tag_name(lines[line].1) == "template") {
+            continue;
+        }
         let name = &text[range.clone()];
         let Some(first) = seen.insert(name, range.start) else { continue };
-        if !separated_by_control_flow(&lines, index.line_of(first), index.line_of(range.start)) {
+        if !separated_by_control_flow(lines, index.line_of(first), index.line_of(range.start)) {
             out.push((range.clone(), html_lint::duplicate_id_message(name, index.line_of(first) + 1)));
         }
     }
@@ -108,24 +116,35 @@ fn duplicate_ids(text: &str, elements: &[Element], index: &LineIndex) -> Vec<(Ra
 }
 
 fn separated_by_control_flow(lines: &[(usize, &str)], first: usize, second: usize) -> bool {
-    let between = lines[first + 1..second].iter().any(|(_, line)| ruby_of(line).is_some_and(branches));
+    let between = lines.get(first + 1..second).is_some_and(|inner| inner.iter().any(|(_, line)| ruby_of(line).is_some_and(branches)));
     between || enclosing_control_flow(lines, first) != enclosing_control_flow(lines, second)
 }
 
 /// The lines of Ruby control flow that a line is nested in, innermost first.
 fn enclosing_control_flow(lines: &[(usize, &str)], line: usize) -> Vec<usize> {
+    let mut found = ancestors(lines, line);
+    found.retain(|&at| ruby_of(lines[at].1).is_some_and(branches));
+    found
+}
+
+/// The lines a line is nested in by indentation, innermost first.
+fn ancestors(lines: &[(usize, &str)], line: usize) -> Vec<usize> {
     let indentation = |text: &str| text.len() - text.trim_start().len();
     let mut depth = indentation(lines[line].1);
     let mut found = Vec::new();
     for (at, (_, text)) in lines[..line].iter().enumerate().rev().filter(|(_, (_, text))| !text.trim().is_empty()) {
         if indentation(text) < depth {
             depth = indentation(text);
-            if ruby_of(text).is_some_and(branches) {
-                found.push(at);
-            }
+            found.push(at);
         }
     }
     found
+}
+
+/// The element a Haml or Slim line starts: `svg` for `%svg.icon{…}` and `svg.icon`.
+fn tag_name(line: &str) -> &str {
+    let line = line.trim_start().trim_start_matches('%');
+    &line[..line.find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '_'))).unwrap_or(line.len())]
 }
 
 /// The Ruby of a Haml or Slim `-` or `=` line.
@@ -140,36 +159,55 @@ fn branches(code: &str) -> bool {
     !matches!(analyze(code), BlockEffect::Neutral) || code.split_whitespace().next().is_some_and(|word| CONTINUERS.contains(&word))
 }
 
-/// The attributes an element repeats, at the repeat. `class` and `id` are left out unless `plain_html`: Haml, Slim and tag helpers merge them.
-fn repeated_attributes(element: &Element, plain_html: bool) -> impl Iterator<Item = (Range<usize>, String)> + '_ {
+/// The attributes an element repeats. Plain ERB markup repeats them in the page, so the second is reported with the HTML rule.
+/// Elsewhere a repeated key renders once (Haml and Ruby keep the last value), so the value dropped is reported; `class` and
+/// `id` are left out there, since Haml, Slim and the helpers merge them. A `data: { a: }` and an `"data-a":` are both emitted.
+fn repeated_attributes(element: &Element, plain_html: bool) -> Vec<(Range<usize>, String)> {
     // ERB in the tag may pick one of two attributes at render time.
-    let skip = plain_html && element.open;
-    let mut seen: Vec<&str> = Vec::new();
-    element
-        .attributes
-        .iter()
-        .filter(move |attribute| {
-            let merged = !plain_html && MERGED.contains(&attribute.name.as_str());
-            if skip || merged || attribute.at.is_empty() {
-                return false;
-            }
-            let repeated = seen.contains(&attribute.name.as_str());
-            seen.push(&attribute.name);
-            repeated
-        })
-        .map(|attribute| {
+    if plain_html && element.open {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (at, attribute) in element.attributes.iter().enumerate() {
+        let merged = !plain_html && MERGED.contains(&attribute.name.as_str());
+        let earlier = element.attributes[..at].iter().rev().find(|earlier| earlier.name == attribute.name);
+        let (Some(earlier), false) = (earlier, merged || attribute.at.is_empty()) else { continue };
+        if plain_html || earlier.in_data != attribute.in_data {
             let message = format!(
                 "Duplicate attribute `{}` on `<{}>`: a start tag must not repeat an attribute (HTML 13.1.2.3)",
                 attribute.name, element.name
             );
-            (attribute.at.clone(), message)
-        })
+            out.push((attribute.at.clone(), message));
+        } else if !earlier.at.is_empty() {
+            out.push((earlier.at.clone(), format!("`{}` is given twice; only one value is rendered", attribute.name)));
+        }
+    }
+    out
 }
 
-fn anchor_without_href(element: &Element) -> Option<Range<usize>> {
-    let exempt = ANCHOR_EXCEPTIONS.iter().any(|name| element.attribute(name).is_some());
-    let bare = element.name == "a" && element.attribute("href").is_none() && !exempt && !element.may_have_more();
-    (bare && !element.at.is_empty()).then(|| element.at.clone())
+/// An `<a>` that isn't a link: no `href` (also `:href`, `x-bind:href`, `xlink:href`), `name` or `tabindex`; an `id` with no
+/// text in it is a target to jump to; and an `<a>` in an `<svg>` is something else.
+fn anchor_without_href(
+    lang: TemplateLang,
+    text: &str,
+    lines: &[(usize, &str)],
+    index: &LineIndex,
+    element: &Element,
+) -> Option<Range<usize>> {
+    let has = |name: &str| element.attribute(name).is_some();
+    let linked = element.attributes.iter().any(|attribute| attribute.name == "href" || attribute.name.ends_with(":href"));
+    let target = has("id") && element.text.as_ref().is_none_or(|written| written.is_empty());
+    let exempt = linked || target || ANCHOR_EXCEPTIONS.iter().any(|name| has(name));
+    if element.name != "a" || exempt || element.may_have_more() || element.at.is_empty() {
+        return None;
+    }
+    let in_svg = match lang {
+        TemplateLang::Erb => {
+            text[..element.at.start].to_ascii_lowercase().rsplit_once("<svg").is_some_and(|(_, after)| !after.contains("</svg"))
+        }
+        _ => ancestors(lines, index.line_of(element.at.start)).iter().any(|&line| tag_name(lines[line].1) == "svg"),
+    };
+    (!in_svg).then(|| element.at.clone())
 }
 
 fn iframe_without_title(element: &Element) -> Option<Range<usize>> {
@@ -179,7 +217,7 @@ fn iframe_without_title(element: &Element) -> Option<Range<usize>> {
 
 fn generic_link_text(text: &str, element: &Element) -> Option<(Range<usize>, String)> {
     let range = element.text.as_ref().filter(|_| element.name == "a" && !element.may_have_more())?;
-    if LABELS.iter().any(|name| element.attribute(name).is_some()) {
+    if LABELS.iter().chain(&["aria-describedby"]).any(|name| element.attribute(name).is_some()) {
         return None;
     }
     let written = &text[range.clone()];
@@ -188,7 +226,7 @@ fn generic_link_text(text: &str, element: &Element) -> Option<(Range<usize>, Str
         return None;
     }
     let start = range.start + written.len() - written.trim_start().len();
-    let message = format!("Link text `{}` says nothing out of context; name where the link goes (WCAG 2.4.4)", written.trim());
+    let message = format!("Link text `{}` says nothing out of context; name where the link goes (WCAG 2.4.9, F84)", written.trim());
     Some((start..start + written.trim().len(), message))
 }
 
@@ -229,6 +267,7 @@ mod tests {
         assert_eq!(flagged(Slim, alt, "= tag.img src: x\n"), ["img"]);
         for (lang, text) in [
             (Haml, "%img{src: x, alt: \"\"}\n"),
+            // Haml renders a `nil` or `false` attribute value as nothing, which Haml's own `alt: ""` is not; stay silent for any value.
             (Haml, "%img{src: x, alt: nil}\n"),
             (Haml, "%img(src=x alt=y)\n"),
             (Haml, "%img{src: x, **attrs}\n"),
@@ -419,10 +458,82 @@ mod tests {
             message(Slim, "iframe src=x\n"),
             "`<iframe>` without `title`: screen readers announce it to name the frame (WCAG 4.1.2)"
         );
+        assert_eq!(message(Haml, "%a{href: x, href: y}\n"), "`href` is given twice; only one value is rendered");
         assert_eq!(
-            message(Haml, "%a{href: x, href: y}\n"),
+            message(Erb, "<a href=x href=y>"),
             "Duplicate attribute `href` on `<a>`: a start tag must not repeat an attribute (HTML 13.1.2.3)"
         );
+        assert_eq!(
+            message(Haml, "%a{data: {a: 1}, \"data-a\" => 2}\n"),
+            "Duplicate attribute `data-a` on `<a>`: a start tag must not repeat an attribute (HTML 13.1.2.3)"
+        );
+        assert_eq!(message(Haml, "%a{href: 1}(href=\"y\") x\n"), "`href` is given twice; only one value is rendered");
         assert!(run(Haml, "%p\n").is_empty());
+    }
+
+    #[test]
+    fn a_repeated_key_is_reported_at_the_value_that_is_dropped() {
+        let columns = |lang, text: &str| {
+            let markup = markup_elements(lang, text, &[], ruby_prism::Version::Latest);
+            diagnostics(lang, text, &markup, &[]).into_iter().map(|d| d.range.start.character).collect::<Vec<_>>()
+        };
+        assert_eq!(columns(Haml, "%a{href: 1, href: 2}\n"), [3], "the last in a hash wins");
+        assert_eq!(columns(Haml, "%a(href=1){href: 2}\n"), [3], "the hash beats the list");
+        assert_eq!(columns(Erb, "<a href=1 href=2>"), [10], "the page has both");
+    }
+
+    #[test]
+    fn ids_on_one_line_and_in_templates() {
+        let id = html_lint::code::DUPLICATE_ID;
+        assert_eq!(flagged(Slim, id, "div#a: span#a x\n"), ["a"]);
+        assert_eq!(flagged(Slim, id, "#a\ndiv#b: span#b x\n"), ["b"]);
+        assert!(flagged(Haml, id, "%template\n  #a\n#a\n").is_empty());
+        assert!(flagged(Haml, id, "#a\n%template\n  #a\n").is_empty());
+        assert!(flagged(Slim, id, "template\n  #a\n  #a\n").is_empty());
+        assert!(flagged(Slim, id, "template#a\n#a\n").is_empty());
+    }
+
+    #[test]
+    fn anchors_that_are_links_in_other_ways_or_are_not_anchors() {
+        let anchor = ANCHOR_HREF;
+        for (lang, text) in [
+            (Erb, "<a :href=\"url\">x</a>"),
+            (Erb, "<a x-bind:href=\"url\">x</a>"),
+            (Erb, "<svg><a xlink:href=\"#p\"><text>x</text></a></svg>"),
+            (Erb, "<svg viewBox=\"0 0 1 1\">\n<a>x</a></svg>"),
+            (Erb, "<a id=\"top\"></a>"),
+            (Erb, "<a id=\"top\"><%= x %></a>"),
+            (Haml, "%a{\"x-bind:href\" => \"url\"} x\n"),
+            (Haml, "%svg\n  %a x\n"),
+            (Haml, "%a#top\n"),
+            (Slim, "svg\n  a x\n"),
+            (Slim, "svg.icon\n  g\n    a x\n"),
+            (Slim, "a#top\n"),
+        ] {
+            assert!(flagged(lang, anchor, text).is_empty(), "{text}");
+        }
+        assert_eq!(flagged(Erb, anchor, "<svg></svg><a>x</a>"), ["a"]);
+        assert_eq!(flagged(Erb, anchor, "<a id=\"menu\" data-action=\"click->m#open\">Menu</a>"), ["a"]);
+        assert_eq!(flagged(Haml, anchor, "%svg\n  %g\n%a x\n"), ["a"]);
+        assert_eq!(flagged(Slim, anchor, "a#menu data-action=\"x\" Menu\n"), ["a"]);
+    }
+
+    #[test]
+    fn aria_hashes_are_read_like_data_hashes() {
+        let iframe = IFRAME_TITLE;
+        assert_eq!(flagged(Haml, iframe, "%iframe{src: x, aria: {hidden: true}}\n"), ["iframe"]);
+        assert_eq!(flagged(Erb, iframe, "<%= tag.iframe src: x, aria: { hidden: true } %>"), ["iframe"]);
+        for (lang, text) in [
+            (Haml, "%iframe{src: x, aria: {label: \"Video\"}}\n"),
+            (Haml, "%iframe{src: x, aria: {labelledby: \"h\"}}\n"),
+            (Haml, "%iframe{src: x, aria: opts}\n"),
+            (Erb, "<%= tag.iframe src: x, aria: { label: \"Video\" } %>"),
+            (Slim, "iframe src=x aria={label: \"Video\"}\n"),
+        ] {
+            assert!(flagged(lang, iframe, text).is_empty(), "{text}");
+        }
+        assert!(flagged(Haml, GENERIC_LINK_TEXT, "%a{href: x, aria: {describedby: \"d\"}} here\n").is_empty());
+        assert_eq!(flagged(Haml, GENERIC_LINK_TEXT, "%a{href: x, aria: {hidden: true}} here\n"), ["here"]);
+        assert!(flagged(Erb, GENERIC_LINK_TEXT, "<a href=x aria-describedby=\"d\">here</a>").is_empty());
     }
 }

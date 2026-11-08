@@ -100,7 +100,7 @@ const HREF_MESSAGE =
 const TITLE_MESSAGE =
   "`<iframe>` without `title`: screen readers announce it to name the frame (WCAG 4.1.2)";
 const LINK_TEXT_MESSAGE =
-  "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.4)";
+  "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.9, F84)";
 const CONTROLLER_MESSAGE =
   "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?";
 
@@ -2277,9 +2277,8 @@ enabled = false`,
         faults: [
           {
             line: 1,
-            column: 20,
-            message:
-              "Duplicate attribute `href` on `<a>`: a start tag must not repeat an attribute (HTML 13.1.2.3)",
+            column: 4,
+            message: "`href` is given twice; only one value is rendered",
             code: "Html/DuplicateAttribute",
           },
         ],
@@ -2289,14 +2288,7 @@ enabled = false`,
         file: SLIM_FILE,
         before: text('a href="/users" href="/people" Users'),
         after: text('a href="/users" Users'),
-        faults: [
-          {
-            line: 1,
-            column: 1,
-            message: "Multiple href attributes specified",
-            code: "Html/DuplicateAttribute",
-          },
-        ],
+        note: "Slim's own error, `Multiple href attributes specified`, is reported as `Syntax/Template`.",
       },
     ],
   },
@@ -2349,7 +2341,7 @@ enabled = false`,
     status: "available",
     code: "Html/AnchorHref",
     today:
-      "On the tag name of `<a>` in ERB start tags and of `%a` and `a` in Haml and Slim, in templates that output HTML. `link_to` always has an `href` and is not checked. An `<a>` with a `name` (the old way to mark a place to jump to) or a `tabindex` (the keyboard can reach it) is left alone, and so is one whose attributes may come from code that can't be read (ERB inside the start tag, a Haml `**attrs` or `data: attrs`, a Slim `*attrs` or `data=` hash).",
+      "On the tag name of `<a>` in ERB start tags and of `%a` and `a` in Haml and Slim, in templates that output HTML. `link_to` always has an `href` and is not checked. An `<a>` with a `name` (the old way to mark a place to jump to), a `tabindex` (the keyboard can reach it), an `id` and no text of its own (a target to jump to), or an attribute ending in `:href` (`:href`, `x-bind:href`, `xlink:href`) is left alone, and so is one inside an `<svg>`, and so is one whose attributes may come from code that can't be read (ERB inside the start tag, a Haml `**attrs` or `data: attrs`, a Slim `*attrs` or `data=` hash).",
     setting: {
       label: "Turn it off",
       code: `[Html.AnchorHref]
@@ -2412,7 +2404,7 @@ enabled = false`,
     status: "available",
     code: "A11y/IframeTitle",
     today:
-      "On the tag name of an `<iframe>` in ERB start tags, Haml and Slim tags, and of `tag.iframe` and `content_tag :iframe`, in templates that output HTML. An `aria-label`, `aria-labelledby` or `aria: { … }` names the frame as well. Not reported where attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`).",
+      "On the tag name of an `<iframe>` in ERB start tags, Haml and Slim tags, and of `tag.iframe` and `content_tag :iframe`, in templates that output HTML. An `aria-label` or `aria-labelledby` (also in an `aria: { label: … }` hash) names the frame as well. Not reported where attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`).",
     setting: {
       label: "Turn it off",
       code: `[A11y.IframeTitle]
@@ -2485,7 +2477,7 @@ enabled = false`,
     status: "available",
     code: "A11y/GenericLinkText",
     today:
-      'On the text of an `<a>` that holds only text (ERB, Haml and Slim tags) and of a `link_to`, `tag.a` or `content_tag :a` given a string literal: "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label`, `aria-labelledby` or `aria: { … }`, with ERB, interpolation, other elements or code in its content, or whose attributes may come from code that can\'t be read is left alone.',
+      'On the text of an `<a>` that holds only text (ERB, Haml and Slim tags) and of a `link_to`, `tag.a` or `content_tag :a` given a string literal: "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label`, `aria-labelledby` or `aria-describedby` (also in an `aria: { … }` hash), with ERB, interpolation, other elements or code in its content, or whose attributes may come from code that can\'t be read is left alone.',
     setting: {
       label: "Turn it off",
       code: `[A11y.GenericLinkText]
