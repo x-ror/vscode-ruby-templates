@@ -9,13 +9,13 @@ pub const ERB_TRIM_MODE: &str = "Style/ErbTrimMode";
 const TRIMMING: &str = "-%>";
 const PLAIN: &str = "%>";
 
-/// The closers of the kind used less often in `text`; with as many of each, the `-%>` ones. Comments and `<%%` tags are
-/// not counted.
+/// The closers of the kind used less often in `text`; with as many of each, the `-%>` ones. Comments, `<%%` tags and
+/// closers with more on their line are not counted: `-%>` only trims a line break.
 pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
     // Each closer's byte range, and whether it trims.
     let closers: Vec<(usize, usize, bool)> = tags(text)
         .into_iter()
-        .filter(|tag| !tag.is_comment() && !tag.is_literal())
+        .filter(|tag| !tag.is_comment() && !tag.is_literal() && ends_line(text, tag.end))
         .map(|tag| (tag.code.end, tag.end, text[tag.code.end..tag.end].starts_with('-')))
         .collect();
     let trimming_count = closers.iter().filter(|closer| closer.2).count();
@@ -32,6 +32,11 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         .filter(|&(_, _, trims)| trims == minority_trims)
         .map(|(from, to, _)| coded(warning(index.range(from, to), message.clone()), ERB_TRIM_MODE))
         .collect()
+}
+
+/// Whether only blanks follow `offset` on its line.
+fn ends_line(text: &str, offset: usize) -> bool {
+    text[offset..].split('\n').next().is_some_and(|rest| rest.trim_matches([' ', '\t', '\r']).is_empty())
 }
 
 #[cfg(test)]
@@ -65,6 +70,12 @@ mod tests {
         assert!(flagged("<% a -%>\n<% b -%>\n").is_empty());
         assert!(flagged("<% a %>\n<%= b %>\n").is_empty());
         assert!(flagged("<p>no tags</p>\n").is_empty());
+    }
+
+    #[test]
+    fn only_closers_at_the_end_of_a_line_count() {
+        assert!(flagged("<p><%= a -%></p>\n<% b %>\n<% c %>\n").is_empty());
+        assert_eq!(flagged("<%= f.label :a -%>\n<%= f.text_field :a %></p>\n<% x %>  \n<% y %>"), ["-%>"]);
     }
 
     #[test]

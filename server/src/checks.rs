@@ -100,7 +100,8 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
-    out.retain(|d| util::code(d).is_none_or(|code| rules.reports(code)));
+    // Rails escapes nothing in a text or other non-HTML template, so nothing is left unescaped.
+    out.retain(|d| (html || util::code(d) != Some(unsafe_output::UNSAFE_OUTPUT)) && util::code(d).is_none_or(|code| rules.reports(code)));
     for d in &mut out {
         d.source = Some(doc.lang.diagnostic_source().into());
     }
@@ -638,6 +639,7 @@ mod tests {
                 ("on/.ruby-templates.toml", "[Style.ErbTrimMode]\nenabled = true\n"),
                 ("on/app/views/a.html.erb", ""),
                 ("app/views/a.html.erb", ""),
+                ("app/views/a.text.erb", ""),
             ],
         );
         let codes = |file: &str| {
@@ -647,6 +649,8 @@ mod tests {
             found.iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
         };
         assert_eq!(codes("app/views/a.html.erb"), ["Rails/UnsafeOutput"]);
+        // Rails escapes nothing in a text template.
+        assert!(codes("app/views/a.text.erb").is_empty());
         assert_eq!(codes("on/app/views/a.html.erb"), ["Style/ErbTrimMode", "Rails/UnsafeOutput"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
