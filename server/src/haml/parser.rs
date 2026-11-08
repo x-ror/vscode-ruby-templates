@@ -937,10 +937,18 @@ impl<'a> Parser<'a> {
         }
         if self.ruby {
             let shorthand = &text[attributes_start..head_len];
-            let element = self.element(name, shorthand, self.line.indent() + attributes_start, reference);
+            let name_column = text.starts_with('%').then(|| self.line.indent() + attributes_start - name.len());
+            let element = self.element(name, name_column, shorthand, self.line.indent() + attributes_start, reference);
             self.tags.push(Tag { element, hash: hash_code.clone() });
         }
         let content = tag_content(&rest.text);
+        if self.ruby && content.action.is_none() && !content.parse && !content.value.is_empty() {
+            let start = rest.text.trim_end_matches(RUBY_WHITESPACE).len() - content.value.len();
+            let at = self.offset_at(rest.line, rest.column + start);
+            if let Some(tag) = self.tags.last_mut() {
+                tag.element.text = at.map(|at| at..at + content.value.len());
+            }
+        }
         // This reads the next line's indentation before any Ruby lines are joined.
         let block_opened = self.block_opened()?;
         if block_opened && content.self_closing {
@@ -996,11 +1004,15 @@ impl<'a> Parser<'a> {
 
     /// The tag's attributes that are not in its `{}` hash: an `#id` in `shorthand` (at `column` of the line), an object
     /// reference (which sets the id) and the `()` list. Open when `|` multiline rewrote the line: its offsets are not the template's.
-    fn element(&mut self, name: &str, shorthand: &str, column: usize, reference: bool) -> Element {
+    fn element(&mut self, name: &str, name_column: Option<usize>, shorthand: &str, column: usize, reference: bool) -> Element {
         let line = self.line.index;
-        let mut element = Element { name: name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
+        let mut element = Element { name: name.to_ascii_lowercase(), ..Element::default() };
         if self.pipe_joined.get(line).copied().unwrap_or(true) {
             return Element { open: true, ..element };
+        }
+        if let Some(column) = name_column {
+            let start = self.line_starts[line] + column;
+            element.at = start..start + name.len();
         }
         for (at, _) in shorthand.match_indices('#') {
             let id = &shorthand[at + 1..];

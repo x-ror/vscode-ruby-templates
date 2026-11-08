@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `Html/ImgAlt` and `Html/DuplicateId` run in Haml and Slim too. `%img`, `img`, and `image_tag` or `tag.img` without `alt:` are reported; so is a second static `#id` or `id:`. Ids in different branches of an `- if`/`- else`, and ids where only one sits in a conditional, a loop or a block, are left alone. ERB is unchanged.
+- `Html/DuplicateAttribute` warns about an attribute written twice on one tag, at the second one: in ERB start tags, Haml (`%a{href: x}(href="y")`, a key twice in the hash) and the literal options of Rails tag helpers. `class` and `id` are left alone in Haml, Slim and the helpers, which merge them. Slim's own error for a repeated attribute (`Multiple href attributes specified`) has this code now instead of `Syntax/Template`, so `[Html.DuplicateAttribute] enabled = false` hides it; a `disabledDiagnostics` list with `Syntax/Template` no longer does.
+- `Html/AnchorHref` warns about an `<a>` without `href` (ERB markup, `%a`, `a`), which is not a link and can't be reached with the keyboard. `link_to`, an `<a>` with `name` or `tabindex`, and one whose attributes may come from code that can't be read are left alone.
+- `A11y/IframeTitle` warns about an `<iframe>` (also `tag.iframe` and `content_tag :iframe`) without `title`, `aria-label` or `aria-labelledby`.
+- `A11y/GenericLinkText` warns about link text such as "Click here", "here", "read more" or "learn more" (any case, punctuation ignored) in an `<a>` that holds only text and in `link_to "Click here", path`. A link with `aria-label` or `aria-labelledby` is left alone.
+- The new rules and the two above run in any ERB, Haml or Slim template that outputs HTML, in Rails projects or not, but not in `.js.erb`, `.text.erb`, `.xml.haml` and the like. They are on by default and appear in the `disabledDiagnostics` settings and under the new `A11y` department of `.ruby-templates.toml`.
+
 ## 0.12.0
 
 - `Rails/SilentRender` warns about a `render` in a tag that outputs nothing (`<% render "x" %>`, `- render "x"`), also in its block form, since the partial is thrown away. The quick fix "Output the result" makes the tag `<%=` (`=` in Haml and Slim) when the call is alone in its tag or line. The three rules run in Rails projects only, under app/views. Not reported when the result is assigned or passed on, or when the call is the last statement of a block whose value the helper around it may use.

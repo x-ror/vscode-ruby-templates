@@ -6,6 +6,7 @@ pub mod cli;
 mod code_context;
 mod completion;
 mod config;
+mod element_lints;
 mod erb;
 mod format;
 mod glob;

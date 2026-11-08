@@ -567,10 +567,11 @@ impl<'a> Parser<'a> {
         } else if let Some((len, named)) = match_tag(r) {
             self.out.tag_slots.push(self.at());
             let name = if named { &r[..len] } else { DEFAULT_TAG };
+            let name_at = self.at()..self.at() + if named { len } else { 0 };
             if named {
                 self.skip(len);
             }
-            self.parse_tag(name);
+            self.parse_tag(name, name_at);
         } else {
             self.fail_at("Unknown line indicator".to_string(), self.column());
         }
@@ -630,17 +631,17 @@ impl<'a> Parser<'a> {
         self.text_block(body, true, text_indent);
     }
 
-    fn parse_tag(&mut self, name: &str) {
+    fn parse_tag(&mut self, name: &str, name_at: Range<usize>) {
         self.out.pieces.push(Piece::Static(format!("<{name}").into()));
-        if self.parse_tag_rest(name) {
+        if self.parse_tag_rest(name, name_at) {
             self.out.pieces.push(Piece::Close(format!("</{name}>").into()));
         }
     }
 
     /// Everything after the tag name; whether the tag needs its closing tag.
-    fn parse_tag_rest(&mut self, name: &str) -> bool {
+    fn parse_tag_rest(&mut self, name: &str, name_at: Range<usize>) -> bool {
         let mut names = Vec::new();
-        let mut element = Element { name: name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
+        let mut element = Element { name: name.to_ascii_lowercase(), at: name_at, ..Element::default() };
         // `.class` / `#id` shortcuts, `((?:\p{Word}|-|\/\d+|:(\w|-)+)*)` after each.
         loop {
             let r = self.rest();
@@ -683,6 +684,7 @@ impl<'a> Parser<'a> {
         self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
         let first_attribute = self.out.pieces.len();
         self.parse_attributes(&mut names, &mut element);
+        let element_index = self.out.elements.len();
         self.out.elements.push(element);
         let attributes = &mut self.out.pieces[first_attribute..];
         if attributes.iter().any(|p| matches!(p, Piece::Splat { .. })) {
@@ -713,10 +715,11 @@ impl<'a> Parser<'a> {
                 return true;
             };
             let name = if named { &r[..len] } else { DEFAULT_TAG };
+            let name_at = self.at()..self.at() + if named { len } else { 0 };
             if named {
                 self.skip(len);
             }
-            self.parse_tag(name);
+            self.parse_tag(name, name_at);
         } else if t.starts_with('=') {
             self.skip(ws);
             self.output(true);
@@ -731,7 +734,12 @@ impl<'a> Parser<'a> {
         } else {
             self.skip(usize::from(r.starts_with(' ')));
             let text_indent = self.lines[self.i][..self.pos].chars().count();
+            let (line, written) = (self.i, self.rest().trim());
+            let at = self.at() + self.rest().len() - self.rest().trim_start().len();
             self.text_block(Body::Interpolated, true, text_indent);
+            if self.i == line && !written.contains("#{") {
+                self.out.elements[element_index].text = Some(at..at + written.len());
+            }
         }
         !void
     }

@@ -122,9 +122,13 @@ pub const RULES: &[Rule] = &[
     lint("Html/UnexpectedCloseTag", &[Erb], "unexpected-close-tag"),
     lint("Html/MismatchedCloseTag", &[Erb], "mismatched-close-tag"),
     lint("Html/UnclosedElement", &[Erb], "unclosed-element"),
-    lint("Html/ImgAlt", &[Erb], "img-missing-alt"),
-    lint("Html/DuplicateId", &[Erb], "duplicate-id"),
+    lint("Html/ImgAlt", TEMPLATES, "img-missing-alt"),
+    lint("Html/DuplicateId", TEMPLATES, "duplicate-id"),
     lint("Html/VoidChildren", HAML_SLIM, "void-children"),
+    new_lint("Html/DuplicateAttribute", TEMPLATES),
+    new_lint("Html/AnchorHref", TEMPLATES),
+    new_lint("A11y/IframeTitle", TEMPLATES),
+    new_lint("A11y/GenericLinkText", TEMPLATES),
     lint("Rails/MissingPartial", ALL, "unresolved-render"),
     lint("Rails/StrictLocals", ALL, "strict-locals"),
     new_lint("Rails/SilentRender", TEMPLATES),
@@ -180,7 +184,7 @@ mod tests {
             assert!(seen.insert(rule.name), "{} twice", rule.name);
             assert!(rule.alias.is_none_or(|alias| seen.insert(alias)), "{:?} twice", rule.alias);
         }
-        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "Rails", "Turbo", "Stimulus", "Layout", "Style"]);
+        assert_eq!(departments().collect::<Vec<_>>(), ["Syntax", "Html", "A11y", "Rails", "Turbo", "Stimulus", "Layout", "Style"]);
     }
 
     #[test]
@@ -193,7 +197,7 @@ mod tests {
 
     #[test]
     fn every_diagnostic_code_constant_is_a_rule_and_the_other_way_round() {
-        let re = regex::Regex::new(r#"pub(?:\(crate\))? const [A-Z_]+: &str = "([A-Z][A-Za-z]+/[A-Za-z]+)""#).unwrap();
+        let re = regex::Regex::new(r#"pub(?:\(crate\))? const [A-Z_]+: &str = "([A-Z][A-Za-z0-9]+/[A-Za-z]+)""#).unwrap();
         let sources = [
             include_str!("checks.rs"),
             include_str!("rails/output_lints.rs"),
@@ -202,6 +206,7 @@ mod tests {
             include_str!("erb.rs"),
             include_str!("erb/tags.rs"),
             include_str!("erb/html_lint.rs"),
+            include_str!("element_lints.rs"),
             include_str!("erb/output_control_flow.rs"),
             include_str!("haml/indent.rs"),
             include_str!("slim/indent.rs"),

@@ -46,7 +46,8 @@ const MARKUP_HELPERS: &[&str] = &[
 /// `tag.div`, `tag.span`: the builder accepts any name, so only HTML's own are taken for the helper and not for a local `tag`.
 pub(crate) const TAG_BUILDER_ELEMENTS: &[&str] = &[
     "a", "article", "aside", "b", "br", "button", "div", "em", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "i",
-    "img", "input", "label", "li", "main", "nav", "ol", "p", "section", "small", "span", "strong", "table", "td", "th", "tr", "ul",
+    "iframe", "img", "input", "label", "li", "main", "nav", "ol", "p", "section", "small", "span", "strong", "table", "td", "th", "tr",
+    "ul",
 ];
 
 /// With arguments: a bare `p` or `debug` could be a method of the view's own.

@@ -5,7 +5,7 @@ use crate::code_context::{self, render_filter};
 use crate::erb::output_control_flow::OUTPUT_CONTROL_FLOW;
 use crate::erb::{html_lint, tags};
 use crate::haml;
-use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
+use crate::lang::{haml_html_host, html_host, is_partial, slim_html_host, TemplateLang};
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
 use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, view_lints};
@@ -14,7 +14,7 @@ use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
 use crate::rules::resolve::ResolvedRules;
 use crate::slim;
-use crate::{erb, util};
+use crate::{element_lints, erb, util};
 use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,6 +25,14 @@ pub(crate) const UNRESOLVED_RENDER: &str = "Rails/MissingPartial";
 pub(crate) const STRICT_LOCALS: &str = "Rails/StrictLocals";
 /// Layouts take what the controller sets; their partials are the page's frame.
 const LAYOUTS_FOLDER: &str = "layouts";
+const ELEMENT_LINTS: [&str; 6] = [
+    html_lint::code::IMG_MISSING_ALT,
+    html_lint::code::DUPLICATE_ID,
+    element_lints::DUPLICATE_ATTRIBUTE,
+    element_lints::ANCHOR_HREF,
+    element_lints::IFRAME_TITLE,
+    element_lints::GENERIC_LINK_TEXT,
+];
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
 #[derive(Clone)]
@@ -62,6 +70,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
     let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby, rules.reports(OUTPUT_CONTROL_FLOW));
+    out.extend(element_diagnostics(uri, doc, rules, &ruby));
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(view_diagnostics(doc, rules, project, path, &ruby, doc.html_host(uri)));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
@@ -123,6 +132,25 @@ fn view_diagnostics(
         out.extend(attribute_lints::diagnostics(&doc.text, &elements, registered));
     }
     out
+}
+
+/// The element lints, for templates that output HTML (not `.js.erb`, `.text.erb` or `.xml.haml`) in any project.
+fn element_diagnostics(uri: &Uri, doc: &Doc, rules: &ResolvedRules, ruby: &RubyContext) -> Vec<Diagnostic> {
+    let html = match doc.lang {
+        TemplateLang::Erb => doc.html_host(uri),
+        TemplateLang::Haml => haml_html_host(uri),
+        TemplateLang::Slim => slim_html_host(uri),
+        _ => false,
+    };
+    if !html || !ELEMENT_LINTS.iter().any(|code| rules.reports(code)) {
+        return vec![];
+    }
+    let markup = attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar);
+    let helpers = code_context::compiled(doc.lang, &doc.text, None, rules.extra_engines()).and_then(|compiled| {
+        let options = ruby_prism::Options::default().version(ruby.grammar).build();
+        compiled.parse(&options).map(|parsed| attributes::helper_elements(&compiled, &parsed.node()))
+    });
+    element_lints::diagnostics(doc.lang, &doc.text, &markup, &helpers.unwrap_or_default())
 }
 
 /// The context of the template at `uri`: its project's, the latest grammar and no strict locals outside any.
@@ -412,6 +440,30 @@ mod tests {
         // Skim follows Slim.
         let off = Options::from_init(Some(&serde_json::json!({ "slim": { "diagnostics": { "enabled": false } } }))).0;
         assert_eq!(count(TemplateLang::Skim, slim, &off), 0);
+    }
+
+    #[test]
+    fn element_lints_run_on_html_templates_in_any_project() {
+        let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
+            let uri = format!("file:///v/{path}").parse::<Uri>().unwrap();
+            let doc = Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect()
+        };
+        let options = Options::default();
+        let (erb, haml, slim) = ("<a>x</a><iframe></iframe>\n", "%a x\n%iframe\n", "a x\niframe\n");
+        let both = ["Html/AnchorHref", "A11y/IframeTitle"];
+        assert_eq!(codes("show.html.erb", TemplateLang::Erb, erb, &options), both);
+        assert_eq!(codes("show.html.haml", TemplateLang::Haml, haml, &options), both);
+        assert_eq!(codes("show.html.slim", TemplateLang::Slim, slim, &options), both);
+        for (path, lang, text) in [
+            ("show.js.erb", TemplateLang::Erb, erb),
+            ("show.text.erb", TemplateLang::Erb, erb),
+            ("show.xml.haml", TemplateLang::Haml, haml),
+            ("show.xml.slim", TemplateLang::Slim, slim),
+        ] {
+            assert!(codes(path, lang, text, &options).is_empty(), "{path}");
+        }
+        assert_eq!(codes("show.html.haml", TemplateLang::Haml, haml, &disabling_haml("A11y/IframeTitle")), ["Html/AnchorHref"]);
     }
 
     fn disabling_haml(code: &str) -> Options {

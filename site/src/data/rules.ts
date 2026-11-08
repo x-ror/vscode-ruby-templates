@@ -89,6 +89,18 @@ const ARGUMENT_MESSAGE =
   "Block argument `index` is never used; rename it `_index`";
 const PERMANENT_MESSAGE =
   "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
+const IMG_MESSAGE =
+  "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)";
+const IMAGE_TAG_MESSAGE =
+  "`image_tag` without `alt:`: the alt attribute must be specified (HTML 4.8.4.4.1)";
+const DUPLICATE_ID_MESSAGE =
+  "Duplicate id `profile` (first on line 1): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)";
+const HREF_MESSAGE =
+  "`<a>` without `href` is not a link and the keyboard can't reach it; use a `<button>` for an action";
+const TITLE_MESSAGE =
+  "`<iframe>` without `title`: screen readers announce it to name the frame (WCAG 4.1.2)";
+const LINK_TEXT_MESSAGE =
+  "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.4)";
 const CONTROLLER_MESSAGE =
   "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?";
 
@@ -1978,14 +1990,12 @@ enabled = false`,
     name: "Html/ImgAlt",
     summary: "An image without alt text.",
     languages: ["erb", "haml", "slim"],
-    availableIn: ["erb"],
     type: "warning",
     safe: true,
-    status: "partial",
-    phase: 3,
+    status: "available",
     code: "Html/ImgAlt",
     today:
-      'In ERB with an HTML host, for `<img>` and for `image_tag` in an output tag without `alt:`. An empty `alt=""` counts as alt text. Haml and Slim templates are not checked.',
+      "For `<img>` (ERB start tags, `%img` and `img`) and for `image_tag` and `tag.img` without `alt:`, in templates that output HTML (not `.js.erb`, `.text.erb` or `.xml.haml`). An empty `alt=\"\"` counts as alt text, and so does `generator-unable-to-provide-required-alt`. Not reported where attributes may come from code that can't be read (ERB inside the start tag, a Haml `**attrs`, a Slim `*attrs`, a helper's `**options` or options in a variable).",
     setting: {
       label: "Turn it off",
       code: `[Html.ImgAlt]
@@ -2020,20 +2030,60 @@ enabled = false`,
           },
         ],
       },
+      {
+        lang: "haml",
+        file: HAML_FILE,
+        before: text(
+          "%img{src: @user.avatar_url}",
+          "= image_tag @user.avatar_url",
+        ),
+        after: text(
+          "%img{src: @user.avatar_url, alt: @user.name}",
+          "= image_tag @user.avatar_url, alt: @user.name",
+        ),
+        faults: [
+          { line: 1, column: 2, message: IMG_MESSAGE, code: "Html/ImgAlt" },
+          {
+            line: 2,
+            column: 3,
+            message: IMAGE_TAG_MESSAGE,
+            code: "Html/ImgAlt",
+          },
+        ],
+      },
+      {
+        lang: "slim",
+        file: SLIM_FILE,
+        before: text(
+          "img src=@user.avatar_url",
+          "= image_tag @user.avatar_url",
+        ),
+        after: text(
+          "img src=@user.avatar_url alt=@user.name",
+          "= image_tag @user.avatar_url, alt: @user.name",
+        ),
+        faults: [
+          { line: 1, column: 1, message: IMG_MESSAGE, code: "Html/ImgAlt" },
+          {
+            line: 2,
+            column: 3,
+            message: IMAGE_TAG_MESSAGE,
+            code: "Html/ImgAlt",
+          },
+        ],
+      },
     ],
   },
   {
     name: "Html/DuplicateId",
     summary: "The same static id twice in one template.",
     languages: ["erb", "haml", "slim"],
-    availableIn: ["erb"],
     type: "warning",
     safe: true,
-    status: "partial",
-    phase: 3,
+    status: "available",
     code: "Html/DuplicateId",
     today:
-      "In ERB with an HTML host, at the second occurrence. Ids that hold ERB, ids in different branches of a conditional and content inside `<template>` are left alone. Haml and Slim templates are not checked.",
+      "At the second occurrence, in templates that output HTML. In Haml and Slim, `#id` and `id:` count. Ids that hold ERB or interpolation, ids in different branches of a conditional (ERB `if`/`else`, Haml and Slim `- if`/`- else`) and content inside `<template>` are left alone; in Haml and Slim, so are ids where one of them sits in a conditional, a loop or a block the other is not in. A Haml element with both `#id` and `id:` gets one joined id and is skipped.",
     setting: {
       label: "Turn it off",
       code: `[Html.DuplicateId]
@@ -2049,6 +2099,34 @@ enabled = false`,
           "</div>",
           '<div id="settings"></div>',
         ),
+      },
+      {
+        lang: "haml",
+        file: HAML_FILE,
+        before: text("#profile", "  = @user.name", "#profile"),
+        after: text("#profile", "  = @user.name", "#settings"),
+        faults: [
+          {
+            line: 3,
+            column: 2,
+            message: DUPLICATE_ID_MESSAGE,
+            code: "Html/DuplicateId",
+          },
+        ],
+      },
+      {
+        lang: "slim",
+        file: SLIM_FILE,
+        before: text("#profile", "  = @user.name", "#profile"),
+        after: text("#profile", "  = @user.name", "#settings"),
+        faults: [
+          {
+            line: 3,
+            column: 2,
+            message: DUPLICATE_ID_MESSAGE,
+            code: "Html/DuplicateId",
+          },
+        ],
       },
     ],
   },
@@ -2160,14 +2238,17 @@ enabled = false`,
     name: "Html/DuplicateAttribute",
     summary: "An attribute given twice on one tag.",
     languages: ["erb", "haml", "slim"],
-    availableIn: ["slim"],
     type: "warning",
     safe: true,
-    status: "partial",
-    phase: 3,
-    code: "Syntax/Template",
+    status: "available",
+    code: "Html/DuplicateAttribute",
     today:
-      "Slim itself rejects a repeated attribute other than `class`, and the language server reports Slim's error, `Multiple href attributes specified`, as `Syntax/Template`. ERB and Haml templates are not checked; phase 3 adds them and a code of its own.",
+      'At the second one, for names written out in ERB start tags, Haml tags (the `(…)` list and the `{…}` hash, `data: { … }` keys included) and Slim tags, and in the literal options of `tag.div`, `content_tag`, `link_to` and the form and button helpers, in templates that output HTML. `class` and `id` are repeated on purpose in Haml, Slim and the helpers, which merge them (`.card{class: "wide"}`), so only plain ERB start tags are checked for them. An ERB start tag with ERB inside is left alone, since it may pick one of two attributes. Slim itself rejects a repeated attribute other than `class`, so there it is an error with Slim\'s message, `Multiple href attributes specified`.',
+    setting: {
+      label: "Turn it off",
+      code: `[Html.DuplicateAttribute]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2178,12 +2259,30 @@ enabled = false`,
           "</div>",
         ),
         after: text('<div class="card wide">', "  <%= user.name %>", "</div>"),
+        faults: [
+          {
+            line: 1,
+            column: 19,
+            message:
+              "Duplicate attribute `class` on `<div>`: a start tag must not repeat an attribute (HTML 13.1.2.3)",
+            code: "Html/DuplicateAttribute",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('%a{href: "/users", href: "/people"} Users'),
         after: text('%a{href: "/users"} Users'),
+        faults: [
+          {
+            line: 1,
+            column: 20,
+            message:
+              "Duplicate attribute `href` on `<a>`: a start tag must not repeat an attribute (HTML 13.1.2.3)",
+            code: "Html/DuplicateAttribute",
+          },
+        ],
       },
       {
         lang: "slim",
@@ -2195,7 +2294,7 @@ enabled = false`,
             line: 1,
             column: 1,
             message: "Multiple href attributes specified",
-            code: "Syntax/Template",
+            code: "Html/DuplicateAttribute",
           },
         ],
       },
@@ -2247,8 +2346,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 3,
+    status: "available",
+    code: "Html/AnchorHref",
+    today:
+      "On the tag name of `<a>` in ERB start tags and of `%a` and `a` in Haml and Slim, in templates that output HTML. `link_to` always has an `href` and is not checked. An `<a>` with a `name` (the old way to mark a place to jump to) or a `tabindex` (the keyboard can reach it) is left alone, and so is one whose attributes may come from code that can't be read (ERB inside the start tag, a Haml `**attrs` or `data: attrs`, a Slim `*attrs` or `data=` hash).",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.AnchorHref]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2257,18 +2363,42 @@ enabled = false`,
         after: text(
           '<button class="btn" data-action="click->menu#open">Menu</button>',
         ),
+        faults: [
+          {
+            line: 1,
+            column: 2,
+            message: HREF_MESSAGE,
+            code: "Html/AnchorHref",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('%a.btn{data: {action: "click->menu#open"}} Menu'),
         after: text('%button.btn{data: {action: "click->menu#open"}} Menu'),
+        faults: [
+          {
+            line: 1,
+            column: 2,
+            message: HREF_MESSAGE,
+            code: "Html/AnchorHref",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('a.btn data-action="click->menu#open" Menu'),
         after: text('button.btn data-action="click->menu#open" Menu'),
+        faults: [
+          {
+            line: 1,
+            column: 1,
+            message: HREF_MESSAGE,
+            code: "Html/AnchorHref",
+          },
+        ],
       },
     ],
   },
@@ -2279,8 +2409,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 3,
+    status: "available",
+    code: "A11y/IframeTitle",
+    today:
+      "On the tag name of an `<iframe>` in ERB start tags, Haml and Slim tags, and of `tag.iframe` and `content_tag :iframe`, in templates that output HTML. An `aria-label`, `aria-labelledby` or `aria: { … }` names the frame as well. Not reported where attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`).",
+    setting: {
+      label: "Turn it off",
+      code: `[A11y.IframeTitle]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2291,6 +2428,14 @@ enabled = false`,
         after: text(
           '<iframe src="https://www.youtube.com/embed/<%= video.youtube_id %>" title="<%= video.title %>"></iframe>',
         ),
+        faults: [
+          {
+            line: 1,
+            column: 2,
+            message: TITLE_MESSAGE,
+            code: "A11y/IframeTitle",
+          },
+        ],
       },
       {
         lang: "haml",
@@ -2301,6 +2446,14 @@ enabled = false`,
         after: text(
           '%iframe{src: "https://www.youtube.com/embed/#{video.youtube_id}", title: video.title}',
         ),
+        faults: [
+          {
+            line: 1,
+            column: 2,
+            message: TITLE_MESSAGE,
+            code: "A11y/IframeTitle",
+          },
+        ],
       },
       {
         lang: "slim",
@@ -2311,6 +2464,14 @@ enabled = false`,
         after: text(
           'iframe src="https://www.youtube.com/embed/#{video.youtube_id}" title=video.title',
         ),
+        faults: [
+          {
+            line: 1,
+            column: 1,
+            message: TITLE_MESSAGE,
+            code: "A11y/IframeTitle",
+          },
+        ],
       },
     ],
   },
@@ -2321,8 +2482,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 3,
+    status: "available",
+    code: "A11y/GenericLinkText",
+    today:
+      'On the text of an `<a>` that holds only text (ERB, Haml and Slim tags) and of a `link_to`, `tag.a` or `content_tag :a` given a string literal: "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label`, `aria-labelledby` or `aria: { … }`, with ERB, interpolation, other elements or code in its content, or whose attributes may come from code that can\'t be read is left alone.',
+    setting: {
+      label: "Turn it off",
+      code: `[A11y.GenericLinkText]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2333,18 +2501,42 @@ enabled = false`,
         after: text(
           '<p><%= link_to "See the new pricing", pricing_path %></p>',
         ),
+        faults: [
+          {
+            line: 1,
+            column: 42,
+            message: LINK_TEXT_MESSAGE,
+            code: "A11y/GenericLinkText",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('%p= link_to "Click here", pricing_path'),
         after: text('%p= link_to "See the new pricing", pricing_path'),
+        faults: [
+          {
+            line: 1,
+            column: 14,
+            message: LINK_TEXT_MESSAGE,
+            code: "A11y/GenericLinkText",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('p = link_to "Click here", pricing_path'),
         after: text('p = link_to "See the new pricing", pricing_path'),
+        faults: [
+          {
+            line: 1,
+            column: 14,
+            message: LINK_TEXT_MESSAGE,
+            code: "A11y/GenericLinkText",
+          },
+        ],
       },
     ],
   },

@@ -15,7 +15,11 @@ use std::ops::Range;
 pub(crate) struct Element {
     /// Lower-case: `a`, `div`.
     pub name: String,
+    /// Where the name is written; empty when it is implied (`.card` is a `div`).
+    pub at: Range<usize>,
     pub attributes: Vec<Attribute>,
+    /// The text that is all of the element's content, when the template spells it out: no ERB, interpolation or child.
+    pub text: Option<Range<usize>>,
     /// ERB in the tag, a splat or a hash that isn't a literal may set attributes this reading doesn't see.
     pub open: bool,
 }
@@ -56,10 +60,13 @@ impl Element {
 
     /// The same element `by` bytes further on.
     pub fn shifted(mut self, by: usize) -> Self {
+        let shift = |range: &Range<usize>| range.start + by..range.end + by;
+        self.at = shift(&self.at);
+        self.text = self.text.as_ref().map(shift);
         for attribute in &mut self.attributes {
-            attribute.at = attribute.at.start + by..attribute.at.end + by;
+            attribute.at = shift(&attribute.at);
             if let Value::Text(text) = &mut attribute.value {
-                *text = text.start + by..text.end + by;
+                *text = shift(text);
             }
         }
         self
@@ -99,6 +106,8 @@ fn erb_elements(text: &str) -> Vec<Element> {
         Attribute { name: attribute.name, at: attribute.at.0..attribute.at.1, in_data: false, value }
     };
     let element = |tag: html_lint::StartTag| Element {
+        at: tag.start + "<".len()..tag.start + "<".len() + tag.name.len(),
+        text: tag.text.map(|(start, end)| start..end),
         name: tag.name,
         open: tag.dynamic,
         attributes: tag.attrs.into_iter().filter(|attribute| !attribute.name.is_empty()).map(attribute).collect(),
@@ -224,6 +233,7 @@ impl Helpers<'_> {
         let element_name = match call.receiver() {
             None => match name.as_str() {
                 "link_to" => "a".to_string(),
+                "image_tag" => "img".to_string(),
                 "button_to" | "button_tag" | "submit_tag" => "button".to_string(),
                 "form_with" | "form_for" | "form_tag" => "form".to_string(),
                 "content_tag" => arguments.first().and_then(|node| literal_name(node, self.compiled).map(|(text, _)| text))?,
@@ -234,14 +244,27 @@ impl Helpers<'_> {
             Some(_) => return None,
         };
         let is_form = element_name == "form" && call.receiver().is_none();
-        let mut element = Element { name: element_name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
-        let options = arguments.last();
-        let entries: Vec<Node> = options
-            .and_then(|node| {
-                let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect());
-                keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
-            })
-            .unwrap_or_default();
+        let is_content_tag = call.receiver().is_none() && name == "content_tag";
+        let text_argument = usize::from(is_content_tag);
+        let at = if is_content_tag {
+            arguments.first().and_then(|node| literal_name(node, self.compiled)).map(|(_, at)| at)
+        } else {
+            call.message_loc().and_then(|loc| span(self.compiled, &loc))
+        };
+        let text = arguments.get(text_argument).filter(|_| call.block().is_none()).and_then(|node| literal_name(node, self.compiled));
+        let mut element = Element {
+            name: element_name.to_ascii_lowercase(),
+            at: at.unwrap_or_default(),
+            text: text.map(|(_, range)| range),
+            ..Element::default()
+        };
+        let options = arguments.last().and_then(|node| {
+            let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect::<Vec<_>>());
+            keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
+        });
+        // The second argument of `image_tag` is its options: a variable there may hold `alt`.
+        element.open = name == "image_tag" && arguments.len() > 1 && options.is_none();
+        let entries = options.unwrap_or_default();
         // A form's `html:` options are the form tag's own attributes, and `form_for` always gives the form an id.
         let (html, rest): (Vec<Node>, Vec<Node>) = entries.into_iter().partition(|entry| is_form && self.is_html_option(entry));
         read_hash(&mut element, rest.into_iter(), self.compiled, false);

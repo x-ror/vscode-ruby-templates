@@ -112,10 +112,10 @@ export const diagnostics: Diagnostic[] = [
   {
     code: "Html/ImgAlt",
     formerly: "img-missing-alt",
-    languages: ["erb"],
+    languages: ["erb", "haml", "slim"],
     summary: "An image without alt text.",
     explanation:
-      'Fires for an `<img>` with no `alt` attribute and for an `image_tag` call in an output tag whose options have no `alt:`; that one reads "`image_tag` without `alt:`". Not reported for an `<img>` with ERB where attributes go (`<img <%= attrs %>>`), an `image_tag` given a `**splat`, or `generator-unable-to-provide-required-alt`, since each may supply the text. An empty `alt=""` counts as alt text. ERB with an HTML host only.',
+      'Fires for an `<img>` (`%img` in Haml, `img` in Slim) with no `alt` attribute and for an `image_tag` call whose options have no `alt:`; that one reads "`image_tag` without `alt:`". In ERB the call must be in an output tag. Not reported for an `<img>` with ERB where attributes go (`<img <%= attrs %>>`), a Haml `**attrs` or a Slim `*attrs`, an `image_tag` given a `**splat`, or `generator-unable-to-provide-required-alt`, since each may supply the text. An empty `alt=""` counts as alt text. Templates that output HTML only: not `.js.erb`, `.text.erb` or `.xml.haml`.',
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",
@@ -130,10 +130,10 @@ export const diagnostics: Diagnostic[] = [
   {
     code: "Html/DuplicateId",
     formerly: "duplicate-id",
-    languages: ["erb"],
+    languages: ["erb", "haml", "slim"],
     summary: "The same static id twice in one template.",
     explanation:
-      "Reported at the second occurrence, naming the line of the first. Only literal values count: an id holding ERB is left alone. Two ids in different branches of an ERB conditional don't clash, and content inside `<template>` isn't in the document yet. ERB with an HTML host only.",
+      "Reported at the second occurrence, naming the line of the first. Only literal values count: an id holding ERB or interpolation is left alone, and so is an element with both `#id` and `id:` in Haml (it gets one joined id). Two ids in different branches of a conditional don't clash, and content inside `<template>` isn't in the document yet. In Haml and Slim, ids are also left alone when one of them sits in a conditional, a loop or a block that the other is not in. Templates that output HTML only.",
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",
@@ -147,6 +147,79 @@ export const diagnostics: Diagnostic[] = [
       "Duplicate id `profile` (first on line 1): the value must be unique amongst all the IDs in the element's tree (HTML 3.2.6)",
     line: 4,
     column: 10,
+  },
+  {
+    code: "Html/DuplicateAttribute",
+    languages: ["erb", "haml", "slim"],
+    summary: "An attribute given twice on one tag.",
+    explanation:
+      'Reported at the second one, for names written out in ERB start tags, Haml tags (the `(…)` list and the `{…}` hash) and Slim tags, and in the literal options of Rails tag helpers. `class` and `id` are left alone in Haml, Slim and the helpers, which merge them. An ERB start tag with ERB inside is left alone. Slim rejects a repeated attribute other than `class` itself, so there the message is Slim\'s own ("Multiple href attributes specified") and the severity is error. Templates that output HTML only.',
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<div class="card" class="wide">
+  <%= @user.name %>
+</div>
+`,
+    },
+    message:
+      "Duplicate attribute `class` on `<div>`: a start tag must not repeat an attribute (HTML 13.1.2.3)",
+    line: 1,
+    column: 19,
+  },
+  {
+    code: "Html/AnchorHref",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      "An `<a>` without an `href`, which is not a link and cannot be reached with the keyboard.",
+    explanation:
+      "Reported on the tag name. `link_to` always has an `href` and is not checked. An `<a>` with a `name` or a `tabindex`, or whose attributes may come from code that can't be read (ERB inside the start tag, `**attrs`, `*attrs`), is left alone. Templates that output HTML only.",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<a class="btn" data-action="click->menu#open">Menu</a>
+`,
+    },
+    message:
+      "`<a>` without `href` is not a link and the keyboard can't reach it; use a `<button>` for an action",
+    line: 1,
+    column: 2,
+  },
+  {
+    code: "A11y/IframeTitle",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      "An `<iframe>` without a `title`, which screen readers use to name it.",
+    explanation:
+      "Reported on the tag name, also for `tag.iframe` and `content_tag :iframe`. An `aria-label`, `aria-labelledby` or `aria: { … }` names the frame as well. Not reported where attributes may come from code that can't be read. Templates that output HTML only.",
+    example: {
+      file: "app/views/videos/show.html.erb",
+      lang: "erb",
+      code: `<iframe src="https://www.youtube.com/embed/<%= @video.youtube_id %>"></iframe>
+`,
+    },
+    message:
+      "`<iframe>` without `title`: screen readers announce it to name the frame (WCAG 4.1.2)",
+    line: 1,
+    column: 2,
+  },
+  {
+    code: "A11y/GenericLinkText",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      'Link text that says nothing out of context: "click here", "here", "read more".',
+    explanation:
+      'Reported on the text, for an `<a>` that holds only text and for a `link_to`, `tag.a` or `content_tag :a` given a string literal. The texts are "click here", "here", "read more", "learn more", "more", "more info", "more information", "link", "this link" and "click", in any case and ignoring punctuation. A link with an `aria-label` or `aria-labelledby`, or with ERB, interpolation or other elements inside, is left alone. Templates that output HTML only.',
+    example: {
+      file: "app/views/pricing/show.html.erb",
+      lang: "erb",
+      code: `<p>Our new pricing is live. <%= link_to "Click here", pricing_path %></p>
+`,
+    },
+    message:
+      "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.4)",
+    line: 1,
+    column: 42,
   },
   {
     code: "Syntax/InconsistentIndent",
@@ -338,7 +411,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["haml", "slim"],
     summary: "Any other error the Haml or Slim parser raises.",
     explanation:
-      'The parser errors that have no code of their own. In Haml: "Invalid tag", "Invalid filter name" and "There\'s no Ruby code for = to evaluate." In Slim: "Unknown line indicator", "Illegal shortcut", "Invalid empty attribute", "Expected attribute", "Expected tag" for a block expansion with nothing after it (`ul:`), "Unexpected text after closed tag", "Multiple id attributes specified" (for any repeated attribute) and "Invalid doctype".',
+      'The parser errors that have no code of their own. In Haml: "Invalid tag", "Invalid filter name" and "There\'s no Ruby code for = to evaluate." In Slim: "Unknown line indicator", "Illegal shortcut", "Invalid empty attribute", "Expected attribute", "Expected tag" for a block expansion with nothing after it (`ul:`), "Unexpected text after closed tag" and "Invalid doctype".',
     example: {
       file: "app/views/users/show.html.haml",
       lang: "haml",
