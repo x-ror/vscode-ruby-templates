@@ -2,6 +2,7 @@
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
 pub(crate) mod blank_lines;
+mod element_content;
 mod element_style;
 pub mod erb;
 pub mod haml;
@@ -64,6 +65,8 @@ pub struct Settings {
     pub classes_before_ids: bool,
     /// `Style/HashAttributes`; `None` leaves the attributes.
     pub hash_attributes: Option<AttributeStyle>,
+    /// `Layout/ElementContentOnOwnLine`: the lower-case names of the elements whose content moves to its own line; `None` leaves it.
+    pub content_on_own_line: Option<Vec<String>>,
 }
 
 impl Default for Settings {
@@ -90,6 +93,7 @@ impl Default for Settings {
             implicit_div: false,
             classes_before_ids: false,
             hash_attributes: None,
+            content_on_own_line: None,
         }
     }
 }
@@ -240,6 +244,7 @@ pub(crate) fn format_in(
     if lang == TemplateLang::Haml {
         keep(element_style::attributes(&source, settings, ruby.grammar), &mut source, &mut notes);
     }
+    keep(element_content::apply(lang, &source, settings, extra_engines), &mut source, &mut notes);
     let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
     formatted.notes.extend(notes);
     if formatted.text == *source {

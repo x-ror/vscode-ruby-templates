@@ -815,6 +815,7 @@ impl Backend {
                 settings.around_block_body = None;
                 settings.around_element_body = None;
                 settings.around_branches = None;
+                settings.content_on_own_line = None;
             }
             let result = format::format(&uri, lang, plain_erb, &text, &settings, rules.extra_engines());
             (Arc::new(rules), Some((uri, text, result)))

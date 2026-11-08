@@ -14,6 +14,7 @@ mod haml;
 mod helpers;
 mod html;
 mod lang;
+mod line_length;
 mod lsp;
 mod options;
 mod outline;

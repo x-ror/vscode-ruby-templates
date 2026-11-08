@@ -539,6 +539,41 @@ try {
   );
   assert.strictEqual(tagStyleFormat("a.html.slim", "div#a.b x\n"), "#a.b x\n");
 
+  // Layout/ElementContentOnOwnLine moves the content of the listed tags; Layout/LineLength only reports.
+  fs.writeFileSync(
+    path.join(tagStyle, ".ruby-templates.toml"),
+    '[Layout.ElementContentOnOwnLine]\nenabled = true\ntags = ["Div", "li"]\n[Layout.LineLength]\nenabled = true\nmax = 20\n',
+  );
+  const content = "<div><li>y</li></div>\n";
+  const moved = "<div>\n  <li>\n    y\n  </li>\n</div>\n";
+  assert.strictEqual(tagStyleFormat("a.html.erb", content), moved);
+  assert.strictEqual(tagStyleFormat("a.html.erb", moved), moved, "stable");
+  assert.strictEqual(
+    tagStyleFormat("a.html.haml", "%div\n  %li y\n  %p x\n"),
+    "%div\n  %li\n    y\n  %p x\n",
+  );
+  assert.strictEqual(
+    tagStyleFormat("a.html.slim", "div\n  li y\n  p x\n"),
+    "div\n    li\n        | y\n    p x\n",
+  );
+  const longLine = path.join(tagStyle, "long.html.erb");
+  fs.writeFileSync(longLine, "<p>short</p>\n<p>this line is longer</p>\n");
+  r = run(["check", longLine]);
+  assert.strictEqual(r.status, 1);
+  assert.match(
+    r.stdout,
+    /long\.html\.erb:2:21: warning: line is 26 characters long; the limit is 20/,
+  );
+  fs.writeFileSync(
+    path.join(tagStyle, ".ruby-templates.toml"),
+    '[Layout.ElementContentOnOwnLine]\ntags = ["<p>"]\n',
+  );
+  r = run(["check", longLine]);
+  assert.match(
+    r.stdout,
+    /\.ruby-templates\.toml:2:9: warning: `<p>` is not an element name/,
+  );
+
   // Layout/IndentationStyle (ERB tabs, from the file or .editorconfig) and Layout/TrailingWhitespace.
   const layout = path.join(root, "layout");
   fs.mkdirSync(layout);

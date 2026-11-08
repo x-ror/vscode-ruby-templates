@@ -1,6 +1,6 @@
 //! `.ruby-templates.toml`, read against the rule registry. A part that can't be read is dropped with a `Problem`; the rest is kept.
 
-use super::{by_code, by_name, departments, ChoiceOption, CountOption, Kind, Rule};
+use super::{by_code, by_name, departments, ChoiceOption, CountOption, Kind, ListOption, Rule};
 use crate::glob::Glob;
 use crate::util::LineIndex;
 use std::ops::Range as Span;
@@ -35,6 +35,8 @@ pub struct RuleTable {
     pub counts: Vec<(&'static str, usize)>,
     /// The rule's word options that the table sets, by key.
     pub choices: Vec<(&'static str, &'static str)>,
+    /// The rule's list options that the table sets, by key.
+    pub lists: Vec<(&'static str, Vec<String>)>,
 }
 
 /// One of `[erb]`, `[haml]`, `[slim]` (Skim too), `[jbuilder]`.
@@ -188,12 +190,16 @@ impl Reader<'_> {
                 other => {
                     let count = rule.options.iter().find(|option| option.key == other);
                     let choice = rule.choices.iter().find(|choice| choice.key == other);
+                    let list = rule.lists.iter().find(|list| list.key == other);
                     if let Some(option) = count {
                         parsed.counts.extend(self.count(option, value));
                     } else if let Some(option) = choice {
                         parsed.choices.extend(self.choice(option, value));
+                    } else if let Some(option) = list {
+                        parsed.lists.extend(self.words(option, value));
                     } else {
-                        let own = rule.options.iter().map(|option| option.key).chain(rule.choices.iter().map(|choice| choice.key));
+                        let own = rule.options.iter().map(|option| option.key);
+                        let own = own.chain(rule.choices.iter().map(|choice| choice.key)).chain(rule.lists.iter().map(|list| list.key));
                         let takes = RULE_KEYS.into_iter().chain(own).collect::<Vec<_>>();
                         let message = format!("unknown key `{other}` in [{table_name}]; it takes {}", takes.join(", "));
                         self.problem(key.span(), message);
@@ -220,6 +226,20 @@ impl Reader<'_> {
             self.problem(value.span(), message);
         }
         word.map(|&word| (option.key, word))
+    }
+
+    /// The words of a list option: element names, lower-cased.
+    fn words(&mut self, option: &ListOption, value: Value) -> Option<(&'static str, Vec<String>)> {
+        let words = self.strings(option.key, value)?;
+        let mut kept = Vec::new();
+        for (word, span) in words {
+            if word.is_empty() || !word.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | ':' | '_')) {
+                self.problem(span, format!("`{word}` is not an element name"));
+            } else {
+                kept.push(word.to_ascii_lowercase());
+            }
+        }
+        Some((option.key, kept))
     }
 
     fn as_table<'v>(&mut self, name: &str, value: &'v Spanned<DeValue<'v>>) -> Option<&'v DeTable<'v>> {
@@ -429,6 +449,20 @@ colour = 1
             assert_eq!(messages(&file), want, "style = {value}");
             assert!(file.rules[0].1.choices.is_empty(), "style = {value}");
         }
+    }
+
+    #[test]
+    fn a_list_option_is_a_list_of_element_names() {
+        let file = read("[Layout.ElementContentOnOwnLine]\ntags = [\"Div\", \"my-element\"]\n");
+        assert!(file.problems.is_empty(), "{:?}", messages(&file));
+        assert_eq!(file.rules[0].1.lists, [("tags", vec!["div".to_string(), "my-element".to_string()])]);
+        let file = read("[Layout.ElementContentOnOwnLine]\ntags = []\n");
+        assert_eq!(file.rules[0].1.lists, [("tags", Vec::<String>::new())]);
+        let file = read("[Layout.ElementContentOnOwnLine]\ntags = \"div\"\n");
+        assert_eq!(messages(&file), ["2:8: `tags` must be a list of strings"]);
+        let file = read("[Layout.ElementContentOnOwnLine]\ntags = [\"div\", \"<p>\", \"\"]\n");
+        assert_eq!(messages(&file), ["2:16: `<p>` is not an element name", "2:23: `` is not an element name"]);
+        assert_eq!(file.rules[0].1.lists, [("tags", vec!["div".to_string()])]);
     }
 
     #[test]

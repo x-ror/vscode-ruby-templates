@@ -13,6 +13,10 @@ static NEEDS_NO_DO: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\A(if|unless|else|elsif|when|in|begin|rescue|ensure|case)\b|\bdo\s*(\|[^|]*\|\s*)?\n?\z").unwrap());
 static CAPTURES_BLOCK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)\A(if|unless)\b|\bdo\s*(\|[^|]*\|)?\s*$").unwrap());
 
+static LINE_SYNC: LazyLock<Regex> = LazyLock::new(|| Regex::new(r";[\s;]*").unwrap());
+/// The end of one static string and the start of the next, which Temple merges unless a line break comes between them.
+static STATIC_JOIN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""\.freeze\);_buf << \(""#).unwrap());
+
 /// What the last line of a depth still owes after its nested lines.
 enum Closer<'a> {
     Markup(&'a str),
@@ -70,6 +74,17 @@ pub fn same_compilation_ignoring_lines(before: &str, after: &str, extra_engines:
         pieces
     };
     without_positions(before) == without_positions(after)
+}
+
+/// `same_compilation` for a text that moved content to a line of its own: the Ruby compared without the line breaks that keep
+/// its lines in step with the template's, and with the static strings each side has next to each other merged.
+pub fn same_compilation_ignoring_layout(before: &str, after: &str, extra_engines: &[String]) -> bool {
+    let layout_free = |text: &str| {
+        let source = generated(text, extra_engines);
+        let source = LINE_SYNC.replace_all(&source, ";");
+        STATIC_JOIN.replace_all(&source, "").into_owned()
+    };
+    layout_free(before) == layout_free(after)
 }
 
 /// The Ruby `Slim::Engine` generates from the parser's output.

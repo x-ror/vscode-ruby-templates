@@ -746,6 +746,22 @@ export const diagnostics: Diagnostic[] = [
     line: 1,
     column: 26,
   },
+  {
+    code: "Layout/LineLength",
+    languages: ["erb", "haml", "slim"],
+    summary: "A line longer than the limit.",
+    explanation:
+      "Every line over `max` characters (100 unless set) is reported from the first character past the limit. Characters are counted, a tab is one, trailing whitespace is not counted, and a line that cannot be made shorter is skipped: one with no space after its indentation, such as a long URL, and the `# locals:` comment of strict locals. Off by default: turn it on with `enabled = true` under `[Layout.LineLength]` in .ruby-templates.toml, where `max` sets the limit.",
+    example: {
+      file: "app/views/announcements/show.html.erb",
+      lang: "erb",
+      code: `<p class="lead text-muted"><%= link_to "Read the full announcement", announcement_path(@announcement), class: "link" %></p>
+`,
+    },
+    message: "line is 123 characters long; the limit is 100",
+    line: 1,
+    column: 101,
+  },
 ];
 
 /** The codes each language's `disabledDiagnostics` setting in `package.json` accepts. */

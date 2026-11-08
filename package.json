@@ -728,7 +728,8 @@
                   "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
-                  "Style/ErbTrimMode"
+                  "Style/ErbTrimMode",
+                  "Layout/LineLength"
                 ]
               },
               {
@@ -778,7 +779,8 @@
                   "Rails/RenderInLoop",
                   "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
-                  "Stimulus/UnknownController"
+                  "Stimulus/UnknownController",
+                  "Layout/LineLength"
                 ]
               },
               {
@@ -845,7 +847,8 @@
                   "Rails/RenderInLoop",
                   "Rails/UnsafeOutput",
                   "Turbo/PermanentRequiresId",
-                  "Stimulus/UnknownController"
+                  "Stimulus/UnknownController",
+                  "Layout/LineLength"
                 ]
               },
               {

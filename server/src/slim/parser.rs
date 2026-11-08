@@ -719,10 +719,16 @@ impl<'a> Parser<'a> {
             if named {
                 self.skip(len);
             }
+            let nested = self.out.elements.len();
             self.parse_tag(name, name_at);
+            for element in &mut self.out.elements[nested..] {
+                element.content = None;
+            }
         } else if t.starts_with('=') {
             self.skip(ws);
+            let code = self.at()..self.at() + self.rest().len();
             self.output(true);
+            self.out.elements[element_index].content = Some(code);
         } else if let Some(after) = t.strip_prefix('/') {
             let text = trim_start(after);
             if !text.is_empty() {
@@ -737,8 +743,11 @@ impl<'a> Parser<'a> {
             let (line, written) = (self.i, self.rest().trim());
             let at = self.at() + self.rest().len() - self.rest().trim_start().len();
             self.text_block(Body::Interpolated, true, text_indent);
-            if self.i == line && !written.contains("#{") {
-                self.out.elements[element_index].text = Some(at..at + written.len());
+            if self.i == line {
+                self.out.elements[element_index].content = Some(at..at + written.len());
+                if !written.contains("#{") {
+                    self.out.elements[element_index].text = Some(at..at + written.len());
+                }
             }
         }
         !void

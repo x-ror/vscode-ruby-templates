@@ -20,6 +20,9 @@ pub(crate) struct Element {
     pub attributes: Vec<Attribute>,
     /// The text that is all of the element's content, when the template spells it out: no ERB, interpolation or child.
     pub text: Option<Range<usize>>,
+    /// Haml and Slim: what follows the tag on its line, text or `=` code, from its first character to its last; none when it
+    /// is nothing, when the line goes on or when the tag is nested on a line by `:` (`li: a x`).
+    pub content: Option<Range<usize>>,
     /// ERB in the tag, a splat or a hash that isn't a literal may set attributes this reading doesn't see.
     pub open: bool,
 }
@@ -63,6 +66,7 @@ impl Element {
         let shift = |range: &Range<usize>| range.start + by..range.end + by;
         self.at = shift(&self.at);
         self.text = self.text.as_ref().map(shift);
+        self.content = self.content.as_ref().map(shift);
         for attribute in &mut self.attributes {
             attribute.at = shift(&attribute.at);
             if let Value::Text(text) = &mut attribute.value {
@@ -108,6 +112,7 @@ fn erb_elements(text: &str) -> Vec<Element> {
     let element = |tag: html_lint::StartTag| Element {
         at: tag.start + "<".len()..tag.start + "<".len() + tag.name.len(),
         text: tag.text.map(|(start, end)| start..end),
+        content: None,
         name: tag.name,
         open: tag.dynamic,
         attributes: tag.attrs.into_iter().filter(|attribute| !attribute.name.is_empty()).map(attribute).collect(),
