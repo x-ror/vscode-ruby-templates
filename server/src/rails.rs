@@ -19,5 +19,6 @@ pub mod routes;
 pub mod schema;
 pub mod slots;
 pub mod stimulus;
+pub mod unsafe_output;
 pub mod view_lints;
 pub mod view_roots;

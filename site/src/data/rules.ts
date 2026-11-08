@@ -89,6 +89,11 @@ const ARGUMENT_MESSAGE =
   "Block argument `index` is never used; rename it `_index`";
 const PERMANENT_MESSAGE =
   "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
+const unsafeMessage = (
+  subject: string,
+  code: string,
+  hint = "use `sanitize` if it holds user HTML",
+) => `\`${subject}\` outputs \`${code}\` without escaping; ${hint}`;
 const IMG_MESSAGE =
   "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)";
 const IMAGE_TAG_MESSAGE =
@@ -1021,8 +1026,12 @@ enabled = false`,
     safe: false,
     safeNote:
       "There is no autofix. In Rails, `-%>` also removes the line break after an output tag, so changing one to the other can change the page.",
-    status: "planned",
-    phase: 3,
+    status: "available",
+    code: "Style/ErbTrimMode",
+    today:
+      "Every closer of the kind the template uses less is reported, `-%>` when there are as many of each. Comments (`<%#`) and literal `<%%` tags are not counted, nor are closers with more on their line (`-%>` only trims a line break). Off by default, as a style preference.",
+    onByDefault: [],
+    config: text("[Style.ErbTrimMode]", "enabled = true"),
     examples: [
       {
         lang: "erb",
@@ -1037,6 +1046,14 @@ enabled = false`,
           "  <li><%= user.name %></li>",
           "<% end %>",
         ),
+        faults: [
+          {
+            line: 1,
+            column: 26,
+            message: "`-%>` here, but most closers in this template are `%>`",
+            code: "Style/ErbTrimMode",
+          },
+        ],
       },
     ],
   },
@@ -1550,8 +1567,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 3,
+    status: "available",
+    code: "Rails/UnsafeOutput",
+    today:
+      '`raw x`, `x.html_safe` and `safe_concat x` are reported on the method name, and the unescaped output markers `<%==` (ERB), `!=` and `!~` (Haml) and `==` (Slim, also before an attribute value) on the marker. A `to_json` value gets the hint to use `json_escape`. Not reported when the value is certainly safe: a literal without interpolation (`"<br>".html_safe`, `raw "&nbsp;"`), a `t`/`translate` call with a literal key ending in `_html` or `.html`, or a call to `sanitize`, `safe_join`, `strip_tags`, `json_escape`, `j`, `escape_javascript`, `h`, `html_escape`, `escape_once`, `link_to`, `button_to`, `mail_to`, `content_tag`, `image_tag`, `simple_format`, `render`, `capture` or `tag.div` and the other `tag` elements. `<%== render … %>` is redundant, not unsafe, so it is quiet. Haml\'s `!==` and Slim\'s `#{{x}}` are not looked at. Only in Rails projects, in templates under app/views.',
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.UnsafeOutput]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1561,28 +1585,91 @@ enabled = false`,
           "<%= @user.bio.html_safe %>",
           "<%== @user.bio %>",
           '<a href="<%= raw @user.website %>">Website</a>',
-          "<script>var bio = <%= raw @user.bio.to_json %>;</script>",
+          '<div data-bio="<%= raw @user.bio.to_json %>"></div>',
         ),
         after: text(
           "<%= sanitize @user.bio %>",
           "<%= sanitize @user.bio %>",
           "<%= sanitize @user.bio %>",
           '<a href="<%= @user.website %>">Website</a>',
-          "<script>var bio = <%= @user.bio.to_json %>;</script>",
+          '<div data-bio="<%= @user.bio.to_json %>"></div>',
         ),
-        note: "The same rule covers `raw` and `html_safe` in attributes and `<script>` bodies, as the last two lines show.",
+        faults: [
+          {
+            line: 1,
+            column: 5,
+            message: unsafeMessage("raw", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 2,
+            column: 15,
+            message: unsafeMessage("html_safe", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 3,
+            column: 1,
+            message: unsafeMessage("<%==", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 4,
+            column: 14,
+            message: unsafeMessage("raw", "@user.website"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 5,
+            column: 20,
+            message: unsafeMessage(
+              "raw",
+              "@user.bio.to_json",
+              "`to_json` doesn't escape quotes for an attribute; output it without `raw`",
+            ),
+            code: "Rails/UnsafeOutput",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text("!= @user.bio", "= raw @user.bio"),
         after: text("= sanitize @user.bio", "= sanitize @user.bio"),
+        faults: [
+          {
+            line: 1,
+            column: 1,
+            message: unsafeMessage("!=", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 2,
+            column: 3,
+            message: unsafeMessage("raw", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text("== @user.bio", "= raw @user.bio"),
         after: text("= sanitize @user.bio", "= sanitize @user.bio"),
+        faults: [
+          {
+            line: 1,
+            column: 1,
+            message: unsafeMessage("==", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+          {
+            line: 2,
+            column: 3,
+            message: unsafeMessage("raw", "@user.bio"),
+            code: "Rails/UnsafeOutput",
+          },
+        ],
       },
     ],
   },
