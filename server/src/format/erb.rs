@@ -131,7 +131,7 @@ fn line_infos(tokens: &[Token], starts: &[usize], roles: &[Role], levels: &Level
 
 /// Why `text` isn't safe to re-indent: its first ERB error, else its first HTML or tag problem.
 fn doubt(text: &str, partial: bool, ruby: &RubyContext) -> Option<String> {
-    let d = crate::erb::diagnostics(text, ruby, false)
+    let d = crate::erb::diagnostics(text, ruby, false, false)
         .into_iter()
         .find(|d| d.severity == Some(DiagnosticSeverity::ERROR))
         .or_else(|| crate::erb::html_diagnostics(text).into_iter().next())

@@ -1,6 +1,7 @@
 //! The diagnostics of a template: its language's own checks plus the `render` checks against app/views.
 
 use crate::code_context::{self, render_filter};
+use crate::erb::output_control_flow::OUTPUT_CONTROL_FLOW;
 use crate::erb::{html_lint, tags};
 use crate::haml;
 use crate::lang::{html_host, is_partial, slim_html_host, TemplateLang};
@@ -59,7 +60,7 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     let path = util::file_path(uri);
     let project = path.as_deref().map(|path| Project::memoized(projects, path, None));
     let ruby = path.as_deref().zip(project).map_or_else(RubyContext::outside_project, |(path, project)| project.ruby_context(path));
-    let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby);
+    let mut out = language_diagnostics(uri, doc, rules.extra_engines(), &ruby, rules.reports(OUTPUT_CONTROL_FLOW));
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(view_diagnostics(doc, rules, project, path, &ruby));
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
@@ -108,11 +109,18 @@ pub(crate) fn ruby_context(uri: &Uri, projects: &mut Projects) -> RubyContext {
     util::file_path(uri).map_or_else(RubyContext::outside_project, |path| Project::memoized(projects, &path, None).ruby_context(&path))
 }
 
-/// The template language's own checks, without the render checks that need app/views.
-pub(crate) fn language_diagnostics(uri: &Uri, doc: &Doc, extra_engines: &[String], ruby: &RubyContext) -> Vec<Diagnostic> {
+/// The template language's own checks, without the render checks that need app/views. `name_output_control_flow`: ERB's
+/// `Rails/OutputControlFlow` stands in for the Ruby errors it causes.
+pub(crate) fn language_diagnostics(
+    uri: &Uri,
+    doc: &Doc,
+    extra_engines: &[String],
+    ruby: &RubyContext,
+    name_output_control_flow: bool,
+) -> Vec<Diagnostic> {
     let (lang, text) = (doc.lang, doc.text.as_str());
     let mut out = match lang {
-        TemplateLang::Erb => erb::diagnostics(text, ruby, doc.percent_lines),
+        TemplateLang::Erb => erb::diagnostics(text, ruby, doc.percent_lines, name_output_control_flow),
         TemplateLang::Haml => {
             let parsed = haml::parser::parse_with_ruby(text);
             let mut out = haml::indent::diagnostics(text, &parsed);
@@ -522,6 +530,23 @@ mod tests {
         assert!(codes(&padrino, "app/views/a.html.erb", &options).is_empty());
         assert!(codes(&rails, "config/nginx.conf.erb", &options).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn output_control_flow_stands_in_for_the_ruby_errors_it_causes() {
+        let codes = |text: &str, options: &Options| {
+            let uri = "file:///v/show.html.erb".parse::<Uri>().unwrap();
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        let text = "<%= if @user %>\n<p>hi</p>\n<% end %>\n";
+        assert_eq!(codes(text, &Options::default()), ["Rails/OutputControlFlow"]);
+        // Another error in the template still shows.
+        let with_error = codes(&format!("{text}<% foo( %>"), &Options::default());
+        assert!(with_error.contains(&RUBY_SYNTAX.to_string()) && with_error.contains(&"Rails/OutputControlFlow".to_string()));
+        let off = Options::from_init(Some(&serde_json::json!({ "erb": { "disabledDiagnostics": ["Rails/OutputControlFlow"] } }))).0;
+        assert!(codes(text, &off).iter().all(|code| code == RUBY_SYNTAX));
+        assert!(!codes(text, &off).is_empty());
     }
 
     #[test]

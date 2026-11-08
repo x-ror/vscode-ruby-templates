@@ -324,7 +324,7 @@ fn structure_diagnostics(template: Template, text: &str, extra_engines: &[String
         (code, d.message.chars().filter(|c| !c.is_ascii_digit()).collect())
     };
     let doc = Doc { lang: template.lang, plain_erb: template.plain_erb, percent_lines: false, text: text.to_string(), version: 0 };
-    language_diagnostics(template.uri, &doc, extra_engines, ruby).iter().map(key).collect()
+    language_diagnostics(template.uri, &doc, extra_engines, ruby, false).iter().map(key).collect()
 }
 
 #[cfg(test)]

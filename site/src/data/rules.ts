@@ -1499,14 +1499,13 @@ enabled = false`,
     languages: ["erb"],
     type: "warning",
     safe: true,
-    status: "partial",
-    phase: 2,
-    code: "Syntax/Ruby",
+    status: "available",
+    code: "Rails/OutputControlFlow",
     today:
-      "The template doesn't compile, so it is reported as a Ruby syntax error with Prism's messages, as `Syntax/Ruby`. Nothing says that the `=` is the cause. The planned rule is a message that names it.",
+      "An ERB output tag (`<%=`, `<%==`) that starts with `if`, `unless`, `while`, `until`, `case`, `for` or `begin` and doesn't close it in the same tag, or with `else`, `elsif`, `when`, `end`, `rescue` or `ensure`. The quick fix removes the `=`. The Ruby syntax errors the `=` causes are not shown (`for x in y do` and `while c do` compile, but print the loop's value), so the message is the only one; other errors in the template still are. A complete expression (`<%= if a then b else c end %>`, `<%= x if y %>`) and `form_with … do` blocks are fine. Reported in every ERB template, as the syntax errors are. Haml and Slim accept `= if` with a nested block.",
     setting: {
       label: "Turn it off",
-      code: `[Syntax.Ruby]
+      code: `[Rails.OutputControlFlow]
 enabled = false`,
     },
     examples: [
@@ -1518,22 +1517,9 @@ enabled = false`,
         faults: [
           {
             line: 1,
-            column: 5,
-            message: "expected an `end` to close the conditional clause",
-            code: "Syntax/Ruby",
-          },
-          {
-            line: 1,
-            column: 14,
-            message: "expected `then` or `;` or '\\n'",
-            code: "Syntax/Ruby",
-          },
-          {
-            line: 1,
-            column: 14,
-            message:
-              "unexpected ')', assuming it is closing the parent parentheses",
-            code: "Syntax/Ruby",
+            column: 3,
+            message: "`if` in an output tag `<%=`: use `<% if … %>`",
+            code: "Rails/OutputControlFlow",
           },
         ],
       },
