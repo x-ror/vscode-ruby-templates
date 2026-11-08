@@ -263,6 +263,9 @@ impl LanguageServer for Backend {
         if may_change_view_roots(&events) {
             self.view_roots.clear();
         }
+        if may_change_controllers(&events) {
+            stimulus::clear_cache();
+        }
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
         // Unresolved-render and strict-locals warnings read other templates from disk.
@@ -1148,6 +1151,14 @@ fn may_change_view_roots(events: &[(PathBuf, FileChangeType)]) -> bool {
     events.iter().any(|(path, kind)| !path.ends_with(FILE_NAME) && (*kind != FileChangeType::CHANGED || path.ends_with(project::LOCKFILE)))
 }
 
+/// A file under app/javascript or the importmap may add, rename or register a Stimulus controller; so may the deletion of an `app`.
+fn may_change_controllers(events: &[(PathBuf, FileChangeType)]) -> bool {
+    let in_javascript = |path: &Path| path.components().any(|part| part.as_os_str() == "javascript");
+    events.iter().any(|(path, kind)| {
+        path.ends_with("config/importmap.rb") || in_javascript(path) || (*kind != FileChangeType::CHANGED && path.ends_with("app"))
+    })
+}
+
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
 /// With `col`, only the ones under it are resolved.
 fn convention_targets(project: &Project, path: &Path, text: &str, line_start: usize, line: &str, col: Option<usize>) -> Vec<Target> {
@@ -1374,6 +1385,17 @@ fn line_edits(text: &str, formatted: &str, lines: std::ops::RangeInclusive<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stimulus_controllers_are_dropped_when_app_javascript_or_the_importmap_changes() {
+        let event = |path: &str, kind| vec![(PathBuf::from(path), kind)];
+        assert!(may_change_controllers(&event("/r/app/javascript/controllers/index.js", FileChangeType::CHANGED)));
+        assert!(may_change_controllers(&event("/r/app/javascript/controllers", FileChangeType::DELETED)));
+        assert!(may_change_controllers(&event("/r/config/importmap.rb", FileChangeType::CHANGED)));
+        assert!(may_change_controllers(&event("/r/app", FileChangeType::DELETED)));
+        assert!(!may_change_controllers(&event("/r/app/views/users/_card.erb", FileChangeType::CHANGED)));
+        assert!(!may_change_controllers(&event("/r/app", FileChangeType::CHANGED)));
+    }
 
     #[test]
     fn view_roots_are_dropped_when_files_come_or_go_or_the_lockfile_changes() {

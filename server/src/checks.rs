@@ -616,10 +616,12 @@ mod tests {
         let off = Options::from_init(Some(&serde_json::json!({ "erb": { "disabledDiagnostics": ["Stimulus/UnknownController"] } }))).0;
         assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &off), both[..1]);
         // Controllers loaded from somewhere this can't see.
+        stimulus::clear_cache();
         std::fs::write(controllers.join("index.js"), "eagerLoadControllersFrom(\"components\", application)").unwrap();
         assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both[..1]);
         std::fs::remove_file(controllers.join("index.js")).unwrap();
         std::fs::remove_dir_all(&controllers).unwrap();
+        stimulus::clear_cache();
         assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both[..1], "no controllers folder");
         std::fs::remove_dir_all(&root).unwrap();
     }

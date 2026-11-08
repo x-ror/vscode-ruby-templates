@@ -1719,19 +1719,19 @@ enabled = false`,
     onByDefault: [],
     config: text("[Turbo.PreferTurboAttributes]", "enabled = true"),
     today:
-      'On links (`<a>`, `link_to`, `tag.a`, `content_tag :a`), `data-method` becomes `data-turbo-method`, and `data-confirm` becomes `data-turbo-confirm` when the link sends a method, since Turbo asks to confirm only such a link. On submit buttons (`<button>` with no `type` or `type="submit"`, `<input type="submit">`, `submit_tag`, `button_tag`, `button_to`, `form.submit`), `data-disable-with` becomes `data-turbo-submits-with`. In the options of a helper, the keys of `data: { }` are renamed in the spelling they have (`confirm:` becomes `turbo_confirm:`, `"disable-with" =>` becomes `"turbo-submits-with" =>`), as is a key such as `"data-method" =>`. Left alone: a `data-confirm` on a link without a method, `button_to`\'s confirm, which Turbo reads from the form, `link_to … method: :delete`, which is not a data attribute, an attribute whose Turbo name the element has already, a button of another `type`, other elements, and keys and attribute names that are not literal. It runs before the other formatter rules, whose checks then apply to the renamed text. Format selection applies it to the lines it covers.',
+      'On links (`<a>`, `link_to`, `tag.a`, `content_tag :a`), `data-method` becomes `data-turbo-method`, and `data-confirm` becomes `data-turbo-confirm` when the link sends a method, since Turbo asks to confirm only such a link. On submit buttons (`<button>` with no `type` or `type="submit"`, `<input type="submit">`, `submit_tag`, `button_tag`, `button_to`, and `submit` or `button` on the builder of a `form_with`, `form_for` or `fields_for` block), `data-disable-with` becomes `data-turbo-submits-with`. In the options of a helper, the keys of `data: { }` are renamed in the spelling they have (`confirm:` becomes `turbo_confirm:`, `"disable-with" =>` becomes `"turbo-submits-with" =>`), as is a key such as `"data-method" =>`. Left alone: a `data-confirm` on a link without a method, `button_to`\'s confirm, which Turbo reads from the form, `link_to … method: :delete`, which is not a data attribute, an attribute whose Turbo name the element has already, a button of another `type` or whose attributes are not all readable, `disable_with: false` and a `confirm:` with no value (which reads a variable), other elements, and keys and attribute names that are not literal. It runs before the other formatter rules, whose checks then apply to the renamed text. Format selection applies it to the lines it covers.',
     examples: [
       {
         lang: "erb",
         file: ERB_FILE,
         before: text(
           '<%= link_to "Delete", user_path(user), data: { confirm: "Sure?", method: :delete } %>',
-          '<%= form.submit "Save", data: { disable_with: "Saving..." } %>',
+          '<%= submit_tag "Save", data: { disable_with: "Saving..." } %>',
           '<a href="/users/1" data-confirm="Sure?" data-method="delete">Delete</a>',
         ),
         after: text(
           '<%= link_to "Delete", user_path(user), data: { turbo_confirm: "Sure?", turbo_method: :delete } %>',
-          '<%= form.submit "Save", data: { turbo_submits_with: "Saving..." } %>',
+          '<%= submit_tag "Save", data: { turbo_submits_with: "Saving..." } %>',
           '<a href="/users/1" data-turbo-confirm="Sure?" data-turbo-method="delete">Delete</a>',
         ),
       },

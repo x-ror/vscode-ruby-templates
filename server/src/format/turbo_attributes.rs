@@ -59,13 +59,14 @@ fn renames(text: &str, element: &Element) -> Vec<Rename> {
     element
         .attributes
         .iter()
-        .filter(|attribute| !attribute.at.is_empty())
+        .filter(|attribute| !attribute.at.is_empty() && attribute.value != Value::Shorthand)
         .filter_map(|attribute| {
             let turbo = match attribute.name.as_str() {
                 METHOD if link => TURBO_METHOD,
                 // Turbo asks to confirm a link only when the link sends a method.
                 CONFIRM if link && sends_a_method => TURBO_CONFIRM,
-                DISABLE_WITH if is_submit(text, element) => TURBO_SUBMITS_WITH,
+                // `disable_with: false` is how Rails opts a button out.
+                DISABLE_WITH if is_submit(text, element) && matches!(attribute.value, Value::Text(_) | Value::Empty) => TURBO_SUBMITS_WITH,
                 _ => return None,
             };
             if has(turbo) {
@@ -82,7 +83,8 @@ fn is_submit(text: &str, element: &Element) -> bool {
     let kind = element.attribute("type");
     let is_submit = || kind.is_some_and(|k| matches!(&k.value, Value::Text(range) if text[range.clone()].eq_ignore_ascii_case("submit")));
     match element.name.as_str() {
-        "button" => kind.is_none() || is_submit(),
+        // Attributes the reading can't see may hold a type.
+        "button" => (kind.is_none() && !element.open) || is_submit(),
         "input" => is_submit(),
         _ => false,
     }
@@ -174,7 +176,7 @@ mod tests {
         let erb = "<input type=\"submit\" data-disable-with=\"Saving...\">\n\
                    <button data-disable-with=\"Saving...\">x</button>\n\
                    <button type=\"submit\" data-disable-with=\"s\">x</button>\n\
-                   <%= form.submit \"Save\", data: { disable_with: \"Saving...\" } %>\n\
+                   <%= form_with model: x do |form| %><%= form.submit \"Save\", data: { disable_with: \"Saving...\" } %><% end %>\n\
                    <%= submit_tag \"Save\", data: { \"disable-with\" => \"Saving...\" } %>\n\
                    <%= button_tag \"Save\", data: { disable_with: \"Saving...\" } %>\n\
                    <%= button_to \"Save\", path, data: { disable_with: \"Saving...\" } %>\n";
@@ -183,7 +185,7 @@ mod tests {
             "<input type=\"submit\" data-turbo-submits-with=\"Saving...\">\n\
              <button data-turbo-submits-with=\"Saving...\">x</button>\n\
              <button type=\"submit\" data-turbo-submits-with=\"s\">x</button>\n\
-             <%= form.submit \"Save\", data: { turbo_submits_with: \"Saving...\" } %>\n\
+             <%= form_with model: x do |form| %><%= form.submit \"Save\", data: { turbo_submits_with: \"Saving...\" } %><% end %>\n\
              <%= submit_tag \"Save\", data: { \"turbo-submits-with\" => \"Saving...\" } %>\n\
              <%= button_tag \"Save\", data: { turbo_submits_with: \"Saving...\" } %>\n\
              <%= button_to \"Save\", path, data: { turbo_submits_with: \"Saving...\" } %>\n"
@@ -217,6 +219,13 @@ mod tests {
             (Erb, "<%= link_to \"x\", y, data: { method: :delete, turbo_method: :post } %>\n"),
             (Erb, "<a data-method=\"delete\" data-turbo-method=\"post\">x</a>\n"),
             (Erb, "<%= tag.div data: { confirm: 1, method: 2, disable_with: 3 } %>\n"),
+            // A shorthand key reads a variable of its name; `disable_with: false` opts out; a type may hide in the rest.
+            (Erb, "<%= link_to \"x\", y, data: { confirm:, method: } %>\n"),
+            (Haml, "= link_to \"x\", y, data: { confirm:, method: }\n"),
+            (Erb, "<%= submit_tag \"x\", data: { disable_with: false } %>\n<%= submit_tag \"x\", data: { disable_with: } %>\n"),
+            (Erb, "<button <%= opts %> data-disable-with=\"s\">x</button>\n"),
+            (Haml, "%button{**opts, data: {disable_with: \"s\"}} x\n"),
+            (Erb, "<%= f.submit \"x\", data: { disable_with: \"s\" } %>\n<%= form_with model: x do |f| %><% end %>\n"),
             (Haml, "%div{data: {confirm: \"s\", disable_with: \"s\"}}\n%input{data: {disable_with: \"s\"}}\n%a{data: attrs, href: x} x\n"),
             (Haml, "%button{type: x, data: {disable_with: \"s\"}} x\n"),
             (Slim, "div data-confirm=\"s\" data-disable-with=\"s\"\ninput data-disable-with=\"s\"\n"),

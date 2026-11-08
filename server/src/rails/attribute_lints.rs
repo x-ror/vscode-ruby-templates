@@ -2,9 +2,10 @@
 //! that no Stimulus controller has.
 
 use crate::attributes::{Element, Value};
-use crate::rails::stimulus::CONTROLLERS_DIR;
+use crate::rails::stimulus::{Registered, CONTROLLERS_DIR};
 use crate::util::{self, edit_distance, LineIndex};
 use std::ops::Range;
+use std::sync::Arc;
 use tower_lsp_server::ls_types::Diagnostic;
 
 pub(crate) const PERMANENT_REQUIRES_ID: &str = "Turbo/PermanentRequiresId";
@@ -18,7 +19,7 @@ const MAX_SUGGESTION_DISTANCE: usize = 2;
 
 /// The findings in `elements`. `registered` lists the controllers the app has and is asked only when a template names one;
 /// none means they can't be told, and no name is reported.
-pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnOnce() -> Option<Vec<String>>) -> Vec<Diagnostic> {
+pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnOnce() -> Option<Arc<Registered>>) -> Vec<Diagnostic> {
     let index = LineIndex::new(text);
     let message = "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
     let mut out: Vec<Diagnostic> = elements
@@ -28,9 +29,9 @@ pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnO
         .collect();
     let named: Vec<(Range<usize>, &str)> = elements.iter().flat_map(|element| controller_names(text, element)).collect();
     if let Some(known) = (!named.is_empty()).then(registered).flatten() {
-        let unknown = named.into_iter().filter(|(_, name)| !known.iter().any(|known| known == name));
+        let unknown = named.into_iter().filter(|(_, name)| !known.knows(name));
         out.extend(unknown.map(|(at, name)| {
-            let message = unknown_message(name, &known);
+            let message = unknown_message(name, &known.names);
             util::coded(util::warning(index.range(at.start, at.end), message), UNKNOWN_CONTROLLER)
         }));
     }
@@ -39,7 +40,9 @@ pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnO
 
 /// Where the element names `data-turbo-permanent` when it can't have an id.
 fn permanent_without_id(element: &Element) -> Option<Range<usize>> {
-    let permanent = element.attribute(PERMANENT).filter(|attribute| attribute.value != Value::Dynamic && !attribute.at.is_empty())?;
+    let permanent = element
+        .attribute(PERMANENT)
+        .filter(|attribute| !matches!(attribute.value, Value::Dynamic | Value::Shorthand) && !attribute.at.is_empty())?;
     (element.attribute(ID).is_none() && !element.may_have_more()).then(|| permanent.at.clone())
 }
 
@@ -89,10 +92,12 @@ mod tests {
         elements.extend(helper_elements(&compiled, &parsed.node()));
         let index = LineIndex::new(text);
         let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
-        diagnostics(text, &elements, || controllers.map(|names| names.iter().map(|name| name.to_string()).collect()))
-            .into_iter()
-            .map(|d| (format!("{} {}", util::code(&d).unwrap(), d.message), text[at(d.range.start)..at(d.range.end)].to_string()))
-            .collect()
+        diagnostics(text, &elements, || {
+            controllers.map(|names| Arc::new(Registered::new(names.iter().map(|name| name.to_string()).collect())))
+        })
+        .into_iter()
+        .map(|d| (format!("{} {}", util::code(&d).unwrap(), d.message), text[at(d.range.start)..at(d.range.end)].to_string()))
+        .collect()
     }
 
     fn permanent(lang: TemplateLang, text: &str) -> Vec<String> {
@@ -110,6 +115,11 @@ mod tests {
         assert_eq!(permanent(Slim, "div data-turbo-permanent=true\n"), ["data-turbo-permanent"]);
         assert_eq!(permanent(Slim, "div[data-turbo-permanent]\n"), ["data-turbo-permanent"]);
         assert_eq!(permanent(Erb, "<%= tag.div data: { turbo_permanent: true } do %>x<% end %>"), ["turbo_permanent"]);
+        assert_eq!(permanent(Erb, "<%= form_with model: @user, data: { turbo_permanent: true } do |f| %><% end %>"), ["turbo_permanent"]);
+        assert_eq!(
+            permanent(Erb, "<%= form_with model: @user, html: { data: { turbo_permanent: true } } do |f| %><% end %>"),
+            ["turbo_permanent"]
+        );
         assert_eq!(permanent(Erb, "<%= content_tag :div, \"x\", data: { turbo_permanent: \"\" } %>"), ["turbo_permanent"]);
         assert_eq!(permanent(Haml, "= link_to \"x\", y, data: { turbo_permanent: true }\n"), ["turbo_permanent"]);
         assert_eq!(
@@ -131,6 +141,11 @@ mod tests {
             (Erb, "<%= tag.div data: attrs %>"),
             (Erb, "<%= tag.div data: { turbo_permanent: flag } %>"),
             (Erb, "<%= tag.div data: { turbo_permanent: nil } %>"),
+            (Erb, "<%= tag.div data: { turbo_permanent: } %>"),
+            (Erb, "<%= form_for @user, html: { id: \"f\" }, data: { turbo_permanent: true } do |f| %><% end %>"),
+            (Erb, "<%= form_for @user, data: { turbo_permanent: true } do |f| %><% end %>"),
+            (Erb, "<%= form_with model: @user, html: opts, data: { turbo_permanent: true } do |f| %><% end %>"),
+            (Erb, "<%= form_with model: @user, html: { id: \"f\", data: { turbo_permanent: true } } do |f| %><% end %>"),
             (Erb, "<%= render \"x\", data: { turbo_permanent: true } %>"),
             (Erb, "<%= link_to \"x\", y, id: \"l\", data: { turbo_permanent: true } %>"),
             (Erb, "<div data-turbo-permanent=\"<%= x %>\" id=\"p\"></div>"),

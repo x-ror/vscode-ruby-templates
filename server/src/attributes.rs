@@ -40,6 +40,8 @@ pub(crate) enum Value {
     /// A Ruby `true` or number: the attribute is set, to nothing that can be read.
     Literal,
     Dynamic,
+    /// A Ruby 3.1 `confirm:` with no value, which reads the variable of that name.
+    Shorthand,
 }
 
 impl Element {
@@ -186,6 +188,9 @@ fn literal_name(node: &Node, compiled: &Compiled) -> Option<(String, Range<usize
 }
 
 fn value_of(node: &Node, compiled: &Compiled) -> Value {
+    if node.as_implicit_node().is_some() {
+        return Value::Shorthand;
+    }
     if let Some((_, range)) = literal_name(node, compiled) {
         return Value::Text(range);
     }
@@ -200,7 +205,7 @@ fn value_of(node: &Node, compiled: &Compiled) -> Value {
 /// The elements Rails tag helpers make from the Ruby of a template (`root`, the parse of `compiled`): `tag.div`,
 /// `content_tag`, `link_to`, the form and button helpers, with the attributes of their literal options.
 pub(crate) fn helper_elements(compiled: &Compiled, root: &Node) -> Vec<Element> {
-    let mut helpers = Helpers { compiled, found: Vec::new() };
+    let mut helpers = Helpers { compiled, found: Vec::new(), builders: Vec::new() };
     helpers.visit(root);
     helpers.found
 }
@@ -208,6 +213,8 @@ pub(crate) fn helper_elements(compiled: &Compiled, root: &Node) -> Vec<Element> 
 struct Helpers<'a> {
     compiled: &'a Compiled,
     found: Vec<Element>,
+    /// The form builders in scope, innermost last.
+    builders: Vec<String>,
 }
 
 impl Helpers<'_> {
@@ -222,19 +229,62 @@ impl Helpers<'_> {
                 "content_tag" => arguments.first().and_then(|node| literal_name(node, self.compiled).map(|(text, _)| text))?,
                 _ => return None,
             },
-            Some(receiver) if is_tag_builder(&receiver) && TAG_BUILDER_ELEMENTS.contains(&name.as_str()) => name,
-            Some(_) if matches!(name.as_str(), "submit" | "button") => "button".to_string(),
+            Some(receiver) if is_tag_builder(&receiver) && TAG_BUILDER_ELEMENTS.contains(&name.as_str()) => name.clone(),
+            Some(receiver) if matches!(name.as_str(), "submit" | "button") && self.is_form_builder(&receiver) => "button".to_string(),
             Some(_) => return None,
         };
+        let is_form = element_name == "form" && call.receiver().is_none();
         let mut element = Element { name: element_name.to_ascii_lowercase(), attributes: Vec::new(), open: false };
         let options = arguments.last();
-        let entries: Option<Vec<Node>> = options.and_then(|node| {
-            let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect());
-            keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
-        });
-        read_hash(&mut element, entries.into_iter().flatten(), self.compiled, false);
+        let entries: Vec<Node> = options
+            .and_then(|node| {
+                let keywords = node.as_keyword_hash_node().map(|hash| hash.elements().iter().collect());
+                keywords.or_else(|| node.as_hash_node().map(|hash| hash.elements().iter().collect()))
+            })
+            .unwrap_or_default();
+        // A form's `html:` options are the form tag's own attributes, and `form_for` always gives the form an id.
+        let (html, rest): (Vec<Node>, Vec<Node>) = entries.into_iter().partition(|entry| is_form && self.is_html_option(entry));
+        read_hash(&mut element, rest.into_iter(), self.compiled, false);
+        for entry in html {
+            match entry
+                .as_assoc_node()
+                .map(|assoc| assoc.value())
+                .and_then(|value| value.as_hash_node().map(|hash| hash.elements().iter().collect::<Vec<_>>()))
+            {
+                Some(nested) => read_hash(&mut element, nested.into_iter(), self.compiled, false),
+                None => element.open = true,
+            }
+        }
+        if is_form && name == "form_for" {
+            element.attributes.push(Attribute { name: "id".into(), at: 0..0, in_data: false, value: Value::Dynamic });
+        }
         Some(element)
     }
+
+    fn is_html_option(&self, entry: &Node) -> bool {
+        let key = entry.as_assoc_node().and_then(|assoc| literal_name(&assoc.key(), self.compiled));
+        key.is_some_and(|(key, _)| key == "html")
+    }
+
+    /// The block parameter of an enclosing form helper: `f` in `form_with … do |f|`.
+    fn is_form_builder(&self, receiver: &Node) -> bool {
+        let name = receiver.as_local_variable_read_node().map(|read| String::from_utf8_lossy(read.name().as_slice()).into_owned());
+        name.is_some_and(|name| self.builders.contains(&name))
+    }
+}
+
+const FORM_HELPERS: [&str; 4] = ["form_with", "form_for", "form_tag", "fields_for"];
+
+/// The names a form helper's block gives the form builder.
+fn builder_parameters(call: &CallNode) -> Vec<String> {
+    if !FORM_HELPERS.contains(&String::from_utf8_lossy(call.name().as_slice()).as_ref()) {
+        return Vec::new();
+    }
+    let list = call.block().and_then(|block| block.as_block_node()?.parameters()?.as_block_parameters_node()?.parameters());
+    let required = list.iter().flat_map(|list| list.requireds().iter());
+    required
+        .filter_map(|node| node.as_required_parameter_node().map(|p| String::from_utf8_lossy(p.name().as_slice()).into_owned()))
+        .collect()
 }
 
 /// The `tag` of `tag.div`: the view helper, not a local variable or a call with a receiver.
@@ -245,7 +295,10 @@ fn is_tag_builder(node: &Node) -> bool {
 impl<'pr> Visit<'pr> for Helpers<'_> {
     fn visit_call_node(&mut self, call: &CallNode<'pr>) {
         self.found.extend(self.element(call));
+        let scope = self.builders.len();
+        self.builders.extend(builder_parameters(call));
         ruby_prism::visit_call_node(self, call);
+        self.builders.truncate(scope);
     }
 }
 
@@ -370,8 +423,10 @@ mod tests {
         let names = |text: &str| helpers(Erb, text).into_iter().map(|e| (e.name, e.open)).collect::<Vec<_>>();
         assert_eq!(names("<%= link_to \"x\", path, **opts %>"), [("a".to_string(), true)]);
         assert_eq!(names("<%= content_tag :section, \"x\", class: \"c\" %>"), [("section".to_string(), false)]);
-        assert_eq!(names("<%= f.submit \"Save\" %><%= button_to \"x\", y %>"), [("button".into(), false), ("button".into(), false)]);
-        assert_eq!(names("<%= form_with(model: x, html: y) %>"), [("form".to_string(), false)]);
+        assert_eq!(names("<%= form_with model: x do |f| %><%= f.submit \"Save\" %><%= button_to \"x\", y %><% end %>").len(), 3);
+        assert_eq!(names("<%= f.submit \"Save\" %><%= f.button %>"), Vec::<(String, bool)>::new(), "f is no form builder here");
+        assert_eq!(names("<%= form_with model: x do |f| %><% end %><%= f.submit %>"), [("form".to_string(), false)], "out of scope");
+        assert_eq!(names("<%= form_with(model: x, html: y) %>"), [("form".to_string(), true)]);
         for none in ["<%= tag.name %>", "<%= content_tag name %>", "<%= render \"x\", data: { a: 1 } %>", "<% tag = 1 %><%= tag.div %>"] {
             assert_eq!(names(none), Vec::<(String, bool)>::new(), "{none}");
         }
