@@ -40,9 +40,14 @@ pub fn parse(root: &Path, routes: &Value) -> Vec<Route> {
         .collect()
 }
 
+/// `users_path` → (`users`, `_path`).
+pub fn split_helper(word: &str) -> Option<(&str, &str)> {
+    SUFFIXES.iter().find_map(|&suffix| word.strip_suffix(suffix).filter(|name| !name.is_empty()).map(|name| (name, suffix)))
+}
+
 /// The named route a helper such as `users_path` calls, and every route sharing its path (`GET`, `POST`, …).
 pub fn for_helper<'a>(routes: &'a [Route], word: &str) -> Option<(&'a Route, Vec<&'a Route>)> {
-    let name = SUFFIXES.iter().find_map(|s| word.strip_suffix(s)).filter(|n| !n.is_empty())?;
+    let (name, _) = split_helper(word)?;
     let named = routes.iter().find(|r| r.name == name)?;
     Some((named, routes.iter().filter(|r| r.path == named.path).collect()))
 }

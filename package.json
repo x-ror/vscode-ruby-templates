@@ -726,6 +726,8 @@
                   "Rails/RenderInLoop",
                   "Rails/OutputControlFlow",
                   "Rails/UnsafeOutput",
+                  "Rails/I18nMissingKey",
+                  "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
                   "Style/ErbTrimMode",
@@ -778,6 +780,8 @@
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
                   "Rails/UnsafeOutput",
+                  "Rails/I18nMissingKey",
+                  "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
                   "Layout/LineLength"
@@ -846,6 +850,8 @@
                   "Rails/UnusedBlockArgument",
                   "Rails/RenderInLoop",
                   "Rails/UnsafeOutput",
+                  "Rails/I18nMissingKey",
+                  "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
                   "Layout/LineLength"

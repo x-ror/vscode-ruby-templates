@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `Rails/I18nMissingKey` warns about a lazy translation key (`t(".title")`, `translate`, with or without parentheses) that the default locale has no entry for in `config/locales`, on the key, with the closest key of the view within two edits. The full key follows Rails (`users/_form` gives `users.form.title`); the default locale is `config.i18n.default_locale` or `en`. Absolute keys, keys with `default:`, `scope:` or `locale:`, interpolated keys, and views named for a gem in the Gemfile.lock are not checked. Nothing is reported without a config/application.rb or a locale file for the default locale, or when translations may come from elsewhere (Ruby locale files, `I18n.load_path`, `I18n.backend`, `i18n-active_record`). It runs in Rails projects under app/views, also in `ruby-templates check`, and is on by default.
+- `Rails/UnknownRoute` warns about a `*_path` or `*_url` call without a receiver that the app's routes don't define, with the closest route within two edits. It needs the routes the editor loads with `bin/rails runner`, so `ruby-templates check` never reports it. Rails' asset and polymorphic helpers, `rails_*`, `turbo_*`, `omniauth_*` and the like, helpers the app defines, routes declared with `direct`, locals, and calls on a receiver (`main_app.users_path`, an engine's) are left alone; in a partial a bare name is reported only when a route is close to it, since the caller may pass it as a local. It runs in Rails projects under app/views and is on by default. Diagnostics are republished when the routes arrive or change.
+
 ## 0.13.0
 
 - `Html/ImgAlt` and `Html/DuplicateId` run in Haml and Slim too. `%img`, `img`, and `image_tag` or `tag.img` without `alt:` are reported; so is a second static `#id` or `id:`. Ids in different branches of an `- if`/`- else`, and ids where only one sits in a conditional, a loop or a block, are left alone. ERB is unchanged.

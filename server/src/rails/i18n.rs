@@ -1,12 +1,13 @@
 //! Rails i18n keys in `t("…")` calls → `config/locales/**/*.yml`: definition, hover, completion.
 
-use crate::rails::paths::{rails_root, template_stem, view_relative};
+use crate::rails::paths::{files_under, rails_root, ruby_files_under, template_stem, view_relative};
 use crate::rails::project::Project;
 use crate::util::{inline_code, slash_path};
+use dashmap::DashMap;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use walkdir::WalkDir;
 
 // `t "a.b"`, `t(".x")`, `translate`, `I18n.t`; not `obj.t(…)`. `#` keeps interpolated keys out.
@@ -14,6 +15,13 @@ const CALL: &str = r#"(?:^|[^\w.@$])(?:I18n\.)?(?:t|translate)\s*\(?\s*["']"#;
 static KEY_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]+)["']"#)).unwrap());
 static KEY_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r#"{CALL}([\w.?!-]*)$"#)).unwrap());
 const VALUE_PREVIEW: usize = 80;
+const DEFAULT_LOCALE: &str = "en";
+/// Gems that serve translations from a store besides the files.
+const STORE_BACKED_GEMS: [&str; 3] = ["i18n-active_record", "redis-i18n", "i18n-backend-redis"];
+// Where an app adds translation sources the locale files don't show: `config.i18n.load_path`, `I18n.backend = …`.
+static OTHER_SOURCES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)i18n[\w.:]*(?:load_path|backend)").unwrap());
+static DEFAULT_LOCALE_SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdefault_locale\s*=\s*([^\n]*)").unwrap());
+static LOCALE_LITERAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^:?["']?([A-Za-z][\w-]*)["']?$"#).unwrap());
 
 /// One key of a locale file. `key` has no locale prefix; `value` is `None` for a nested mapping.
 #[derive(Debug, PartialEq)]
@@ -106,6 +114,99 @@ pub fn locale_files(dir: &Path) -> Locales {
 
 pub fn lookup<'a>(files: &'a Locales, key: &'a str) -> impl Iterator<Item = (&'a Path, &'a Translation)> {
     files.starting_with(key).filter(move |(_, t)| t.key == key)
+}
+
+/// What a lazy key must be found in: the translations of an app's default locale.
+pub struct Catalog {
+    locales: Locales,
+    default_locale: String,
+}
+
+static CATALOGS: LazyLock<DashMap<PathBuf, Option<Arc<Catalog>>>> = LazyLock::new(DashMap::new);
+
+/// Forgets the catalogs read so far; the next `catalog` reads the files again.
+pub fn clear_catalogs() {
+    CATALOGS.clear();
+}
+
+/// The catalog of the app `current` belongs to, kept until `clear_catalogs`. `None` when the app's translations can't all
+/// be seen: no `config/application.rb`, a default locale the code computes, translations from other sources or no
+/// file for the default locale.
+pub fn catalog(project: &Project, current: &Path) -> Option<Arc<Catalog>> {
+    if STORE_BACKED_GEMS.iter().any(|gem| project.has_gem_family(gem)) {
+        return None;
+    }
+    let root = rails_root(current)?;
+    if let Some(found) = CATALOGS.get(&root) {
+        return found.clone();
+    }
+    let found = read_catalog(&root).map(Arc::new);
+    CATALOGS.insert(root, found.clone());
+    found
+}
+
+fn read_catalog(root: &Path) -> Option<Catalog> {
+    let config = config_code(root)?;
+    if OTHER_SOURCES.is_match(&config) {
+        return None;
+    }
+    let default_locale = default_locale(&config)?;
+    let dir = root.join("config/locales");
+    // Ruby locale files aren't read.
+    if !ruby_files_under(&dir).is_empty() {
+        return None;
+    }
+    let locales = locale_files(&dir);
+    locales.locales.contains(&default_locale).then_some(Catalog { locales, default_locale })
+}
+
+/// The code, without comment lines, of the files that configure Rails: application.rb, environments and initializers.
+fn config_code(root: &Path) -> Option<String> {
+    let config = root.join("config");
+    let mut files = vec![config.join("application.rb")];
+    files.extend(files_under(&config.join("environments"), 1));
+    files.extend(ruby_files_under(&config.join("initializers")));
+    let mut code = String::new();
+    for (i, file) in files.iter().enumerate() {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(_) if i == 0 => return None,
+            Err(_) => continue,
+        };
+        code.extend(text.lines().filter(|line| !line.trim_start().starts_with('#')).flat_map(|line| [line, "\n"]));
+    }
+    Some(code)
+}
+
+/// The locale the code sets as the default, `en` when it sets none; `None` when it sets it to anything but a literal, or
+/// to different ones.
+fn default_locale(config: &str) -> Option<String> {
+    let mut found = DEFAULT_LOCALE_SETTING.captures_iter(config).map(|cap| {
+        let value = cap[1].split(" #").next().unwrap_or_default().trim();
+        LOCALE_LITERAL.captures(value).map(|literal| literal[1].to_string())
+    });
+    let Some(first) = found.next() else { return Some(DEFAULT_LOCALE.to_string()) };
+    let first = first?;
+    found.all(|next| next.as_deref() == Some(first.as_str())).then_some(first)
+}
+
+impl Catalog {
+    pub fn default_locale(&self) -> &str {
+        &self.default_locale
+    }
+
+    /// Whether the default locale has `key`, as a leaf or as a group of keys.
+    pub fn has(&self, key: &str) -> bool {
+        lookup(&self.locales, key).any(|(_, t)| t.locale == self.default_locale)
+    }
+
+    /// The keys of the default locale below `scope`, each from the dot that follows it (`.title`).
+    pub fn keys_under(&self, scope: &str) -> Vec<&str> {
+        let prefix = format!("{scope}.");
+        let first = self.locales.by_key.partition_point(|(_, t)| t.key < prefix);
+        let under = self.locales.by_key[first..].iter().take_while(|(_, t)| t.key.starts_with(&prefix));
+        under.filter(|(_, t)| t.locale == self.default_locale).map(|(_, t)| &t.key[scope.len()..]).collect()
+    }
 }
 
 /// Markdown with each locale's value of `key` and the locales missing it.
@@ -874,5 +975,50 @@ en:
         assert_eq!(labels("."), [".title"]);
         assert_eq!(completions(&Project::unknown(), &files, &partial, ".t")[0].1, "en: New user");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_catalog_is_read_only_where_all_translations_are_visible() {
+        let root = std::env::temp_dir().join(format!("rt-i18n-catalog-{}", std::process::id()));
+        let read = |files: &[(&str, &str)]| {
+            let _ = std::fs::remove_dir_all(&root);
+            crate::util::write_files(&root, files);
+            read_catalog(&root).map(|catalog| catalog.default_locale)
+        };
+        let en = ("config/locales/en.yml", "en:\n  a: A\n");
+        let app = |code| ("config/application.rb", code);
+        assert_eq!(read(&[app(""), en]).as_deref(), Some("en"));
+        assert_eq!(read(&[en]), None, "no config/application.rb");
+        assert_eq!(
+            read(&[app("config.i18n.default_locale = :fr # main\n"), en, ("config/locales/fr.yml", "fr:\n  a: A\n")]).as_deref(),
+            Some("fr")
+        );
+        assert_eq!(read(&[app("config.i18n.default_locale = :fr\n"), en]), None, "no file of the default locale");
+        let initializer = |code| ("config/initializers/locale.rb", code);
+        assert_eq!(read(&[app("I18n.default_locale = \"en\"\n"), initializer("I18n.default_locale = 'en'\n"), en]).as_deref(), Some("en"));
+        assert_eq!(
+            read(&[app("config.i18n.default_locale = :fr\n"), initializer("I18n.default_locale = :en\n"), en]),
+            None,
+            "two defaults"
+        );
+        assert_eq!(read(&[app("config.i18n.default_locale = ENV[\"LOCALE\"]\n"), en]), None, "computed default");
+        assert_eq!(read(&[app("config.i18n.load_path += Dir[Rails.root.join(\"x\", \"*.yml\")]\n"), en]), None);
+        assert_eq!(read(&[app(""), initializer("I18n.backend = Chain.new\n"), en]), None);
+        assert_eq!(read(&[app("# config.i18n.load_path += []\n"), en]).as_deref(), Some("en"));
+        assert_eq!(read(&[app(""), en, ("config/locales/more.rb", "{}")]), None, "Ruby locale file");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_catalog_answers_for_its_default_locale_only() {
+        let locales =
+            parse("en:\n  users:\n    index:\n      title: T\n      stats:\n        one: 1\nfr:\n  users:\n    index:\n      only_fr: F\n");
+        let mut by_key: Vec<(usize, Translation)> = locales.into_iter().map(|t| (0, t)).collect();
+        by_key.sort_by(|(_, a), (_, b)| a.key.cmp(&b.key));
+        let catalog =
+            Catalog { locales: Locales { files: vec![PathBuf::new()], by_key, locales: BTreeSet::new() }, default_locale: "en".into() };
+        assert!(catalog.has("users.index.title") && catalog.has("users.index.stats") && catalog.has("users.index"));
+        assert!(!catalog.has("users.index.only_fr") && !catalog.has("users.index.titl"));
+        assert_eq!(catalog.keys_under("users.index"), [".stats", ".stats.one", ".title"]);
     }
 }

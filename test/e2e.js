@@ -1912,6 +1912,64 @@ const check = (label, actual, expected) => {
     ],
     [["users_path"], "`users_path` → `/users`", ["/config/routes.rb:1"]],
   );
+  const unknownRouteUri = fileUri(path.join(views, "users", "links.html.erb"));
+  const latestCodes = (uri) =>
+    notes
+      .filter(
+        (n) =>
+          n.method === "textDocument/publishDiagnostics" &&
+          n.params.uri === uri,
+      )
+      .at(-1)
+      ?.params.diagnostics.map((d) => `${d.range.start.line}:${d.code}`);
+  const waitForCodes = async (uri, expected) => {
+    for (
+      let waited = 0;
+      waited < 2000 &&
+      JSON.stringify(latestCodes(uri)) !== JSON.stringify(expected);
+      waited += 50
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return latestCodes(uri);
+  };
+  await send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: unknownRouteUri,
+        languageId: "erb",
+        version: 1,
+        text: '<%= link_to "x", usrs_path %>\n<%= users_path %>\n<%= asset_path("a.png") %>\n<%= main_app.dash_path %>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "Rails/UnknownRoute: only the undefined helper, and none once the route arrives",
+    [
+      await waitForCodes(unknownRouteUri, ["0:Rails/UnknownRoute"]),
+      await (async () => {
+        const sendRoutes = (routes) =>
+          send("rubyTemplates/routes", { root, routes }, true);
+        const users = { name: "users", verb: "GET", path: "/users(.:format)" };
+        await sendRoutes([users, { name: "usrs", verb: "GET", path: "/usrs" }]);
+        const codes = await waitForCodes(unknownRouteUri, []);
+        // The routes the later checks expect.
+        await sendRoutes([
+          { ...users, action: "users#index", source: "config/routes.rb:2" },
+          {
+            name: "",
+            verb: "POST",
+            path: "/users(.:format)",
+            action: "users#create",
+          },
+        ]);
+        return codes;
+      })(),
+    ],
+    [["0:Rails/UnknownRoute"], []],
+  );
   const slimRubyUri = fileUri(path.join(views, "users", "_ruby.html.slim"));
   await send(
     "textDocument/didOpen",

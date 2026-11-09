@@ -175,6 +175,8 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/RenderInLoop", TEMPLATES),
     new_lint("Rails/OutputControlFlow", &[Erb]),
     new_lint("Rails/UnsafeOutput", TEMPLATES),
+    new_lint("Rails/I18nMissingKey", TEMPLATES),
+    new_lint("Rails/UnknownRoute", TEMPLATES),
     new_lint("Turbo/PermanentRequiresId", TEMPLATES),
     new_lint("Stimulus/UnknownController", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn every_diagnostic_code_constant_is_a_rule_and_the_other_way_round() {
-        let re = regex::Regex::new(r#"pub(?:\(crate\))? const [A-Z_]+: &str = "([A-Z][A-Za-z0-9]+/[A-Za-z]+)""#).unwrap();
+        let re = regex::Regex::new(r#"pub(?:\(crate\))? const [A-Z0-9_]+: &str = "([A-Z][A-Za-z0-9]+/[A-Za-z0-9]+)""#).unwrap();
         let sources = [
             include_str!("checks.rs"),
             include_str!("rails/output_lints.rs"),
@@ -256,6 +258,8 @@ mod tests {
             include_str!("erb/html_lint.rs"),
             include_str!("erb/trim_mode.rs"),
             include_str!("rails/unsafe_output.rs"),
+            include_str!("rails/missing_translation.rs"),
+            include_str!("rails/unknown_route.rs"),
             include_str!("element_lints.rs"),
             include_str!("line_length.rs"),
             include_str!("erb/output_control_flow.rs"),
