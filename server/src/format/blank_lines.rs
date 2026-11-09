@@ -183,7 +183,7 @@ fn end_with_one_line_ending(text: &mut String, from: usize, original: &str) {
     }
 }
 
-fn dominant_ending(text: &str) -> &'static str {
+pub(super) fn dominant_ending(text: &str) -> &'static str {
     let lf = text.matches('\n').count();
     let crlf = text.matches("\r\n").count();
     if crlf * 2 > lf {

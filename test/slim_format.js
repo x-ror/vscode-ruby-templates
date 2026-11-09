@@ -190,3 +190,51 @@ function checkStyleRules() {
   console.log("style rules keep the page ok");
 }
 if (hasGem("haml")) checkStyleRules();
+
+// Layout/ElementContentOnOwnLine adds whitespace only: Slim renders the same page, Haml the same apart from the blanks
+// around tags.
+function checkContentRule() {
+  const ctx =
+    'class Ctx; def initialize; @t = "T&<"; end; end; print %s.new { STDIN.read }.render(Ctx.new)';
+  const render = (gem, template, source) =>
+    execFileSync("ruby", [`-r${gem}`, "-e", ctx.replace("%s", template)], {
+      input: source,
+      encoding: "utf8",
+    });
+  const aroundTags = (html) => html.replace(/\s*(<[^>]*>)\s*/g, "$1").trim();
+  const run = (root, name, source) => {
+    const done = spawnSync(
+      cli,
+      ["format", "--verbose", "--stdin-filepath", path.join(root, name)],
+      { input: source, encoding: "utf8" },
+    );
+    assert.strictEqual(done.status, 0, `${name}: ${done.stderr}`);
+    assert.ok(!/kept/.test(done.stderr), `${name}: refused: ${done.stderr}`);
+    return done.stdout;
+  };
+  const rule = "[Layout.ElementContentOnOwnLine]\nenabled = true";
+  for (const [lang, gem, template, same] of [
+    ["haml", "haml", "Haml::Template", aroundTags],
+    ["slim", "slim", "Slim::Template", (html) => html],
+  ]) {
+    if (!hasGem(gem)) continue;
+    const name = `content.${lang}`;
+    const source = fs.readFileSync(path.join(styledDir, name), "utf8");
+    withRules(rule, (root) => {
+      const formatted = run(root, name, source);
+      assert.notStrictEqual(formatted, source, `${lang}: should change`);
+      assert.strictEqual(
+        same(render(gem, template, formatted)),
+        same(render(gem, template, source)),
+        `${lang}: rendered page changed`,
+      );
+      assert.strictEqual(
+        run(root, name, formatted),
+        formatted,
+        `${lang}: not idempotent`,
+      );
+    });
+  }
+  console.log("element content rule keeps the page ok");
+}
+if (hasGem("haml") || hasGem("slim")) checkContentRule();

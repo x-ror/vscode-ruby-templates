@@ -31,7 +31,8 @@ Usage:
   ruby-templates format [--check | --write] [--verbose] [--align-comments] <files|dirs>...
   ruby-templates format [--check] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
-check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates.
+check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates, and with Layout/LineLength (off) the lines
+        over its max.
 format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines,
         Layout/EmptyLinesAroundBlockBody, Layout/EmptyLinesAroundElementBody and Layout/EmptyLinesAroundBranches (all
         off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
@@ -42,7 +43,8 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         attributes data-confirm, data-method and data-disable-with to Turbo's. Style/AttributeQuotes, Style/BooleanAttributes,
         Style/VoidTagClosing and Style/TagNameCase (all off) set attribute quotes, boolean attributes, the end of void
         tags and the case of tag names. Style/ImplicitDiv, Style/ClassesBeforeIds and Style/HashAttributes (all off) drop
-        a div a class or id implies, put Haml classes before ids and write Haml attributes as a hash or in HTML style. Nothing else changes;
+        a div a class or id implies, put Haml classes before ids and write Haml attributes as a hash or in HTML style. Layout/ElementContentOnOwnLine (off) moves the content of the elements in its
+        tags option to a line of its own. Nothing else changes;
         a file whose structure is in doubt is left as it is, with the reason on stderr. Without --check or --write
         the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.

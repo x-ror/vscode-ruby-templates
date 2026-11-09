@@ -4,6 +4,7 @@ pub mod file;
 pub mod resolve;
 
 use crate::lang::TemplateLang;
+use crate::line_length::LINE_LENGTH;
 use TemplateLang::{Erb, Haml, Ruby, Slim};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +30,13 @@ pub struct ChoiceOption {
     pub default: &'static str,
 }
 
+/// An option of a rule's table that is a list of words.
+#[derive(Debug)]
+pub struct ListOption {
+    pub key: &'static str,
+    pub default: &'static [&'static str],
+}
+
 #[derive(Debug)]
 pub struct Rule {
     pub name: &'static str,
@@ -40,6 +48,7 @@ pub struct Rule {
     /// The keys its table takes besides `enabled`, `include` and `exclude`.
     pub options: &'static [CountOption],
     pub choices: &'static [ChoiceOption],
+    pub lists: &'static [ListOption],
     /// The code a lint rule had before 0.11, still accepted in `disabledDiagnostics`.
     pub alias: Option<&'static str>,
 }
@@ -64,7 +73,7 @@ const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'s
 
 /// A lint rule with no code from before 0.11 to accept.
 const fn new_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
-    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], alias: None }
+    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], lists: &[], alias: None }
 }
 
 const fn off_by_default_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
@@ -78,7 +87,7 @@ const fn format_rule(
     options: &'static [CountOption],
     choices: &'static [ChoiceOption],
 ) -> Rule {
-    Rule { name, languages, kind: Kind::Format, on_by_default, options, choices, alias: None }
+    Rule { name, languages, kind: Kind::Format, on_by_default, options, choices, lists: &[], alias: None }
 }
 
 pub const EMPTY_LINES: &str = "Layout/EmptyLines";
@@ -100,6 +109,7 @@ pub const TAG_NAME_CASE: &str = "Style/TagNameCase";
 pub const IMPLICIT_DIV: &str = "Style/ImplicitDiv";
 pub const CLASSES_BEFORE_IDS: &str = "Style/ClassesBeforeIds";
 pub const HASH_ATTRIBUTES: &str = "Style/HashAttributes";
+pub const ELEMENT_CONTENT_ON_OWN_LINE: &str = "Layout/ElementContentOnOwnLine";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -121,6 +131,8 @@ pub const VOID_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[NO_S
 pub const RUBY_HASH: &str = "ruby_hash";
 pub const HTML_ATTRIBUTES: &str = "html";
 pub const ATTRIBUTES_STYLE: ChoiceOption = ChoiceOption { key: "style", values: &[RUBY_HASH, HTML_ATTRIBUTES], default: RUBY_HASH };
+
+pub const BLOCK_TAGS: ListOption = ListOption { key: "tags", default: &["div", "section", "article", "header", "footer", "ul", "ol"] };
 
 const ALL: &[TemplateLang] = &[Erb, Haml, Slim, Ruby];
 const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
@@ -188,6 +200,9 @@ pub const RULES: &[Rule] = &[
     format_rule(CLASSES_BEFORE_IDS, &[Haml], &[], &[], &[]),
     format_rule(HASH_ATTRIBUTES, &[Haml], &[], &[], &[ATTRIBUTES_STYLE]),
     off_by_default_lint("Style/ErbTrimMode", &[Erb]),
+    Rule { options: &[CountOption { key: "max", default: 100 }], ..off_by_default_lint(LINE_LENGTH, TEMPLATES) },
+    // Adds whitespace to the page, so it is for the tags where that shows nowhere.
+    Rule { lists: &[BLOCK_TAGS], ..format_rule(ELEMENT_CONTENT_ON_OWN_LINE, TEMPLATES, &[], &[], &[]) },
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {
@@ -242,6 +257,7 @@ mod tests {
             include_str!("erb/trim_mode.rs"),
             include_str!("rails/unsafe_output.rs"),
             include_str!("element_lints.rs"),
+            include_str!("line_length.rs"),
             include_str!("erb/output_control_flow.rs"),
             include_str!("haml/indent.rs"),
             include_str!("slim/indent.rs"),

@@ -2753,6 +2753,51 @@ const check = (label, actual, expected) => {
       [4, 4, "  <p>b</p>"],
     ],
   );
+  // Layout/ElementContentOnOwnLine adds lines: in Format Document, never in Format Selection.
+  const contentDir = path.join(views, "content");
+  fs.mkdirSync(contentDir);
+  fs.writeFileSync(
+    path.join(contentDir, ".ruby-templates.toml"),
+    "[Layout.ElementContentOnOwnLine]\nenabled = true\n",
+  );
+  const contentUri = fileUri(path.join(contentDir, "a.html.erb"));
+  await aligned.send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: contentUri,
+        languageId: "erb",
+        version: 1,
+        text: "<div>\n<div><%= a %></div>\n</div>\n",
+      },
+    },
+    true,
+  );
+  check(
+    "content moved in the document",
+    (
+      await aligned.send("textDocument/formatting", {
+        textDocument: { uri: contentUri },
+        options: blankOptions,
+      })
+    ).result?.[0]?.newText,
+    "<div>\n  <div>\n    <%= a %>\n  </div>\n</div>\n",
+  );
+  const contentRange = (
+    await aligned.send("textDocument/rangeFormatting", {
+      textDocument: { uri: contentUri },
+      options: blankOptions,
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 3, character: 0 },
+      },
+    })
+  ).result;
+  check(
+    "content kept on its line in a range",
+    contentRange?.map((e) => [e.range.start.line, e.range.end.line, e.newText]),
+    [[1, 1, "  <div><%= a %></div>"]],
+  );
   // The in-line rules keep every line, so Format Selection applies them to the lines it covers.
   const inlineDir = path.join(views, "inline");
   fs.mkdirSync(inlineDir);

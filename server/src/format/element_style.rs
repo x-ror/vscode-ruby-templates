@@ -71,7 +71,7 @@ fn is_prefixed_hash_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("data") || name.eq_ignore_ascii_case("aria")
 }
 
-fn split_bom(text: &str) -> (&str, &str) {
+pub(super) fn split_bom(text: &str) -> (&str, &str) {
     let body = text.strip_prefix(BOM).unwrap_or(text);
     (&text[..text.len() - body.len()], body)
 }

@@ -149,6 +149,38 @@ enabled = true
 style = "ruby_hash"
 ```
 
+## Content on its own line
+
+`Layout/ElementContentOnOwnLine` (off until enabled) moves the content of an element that is written next to its tags to a line of its own, one level in. It applies to the names in `tags` (`div`, `section`, `article`, `header`, `footer`, `ul` and `ol` unless you list others, in any case), runs before the other rules, which indent the new line, and is left out of _Format Selection_ because it adds lines.
+
+```erb
+<div class="card" id="<%= dom_id(user) %>"><%= user.name %></div>
+```
+
+becomes
+
+```erb
+<div class="card" id="<%= dom_id(user) %>">
+  <%= user.name %>
+</div>
+```
+
+In Haml `%section.card= x` becomes `%section.card` and `  = x`, and `%div text` becomes `%div` and `  text`. In Slim `section.card = x` becomes `section.card` and `  = x`, and `div text` becomes `div` and `  | text`. Elements inside each other all move.
+
+This is the one rule that adds whitespace to the page, so it is for tags where a line break shows nowhere: inside a `<span>` or `<a>` it would show as a space, and `pre`, `textarea`, `script` and `style` (and anything inside them or inside an inline element) are never touched. It also stays out of:
+
+- ERB: a `<% %>` tag in the start tag or the content (output tags and comments are fine), a `-%>` or `<%-`, an element or content over several lines, an empty element.
+- Haml: `<`, `>` and `/` on the tag, a line joined with `|`, content that starts with a character that would make the new line something else (`-`, `%`, `.`, `=` and the like; `#{…}` is fine), and a tag with lines nested under it or Ruby that goes on to the next line.
+- Slim: `div: span x`, `='`, and a tag with lines nested under it or code that goes on to the next line.
+
+The formatter reads the result again. ERB must keep every character and element, so only whitespace is new; Haml must generate the same Ruby and read the moved content one level below its tag; Slim must compile to the same template (Slim's output does not change at all, Haml's gains line breaks inside the element). Otherwise the file is formatted without the rule and `--verbose` says so.
+
+```toml
+[Layout.ElementContentOnOwnLine]
+enabled = true
+tags = ["div", "section", "article", "header", "footer", "ul", "ol"]
+```
+
 ## Safe by construction
 
 Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel. The exceptions are `Turbo/PreferTurboAttributes`, below, and the rules above, whose rewrites are the characters the formatter changes besides whitespace.
@@ -222,7 +254,7 @@ The formatter also runs in CI with `npx ruby-templates format --check`; see [Com
 
 ## Not supported
 
-- Reflowing long lines.
+- Reflowing long lines (`Layout/LineLength` reports them; off until enabled, with `max` for the limit).
 - Indenting embedded JavaScript or CSS by their own syntax.
 - Ruby formatting (use RuboCop).
 - Haml files with errors.

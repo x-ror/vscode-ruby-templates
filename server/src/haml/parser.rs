@@ -954,6 +954,13 @@ impl<'a> Parser<'a> {
                 tag.element.text = at.map(|at| at..at + content.value.len());
             }
         }
+        let written = rest.text.trim_start_matches(RUBY_WHITESPACE);
+        if self.ruby && !written.is_empty() {
+            let at = self.offset_at(rest.line, rest.column + rest.text.len() - written.len());
+            if let Some(tag) = self.tags.last_mut() {
+                tag.element.content = at.map(|at| at..at + written.len());
+            }
+        }
         // This reads the next line's indentation before any Ruby lines are joined.
         let block_opened = self.block_opened()?;
         if block_opened && content.self_closing {

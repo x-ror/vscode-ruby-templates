@@ -6,6 +6,7 @@ use crate::erb::output_control_flow::OUTPUT_CONTROL_FLOW;
 use crate::erb::{html_lint, tags};
 use crate::haml;
 use crate::lang::{haml_html_host, html_host, is_partial, slim_html_host, TemplateLang};
+use crate::line_length;
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
 use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, unsafe_output, view_lints};
@@ -99,6 +100,9 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     }
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
+    }
+    if let Some(max) = rules.line_length() {
+        out.extend(line_length::diagnostics(&doc.text, max));
     }
     // Rails escapes nothing in a text or other non-HTML template, so nothing is left unescaped.
     out.retain(|d| (html || util::code(d) != Some(unsafe_output::UNSAFE_OUTPUT)) && util::code(d).is_none_or(|code| rules.reports(code)));
@@ -652,6 +656,22 @@ mod tests {
         // Rails escapes nothing in a text template.
         assert!(codes("app/views/a.text.erb").is_empty());
         assert_eq!(codes("on/app/views/a.html.erb"), ["Style/ErbTrimMode", "Rails/UnsafeOutput"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn line_length_is_reported_once_enabled_with_its_limit() {
+        let root = std::env::temp_dir().join(format!("rt-line-length-{}", std::process::id()));
+        let on = "[Layout.LineLength]\nenabled = true\nmax = 20\n";
+        write_files(&root, &[("on/.ruby-templates.toml", on), ("on/a.html.erb", ""), ("a.html.erb", "")]);
+        let found = |file: &str| {
+            let text = "<p>short</p>\n<p>a line over the limit</p>\n";
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            let found = diagnostics(&util::file_uri(root.join(file)).unwrap(), &doc, &Options::default());
+            found.iter().filter(|d| util::code(d) == Some("Layout/LineLength")).map(|d| d.range.start.line).collect::<Vec<_>>()
+        };
+        assert!(found("a.html.erb").is_empty());
+        assert_eq!(found("on/a.html.erb"), [1]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

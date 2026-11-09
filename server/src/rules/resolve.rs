@@ -3,14 +3,16 @@
 
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
-    by_code, by_name, ChoiceOption, CountOption, Kind, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY, ATTRIBUTE_QUOTES,
-    BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, EMPTY_LINES, EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES,
-    IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER,
-    SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE, VOID_TAG_CLOSING,
+    by_code, by_name, ChoiceOption, CountOption, Kind, ListOption, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY,
+    ATTRIBUTE_QUOTES, BLOCK_TAGS, BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, ELEMENT_CONTENT_ON_OWN_LINE, EMPTY_LINES, EMPTY_LINES_STYLE,
+    ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES, IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES,
+    SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE, TRAILING_EMPTY_LINES,
+    TRAILING_WHITESPACE, VOID_TAG_CLOSING,
 };
 use crate::format::{AttributeStyle, IndentStyle, Quote, Settings, Style, VoidClosing};
 use crate::glob::Glob;
 use crate::lang::TemplateLang;
+use crate::line_length::LINE_LENGTH;
 use crate::options::Options;
 use crate::util::{self, slash_path};
 use std::collections::{HashMap, HashSet};
@@ -50,6 +52,10 @@ pub struct ResolvedRules {
     implicit_div: bool,
     classes_before_ids: bool,
     hash_attributes: Option<AttributeStyle>,
+    /// `Layout/ElementContentOnOwnLine`: the element names it applies to; `None` when the rule is off.
+    content_on_own_line: Option<Vec<String>>,
+    /// `Layout/LineLength`: the longest line allowed; `None` when the rule is off.
+    line_length: Option<usize>,
     /// Nearest first.
     files: Vec<Arc<ConfigFile>>,
     excluded_by: Option<PathBuf>,
@@ -109,6 +115,9 @@ impl ResolvedRules {
         let max_empty_lines = by_name(EMPTY_LINES)
             .filter(|rule| !off.contains(rule.name))
             .and_then(|rule| rule.options.iter().find(|option| option.key == "max").map(|option| count(&files, rule, option)));
+        let max_line_length = by_name(LINE_LENGTH)
+            .filter(|rule| !off.contains(rule.name))
+            .and_then(|rule| rule.options.first().map(|option| count(&files, rule, option)));
         Self {
             format: in_table(|t| t.format_enabled).unwrap_or_else(|| editor.format_enabled(lang)),
             diagnostics: in_table(|t| t.diagnostics_enabled).unwrap_or_else(|| editor.diagnostics_enabled(lang)),
@@ -151,10 +160,19 @@ impl ResolvedRules {
                     AttributeStyle::RubyHash
                 }
             }),
+            content_on_own_line: by_name(ELEMENT_CONTENT_ON_OWN_LINE)
+                .filter(|rule| !off.contains(rule.name))
+                .map(|rule| words(&files, rule, &BLOCK_TAGS)),
+            line_length: max_line_length,
             off,
             files,
             excluded_by,
         }
+    }
+
+    /// `Layout/LineLength`'s limit; `None` when the rule is off.
+    pub fn line_length(&self) -> Option<usize> {
+        self.line_length
     }
 
     /// Whether a diagnostic with this code is reported.
@@ -206,6 +224,7 @@ impl ResolvedRules {
             implicit_div: self.implicit_div,
             classes_before_ids: self.classes_before_ids,
             hash_attributes: self.hash_attributes,
+            content_on_own_line: self.content_on_own_line.clone(),
             ..base
         }
     }
@@ -239,6 +258,12 @@ fn rule_table<'a>(file: &'a ConfigFile, rule: &Rule) -> Option<&'a RuleTable> {
 fn count(files: &[Arc<ConfigFile>], rule: &Rule, option: &CountOption) -> usize {
     let set = |file: &ConfigFile| rule_table(file, rule)?.counts.iter().find(|(key, _)| *key == option.key).map(|&(_, count)| count);
     nearest(files, set).unwrap_or(option.default)
+}
+
+/// The option's words in the nearest file that sets it.
+fn words(files: &[Arc<ConfigFile>], rule: &Rule, option: &ListOption) -> Vec<String> {
+    let set = |file: &ConfigFile| rule_table(file, rule)?.lists.iter().find(|(key, _)| *key == option.key).map(|(_, words)| words.clone());
+    nearest(files, set).unwrap_or_else(|| option.default.iter().map(|word| word.to_string()).collect())
 }
 
 /// The option's word in the nearest file that sets it.
@@ -499,6 +524,23 @@ mod tests {
         let off = Project::new("format-rules-dept", &[(".ruby-templates.toml", "[Layout]\nenabled = false\n"), ("a.html.slim", "")]);
         let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
         assert!(!settings.trailing_empty_lines, "the department switch turns an on-by-default rule off");
+    }
+
+    #[test]
+    fn line_length_and_element_content_read_their_options() {
+        let settings = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default()).content_on_own_line;
+        let off = Project::new("options-off", &[("a.html.erb", "")]);
+        assert_eq!((off.erb("a.html.erb").line_length(), settings(&off)), (None, None));
+        let toml = "[Layout.LineLength]\nenabled = true\n[Layout.ElementContentOnOwnLine]\nenabled = true\n";
+        let on = Project::new("options-on", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
+        let default_tags = ["div", "section", "article", "header", "footer", "ul", "ol"].map(String::from).to_vec();
+        assert_eq!((on.erb("a.html.erb").line_length(), settings(&on)), (Some(100), Some(default_tags)));
+        let toml =
+            "[Layout.LineLength]\nenabled = true\nmax = 80\n[Layout.ElementContentOnOwnLine]\nenabled = true\ntags = [\"P\", \"li\"]\n";
+        let set = Project::new("options-set", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
+        assert_eq!((set.erb("a.html.erb").line_length(), settings(&set)), (Some(80), Some(vec!["p".to_string(), "li".to_string()])));
+        let disabled = editor(serde_json::json!({ "erb": { "disabledDiagnostics": ["Layout/LineLength"] } }));
+        assert_eq!(set.resolve("a.html.erb", TemplateLang::Erb, &disabled).line_length(), None);
     }
 
     #[test]
