@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.13.0
 
 - `Html/ImgAlt` and `Html/DuplicateId` run in Haml and Slim too. `%img`, `img`, and `image_tag` or `tag.img` without `alt:` are reported; so is a second static `#id` or `id:`. Ids in different branches of an `- if`/`- else`, and ids where only one sits in a conditional, a loop or a block, are left alone. ERB is unchanged.
 - `Html/DuplicateAttribute` warns about an attribute written twice on one tag: at the second one in ERB start tags, where the page gets both, and at the value that is dropped in Haml (`%a{href: x}(href="y")`, a key twice in the hash) and the literal options of Rails tag helpers, which render a key once. Slim's own error for a repeated attribute stays `Syntax/Template`. `class` and `id` are left alone in Haml, Slim and the helpers, which merge them.
