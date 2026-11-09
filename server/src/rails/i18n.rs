@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use walkdir::WalkDir;
 
@@ -20,6 +21,8 @@ const DEFAULT_LOCALE: &str = "en";
 const STORE_BACKED_GEMS: [&str; 3] = ["i18n-active_record", "redis-i18n", "i18n-backend-redis"];
 // Where an app adds translation sources the locale files don't show: `config.i18n.load_path`, `I18n.backend = …`.
 static OTHER_SOURCES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)i18n[\w.:]*(?:load_path|backend)").unwrap());
+// `config.i18n.fallbacks = true` (or a list, a hash): a missing key is looked up in other locales.
+static FALLBACKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)i18n\.fallbacks").unwrap());
 static DEFAULT_LOCALE_SETTING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdefault_locale\s*=\s*([^\n]*)").unwrap());
 static LOCALE_LITERAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^:?["']?([A-Za-z][\w-]*)["']?$"#).unwrap());
 
@@ -120,13 +123,27 @@ pub fn lookup<'a>(files: &'a Locales, key: &'a str) -> impl Iterator<Item = (&'a
 pub struct Catalog {
     locales: Locales,
     default_locale: String,
+    /// The app sets `i18n.fallbacks`, so a key of any locale may answer.
+    fallbacks: bool,
 }
 
 static CATALOGS: LazyLock<DashMap<PathBuf, Option<Arc<Catalog>>>> = LazyLock::new(DashMap::new);
+/// Bumped by every `clear_catalogs`, so a catalog read before it, which may predate the change, isn't kept.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Forgets the catalogs read so far; the next `catalog` reads the files again.
 pub fn clear_catalogs() {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
     CATALOGS.clear();
+}
+
+/// Keeps `found` for `root` unless a clear came after `started`, checked under the entry's lock as `clear` takes it too.
+fn remember(root: PathBuf, found: &Option<Arc<Catalog>>, started: u64) {
+    if let dashmap::mapref::entry::Entry::Vacant(slot) = CATALOGS.entry(root) {
+        if GENERATION.load(Ordering::SeqCst) == started {
+            slot.insert(found.clone());
+        }
+    }
 }
 
 /// The catalog of the app `current` belongs to, kept until `clear_catalogs`. `None` when the app's translations can't all
@@ -140,8 +157,9 @@ pub fn catalog(project: &Project, current: &Path) -> Option<Arc<Catalog>> {
     if let Some(found) = CATALOGS.get(&root) {
         return found.clone();
     }
+    let started = GENERATION.load(Ordering::SeqCst);
     let found = read_catalog(&root).map(Arc::new);
-    CATALOGS.insert(root, found.clone());
+    remember(root, &found, started);
     found
 }
 
@@ -157,7 +175,7 @@ fn read_catalog(root: &Path) -> Option<Catalog> {
         return None;
     }
     let locales = locale_files(&dir);
-    locales.locales.contains(&default_locale).then_some(Catalog { locales, default_locale })
+    locales.locales.contains(&default_locale).then_some(Catalog { locales, default_locale, fallbacks: FALLBACKS.is_match(&config) })
 }
 
 /// The code, without comment lines, of the files that configure Rails: application.rb, environments and initializers.
@@ -195,9 +213,9 @@ impl Catalog {
         &self.default_locale
     }
 
-    /// Whether the default locale has `key`, as a leaf or as a group of keys.
+    /// Whether the default locale (any, with fallbacks) has `key`, as a leaf or as a group of keys.
     pub fn has(&self, key: &str) -> bool {
-        lookup(&self.locales, key).any(|(_, t)| t.locale == self.default_locale)
+        lookup(&self.locales, key).any(|(_, t)| self.fallbacks || t.locale == self.default_locale)
     }
 
     /// The keys of the default locale below `scope`, each from the dot that follows it (`.title`).
@@ -980,11 +998,12 @@ en:
     #[test]
     fn the_catalog_is_read_only_where_all_translations_are_visible() {
         let root = std::env::temp_dir().join(format!("rt-i18n-catalog-{}", std::process::id()));
-        let read = |files: &[(&str, &str)]| {
-            let _ = std::fs::remove_dir_all(&root);
-            crate::util::write_files(&root, files);
-            read_catalog(&root).map(|catalog| catalog.default_locale)
+        let read_catalog_of = |root: &Path, files: &[(&str, &str)]| {
+            let _ = std::fs::remove_dir_all(root);
+            crate::util::write_files(root, files);
+            read_catalog(root)
         };
+        let read = |files: &[(&str, &str)]| read_catalog_of(&root, files).map(|catalog| catalog.default_locale);
         let en = ("config/locales/en.yml", "en:\n  a: A\n");
         let app = |code| ("config/application.rb", code);
         assert_eq!(read(&[app(""), en]).as_deref(), Some("en"));
@@ -1006,6 +1025,14 @@ en:
         assert_eq!(read(&[app(""), initializer("I18n.backend = Chain.new\n"), en]), None);
         assert_eq!(read(&[app("# config.i18n.load_path += []\n"), en]).as_deref(), Some("en"));
         assert_eq!(read(&[app(""), en, ("config/locales/more.rb", "{}")]), None, "Ruby locale file");
+        let fallbacks = |code| read_catalog_of(&root, &[app(code), en]).map(|catalog| catalog.fallbacks);
+        assert_eq!(fallbacks("config.i18n.fallbacks = true\n"), Some(true));
+        assert_eq!(fallbacks("config.i18n.fallbacks = [:en]\n"), Some(true));
+        assert_eq!(fallbacks("# config.i18n.fallbacks = true\n"), Some(false));
+        let started = GENERATION.load(Ordering::SeqCst);
+        clear_catalogs();
+        remember(root.clone(), &None, started);
+        assert!(!CATALOGS.contains_key(&root), "a read from before the clear is not kept");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1015,10 +1042,15 @@ en:
             parse("en:\n  users:\n    index:\n      title: T\n      stats:\n        one: 1\nfr:\n  users:\n    index:\n      only_fr: F\n");
         let mut by_key: Vec<(usize, Translation)> = locales.into_iter().map(|t| (0, t)).collect();
         by_key.sort_by(|(_, a), (_, b)| a.key.cmp(&b.key));
-        let catalog =
-            Catalog { locales: Locales { files: vec![PathBuf::new()], by_key, locales: BTreeSet::new() }, default_locale: "en".into() };
+        let catalog = Catalog {
+            locales: Locales { files: vec![PathBuf::new()], by_key, locales: BTreeSet::new() },
+            default_locale: "en".into(),
+            fallbacks: false,
+        };
         assert!(catalog.has("users.index.title") && catalog.has("users.index.stats") && catalog.has("users.index"));
         assert!(!catalog.has("users.index.only_fr") && !catalog.has("users.index.titl"));
         assert_eq!(catalog.keys_under("users.index"), [".stats", ".stats.one", ".title"]);
+        let lenient = Catalog { fallbacks: true, ..catalog };
+        assert!(lenient.has("users.index.only_fr") && !lenient.has("users.index.nope"));
     }
 }

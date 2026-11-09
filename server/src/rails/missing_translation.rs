@@ -67,8 +67,26 @@ struct Finder {
 impl<'pr> Visit<'pr> for Finder {
     fn visit_call_node(&mut self, call: &CallNode<'pr>) {
         self.keys.extend(lazy_key(call));
+        if renders_in_layout(call) {
+            // The block is the layout's content, and its keys resolve against the layout's path.
+            call.arguments().inspect(|arguments| self.visit_arguments_node(arguments));
+            return;
+        }
         ruby_prism::visit_call_node(self, call);
     }
+}
+
+/// `render layout: "x" do … end`.
+fn renders_in_layout(call: &CallNode) -> bool {
+    if call.receiver().is_some() || call.name().as_slice() != b"render" || call.block().is_none() {
+        return false;
+    }
+    let options = call.arguments().into_iter().flat_map(|arguments| arguments.arguments().iter().collect::<Vec<_>>());
+    options.filter_map(|argument| argument.as_keyword_hash_node()).any(|hash| {
+        hash.elements().iter().any(|element| {
+            element.as_assoc_node().and_then(|pair| pair.key().as_symbol_node().map(|name| name.unescaped() == b"layout")) == Some(true)
+        })
+    })
 }
 
 /// The literal lazy key of `t(".title", count: 2)`; none when an option can send the lookup elsewhere or the options
@@ -160,6 +178,17 @@ mod tests {
         assert_eq!(flagged(Erb, "users/show.html.erb", "<%= t(\".title\") %>\n"), ["\".title\""]);
         // Only the default locale counts.
         assert_eq!(flagged(Erb, "users/index.html.erb", "<%= t(\".only_fr\") %>\n"), ["\".only_fr\""]);
+    }
+
+    #[test]
+    fn keys_in_the_block_of_a_render_with_a_layout_are_the_layouts() {
+        let text = "<%= render layout: \"card\" do %><%= t(\".nothing\") %><% end %><%= t(\".nothing\") %>\n";
+        assert_eq!(flagged(Erb, "users/index.html.erb", text).len(), 1);
+        assert_eq!(
+            flagged(Erb, "users/index.html.erb", "<%= render layout: \"card\", locals: { a: t(\".nothing\") } do %><% end %>\n").len(),
+            1
+        );
+        assert_eq!(flagged(Erb, "users/index.html.erb", "<%= render \"card\" do %><%= t(\".nothing\") %><% end %>\n").len(), 1);
     }
 
     #[test]

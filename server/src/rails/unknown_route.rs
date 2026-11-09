@@ -1,18 +1,20 @@
-//! `*_path` and `*_url` calls that the app's routes don't define, found in the Ruby the template compiles to and mapped back
-//! to the template. Only a call without a receiver is checked (`admin.users_path` and `main_app.users_path` belong to an
-//! engine's routes), and only where it cannot be something else: a Rails helper, a helper of the app, a `direct` route or
-//! a local a partial is passed.
+//! `*_path` and `*_url` calls that the app's routes don't define but come close to one (`usr_path` for `user_path`), found in
+//! the Ruby the template compiles to and mapped back to the template. Typos are the point: a name with no route near it may be
+//! a helper of a gem, a concern or `lib` that can't be seen. Only a call without a receiver is checked (`admin.users_path` and
+//! `main_app.users_path` belong to an engine's routes), not one a local, a helper of the app or a `direct` route can be, and
+//! not one under `defined?`.
 
 use crate::rails::helper_defs;
-use crate::rails::paths::{rails_root, ruby_files_under};
+use crate::rails::paths::{app_root, rails_root, ruby_files_under};
 use crate::rails::routes::{split_helper, Route};
 use crate::ruby::generated::Compiled;
 use crate::ruby::strict_locals::Signature;
 use crate::util::{self, edit_distance, LineIndex};
+use dashmap::DashMap;
 use regex::Regex;
 use ruby_prism::{CallNode, Node, Visit};
-use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use tower_lsp_server::ls_types::Diagnostic;
 
@@ -45,6 +47,20 @@ const FRAMEWORK_HELPERS: [&str; 24] = [
     "video_url",
     "url_path",
 ];
+/// The URL helpers Devise defines for its controllers' views (`new_session_path`, `edit_password_url`), whichever scope.
+const DEVISE_HELPERS: [&str; 10] = [
+    "session_path",
+    "session_url",
+    "registration_path",
+    "registration_url",
+    "password_path",
+    "password_url",
+    "confirmation_path",
+    "confirmation_url",
+    "unlock_path",
+    "unlock_url",
+];
+const DEVISE_ACTION_PREFIXES: [&str; 4] = ["", "new_", "edit_", "cancel_"];
 /// Helpers that Rails, Turbo, Devise and the asset bundlers define besides the routes.
 const FRAMEWORK_PREFIXES: [&str; 7] = ["rails_", "turbo_", "action_mailbox_", "omniauth_", "vite_", "asset_pack_", "image_pack_"];
 /// A name this many edits from the typed one is offered as the one meant.
@@ -55,9 +71,10 @@ static DIRECT_ROUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bdirect\s*
 /// The template being checked.
 pub(crate) struct Template<'a> {
     pub path: &'a Path,
-    pub partial: bool,
-    /// The strict locals the template declares; a partial without them may be passed any local.
+    /// The strict locals the template declares. Without them any local may be passed to it, so a bare name is left alone.
     pub strict_locals: Option<&'a Signature>,
+    /// The app uses Devise, whose views call helpers its controllers define.
+    pub devise: bool,
 }
 
 struct Call {
@@ -73,33 +90,29 @@ pub(crate) fn diagnostics(text: &str, template: &Template, routes: &[Route], com
     let mut finder = Finder { calls: Vec::new() };
     finder.visit(root);
     let index = LineIndex::new(text);
-    // Per name, whether something other than a route may define it: it reads files, so once.
-    let mut defined_elsewhere: HashMap<String, bool> = HashMap::new();
     let mut out = Vec::new();
     for call in finder.calls {
         let Some((base, suffix)) = split_helper(&call.name) else { continue };
-        if routes.iter().any(|route| route.name == base) || is_framework(&call.name) {
+        if routes.iter().any(|route| route.name == base) || is_framework(&call.name, template.devise) {
             continue;
         }
-        let suggestion = closest(routes, base).map(|near| format!("{near}{suffix}"));
-        match (template.strict_locals, template.partial && call.bare) {
-            (Some(signature), _) if signature.rest || signature.declares(&call.name) => continue,
-            (None, true) if suggestion.is_none() => continue,
-            _ => {}
-        }
-        if *defined_elsewhere.entry(call.name.clone()).or_insert_with(|| defined_by_app(template.path, &call.name)) {
+        let Some(near) = closest(routes, base) else { continue };
+        // A bare name is a local unless the signature rules it out.
+        let ruled_out = template.strict_locals.is_some_and(|signature| !signature.rest && !signature.declares(&call.name));
+        if (call.bare && !ruled_out) || defined_by_app(template.path, &call.name) {
             continue;
         }
         let Some((start, end)) = compiled.template_span(call.start, call.end) else { continue };
-        let hint = suggestion.map(|near| format!("; did you mean `{near}`?")).unwrap_or_default();
-        let message = format!("`{}` is not a route helper of this app{hint}", call.name);
+        let message = format!("`{}` is not a route helper of this app; did you mean `{near}{suffix}`?", call.name);
         out.push(util::coded(util::warning(index.range(start, end), message), UNKNOWN_ROUTE));
     }
     out
 }
 
-fn is_framework(name: &str) -> bool {
-    FRAMEWORK_HELPERS.contains(&name) || FRAMEWORK_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+fn is_framework(name: &str, devise: bool) -> bool {
+    let devise_helper =
+        devise && DEVISE_ACTION_PREFIXES.iter().any(|action| name.strip_prefix(action).is_some_and(|rest| DEVISE_HELPERS.contains(&rest)));
+    devise_helper || FRAMEWORK_HELPERS.contains(&name) || FRAMEWORK_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
 /// The route name closest to `base`, when it is near enough to be the one meant.
@@ -113,12 +126,30 @@ fn closest<'a>(routes: &'a [Route], base: &str) -> Option<&'a str> {
     near.map(|(_, name)| name)
 }
 
-/// Whether the app's helpers or controllers define `name`, or its route files declare it with `direct`.
+static DEFINED: LazyLock<DashMap<(PathBuf, String), bool>> = LazyLock::new(DashMap::new);
+
+/// Forgets what `defined_by_app` found; the next call reads the files again.
+pub(crate) fn clear_cache() {
+    DEFINED.clear();
+}
+
+/// Whether the app's helpers or controllers define `name`, or its route files declare it with `direct`. Kept until `clear_cache`.
 fn defined_by_app(template: &Path, name: &str) -> bool {
-    if !helper_defs::definitions(template, name).is_empty() {
+    let Some(root) = rails_root(template) else { return false };
+    let key = (root, name.to_string());
+    if let Some(found) = DEFINED.get(&key) {
+        return *found;
+    }
+    let found = scan_definitions(template, &key.0, name);
+    DEFINED.insert(key, found);
+    found
+}
+
+fn scan_definitions(template: &Path, root: &Path, name: &str) -> bool {
+    if !helper_defs::definitions(template, name).is_empty() || named_by_symbol(template, name) {
         return true;
     }
-    let Some(config) = rails_root(template).map(|root| root.join("config")) else { return false };
+    let config = root.join("config");
     let mut files = ruby_files_under(&config.join("routes"));
     files.push(config.join("routes.rb"));
     let base = split_helper(name).map_or(name, |(base, _)| base);
@@ -126,6 +157,16 @@ fn defined_by_app(template: &Path, name: &str) -> bool {
         .iter()
         .filter_map(|file| std::fs::read_to_string(file).ok())
         .any(|code| DIRECT_ROUTE.captures_iter(&code).any(|cap| &cap[1] == base))
+}
+
+/// Whether a helper or controller names `:name`, as `delegate :name`, `define_method(:name)` and `alias_method` do.
+fn named_by_symbol(template: &Path, name: &str) -> bool {
+    let Some(app) = app_root(template) else { return false };
+    let symbol = format!(":{name}");
+    ["helpers", "controllers"]
+        .iter()
+        .flat_map(|dir| ruby_files_under(&app.join(dir)))
+        .any(|file| std::fs::read_to_string(file).is_ok_and(|code| code.contains(&symbol)))
 }
 
 struct Finder {
@@ -143,6 +184,9 @@ impl<'pr> Visit<'pr> for Finder {
         }
         ruby_prism::visit_call_node(self, call);
     }
+
+    /// `defined?(back_path)` asks whether the helper exists.
+    fn visit_defined_node(&mut self, _node: &ruby_prism::DefinedNode<'pr>) {}
 }
 
 #[cfg(test)]
@@ -153,12 +197,12 @@ mod tests {
     use crate::rails::routes::parse;
 
     fn routes() -> Vec<Route> {
-        let names = ["users", "user", "edit_user", "root"];
+        let names = ["users", "user", "edit_user", "root", "items", "sessions"];
         parse(Path::new("/"), &serde_json::Value::Array(names.iter().map(|name| serde_json::json!({ "name": name })).collect()))
     }
 
-    /// The flagged text and message of each finding in a template at `file` of an app with no helpers.
-    fn found(lang: TemplateLang, file: &str, text: &str, strict_locals: Option<&Signature>) -> Vec<(String, String)> {
+    /// The flagged text and message of each finding in a template of an app whose helper defines `custom_path`.
+    fn found_in(lang: TemplateLang, text: &str, strict_locals: Option<&Signature>, devise: bool) -> Vec<(String, String)> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("rt-unknown-route-{}-{n}", std::process::id()));
@@ -166,14 +210,14 @@ mod tests {
             &root,
             &[
                 ("config/routes.rb", "direct :homepage do\n  \"/\"\nend\n"),
-                ("app/helpers/x_helper.rb", "module XHelper\n  def custom_path\n  end\nend\n"),
+                ("app/helpers/x_helper.rb", "module XHelper\n  def custom_path\n  end\n  delegate :usre_path, to: :helpers\nend\n"),
             ],
         );
-        let path = root.join("app/views").join(file);
+        let path = root.join("app/views/users/index.html.erb");
         let compiled = code_context::compiled(lang, text, None, &[]).unwrap();
         let options = ruby_prism::Options::default().build();
         let result = compiled.parse(&options).unwrap();
-        let template = Template { path: &path, partial: file.contains("/_"), strict_locals };
+        let template = Template { path: &path, strict_locals, devise };
         let found = diagnostics(text, &template, &routes(), &compiled, &result.node());
         let index = LineIndex::new(text);
         let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
@@ -181,57 +225,73 @@ mod tests {
         found.into_iter().map(|d| (text[at(d.range.start)..at(d.range.end)].to_string(), d.message)).collect()
     }
 
-    fn flagged(lang: TemplateLang, file: &str, text: &str) -> Vec<String> {
-        found(lang, file, text, None).into_iter().map(|(flagged, _)| flagged).collect()
+    fn flagged(lang: TemplateLang, text: &str) -> Vec<String> {
+        found_in(lang, text, None, false).into_iter().map(|(flagged, _)| flagged).collect()
+    }
+
+    fn strict(locals: &[&str], rest: bool) -> Signature {
+        Signature { params: String::new(), locals: locals.iter().map(|name| (name.to_string(), None)).collect(), rest }
     }
 
     #[test]
-    fn an_undefined_helper_is_flagged_with_the_route_meant() {
+    fn a_call_near_a_route_is_flagged_with_the_route_meant() {
         assert_eq!(
-            found(Erb, "users/index.html.erb", "<%= link_to \"Users\", usrs_path %>\n", None),
+            found_in(Erb, "<%= link_to \"x\", usrs_path(page: 1) %>\n", None, false),
             [("usrs_path".into(), "`usrs_path` is not a route helper of this app; did you mean `users_path`?".into())]
         );
-        assert_eq!(flagged(Haml, "users/index.html.haml", "= link_to \"Users\", usrs_path\n"), ["usrs_path"]);
-        assert_eq!(flagged(Slim, "users/index.html.slim", "= link_to \"Users\", usrs_path\n"), ["usrs_path"]);
-        assert_eq!(flagged(Erb, "users/index.html.erb", "<%= edit_user_url(@user) %><%= edt_user_url(@user) %>\n"), ["edt_user_url"]);
-        assert_eq!(flagged(Slim, "users/index.html.slim", "a href=dashboard_path(1) x\n"), ["dashboard_path"]);
-        let far = found(Erb, "users/index.html.erb", "<%= dashboard_path %>\n", None);
-        assert_eq!(far[0].1, "`dashboard_path` is not a route helper of this app");
+        assert_eq!(flagged(Haml, "= link_to \"x\", usr_path(@user)\n"), ["usr_path"]);
+        assert_eq!(flagged(Slim, "= link_to \"x\", usr_path(@user)\n"), ["usr_path"]);
+        assert_eq!(flagged(Erb, "<%= edit_user_url(@user) %><%= edt_user_url(@user) %>\n"), ["edt_user_url"]);
+    }
+
+    #[test]
+    fn a_name_with_no_route_near_it_may_be_a_helper_we_cannot_see() {
+        let erb = "<%= dashboard_path(1) %><%= cloudinary_url(@x) %><%= cloudinary_url %>\n";
+        assert!(flagged(Erb, erb).is_empty());
+        assert!(flagged(Haml, "= dashboard_path(1)\n").is_empty());
+        assert!(flagged(Slim, "= dashboard_path(1)\n").is_empty());
     }
 
     #[test]
     fn defined_helpers_and_other_helpers_are_quiet() {
         let erb = "<%= users_path %><%= user_url(@user) %><%= root_path %><%= asset_path(\"a.png\") %><%= image_url(\"a\") %>\n\
                    <%= polymorphic_path(@user) %><%= url_for(@user) %><%= rails_blob_path(@b) %><%= turbo_stream_path %>\n\
-                   <%= custom_path %><%= homepage_url %><%= @user.avatar_path %><%= main_app.dash_path %><%= admin.users_path %>\n\
-                   <%= :dash_path %><%= x(\"dash_path\") %><%= _path %><%= path %><%= users_paths %>\n";
-        assert!(flagged(Erb, "users/index.html.erb", erb).is_empty());
-        assert!(flagged(Haml, "users/index.html.haml", "= users_path\n= custom_path\n= main_app.dash_path\n").is_empty());
-        assert!(flagged(Slim, "users/index.html.slim", "= users_path\n= custom_path\n= main_app.dash_path\n").is_empty());
+                   <%= custom_path(1) %><%= homepage_url(1) %><%= @user.usrs_path %><%= main_app.usrs_path %><%= admin.usrs_path %>\n\
+                   <%= :usrs_path %><%= x(\"usrs_path\") %><%= _path %><%= path %><%= users_paths %>\n";
+        assert!(flagged(Erb, erb).is_empty());
+        assert!(flagged(Haml, "= users_path\n= custom_path(1)\n= main_app.usrs_path\n").is_empty());
+        assert!(flagged(Slim, "= users_path\n= custom_path(1)\n= main_app.usrs_path\n").is_empty());
+        // `delegate :usre_path` in a helper.
+        assert!(flagged(Erb, "<%= usre_path(@user) %>\n").is_empty());
     }
 
     #[test]
-    fn locals_shadow_helpers() {
-        assert!(flagged(Erb, "users/index.html.erb", "<% dash_path = 1 %><%= dash_path %>\n").is_empty());
-        assert!(flagged(Erb, "users/index.html.erb", "<% [1].each do |dash_path| %><%= dash_path %><% end %>\n").is_empty());
-        assert!(flagged(Haml, "users/index.html.haml", "- dash_path = 1\n= dash_path\n").is_empty());
-        assert!(flagged(Slim, "users/index.html.slim", "- dash_path = 1\n= dash_path\n").is_empty());
+    fn devise_helpers_are_not_routes_when_the_app_uses_devise() {
+        let erb = "<%= session_path(resource_name) %><%= new_session_url(x) %><%= edit_password_url(x) %>\n";
+        assert_eq!(found_in(Erb, erb, None, false).len(), 1, "sessions is a route; session_path is near it");
+        assert!(found_in(Erb, erb, None, true).is_empty());
     }
 
     #[test]
-    fn a_partial_may_be_passed_a_local_that_looks_like_a_helper() {
-        let (bare, called) = ("<%= link_to \"x\", dash_path %>\n<%= link_to \"x\", usr_path %>\n", "<%= dash_path(1) %>\n");
-        assert_eq!(flagged(Erb, "users/_card.html.erb", bare), ["usr_path"], "only the one with a route near it");
-        assert_eq!(flagged(Erb, "users/_card.html.erb", called), ["dash_path"], "a local can't be called");
-        assert_eq!(flagged(Erb, "users/index.html.erb", bare), ["dash_path", "usr_path"]);
-        let strict = |locals: &[&str], rest| Signature {
-            params: String::new(),
-            locals: locals.iter().map(|name| (name.to_string(), None)).collect(),
-            rest,
-        };
-        assert!(found(Erb, "users/_card.html.erb", bare, Some(&strict(&["dash_path", "usr_path"], false))).is_empty());
-        assert!(found(Erb, "users/_card.html.erb", bare, Some(&strict(&[], true))).is_empty());
-        assert_eq!(found(Erb, "users/_card.html.erb", bare, Some(&strict(&["dash_path"], false))).len(), 1);
-        assert_eq!(found(Erb, "users/_card.html.erb", bare, Some(&strict(&[], false))).len(), 2);
+    fn locals_and_defined_checks_are_not_calls() {
+        assert!(flagged(Erb, "<% usrs_path = 1 %><%= usrs_path %>\n").is_empty());
+        assert!(flagged(Erb, "<% [1].each do |usrs_path| %><%= usrs_path %><% end %>\n").is_empty());
+        assert!(flagged(Haml, "- usrs_path = 1\n= usrs_path\n").is_empty());
+        assert!(flagged(Slim, "- usrs_path = 1\n= usrs_path\n").is_empty());
+        assert!(
+            flagged(Erb, "<%= usrs_path(1) if defined?(usrs_path) %>\n<%= link_to \"x\", back_path if defined?(back_path) %>\n").len() == 1
+        );
+        assert!(flagged(Erb, "<% if defined?(usr_path) %><% end %>\n").is_empty());
+    }
+
+    #[test]
+    fn a_bare_name_is_a_call_only_when_strict_locals_rule_out_a_local() {
+        // `item_path` is the local a caller may pass, with `resources :items`.
+        let bare = "<%= link_to \"x\", item_path %>\n";
+        assert!(flagged(Erb, bare).is_empty(), "no strict locals");
+        assert!(found_in(Erb, bare, Some(&strict(&["item_path"], false)), false).is_empty());
+        assert!(found_in(Erb, bare, Some(&strict(&[], true)), false).is_empty());
+        assert_eq!(found_in(Erb, bare, Some(&strict(&["user"], false)), false).len(), 1);
+        assert_eq!(flagged(Erb, "<%= item_path(1) %>\n"), ["item_path"], "a local can't be called");
     }
 }

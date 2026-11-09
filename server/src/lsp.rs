@@ -16,7 +16,7 @@ use crate::rails::render_call::HamlPipes;
 use crate::rails::view_lints::{remove_local_edit, UNUSED_BLOCK_ARGUMENT, UNUSED_STRICT_LOCAL};
 use crate::rails::{
     assets, controller_classes, controllers, helper_defs, i18n, ivars, model_columns, partials, paths, project, render_refs, routes,
-    stimulus, view_roots,
+    stimulus, unknown_route, view_roots,
 };
 use crate::rules::file::{ConfigFile, FILE_NAME};
 use crate::rules::resolve::{resolve, Configs, ResolvedRules};
@@ -268,6 +268,9 @@ impl LanguageServer for Backend {
         }
         if may_change_config(&events) {
             i18n::clear_catalogs();
+        }
+        if may_change_helpers(&events) {
+            unknown_route::clear_cache();
         }
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
@@ -1172,6 +1175,12 @@ fn may_change_controllers(events: &[(PathBuf, FileChangeType)]) -> bool {
 /// A file under a `config` folder may add a translation or change where translations come from and the default locale.
 fn may_change_config(events: &[(PathBuf, FileChangeType)]) -> bool {
     events.iter().any(|(path, _)| path.components().any(|part| part.as_os_str() == "config"))
+}
+
+/// A file in the app's helpers or controllers, or its config (the route files), may define a helper a view calls.
+fn may_change_helpers(events: &[(PathBuf, FileChangeType)]) -> bool {
+    let relevant = |part: &std::ffi::OsStr| part == "helpers" || part == "controllers" || part == "config";
+    events.iter().any(|(path, _)| path.components().any(|part| relevant(part.as_os_str())))
 }
 
 /// The routes the client sent for the Rails app `current` belongs to; none until it has.

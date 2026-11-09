@@ -192,14 +192,23 @@ fn reference_diagnostics(
     tree: &RubyTree,
 ) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    if rules.reports(missing_translation::I18N_MISSING_KEY) {
+    // `show.de.html.erb` is rendered for one locale, which the lazy key is looked up in.
+    let localized = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.split('.').skip(1).any(|segment| paths::is_locale(segment) && !project.is_format(segment)));
+    if rules.reports(missing_translation::I18N_MISSING_KEY) && !localized {
         if let Some(catalog) = i18n::catalog(project, path) {
             out.extend(missing_translation::diagnostics(&doc.text, path, project, &catalog, tree.compiled, &tree.root));
         }
     }
-    if rules.reports(unknown_route::UNKNOWN_ROUTE) && !routes.is_empty() {
+    // A view in a gem's folder (`spree/`, `rails_admin/`) overrides the engine's, which calls the engine's routes.
+    let engine_view = paths::view_relative(path)
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|folder| project.has_gem_family(&folder.as_os_str().to_string_lossy()));
+    if rules.reports(unknown_route::UNKNOWN_ROUTE) && !routes.is_empty() && !engine_view {
         let signature = ruby.strict_locals.as_ref().and_then(|_| project.strict_locals(&doc.text));
-        let template = unknown_route::Template { path, partial: paths::is_partial_path(path), strict_locals: signature.as_ref() };
+        let template = unknown_route::Template { path, strict_locals: signature.as_ref(), devise: project.has_gem_family("devise") };
         out.extend(unknown_route::diagnostics(&doc.text, &template, routes, tree.compiled, &tree.root));
     }
     out
@@ -802,7 +811,7 @@ mod tests {
                 ("lib/templates/index.html.erb", ""),
             ],
         );
-        let text = "<h1><%= t(\".titel\") %></h1><%= link_to \"x\", usrs_path %><%= t(\".title\") %><%= users_path %>\n";
+        let text = "<h1><%= t(\".titel\") %></h1><%= link_to \"x\", usrs_path(1) %><%= t(\".title\") %><%= users_path %>\n";
         let routes = routes::parse(&root, &serde_json::json!([{ "name": "users" }]));
         let codes = |file: &str, routes: &[routes::Route], options: &Options| {
             let uri = util::file_uri(root.join(file)).unwrap();
@@ -822,6 +831,18 @@ mod tests {
         ))
         .0;
         assert!(codes(view, &routes, &off).is_empty());
+        // A localized template is rendered for one locale; a gem's folder is the engine's.
+        write_files(
+            &root,
+            &[
+                ("app/views/users/index.de.html.erb", ""),
+                ("app/views/spree/index.html.erb", ""),
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (8.0.2)\n    spree_core (4.8.0)\n"),
+            ],
+        );
+        assert_eq!(codes("app/views/users/index.de.html.erb", &routes, &options), ["Rails/UnknownRoute"]);
+        assert!(codes("app/views/spree/index.html.erb", &routes, &options).is_empty());
+        write_files(&root, &[("Gemfile.lock", "GEM\n  specs:\n    actionview (8.0.2)\n")]);
         // Translations from a source the files don't show.
         write_files(&root, &[("config/initializers/i18n.rb", "I18n.backend = Chain.new\n")]);
         i18n::clear_catalogs();

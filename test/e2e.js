@@ -1940,7 +1940,7 @@ const check = (label, actual, expected) => {
         uri: unknownRouteUri,
         languageId: "erb",
         version: 1,
-        text: '<%= link_to "x", usrs_path %>\n<%= users_path %>\n<%= asset_path("a.png") %>\n<%= main_app.dash_path %>\n',
+        text: '<%= link_to "x", usrs_path(1) %>\n<%= users_path %>\n<%= asset_path("a.png") %>\n<%= main_app.dash_path %>\n',
       },
     },
     true,

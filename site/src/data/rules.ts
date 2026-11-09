@@ -112,7 +112,7 @@ const CONTROLLER_MESSAGE =
 const I18N_MESSAGE =
   "Translation `users.index.titel` is missing in the `en` locale; did you mean `.title`?";
 const ROUTE_MESSAGE =
-  "`usrs_path` is not a route helper of this app; did you mean `users_path`?";
+  "`usr_path` is not a route helper of this app; did you mean `user_path`?";
 const LOCALE_FILES = {
   "config/application.rb": "",
   "config/locales/en.yml": "en:\n  users:\n    index:\n      title: Users\n",
@@ -1873,7 +1873,7 @@ enabled = false`,
     status: "available",
     code: "Rails/UnknownRoute",
     today:
-      "A `*_path` or `*_url` call without a receiver must be a named route of the app, read with `bin/rails runner` once the editor has loaded the routes (setting `rubyTemplates.routes.enabled`), so it is reported in the editor and never by `ruby-templates check`. The closest route within two edits is offered. Not reported: a call on a receiver (`main_app.users_path`, `admin.users_path` for an engine), Rails' asset and polymorphic helpers (`asset_path`, `image_url`, `polymorphic_path`, …), `rails_*`, `turbo_*`, `action_mailbox_*`, `omniauth_*`, `vite_*` and `asset_pack_*` helpers, a helper the app defines in app/helpers or exposes with `helper_method`, a route declared with `direct`, and a local variable or block parameter. In a partial a bare name could be a local that the caller passes, so it is reported only when a route is close to it, or when it is called with arguments, or when the partial's strict locals don't list it. Rails projects only, in templates under app/views.",
+      "A `*_path` or `*_url` call without a receiver that no route of the app defines but that is within two edits of one (`usr_path` for `user_path`) is reported, with that route offered; a name with no route near it may come from a gem, a concern or `lib`, which can\'t be seen, so it is left alone. The routes are read with `bin/rails runner` once the editor has loaded them (setting `rubyTemplates.routes.enabled`), so it is reported in the editor and never by `ruby-templates check`. Not reported: a call on a receiver (`main_app.users_path`, `admin.users_path` for an engine), Rails' asset and polymorphic helpers (`asset_path`, `image_url`, `polymorphic_path`, …), `rails_*`, `turbo_*`, `action_mailbox_*`, `omniauth_*`, `vite_*` and `asset_pack_*` helpers, Devise\'s own helpers (`session_path`, `new_registration_url`, `edit_password_url`, …) when the Gemfile.lock has `devise`, a view in a folder named for a gem (`spree/`, `rails_admin/`), which uses the engine\'s routes, a helper the app defines in app/helpers or names with a symbol (`helper_method`, `delegate`, `define_method`), a call under `defined?`, a route declared with `direct`, and a local variable or block parameter. A bare name (`item_path` with `resources :items`) could be a local the caller passes, so it is reported only when called with arguments or when the template\'s strict locals don\'t list it. Rails projects only, in templates under app/views.",
     setting: {
       label: "Turn it off",
       code: `[Rails.UnknownRoute]
@@ -1883,13 +1883,13 @@ enabled = false`,
       {
         lang: "erb",
         file: ERB_FILE,
-        before: text('<%= link_to "Users", usrs_path %>'),
-        after: text('<%= link_to "Users", users_path %>'),
+        before: text("<%= link_to @user.name, usr_path(@user) %>"),
+        after: text("<%= link_to @user.name, user_path(@user) %>"),
         note: "`config/routes.rb` has `resources :users`. The editor loads the routes, so `ruby-templates check` doesn't report this.",
         faults: [
           {
             line: 1,
-            column: 22,
+            column: 25,
             message: ROUTE_MESSAGE,
             code: "Rails/UnknownRoute",
           },
@@ -1898,13 +1898,13 @@ enabled = false`,
       {
         lang: "haml",
         file: HAML_FILE,
-        before: text('= link_to "Users", usrs_path'),
-        after: text('= link_to "Users", users_path'),
+        before: text("= link_to @user.name, usr_path(@user)"),
+        after: text("= link_to @user.name, user_path(@user)"),
         note: "The routes are the same.",
         faults: [
           {
             line: 1,
-            column: 20,
+            column: 23,
             message: ROUTE_MESSAGE,
             code: "Rails/UnknownRoute",
           },
@@ -1913,13 +1913,13 @@ enabled = false`,
       {
         lang: "slim",
         file: SLIM_FILE,
-        before: text('= link_to "Users", usrs_path'),
-        after: text('= link_to "Users", users_path'),
+        before: text("= link_to @user.name, usr_path(@user)"),
+        after: text("= link_to @user.name, user_path(@user)"),
         note: "The routes are the same.",
         faults: [
           {
             line: 1,
-            column: 20,
+            column: 23,
             message: ROUTE_MESSAGE,
             code: "Rails/UnknownRoute",
           },

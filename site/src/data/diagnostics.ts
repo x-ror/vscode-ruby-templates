@@ -695,7 +695,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "A lazy translation key with no entry in `config/locales`.",
     explanation:
-      'A literal lazy key (`t(".title")`, `translate`, with or without parentheses) is turned into its full key as Rails does (`users/_form` gives `users.form.title`, a layout keeps its folder) and must be in the default locale of the YAML files under config/locales: `config.i18n.default_locale`, `en` without one. The closest key of the view within two edits is offered. Absolute keys are not checked, since gems supply keys such as `date.formats` and `helpers.submit.create`; nor is a key with `default:`, `scope:` or `locale:`, a key with interpolation, or one in a view named for a gem in the Gemfile.lock. Nothing is reported without a config/application.rb or a locale file for the default locale, or when translations may come from elsewhere: Ruby locale files, `I18n.load_path`, `I18n.backend`, a gem that keeps them in a store. Rails projects only, in templates under app/views.',
+      'A literal lazy key (`t(".title")`, `translate`, with or without parentheses) is turned into its full key as Rails does (`users/_form` gives `users.form.title`, a layout keeps its folder) and must be in the default locale of the YAML files under config/locales: `config.i18n.default_locale`, `en` without one. The closest key of the view within two edits is offered. Absolute keys are not checked, since gems supply keys such as `date.formats` and `helpers.submit.create`; nor is a key with `default:`, `scope:` or `locale:`, a key with interpolation, or one in a view named for a gem in the Gemfile.lock. Nothing is reported without a config/application.rb or a locale file for the default locale, or when translations may come from elsewhere: Ruby locale files, `I18n.load_path`, `I18n.backend`, a gem that keeps them in a store. With `config.i18n.fallbacks` a key in any locale counts. Rails projects only, in templates under app/views.',
     example: {
       file: "app/views/users/index.html.erb",
       lang: "erb",
@@ -712,17 +712,17 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "A `*_path` or `*_url` helper that the app's routes don't define.",
     explanation:
-      "A `*_path` or `*_url` call without a receiver must be a named route of the app. The routes are read with `bin/rails runner` once the editor has loaded them (setting `rubyTemplates.routes.enabled`), so this is reported in the editor and not by `ruby-templates check`. The closest route within two edits is offered. Not reported: a call on a receiver (`main_app.users_path`, an engine's `admin.users_path`), Rails' asset and polymorphic helpers, `rails_*`, `turbo_*`, `action_mailbox_*`, `omniauth_*`, `vite_*` and `asset_pack_*` helpers, a helper defined in app/helpers or exposed with `helper_method`, a route declared with `direct`, and a local variable or block parameter. In a partial a bare name could be a local the caller passes, so it is reported only when a route is close to it, when it is called with arguments, or when the partial's strict locals don't list it. Rails projects only, in templates under app/views.",
+      "A `*_path` or `*_url` call without a receiver that no route of the app defines but that is within two edits of one (`usr_path` for `user_path`) is reported, with that route offered; a name with no route near it may come from a gem, a concern or `lib`, which can't be seen, so it is left alone. The routes are read with `bin/rails runner` once the editor has loaded them (setting `rubyTemplates.routes.enabled`), so this is reported in the editor and not by `ruby-templates check`. Not reported: a call on a receiver (`main_app.users_path`, an engine's `admin.users_path`), Rails' asset and polymorphic helpers, `rails_*`, `turbo_*`, `action_mailbox_*`, `omniauth_*`, `vite_*` and `asset_pack_*` helpers, Devise's own helpers (`session_path`, `edit_password_url`, …) when the Gemfile.lock has `devise`, a view in a folder named for a gem (`spree/`, `rails_admin/`), a helper the app defines in app/helpers or names with a symbol (`helper_method`, `delegate`, `define_method`), a call under `defined?`, a route declared with `direct`, and a local variable or block parameter. A bare name (`item_path` with `resources :items`) could be a local the caller passes, so it is reported only when called with arguments or when the template's strict locals don't list it. Rails projects only, in templates under app/views.",
     example: {
       file: "app/views/users/index.html.erb",
       lang: "erb",
-      code: `<%= link_to "Users", usrs_path %>
+      code: `<%= link_to @user.name, usr_path(@user) %>
 `,
     },
     message:
-      "`usrs_path` is not a route helper of this app; did you mean `users_path`?",
+      "`usr_path` is not a route helper of this app; did you mean `user_path`?",
     line: 1,
-    column: 22,
+    column: 25,
   },
   {
     code: "Turbo/PermanentRequiresId",
