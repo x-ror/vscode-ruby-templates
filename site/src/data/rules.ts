@@ -109,6 +109,15 @@ const LINK_TEXT_MESSAGE =
 const CONTROLLER_MESSAGE =
   "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?";
 
+const I18N_MESSAGE =
+  "Translation `users.index.titel` is missing in the `en` locale; did you mean `.title`?";
+const ROUTE_MESSAGE =
+  "`usr_path` is not a route helper of this app; did you mean `user_path`?";
+const LOCALE_FILES = {
+  "config/application.rb": "",
+  "config/locales/en.yml": "en:\n  users:\n    index:\n      title: Users\n",
+};
+
 /** The template, message and position the diagnostics reference shows for `code`. */
 function reported(code: string) {
   const entry = diagnostics.find((d) => d.code === code);
@@ -1796,8 +1805,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 4,
+    status: "available",
+    code: "Rails/I18nMissingKey",
+    today:
+      'A literal lazy key (`t(".title")`, `translate`, with or without parentheses) is turned into its full key as Rails does (`users/_form` gives `users.form.title`, a layout keeps its folder) and must be in the default locale of the YAML files under config/locales: `config.i18n.default_locale`, `en` without one. Absolute keys (`t("users.index.title")`) are not checked, since gems supply keys such as `date.formats` and `helpers.submit.create`; nor is a key with `default:`, `scope:` or `locale:`, a key with interpolation, or one in a view named for a gem in the Gemfile.lock (`devise/sessions/new`, a copy of the gem\'s view). The closest key of the view within two edits is offered. Nothing is reported without a config/application.rb or a locale file for the default locale, when the app has Ruby locale files, adds to `I18n.load_path`, sets `I18n.backend` (also `config.i18n.load_path`, `railties_load_path`) or uses a gem that keeps translations in a store (`i18n-active_record`, `redis-i18n`). Rails projects only, in templates under app/views.',
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.I18nMissingKey]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -1805,18 +1821,45 @@ enabled = false`,
         before: text('<h1><%= t(".titel") %></h1>'),
         after: text('<h1><%= t(".title") %></h1>'),
         note: "`config/locales/en.yml` has `en.users.index.title`.",
+        files: LOCALE_FILES,
+        faults: [
+          {
+            line: 1,
+            column: 11,
+            message: I18N_MESSAGE,
+            code: "Rails/I18nMissingKey",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('%h1= t(".titel")'),
         after: text('%h1= t(".title")'),
+        files: LOCALE_FILES,
+        faults: [
+          {
+            line: 1,
+            column: 8,
+            message: I18N_MESSAGE,
+            code: "Rails/I18nMissingKey",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('h1 = t(".titel")'),
         after: text('h1 = t(".title")'),
+        files: LOCALE_FILES,
+        faults: [
+          {
+            line: 1,
+            column: 8,
+            message: I18N_MESSAGE,
+            code: "Rails/I18nMissingKey",
+          },
+        ],
       },
     ],
   },
@@ -1827,27 +1870,60 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 4,
+    status: "available",
+    code: "Rails/UnknownRoute",
+    today:
+      "A `*_path` or `*_url` call without a receiver that no route of the app defines but that is within two edits of one (`usr_path` for `user_path`) is reported, with that route offered; a name with no route near it may come from a gem, a concern or `lib`, which can\'t be seen, so it is left alone. The routes are read with `bin/rails runner` once the editor has loaded them (setting `rubyTemplates.routes.enabled`), so it is reported in the editor and never by `ruby-templates check`. Not reported: a call on a receiver (`main_app.users_path`, `admin.users_path` for an engine), Rails' asset and polymorphic helpers (`asset_path`, `image_url`, `polymorphic_path`, …), `rails_*`, `turbo_*`, `action_mailbox_*`, `omniauth_*`, `vite_*` and `asset_pack_*` helpers, Devise\'s own helpers (`session_path`, `new_registration_url`, `edit_password_url`, …) when the Gemfile.lock has `devise`, a view in a folder named for a gem (`spree/`, `rails_admin/`), which uses the engine\'s routes, a helper the app defines in app/helpers or names with a symbol (`helper_method`, `delegate`, `define_method`), a call under `defined?`, a route declared with `direct`, and a local variable or block parameter. A bare name (`item_path` with `resources :items`) could be a local the caller passes, so it is reported only when called with arguments or when the template\'s strict locals don\'t list it. Rails projects only, in templates under app/views.",
+    setting: {
+      label: "Turn it off",
+      code: `[Rails.UnknownRoute]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
         file: ERB_FILE,
-        before: text('<%= link_to "Users", usrs_path %>'),
-        after: text('<%= link_to "Users", users_path %>'),
-        note: "`config/routes.rb` has `resources :users`.",
+        before: text("<%= link_to @user.name, usr_path(@user) %>"),
+        after: text("<%= link_to @user.name, user_path(@user) %>"),
+        note: "`config/routes.rb` has `resources :users`. The editor loads the routes, so `ruby-templates check` doesn't report this.",
+        faults: [
+          {
+            line: 1,
+            column: 25,
+            message: ROUTE_MESSAGE,
+            code: "Rails/UnknownRoute",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
-        before: text('= link_to "Users", usrs_path'),
-        after: text('= link_to "Users", users_path'),
+        before: text("= link_to @user.name, usr_path(@user)"),
+        after: text("= link_to @user.name, user_path(@user)"),
+        note: "The routes are the same.",
+        faults: [
+          {
+            line: 1,
+            column: 23,
+            message: ROUTE_MESSAGE,
+            code: "Rails/UnknownRoute",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
-        before: text('= link_to "Users", usrs_path'),
-        after: text('= link_to "Users", users_path'),
+        before: text("= link_to @user.name, usr_path(@user)"),
+        after: text("= link_to @user.name, user_path(@user)"),
+        note: "The routes are the same.",
+        faults: [
+          {
+            line: 1,
+            column: 23,
+            message: ROUTE_MESSAGE,
+            code: "Rails/UnknownRoute",
+          },
+        ],
       },
     ],
   },

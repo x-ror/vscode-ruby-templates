@@ -255,7 +255,7 @@ fn check_file(
             }
         }
     }
-    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &rules, projects) {
+    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &rules, projects, &[]) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
         let name = match severity {
             DiagnosticSeverity::ERROR => "error",

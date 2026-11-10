@@ -9,7 +9,10 @@ use crate::lang::{haml_html_host, html_host, is_partial, slim_html_host, Templat
 use crate::line_length;
 use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
-use crate::rails::{attribute_lints, controller_classes, output_lints, partials, paths, render_refs, stimulus, unsafe_output, view_lints};
+use crate::rails::{
+    attribute_lints, controller_classes, i18n, missing_translation, output_lints, partials, paths, render_refs, routes, stimulus,
+    unknown_route, unsafe_output, view_lints,
+};
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
@@ -57,11 +60,18 @@ impl Doc {
 #[cfg(test)]
 pub(crate) fn diagnostics(uri: &Uri, doc: &Doc, options: &crate::options::Options) -> Vec<Diagnostic> {
     let rules = crate::rules::resolve::resolve(uri, doc.lang, options, &mut Default::default());
-    diagnostics_in(uri, doc, &rules, &mut Projects::new())
+    diagnostics_in(uri, doc, &rules, &mut Projects::new(), &[])
 }
 
-/// `diagnostics`, taking the template's project from `projects` when a run already loaded it.
-pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projects: &mut Projects) -> Vec<Diagnostic> {
+/// `diagnostics`, taking the template's project from `projects` when a run already loaded it. `routes` are the app's, empty
+/// when it has not sent them.
+pub(crate) fn diagnostics_in(
+    uri: &Uri,
+    doc: &Doc,
+    rules: &ResolvedRules,
+    projects: &mut Projects,
+    routes: &[routes::Route],
+) -> Vec<Diagnostic> {
     // Thor templates (`*.html.erb.tt`, `*.haml.tt`) mix the generator's ERB with the template's own tags or
     // lines, and their partials live outside app/views, so no check applies.
     if doc.lang == TemplateLang::Liquid || uri.path().as_str().to_ascii_lowercase().ends_with(".tt") || !rules.diagnostics_enabled() {
@@ -98,6 +108,9 @@ pub(crate) fn diagnostics_in(uri: &Uri, doc: &Doc, rules: &ResolvedRules, projec
     if let (Some(path), Some(views_root), Some(tree)) = (&path, &views_root, &tree) {
         out.extend(view_diagnostics(doc, rules, path, views_root, tree, &[markup.as_slice(), helpers.as_slice()].concat(), &ruby));
     }
+    if let (Some(path), Some(project), Some(_), Some(tree)) = (&path, project, &views_root, &tree) {
+        out.extend(reference_diagnostics(doc, rules, path, project, routes, &ruby, tree));
+    }
     if let (Some(path), Some(project)) = (&path, project) {
         out.extend(render_diagnostics(path, project, &doc.text, doc.lang, render_filter(doc.lang, &doc.text, rules.extra_engines())));
     }
@@ -133,6 +146,8 @@ fn view_lints_root(rules: &ResolvedRules, project: &Project, path: &Path) -> Opt
         view_lints::RENDER_IN_LOOP,
         attribute_lints::PERMANENT_REQUIRES_ID,
         attribute_lints::UNKNOWN_CONTROLLER,
+        missing_translation::I18N_MISSING_KEY,
+        unknown_route::UNKNOWN_ROUTE,
     ];
     let views_root = paths::views_root(path)?;
     let applies = project.framework == Framework::Rails && !project.is_gem_file(path) && wanted.iter().any(|code| rules.reports(code));
@@ -162,6 +177,39 @@ fn view_diagnostics(
     if rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER) {
         let registered = || rules.reports(attribute_lints::UNKNOWN_CONTROLLER).then(|| stimulus::registered(path)).flatten();
         out.extend(attribute_lints::diagnostics(&doc.text, elements, registered));
+    }
+    out
+}
+
+/// The lints on what the template refers to: translation keys and route helpers.
+fn reference_diagnostics(
+    doc: &Doc,
+    rules: &ResolvedRules,
+    path: &Path,
+    project: &Project,
+    routes: &[routes::Route],
+    ruby: &RubyContext,
+    tree: &RubyTree,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    // `show.de.html.erb` is rendered for one locale, which the lazy key is looked up in.
+    let localized = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.split('.').skip(1).any(|segment| paths::is_locale(segment) && !project.is_format(segment)));
+    if rules.reports(missing_translation::I18N_MISSING_KEY) && !localized {
+        if let Some(catalog) = i18n::catalog(project, path) {
+            out.extend(missing_translation::diagnostics(&doc.text, path, project, &catalog, tree.compiled, &tree.root));
+        }
+    }
+    // A view in a gem's folder (`spree/`, `rails_admin/`) overrides the engine's, which calls the engine's routes.
+    let engine_view = paths::view_relative(path)
+        .and_then(|relative| relative.components().next())
+        .is_some_and(|folder| project.has_gem_family(&folder.as_os_str().to_string_lossy()));
+    if rules.reports(unknown_route::UNKNOWN_ROUTE) && !routes.is_empty() && !engine_view {
+        let signature = ruby.strict_locals.as_ref().and_then(|_| project.strict_locals(&doc.text));
+        let template = unknown_route::Template { path, strict_locals: signature.as_ref(), devise: project.has_gem_family("devise") };
+        out.extend(unknown_route::diagnostics(&doc.text, &template, routes, tree.compiled, &tree.root));
     }
     out
 }
@@ -599,6 +647,8 @@ mod tests {
             include_str!("erb/html_lint.rs"),
             include_str!("erb/trim_mode.rs"),
             include_str!("rails/unsafe_output.rs"),
+            include_str!("rails/missing_translation.rs"),
+            include_str!("rails/unknown_route.rs"),
             include_str!("haml/indent.rs"),
             include_str!("slim/indent.rs"),
         ] {
@@ -745,6 +795,59 @@ mod tests {
         std::fs::remove_dir_all(&controllers).unwrap();
         stimulus::clear_cache();
         assert_eq!(codes("app/views/users/show.html.erb", TemplateLang::Erb, text, &options), both[..1], "no controllers folder");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_keys_and_unknown_routes_follow_the_project_and_what_it_has_sent() {
+        let root = std::env::temp_dir().join(format!("rt-reference-lints-{}", std::process::id()));
+        write_files(
+            &root,
+            &[
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (8.0.2)\n"),
+                ("config/application.rb", ""),
+                ("config/locales/en.yml", "en:\n  users:\n    index:\n      title: Users\n"),
+                ("app/views/users/index.html.erb", ""),
+                ("lib/templates/index.html.erb", ""),
+            ],
+        );
+        let text = "<h1><%= t(\".titel\") %></h1><%= link_to \"x\", usrs_path(1) %><%= t(\".title\") %><%= users_path %>\n";
+        let routes = routes::parse(&root, &serde_json::json!([{ "name": "users" }]));
+        let codes = |file: &str, routes: &[routes::Route], options: &Options| {
+            let uri = util::file_uri(root.join(file)).unwrap();
+            let doc = Doc { lang: TemplateLang::Erb, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            let rules = crate::rules::resolve::resolve(&uri, doc.lang, options, &mut Default::default());
+            let found = diagnostics_in(&uri, &doc, &rules, &mut Projects::new(), routes);
+            found.iter().filter_map(|d| util::code(d).map(String::from)).collect::<Vec<_>>()
+        };
+        let view = "app/views/users/index.html.erb";
+        let options = Options::default();
+        i18n::clear_catalogs();
+        assert_eq!(codes(view, &routes, &options), ["Rails/I18nMissingKey", "Rails/UnknownRoute"]);
+        assert_eq!(codes(view, &[], &options), ["Rails/I18nMissingKey"], "routes not sent");
+        assert!(codes("lib/templates/index.html.erb", &routes, &options).is_empty(), "not a view");
+        let off = Options::from_init(Some(
+            &serde_json::json!({ "erb": { "disabledDiagnostics": ["Rails/UnknownRoute", "Rails/I18nMissingKey"] } }),
+        ))
+        .0;
+        assert!(codes(view, &routes, &off).is_empty());
+        // A localized template is rendered for one locale; a gem's folder is the engine's.
+        write_files(
+            &root,
+            &[
+                ("app/views/users/index.de.html.erb", ""),
+                ("app/views/spree/index.html.erb", ""),
+                ("Gemfile.lock", "GEM\n  specs:\n    actionview (8.0.2)\n    spree_core (4.8.0)\n"),
+            ],
+        );
+        assert_eq!(codes("app/views/users/index.de.html.erb", &routes, &options), ["Rails/UnknownRoute"]);
+        assert!(codes("app/views/spree/index.html.erb", &routes, &options).is_empty());
+        write_files(&root, &[("Gemfile.lock", "GEM\n  specs:\n    actionview (8.0.2)\n")]);
+        // Translations from a source the files don't show.
+        write_files(&root, &[("config/initializers/i18n.rb", "I18n.backend = Chain.new\n")]);
+        i18n::clear_catalogs();
+        assert_eq!(codes(view, &routes, &options), ["Rails/UnknownRoute"]);
+        i18n::clear_catalogs();
         std::fs::remove_dir_all(&root).unwrap();
     }
 

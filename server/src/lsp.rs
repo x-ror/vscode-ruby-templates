@@ -16,7 +16,7 @@ use crate::rails::render_call::HamlPipes;
 use crate::rails::view_lints::{remove_local_edit, UNUSED_BLOCK_ARGUMENT, UNUSED_STRICT_LOCAL};
 use crate::rails::{
     assets, controller_classes, controllers, helper_defs, i18n, ivars, model_columns, partials, paths, project, render_refs, routes,
-    stimulus, view_roots,
+    stimulus, unknown_route, view_roots,
 };
 use crate::rules::file::{ConfigFile, FILE_NAME};
 use crate::rules::resolve::{resolve, Configs, ResolvedRules};
@@ -62,7 +62,7 @@ pub async fn serve() {
         local_callers: DashMap::new(),
         warming: Arc::default(),
         view_roots: Arc::default(),
-        routes: DashMap::new(),
+        routes: Arc::default(),
         options: Arc::default(),
         resolved: Arc::default(),
         config_reports: Arc::default(),
@@ -95,7 +95,7 @@ struct Backend {
     /// Each app's view roots, found off the server task and dropped when a watched file may have changed them.
     view_roots: Arc<view_roots::Cache>,
     /// Routes per Rails root, as the client last sent them.
-    routes: DashMap<PathBuf, Arc<Vec<routes::Route>>>,
+    routes: Arc<DashMap<PathBuf, Arc<Vec<routes::Route>>>>,
     // Set once in `initialize`; the client restarts the server when these settings change.
     options: Arc<OnceLock<Options>>,
     /// What applied to each open document at its latest diagnostics run, for the handlers that read the Slim engines.
@@ -265,6 +265,12 @@ impl LanguageServer for Backend {
         }
         if may_change_controllers(&events) {
             stimulus::clear_cache();
+        }
+        if may_change_config(&events) {
+            i18n::clear_catalogs();
+        }
+        if may_change_helpers(&events) {
+            unknown_route::clear_cache();
         }
         self.templates.retain(|root, _| !stale(root, &events, false));
         self.locales.retain(|root, _| !stale(root, &events, true));
@@ -882,7 +888,8 @@ impl Backend {
             Arc::clone(&self.options),
             Arc::clone(&self.view_roots),
         );
-        let (resolved, config_reports) = (Arc::clone(&self.resolved), Arc::clone(&self.config_reports));
+        let (resolved, config_reports, app_routes) =
+            (Arc::clone(&self.resolved), Arc::clone(&self.config_reports), Arc::clone(&self.routes));
         let (watching, refresh) = (self.dynamic_watching.get().cloned().flatten(), self.semantic_refresh.get() == Some(&true));
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
@@ -896,7 +903,8 @@ impl Backend {
                     Project::memoized(&mut projects, &path, Some(&view_roots));
                 }
                 let rules = resolve(&checked, doc.lang, options.get_or_init(Options::default), &mut Configs::new());
-                (diagnostics_in(&checked, &doc, &rules, &mut projects), rules)
+                let routes = util::file_path(&checked).map(|path| routes_of(&app_routes, &path)).unwrap_or_default();
+                (diagnostics_in(&checked, &doc, &rules, &mut projects, &routes), rules)
             })
             .await
             else {
@@ -992,12 +1000,16 @@ impl Backend {
         let Some(root) = params.get("root").and_then(serde_json::Value::as_str).map(PathBuf::from) else { return };
         let parsed = routes::parse(&root, params.get("routes").unwrap_or(&serde_json::Value::Null));
         self.routes.insert(root, Arc::new(parsed));
+        // `Rails/UnknownRoute` reads them.
+        let open: Vec<Uri> = self.docs.iter().map(|d| d.key().clone()).collect();
+        for uri in open {
+            self.publish_later(uri, Duration::ZERO);
+        }
     }
 
     /// Routes of the Rails app `current` belongs to, empty until the client has sent them.
     fn routes_for(&self, current: &Path) -> Arc<Vec<routes::Route>> {
-        let root = paths::rails_root(current);
-        root.and_then(|root| self.routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
+        routes_of(&self.routes, current)
     }
 
     /// Open documents' text, which may have unsaved edits. Keyed by path: VS Code's Windows URIs differ in drive-letter
@@ -1158,6 +1170,23 @@ fn may_change_controllers(events: &[(PathBuf, FileChangeType)]) -> bool {
     events.iter().any(|(path, kind)| {
         path.ends_with("config/importmap.rb") || in_javascript(path) || (*kind != FileChangeType::CHANGED && path.ends_with("app"))
     })
+}
+
+/// A file under a `config` folder may add a translation or change where translations come from and the default locale.
+fn may_change_config(events: &[(PathBuf, FileChangeType)]) -> bool {
+    events.iter().any(|(path, _)| path.components().any(|part| part.as_os_str() == "config"))
+}
+
+/// A file in the app's helpers or controllers, or its config (the route files), may define a helper a view calls.
+fn may_change_helpers(events: &[(PathBuf, FileChangeType)]) -> bool {
+    let relevant = |part: &std::ffi::OsStr| part == "helpers" || part == "controllers" || part == "config";
+    events.iter().any(|(path, _)| path.components().any(|part| relevant(part.as_os_str())))
+}
+
+/// The routes the client sent for the Rails app `current` belongs to; none until it has.
+fn routes_of(routes: &DashMap<PathBuf, Arc<Vec<routes::Route>>>, current: &Path) -> Arc<Vec<routes::Route>> {
+    let root = paths::rails_root(current);
+    root.and_then(|root| routes.get(&root).map(|r| Arc::clone(&r))).unwrap_or_default()
 }
 
 /// Byte ranges on `line` that lead to files by convention: `render @model`, Stimulus identifiers, asset paths.
