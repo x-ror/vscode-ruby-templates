@@ -40,7 +40,8 @@ static OPEN_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 // An unfinished `data-x-target="…` or `x_target: "…` value in a `data:` hash.
 static OPEN_TARGET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?:data-([\w-]+)-target["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(\w+)_target:)\s*["']([^"']*)$"#).unwrap());
-static STATIC_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
+static STATIC_LIST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"static\s+(?:(?:readonly|override|public)\s+)*(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
 static STATIC_VALUES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+values\s*=\s*\{").unwrap());
 // A Haml or Slim tag head and the attribute wrapper right after it: `%form(`, `div.card{`, `a[`.
 static TAG_WRAPPER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[ \t]*[%.#]?[\w:-]+(?:[.#][\w:-]+)*[(\[{]").unwrap());

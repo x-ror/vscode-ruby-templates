@@ -18,9 +18,11 @@ static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\b([\w\s$<>
 static STIMULUS_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"import\s*(?:\w+\s*,\s*)?\{[^}]*\bController\b[^}]*\}\s*from\s*["'](?:@hotwired/)?stimulus["']"#).unwrap()
 });
-static TARGETS_DECLARATION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bstatic\s+(?:get\s+)?targets\b").unwrap());
-static TARGETS_LIST: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"\bstatic\s+targets\s*=\s*\[\s*(?:(?:"[^"\n]*"|'[^'\n]*')\s*,?\s*)*\]"#).unwrap());
+static TARGETS_DECLARATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bstatic\s+(?:(?:get|readonly|override|declare|public)\s+)*targets\b").unwrap());
+static TARGETS_LIST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bstatic\s+(?:(?:readonly|override|public)\s+)*targets\s*=\s*\[\s*(?:(?:"[^"\n]*"|'[^'\n]*')\s*,?\s*)*\]"#).unwrap()
+});
 // Methods and targets that come in without a declaration in the class.
 static UNREADABLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -28,6 +30,8 @@ static UNREADABLE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+// A helper handed the controller (`useClickOutside(this)`, `Modal.install(this, …)`) may add methods to it.
+static THIS_ARGUMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[(,]\s*this\s*[,)]").unwrap());
 static ASSIGNED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bthis\.([A-Za-z_$][\w$]*)\s*=[^=>]").unwrap());
 
 #[derive(Debug)]
@@ -68,7 +72,7 @@ fn read(file: &Path, parents_left: usize) -> Option<Members> {
     let source = std::fs::read_to_string(file).ok()?;
     let code = blank(&source, false);
     let skeleton = blank(&source, true);
-    if UNREADABLE.is_match(&skeleton) {
+    if UNREADABLE.is_match(&skeleton) || passes_this(&skeleton) {
         return None;
     }
     let mut classes = CLASS.captures_iter(&skeleton);
@@ -77,6 +81,9 @@ fn read(file: &Path, parents_left: usize) -> Option<Members> {
     let open = class.get(0)?.end() - "{".len();
     let body = &skeleton[open + "{".len()..matching_brace(&skeleton, open)?];
     let mut methods = member_names(body)?;
+    if methods.iter().any(|name| name == "targets") && !TARGETS_DECLARATION.is_match(&skeleton) {
+        return None;
+    }
     methods.extend(ASSIGNED.captures_iter(&skeleton).map(|assigned| assigned[1].to_string()));
     let mut members = Members { targets: declared_targets(&code, &skeleton)?, methods };
     if parent != "Controller" || !STIMULUS_IMPORT.is_match(&code) {
@@ -85,6 +92,11 @@ fn read(file: &Path, parents_left: usize) -> Option<Members> {
         members.methods.extend(inherited.methods);
     }
     Some(members)
+}
+
+/// Whether the code hands `this` to a call, other than `.bind(this)`.
+fn passes_this(skeleton: &str) -> bool {
+    THIS_ARGUMENT.find_iter(skeleton).any(|call| !skeleton[..call.start()].ends_with(".bind"))
 }
 
 /// The class a header (`Name extends Base<T> `) extends; none for a class that extends nothing or whose header says more.
@@ -146,7 +158,7 @@ fn member_names(body: &str) -> Option<Vec<String>> {
                 while let Some((i, next)) = chars.next_if(|&(_, next)| next.is_alphanumeric() || matches!(next, '_' | '$')) {
                     end = i + next.len_utf8();
                 }
-                let (name, rest) = (&body[at..end], body[end..].trim_start());
+                let (name, rest) = (&body[at..end], skip_generics(body[end..].trim_start()));
                 let optional = rest.strip_prefix(['?', '!']).unwrap_or(rest);
                 let defines =
                     optional.starts_with(['(', ';', ':']) || optional.strip_prefix('=').is_some_and(|after| !after.starts_with(['=', '>']));
@@ -161,6 +173,27 @@ fn member_names(body: &str) -> Option<Vec<String>> {
         }
     }
     Some(names)
+}
+
+/// `rest` without a leading `<…>` (a TypeScript method's type parameters).
+fn skip_generics(rest: &str) -> &str {
+    if !rest.starts_with('<') {
+        return rest;
+    }
+    let mut depth = 0usize;
+    for (at, c) in rest.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return rest[at + 1..].trim_start();
+                }
+            }
+            _ => {}
+        }
+    }
+    rest
 }
 
 /// Whether a member can begin after `previous`, the last character before it: `[` there is a computed name, not an index.
@@ -203,7 +236,7 @@ fn blank(source: &str, strings: bool) -> String {
             (template_len(rest), false, true)
         } else if matches!(c, '"' | '\'') {
             (stimulus::string_len(rest, c), false, true)
-        } else if c == '/' && last_code.is_none_or(|p| "(,=:[!&|?{};".contains(p)) {
+        } else if c == '/' && (last_code.is_none_or(|p| "(,=:[!&|?{};<>+-*%~^".contains(p)) || ends_with_keyword(&out)) {
             (regex_len(rest), false, true)
         } else {
             (c.len_utf8(), false, false)
@@ -228,6 +261,14 @@ fn blank(source: &str, strings: bool) -> String {
         at += len;
     }
     out
+}
+
+/// Whether `code` ends in a keyword after which an expression, so a regular expression, can begin.
+fn ends_with_keyword(code: &str) -> bool {
+    let code = code.trim_end();
+    let start = code.rfind(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '$'))).map_or(0, |at| at + 1);
+    const KEYWORDS: [&str; 12] = ["return", "typeof", "case", "yield", "await", "void", "delete", "in", "of", "new", "else", "do"];
+    KEYWORDS.contains(&&code[start..]) || &code[start..] == "instanceof"
 }
 
 /// The length of the template literal `rest` starts with, `${ }` included, which may hold strings and templates of its own.
@@ -350,6 +391,29 @@ export default class extends Controller {
     }
 
     #[test]
+    fn modifiers_generics_and_regexes_do_not_hide_members() {
+        let header = "import { Controller } from \"@hotwired/stimulus\"\nexport default class extends Controller {\n";
+        let read = |body: &str| members_of(&format!("{header}{body}\n}}"));
+        for modifiers in ["readonly", "override", "public", "public readonly"] {
+            let (targets, _) = read(&format!("  static {modifiers} targets = [\"a\"]")).unwrap();
+            assert_eq!(targets, ["a"], "{modifiers}");
+        }
+        assert!(read("  static targets = foo\n  static readonly values = {}").is_none());
+        assert!(read("  static async targets = [\"a\"]").is_none(), "a targets member that can't be read");
+        let (_, methods) =
+            read("  handle<T extends Event>(event: T): void {}\n  async load<T>() {}\n  other<A, B = Map<A, B>>(a) {}").unwrap();
+        for method in ["handle", "load", "other"] {
+            assert!(methods.contains(&method.to_string()), "{method} in {methods:?}");
+        }
+        let (_, methods) =
+            read("  isQuote(c) { return /'/.test(c) }\n  later() {}\n  more() { x = a > /\"/.test(b) }\n  last() {}").unwrap();
+        for method in ["isQuote", "later", "more", "last"] {
+            assert!(methods.contains(&method.to_string()), "{method} in {methods:?}");
+        }
+        assert!(read("  connect() { this.f = this.f.bind(this) }").is_some(), "bind(this) adds nothing");
+    }
+
+    #[test]
     fn controllers_that_could_have_members_unseen_are_not_described() {
         let header = "import { Controller } from \"@hotwired/stimulus\"\n";
         for body in [
@@ -364,6 +428,9 @@ export default class extends Controller {
             "export default class extends Controller {}\nObject.assign(SearchController.prototype, Mixin)",
             "export default class extends Controller {\n  connect() { Object.assign(this, mixin) }\n}",
             "export default class extends Controller {\n  connect() { this[name] = fn }\n}",
+            "export default class extends Controller {\n  connect() { useClickOutside(this) }\n}",
+            "export default class extends Controller {\n  connect() { useTransition(this, { element: x }) }\n}",
+            "export default class extends Controller {\n  connect() { Modal.install(a, this) }\n}",
             "export default class extends mixin(Controller) {}",
             "export default class extends Controller {}\nclass Other extends Controller {}",
             "export default class {}",
