@@ -1,0 +1,5 @@
+<%# Turbo/PreferTurboAttributes %>
+<%= link_to "Delete", @user, data: { confirm: "Sure?", method: :delete } %>
+<%= submit_tag "Save", data: { disable_with: "Saving..." } %>
+<a href="/u/1" data-method="delete">Delete</a>
+<a href="/u/1" data-confirm="Sure?">Stays</a>

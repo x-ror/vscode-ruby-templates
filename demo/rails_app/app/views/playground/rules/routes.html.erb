@@ -1,0 +1,10 @@
+<%# Rails/UnknownRoute, editor only: lines 2-3 warn, the rest do not %>
+<%= link_to "Edit", edit_usr_path(@user) %>
+<%= link_to "Users", usrs_path(page: 2) %>
+
+<%# no warning %>
+<%= link_to "Users", users_path %>
+<%= link_to "Edit", edit_user_path(@user) %>
+<%= link_to "Users", main_app.usrs_path %>
+<%= image_tag asset_path("logo.png"), alt: "Logo" %>
+<%= link_to "Elsewhere", somewhere_else_path %>

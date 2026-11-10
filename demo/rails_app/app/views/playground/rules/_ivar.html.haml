@@ -1,0 +1,6 @@
+-# Rails/InstanceVariableInPartial: line 2 warns, lines 4-6 do not
+%p= @user.name
+-# no warning: the partial sets the variable itself, defined? only asks
+- @shown ||= []
+= @shown.size
+= defined?(@flash)

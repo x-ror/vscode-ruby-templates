@@ -1,0 +1,17 @@
+/ Layout/EmptyLines (max = 1) and the EmptyLinesAround* rules
+h1 Users
+
+
+
+section.users
+
+  - @users.each do |user|
+
+    li = user.name
+
+  - if @users.empty?
+    li None
+
+  - else
+
+    li Some

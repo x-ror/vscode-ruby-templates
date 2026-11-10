@@ -1,0 +1,21 @@
+<%# Layout/EmptyLines (max = 1) and the EmptyLinesAround* rules %>
+<h1>Users</h1>
+
+
+
+<section class="users">
+
+  <% @users.each do |user| %>
+
+    <li><%= user.name %></li>
+
+  <% end %>
+
+</section>
+<% if @users.empty? %>
+  <li>None</li>
+
+<% else %>
+
+  <li>Some</li>
+<% end %>

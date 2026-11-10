@@ -1,0 +1,21 @@
+<%# Rails/RenderInLoop (line 3) and Rails/UnusedBlockArgument (lines 6 and 9) warn %>
+<% @users.each do |user| %>
+  <%= render "users/card", user: user %>
+<% end %>
+
+<% @users.each do |user, index| %>
+  <li><%= user.name %></li>
+<% end %>
+<% 3.times do |i| %><hr><% end %>
+
+<%# no warning: a wrapping element, more locals, an unused name with _, the collection form %>
+<% @users.each do |user| %>
+  <li><%= render "users/card", user: user %></li>
+<% end %>
+<% @users.each do |user| %>
+  <%= render "users/card", user: user, compact: true %>
+<% end %>
+<% @users.each_with_index do |user, _index| %>
+  <li><%= user.name %></li>
+<% end %>
+<%= render partial: "users/card", collection: @users, as: :user %>

@@ -1,3 +1,6 @@
 # Rules for this app; the file beats the VS Code settings. See the rules reference on the docs site.
+# Highlight samples are copies of test/sample.*; they are about colours, not clean templates.
+exclude = ["app/views/playground/highlight/**"]
+
 [Html.ImgAlt]
 exclude = ["app/views/playground/rules/**"]

@@ -1,0 +1,70 @@
+# Every opt-in formatter rule and the off-by-default checks, for this folder only (the nearest file wins).
+[Layout.EmptyLines]
+enabled = true
+max = 1
+
+[Layout.EmptyLinesAroundBlockBody]
+enabled = true
+style = "no_empty_lines"
+
+[Layout.EmptyLinesAroundElementBody]
+enabled = true
+style = "no_empty_lines"
+
+[Layout.EmptyLinesAroundBranches]
+enabled = true
+style = "empty_lines"
+
+[Layout.SpaceInsideErbTag]
+enabled = true
+
+[Layout.SpaceAfterScriptMarker]
+enabled = true
+
+[Layout.SpaceInHtmlTag]
+enabled = true
+
+[Layout.ElementContentOnOwnLine]
+enabled = true
+tags = ["div", "section", "p"]
+
+[Layout.AttributesPerLine]
+enabled = true
+max_line_length = 60
+
+[Layout.LineLength]
+enabled = true
+max = 80
+
+[Style.ErbCommentSyntax]
+enabled = true
+
+[Style.ErbTrimMode]
+enabled = true
+
+[Style.AttributeQuotes]
+enabled = true
+style = "double_quotes"
+
+[Style.BooleanAttributes]
+enabled = true
+
+[Style.VoidTagClosing]
+enabled = true
+style = "no_slash"
+
+[Style.TagNameCase]
+enabled = true
+
+[Style.ImplicitDiv]
+enabled = true
+
+[Style.ClassesBeforeIds]
+enabled = true
+
+[Style.HashAttributes]
+enabled = true
+style = "html"
+
+[Turbo.PreferTurboAttributes]
+enabled = true

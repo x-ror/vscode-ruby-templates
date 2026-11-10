@@ -1,0 +1,14 @@
+<%# Rails/OutputControlFlow: line 2 warns, the rest do not %>
+<%= if @user %>
+  <p>hi</p>
+<% end %>
+
+<%# no warning %>
+<%= if @user then "a" else "b" end %>
+<%= @user.name if @user %>
+<%= form_with model: @user do |f| %>
+  <%= f.text_field :name %>
+<% end %>
+<% if @user %>
+  <p>hi</p>
+<% end %>

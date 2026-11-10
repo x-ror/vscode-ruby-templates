@@ -1,0 +1,4 @@
+/# locals: (user:, compact: false, label: "x", **rest)
+/ Rails/UnusedStrictLocal: only compact warns; label is read through local_assigns and **rest is never reported
+p = user.name
+= local_assigns[:label]

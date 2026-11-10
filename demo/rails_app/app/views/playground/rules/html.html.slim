@@ -1,0 +1,14 @@
+/ Html/AnchorHref (2), Html/NestedInteractive (3-4) and A11y/IframeTitle (5), A11y/GenericLinkText (6-7) warn
+a.btn data-action="click->hello#greet" Menu
+a href="/users"
+  a href="/users/new" New
+iframe src="https://example.com/embed"
+= link_to "Click here", users_path
+a href="/users" Read more
+/ no warning
+a name="top"
+a.btn href="/users" Users
+iframe src="https://example.com/embed" title="Embedded page"
+a href="/users" aria-label="All users" here
+= link_to "All users", users_path
+.card class="wide" card

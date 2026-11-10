@@ -1,0 +1,11 @@
+<%# SpaceInsideErbTag, SpaceInHtmlTag, ErbCommentSyntax %>
+<%=@user.name%>
+<%if @user.admin?%>
+  <b>Admin</b>
+<%end%>
+<div  class="card"   id="user_<%= @user.id %>" >
+  <img src = "<%= @user.avatar_url %>"  alt="">
+</div  >
+<% # TODO: show the avatar %>
+<%# already a comment %>
+<%- code = 1 %>
