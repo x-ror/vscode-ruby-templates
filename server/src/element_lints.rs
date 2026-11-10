@@ -417,6 +417,7 @@ mod tests {
         assert_eq!(flagged(Haml, generic, "%a{href: x} here\n"), ["here"]);
         assert_eq!(flagged(Slim, generic, "p = link_to \"Click here\", pricing_path\n"), ["Click here"]);
         assert_eq!(flagged(Slim, generic, "a href=x Read more\n"), ["Read more"]);
+        assert_eq!(flagged(Slim, generic, "a href=\"/users\" Read more\n\np x\n"), ["Read more"]);
         for (lang, text) in [
             (Erb, "<a href=\"/p\">See the new pricing</a>"),
             (Erb, "<a href=\"/p\">Click here to download the report</a>"),
@@ -442,6 +443,8 @@ mod tests {
             (Slim, "a href=x = here\n"),
             (Slim, "a href=x here #{y}\n"),
             (Slim, "a href=x aria-label=\"Pricing\" here\n"),
+            (Slim, "a href=x Read more\n  | about pricing\n"),
+            (Slim, "a href=x Read more\n\n  | about pricing\n"),
         ] {
             assert!(flagged(lang, generic, text).is_empty(), "{text}");
         }

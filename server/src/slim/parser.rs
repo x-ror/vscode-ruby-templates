@@ -740,10 +740,9 @@ impl<'a> Parser<'a> {
         } else {
             self.skip(usize::from(r.starts_with(' ')));
             let text_indent = self.lines[self.i][..self.pos].chars().count();
-            let (line, written) = (self.i, self.rest().trim());
+            let written = self.rest().trim();
             let at = self.at() + self.rest().len() - self.rest().trim_start().len();
-            self.text_block(Body::Interpolated, true, text_indent);
-            if self.i == line {
+            if !self.text_block(Body::Interpolated, true, text_indent) {
                 self.out.elements[element_index].content = Some(at..at + written.len());
                 if !written.contains("#{") {
                     self.out.elements[element_index].text = Some(at..at + written.len());
@@ -948,8 +947,9 @@ impl<'a> Parser<'a> {
         (code, at)
     }
 
-    /// `parse_text_block`: the rest of this line and the following lines indented deeper than this one.
-    fn text_block(&mut self, body: Body, raw_column: bool, text_indent: usize) {
+    /// `parse_text_block`: the rest of this line and the following lines indented deeper than this one. Whether any such
+    /// line followed; trailing blank lines don't count.
+    fn text_block(&mut self, body: Body, raw_column: bool, text_indent: usize) -> bool {
         let first = self.i;
         let has_first = self.pos < self.end;
         let mut layout = Layout { text_indent: has_first.then_some(text_indent), blank: 0 };
@@ -998,6 +998,7 @@ impl<'a> Parser<'a> {
         if raw_column && has_first && continued {
             self.out.lines[first].raw_column = true;
         }
+        continued
     }
 
     fn body_segment(&mut self, body: Body) {
