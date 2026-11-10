@@ -574,6 +574,22 @@ try {
     /\.ruby-templates\.toml:2:9: warning: `<p>` is not an element name/,
   );
 
+  // Layout/AttributesPerLine splits the start tags over max_line_length and leaves the others.
+  fs.writeFileSync(
+    path.join(tagStyle, ".ruby-templates.toml"),
+    "[Layout.AttributesPerLine]\nenabled = true\nmax_line_length = 40\n",
+  );
+  const perLine =
+    '<ul>\n<li class="a" id="b" data-x="yyyyyyyyyyyyyyy">z</li>\n<li class="a" id="b">z</li>\n</ul>\n';
+  const perLineSplit =
+    '<ul>\n  <li\n    class="a"\n    id="b"\n    data-x="yyyyyyyyyyyyyyy">z</li>\n  <li class="a" id="b">z</li>\n</ul>\n';
+  assert.strictEqual(tagStyleFormat("a.html.erb", perLine), perLineSplit);
+  assert.strictEqual(
+    tagStyleFormat("a.html.erb", perLineSplit),
+    perLineSplit,
+    "stable",
+  );
+
   // Layout/IndentationStyle (ERB tabs, from the file or .editorconfig) and Layout/TrailingWhitespace.
   const layout = path.join(root, "layout");
   fs.mkdirSync(layout);

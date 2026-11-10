@@ -110,6 +110,7 @@ pub const IMPLICIT_DIV: &str = "Style/ImplicitDiv";
 pub const CLASSES_BEFORE_IDS: &str = "Style/ClassesBeforeIds";
 pub const HASH_ATTRIBUTES: &str = "Style/HashAttributes";
 pub const ELEMENT_CONTENT_ON_OWN_LINE: &str = "Layout/ElementContentOnOwnLine";
+pub const ATTRIBUTES_PER_LINE: &str = "Layout/AttributesPerLine";
 
 pub const NO_EMPTY_LINES: &str = "no_empty_lines";
 pub const EMPTY_LINES_STYLE: &str = "empty_lines";
@@ -207,6 +208,7 @@ pub const RULES: &[Rule] = &[
     Rule { options: &[CountOption { key: "max", default: 100 }], ..off_by_default_lint(LINE_LENGTH, TEMPLATES) },
     // Adds whitespace to the page, so it is for the tags where that shows nowhere.
     Rule { lists: &[BLOCK_TAGS], ..format_rule(ELEMENT_CONTENT_ON_OWN_LINE, TEMPLATES, &[], &[], &[]) },
+    format_rule(ATTRIBUTES_PER_LINE, &[Erb], &[], &[CountOption { key: "max_line_length", default: 100 }], &[]),
 ];
 
 pub fn by_name(name: &str) -> Option<&'static Rule> {

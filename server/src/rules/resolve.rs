@@ -4,10 +4,10 @@
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
     by_code, by_name, ChoiceOption, CountOption, Kind, ListOption, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY,
-    ATTRIBUTE_QUOTES, BLOCK_TAGS, BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, ELEMENT_CONTENT_ON_OWN_LINE, EMPTY_LINES, EMPTY_LINES_STYLE,
-    ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES, IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE, PREFER_TURBO_ATTRIBUTES, RULES,
-    SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS, TAG_NAME_CASE, TRAILING_EMPTY_LINES,
-    TRAILING_WHITESPACE, VOID_TAG_CLOSING,
+    ATTRIBUTES_PER_LINE, ATTRIBUTE_QUOTES, BLOCK_TAGS, BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, ELEMENT_CONTENT_ON_OWN_LINE, EMPTY_LINES,
+    EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES, IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE,
+    PREFER_TURBO_ATTRIBUTES, RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS,
+    TAG_NAME_CASE, TRAILING_EMPTY_LINES, TRAILING_WHITESPACE, VOID_TAG_CLOSING,
 };
 use crate::format::{AttributeStyle, IndentStyle, Quote, Settings, Style, VoidClosing};
 use crate::glob::Glob;
@@ -54,6 +54,8 @@ pub struct ResolvedRules {
     hash_attributes: Option<AttributeStyle>,
     /// `Layout/ElementContentOnOwnLine`: the element names it applies to; `None` when the rule is off.
     content_on_own_line: Option<Vec<String>>,
+    /// `Layout/AttributesPerLine`: the longest line a start tag stays on; `None` when the rule is off.
+    attributes_per_line: Option<usize>,
     /// `Layout/LineLength`: the longest line allowed; `None` when the rule is off.
     line_length: Option<usize>,
     /// Nearest first.
@@ -163,6 +165,9 @@ impl ResolvedRules {
             content_on_own_line: by_name(ELEMENT_CONTENT_ON_OWN_LINE)
                 .filter(|rule| !off.contains(rule.name))
                 .map(|rule| words(&files, rule, &BLOCK_TAGS)),
+            attributes_per_line: by_name(ATTRIBUTES_PER_LINE)
+                .filter(|rule| !off.contains(rule.name))
+                .and_then(|rule| rule.options.first().map(|option| count(&files, rule, option))),
             line_length: max_line_length,
             off,
             files,
@@ -225,6 +230,7 @@ impl ResolvedRules {
             classes_before_ids: self.classes_before_ids,
             hash_attributes: self.hash_attributes,
             content_on_own_line: self.content_on_own_line.clone(),
+            attributes_per_line: self.attributes_per_line,
             ..base
         }
     }
@@ -539,6 +545,14 @@ mod tests {
             "[Layout.LineLength]\nenabled = true\nmax = 80\n[Layout.ElementContentOnOwnLine]\nenabled = true\ntags = [\"P\", \"li\"]\n";
         let set = Project::new("options-set", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
         assert_eq!((set.erb("a.html.erb").line_length(), settings(&set)), (Some(80), Some(vec!["p".to_string(), "li".to_string()])));
+        let per_line = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default()).attributes_per_line;
+        assert_eq!(per_line(&off), None);
+        let default_limit =
+            Project::new("per-line-on", &[(".ruby-templates.toml", "[Layout.AttributesPerLine]\nenabled = true\n"), ("a.html.erb", "")]);
+        assert_eq!(per_line(&default_limit), Some(100));
+        let limit = "[Layout.AttributesPerLine]\nenabled = true\nmax_line_length = 60\n";
+        let own_limit = Project::new("per-line-set", &[(".ruby-templates.toml", limit), ("a.html.erb", "")]);
+        assert_eq!(per_line(&own_limit), Some(60));
         let disabled = editor(serde_json::json!({ "erb": { "disabledDiagnostics": ["Layout/LineLength"] } }));
         assert_eq!(set.resolve("a.html.erb", TemplateLang::Erb, &disabled).line_length(), None);
     }

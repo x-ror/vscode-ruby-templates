@@ -44,7 +44,8 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         Style/VoidTagClosing and Style/TagNameCase (all off) set attribute quotes, boolean attributes, the end of void
         tags and the case of tag names. Style/ImplicitDiv, Style/ClassesBeforeIds and Style/HashAttributes (all off) drop
         a div a class or id implies, put Haml classes before ids and write Haml attributes as a hash or in HTML style. Layout/ElementContentOnOwnLine (off) moves the content of the elements in its
-        tags option to a line of its own. Nothing else changes;
+        tags option to a line of its own. Layout/AttributesPerLine (ERB, off) puts each attribute of a start tag longer than its
+        max_line_length on a line of its own. Nothing else changes;
         a file whose structure is in doubt is left as it is, with the reason on stderr. Without --check or --write
         the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.
