@@ -249,13 +249,15 @@ pub(crate) fn format_in(
         keep(element_style::attributes(&source, settings, ruby.grammar), &mut source, &mut notes);
     }
     keep(element_content::apply(lang, &source, settings, extra_engines), &mut source, &mut notes);
+    let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
     if attributes_per_line::is_on(lang, settings) {
-        // Lines are measured where the re-indenter puts them; a file it refuses gets its note from the run below.
-        if let Ok(indented) = format_once(template, &source, settings, extra_engines, &ruby) {
-            keep(attributes_per_line::apply(&indented.text, settings), &mut source, &mut notes);
+        // Lines are measured as the re-indenter left them, and the checks below still compare with the text before the split.
+        match attributes_per_line::apply(&formatted.text, settings) {
+            Ok(Some(split)) => formatted = format_once(template, &split, settings, extra_engines, &ruby)?,
+            Ok(None) => {}
+            Err(note) => notes.push(note),
         }
     }
-    let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
     formatted.notes.extend(notes);
     if formatted.text == *source {
         return Ok(formatted);

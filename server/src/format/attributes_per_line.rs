@@ -43,30 +43,31 @@ pub(super) fn apply(text: &str, settings: &Settings) -> Result<Option<String>, S
 fn split_edits(text: &str, max: usize, unit: &str) -> Vec<Edit> {
     let Some(spans) = tag_spans(text) else { return Vec::new() };
     let erb = ruby::tags(text);
-    let elements = tags::elements(text);
     let eol = dominant_ending(text);
+    // Found when a tag first needs it: most files have no line over the limit.
+    let mut sensitive: Option<Vec<Range<usize>>> = None;
     let mut edits = Vec::new();
     for span in &spans {
         let line_start = text[..span.start].rfind('\n').map_or(0, |at| at + 1);
         let line = text[line_start..].lines().next().unwrap_or_default();
         let indent = leading_ws(line);
         let first_on_line = line_start + indent.len() == span.start;
-        let inside_sensitive = elements.iter().any(|element| {
-            element.open_end <= span.start
-                && span.end <= element.close_start
-                && SENSITIVE.iter().any(|name| element.name.eq_ignore_ascii_case(name))
-        });
         let one_line = !text[span.clone()].contains(['\n', '\r']);
-        if !first_on_line || !one_line || inside_sensitive || width(line) <= max || text[span.start + 1..].starts_with('/') {
+        if !first_on_line || !one_line || width(line) <= max || text[span.start + 1..].starts_with('/') {
             continue;
         }
         let Some((_, parsed)) = read(text, span, &erb) else { continue };
+        if parsed.written.len() < MIN_ATTRIBUTES {
+            continue;
+        }
         let values: Vec<&Range<usize>> = parsed.written.iter().filter_map(|attribute| attribute.value.as_ref()).collect();
-        let erb_only_in_values = erb
+        let first_erb = erb.partition_point(|tag| tag.start < span.start);
+        let erb_only_in_values = erb[first_erb..]
             .iter()
-            .filter(|tag| tag.start >= span.start && tag.end <= span.end)
+            .take_while(|tag| tag.end <= span.end)
             .all(|tag| prints(tag) && values.iter().any(|value| value.start <= tag.start && tag.end <= value.end));
-        if parsed.written.len() < MIN_ATTRIBUTES || !erb_only_in_values {
+        let ranges = sensitive.get_or_insert_with(|| sensitive_ranges(text));
+        if !erb_only_in_values || ranges.iter().any(|range| range.start <= span.start && span.end <= range.end) {
             continue;
         }
         let separator = format!("{eol}{indent}{unit}");
@@ -81,6 +82,16 @@ fn split_edits(text: &str, max: usize, unit: &str) -> Vec<Edit> {
         }
     }
     edits
+}
+
+/// The content of the elements that show their whitespace.
+fn sensitive_ranges(text: &str) -> Vec<Range<usize>> {
+    let sensitive = |name: &str| SENSITIVE.iter().any(|candidate| name.eq_ignore_ascii_case(candidate));
+    tags::elements(text)
+        .into_iter()
+        .filter(|element| sensitive(&element.name))
+        .map(|element| element.open_end..element.close_start)
+        .collect()
 }
 
 /// Whether the tag only prints: `<%= %>` can't be control flow.
@@ -297,6 +308,14 @@ mod tests {
             run("<ul>\n<li class='a-long-class' id='main-card-element' data-controller='toggle' hidden>x</li>\n</ul>\n", &tabs),
             "<ul>\n\t<li\n\t\tclass=\"a-long-class\"\n\t\tid=\"main-card-element\"\n\t\tdata-controller=\"toggle\"\n\t\thidden>x</li>\n</ul>\n"
         );
+    }
+
+    #[test]
+    fn a_large_file_with_nothing_to_split_is_read_in_linear_time() {
+        let text = "<div class=\"card\" id=\"main\">x</div>\n".repeat(20_000);
+        let started = std::time::Instant::now();
+        assert!(split_edits(&text, 100, "  ").is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
     }
 
     #[test]
