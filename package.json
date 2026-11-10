@@ -713,6 +713,7 @@
                   "Html/DuplicateId",
                   "Html/DuplicateAttribute",
                   "Html/AnchorHref",
+                  "Html/NestedInteractive",
                   "A11y/IframeTitle",
                   "A11y/GenericLinkText",
                   "Rails/MissingPartial",
@@ -730,6 +731,7 @@
                   "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
+                  "Stimulus/UnknownTargetOrAction",
                   "Style/ErbTrimMode",
                   "Layout/LineLength"
                 ]
@@ -768,6 +770,7 @@
                   "Html/VoidChildren",
                   "Html/DuplicateAttribute",
                   "Html/AnchorHref",
+                  "Html/NestedInteractive",
                   "A11y/IframeTitle",
                   "A11y/GenericLinkText",
                   "Rails/MissingPartial",
@@ -784,6 +787,7 @@
                   "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
+                  "Stimulus/UnknownTargetOrAction",
                   "Layout/LineLength"
                 ]
               },
@@ -838,6 +842,7 @@
                   "Html/VoidChildren",
                   "Html/DuplicateAttribute",
                   "Html/AnchorHref",
+                  "Html/NestedInteractive",
                   "A11y/IframeTitle",
                   "A11y/GenericLinkText",
                   "Rails/MissingPartial",
@@ -854,6 +859,7 @@
                   "Rails/UnknownRoute",
                   "Turbo/PermanentRequiresId",
                   "Stimulus/UnknownController",
+                  "Stimulus/UnknownTargetOrAction",
                   "Layout/LineLength"
                 ]
               },

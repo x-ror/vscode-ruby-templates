@@ -20,6 +20,7 @@ pub mod routes;
 pub mod schema;
 pub mod slots;
 pub mod stimulus;
+pub mod stimulus_controller;
 pub mod unknown_route;
 pub mod unsafe_output;
 pub mod view_lints;

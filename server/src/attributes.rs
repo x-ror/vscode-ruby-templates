@@ -25,6 +25,8 @@ pub(crate) struct Element {
     pub content: Option<Range<usize>>,
     /// ERB in the tag, a splat or a hash that isn't a literal may set attributes this reading doesn't see.
     pub open: bool,
+    /// A Rails helper called with a block, which writes the element's content.
+    pub block: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +117,7 @@ fn erb_elements(text: &str) -> Vec<Element> {
         content: None,
         name: tag.name,
         open: tag.dynamic,
+        block: false,
         attributes: tag.attrs.into_iter().filter(|attribute| !attribute.name.is_empty()).map(attribute).collect(),
     };
     html_lint::start_tags(text, &regions).into_iter().map(element).collect()
@@ -265,6 +268,7 @@ impl Helpers<'_> {
             name: element_name.to_ascii_lowercase(),
             at: at.unwrap_or_default(),
             text: text.map(|(_, range)| range),
+            block: call.block().is_some_and(|block| block.as_block_node().is_some()),
             ..Element::default()
         };
         let options = arguments.last().and_then(|node| {

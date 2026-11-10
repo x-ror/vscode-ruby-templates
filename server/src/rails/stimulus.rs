@@ -24,7 +24,7 @@ const CONTROLLER_SUFFIXES: [&str; 10] = [
     "-controller.ts",
     "-controller.tsx",
 ];
-const SCRIPT_EXTENSIONS: [&str; 7] = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts"];
+pub(crate) const SCRIPT_EXTENSIONS: [&str; 7] = ["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts"];
 
 // `data-controller="a b"`, `"data-action": "…"`, `"data-controller" => "…"`.
 static ATTR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"data-(controller|action)["']?\s*(?:=>|=|:)\s*["']([^"']*)["']"#).unwrap());
@@ -40,7 +40,8 @@ static OPEN_VALUE: LazyLock<Regex> = LazyLock::new(|| {
 // An unfinished `data-x-target="…` or `x_target: "…` value in a `data:` hash.
 static OPEN_TARGET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?:data-([\w-]+)-target["']?\s*(?:=>|=|:)|\bdata:\s*\{[^}]*\b(\w+)_target:)\s*["']([^"']*)$"#).unwrap());
-static STATIC_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
+static STATIC_LIST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"static\s+(?:(?:readonly|override|public)\s+)*(targets|classes|outlets)\s*=\s*\[([^\]]*)\]").unwrap());
 static STATIC_VALUES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"static\s+values\s*=\s*\{").unwrap());
 // A Haml or Slim tag head and the attribute wrapper right after it: `%form(`, `div.card{`, `a[`.
 static TAG_WRAPPER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[ \t]*[%.#]?[\w:-]+(?:[.#][\w:-]+)*[(\[{]").unwrap());
@@ -115,7 +116,7 @@ fn last_token(value: regex::Match<'_>) -> (usize, &str) {
     (value.start() + start, &value.as_str()[start..])
 }
 
-fn is_name_char(c: char) -> bool {
+pub(crate) fn is_name_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$'
 }
 
@@ -171,7 +172,7 @@ fn static_values(source: &str) -> Vec<String> {
 }
 
 /// The length of the string literal `rest` starts with, quotes included; a backslash escapes the next character.
-fn string_len(rest: &str, quote: char) -> usize {
+pub(crate) fn string_len(rest: &str, quote: char) -> usize {
     let mut chars = rest.char_indices().skip(1);
     while let Some((at, c)) = chars.next() {
         match c {
@@ -345,9 +346,10 @@ impl Registered {
 /// `registered` per app folder: it walks app/javascript and reads its scripts, which each diagnostics run would repeat.
 static REGISTERED: LazyLock<DashMap<PathBuf, Option<Arc<Registered>>>> = LazyLock::new(DashMap::new);
 
-/// Drops what `registered` remembers, when a watched file may have changed it.
+/// Drops what `registered` and the controllers read from their files remember, when a watched file may have changed it.
 pub fn clear_cache() {
     REGISTERED.clear();
+    super::stimulus_controller::clear_cache();
 }
 
 /// What the app registers, remembered until `clear_cache`. `None` when that can't be told: no controllers folder, or

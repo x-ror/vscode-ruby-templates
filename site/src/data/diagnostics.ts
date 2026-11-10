@@ -186,6 +186,26 @@ export const diagnostics: Diagnostic[] = [
     column: 2,
   },
   {
+    code: "Html/NestedInteractive",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      "An interactive element inside another: a link in a link, a form in a form.",
+    explanation:
+      "Reported on the inner element's tag name or helper name. A link or button (also `link_to`, `tag.a`, `button_tag` with a block) can't hold another link, a button, an `<input>` that isn't hidden, a `<select>`, `<textarea>`, `<label>`, `<iframe>`, `<details>`, controls of `<audio>` and `<video>`, or an `<img usemap>` (HTML 4.5.1); a form can't hold a form, and `button_to` renders one (HTML 4.10.3). Only nesting the template writes is reported: partials rendered inside the element, a `yield`, elements started and ended in different branches of an `if`, and anything in an `<svg>` or `<template>` are left alone, and so are a `<label>` around its `<input>` and a hidden input. Templates that output HTML only.",
+    example: {
+      file: "app/views/users/show.html.erb",
+      lang: "erb",
+      code: `<%= link_to user_path(user) do %>
+  <%= link_to "Edit", edit_user_path(user) %>
+<% end %>
+`,
+    },
+    message:
+      "`<a>` inside `<a>`: interactive content can't be nested (HTML 4.5.1)",
+    line: 2,
+    column: 7,
+  },
+  {
     code: "A11y/IframeTitle",
     languages: ["erb", "haml", "slim"],
     summary:
@@ -761,6 +781,26 @@ export const diagnostics: Diagnostic[] = [
       "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?",
     line: 1,
     column: 23,
+  },
+  {
+    code: "Stimulus/UnknownTargetOrAction",
+    languages: ["erb", "haml", "slim"],
+    summary:
+      "A `data-*-target` or `data-action` method that its Stimulus controller doesn't have.",
+    explanation:
+      'Static `data-<controller>-target` names are checked against the controller\'s `static targets = ["…"]`, and the method of each `data-action` descriptor against the members its class defines (also `data: { search_target: "…", action: "…" }` in Haml and in the options of the Rails helpers). The closest name within two edits is offered. Only a controller that is one file in app/javascript/controllers and can be read with confidence is checked: a class that extends something other than `Controller` (a base controller is followed when imported by a relative path), computed member names, decorators, mixins and a `static targets` that is not a plain list skip it. Rails projects only, in templates under app/views.',
+    example: {
+      file: "app/views/users/index.html.erb",
+      lang: "erb",
+      code: `<div data-controller="search">
+  <input data-search-target="querry">
+</div>
+`,
+    },
+    message:
+      "`search` controller has no target `querry`; did you mean `query`?",
+    line: 2,
+    column: 30,
   },
   {
     code: "Style/ErbTrimMode",
