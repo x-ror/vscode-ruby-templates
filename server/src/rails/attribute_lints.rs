@@ -1,25 +1,37 @@
-//! Lints on the attributes an element is written with: `data-turbo-permanent` without an `id`, and a `data-controller` name
-//! that no Stimulus controller has.
+//! Lints on the attributes an element is written with: `data-turbo-permanent` without an `id`, a `data-controller` name that
+//! no Stimulus controller has, and a target or action that names something its controller doesn't have.
 
 use crate::attributes::{Element, Value};
-use crate::rails::stimulus::{Registered, CONTROLLERS_DIR};
+use crate::rails::stimulus::{is_name_char, Registered, CONTROLLERS_DIR};
+use crate::rails::stimulus_controller::Members;
 use crate::util::{self, edit_distance, LineIndex};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use tower_lsp_server::ls_types::Diagnostic;
 
 pub(crate) const PERMANENT_REQUIRES_ID: &str = "Turbo/PermanentRequiresId";
 pub(crate) const UNKNOWN_CONTROLLER: &str = "Stimulus/UnknownController";
+pub(crate) const UNKNOWN_TARGET_OR_ACTION: &str = "Stimulus/UnknownTargetOrAction";
+/// The codes this module reports.
+pub(crate) const LINTS: [&str; 3] = [PERMANENT_REQUIRES_ID, UNKNOWN_CONTROLLER, UNKNOWN_TARGET_OR_ACTION];
 
 const PERMANENT: &str = "data-turbo-permanent";
 const CONTROLLER: &str = "data-controller";
+const ACTION: &str = "data-action";
 const ID: &str = "id";
 /// A name this many edits from the typed one is offered as the one meant.
 const MAX_SUGGESTION_DISTANCE: usize = 2;
 
 /// The findings in `elements`. `registered` lists the controllers the app has and is asked only when a template names one;
-/// none means they can't be told, and no name is reported.
-pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnOnce() -> Option<Arc<Registered>>) -> Vec<Diagnostic> {
+/// none means they can't be told, and no name is reported. `controller` reads what the controller of an identifier declares;
+/// none means it can't be read with confidence, and nothing is reported for it.
+pub(crate) fn diagnostics(
+    text: &str,
+    elements: &[Element],
+    registered: impl FnOnce() -> Option<Arc<Registered>>,
+    controller: impl Fn(&str) -> Option<Arc<Members>>,
+) -> Vec<Diagnostic> {
     let index = LineIndex::new(text);
     let message = "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
     let mut out: Vec<Diagnostic> = elements
@@ -34,6 +46,12 @@ pub(crate) fn diagnostics(text: &str, elements: &[Element], registered: impl FnO
             let message = unknown_message(name, &known.names);
             util::coded(util::warning(index.range(at.start, at.end), message), UNKNOWN_CONTROLLER)
         }));
+    }
+    let mut controllers: HashMap<&str, Option<Arc<Members>>> = HashMap::new();
+    for mention in elements.iter().flat_map(|element| mentions(text, element)) {
+        let members = controllers.entry(mention.controller).or_insert_with(|| controller(mention.controller));
+        let Some(message) = members.as_deref().and_then(|members| mention.unknown_message(members)) else { continue };
+        out.push(util::coded(util::warning(index.range(mention.at.start, mention.at.end), message), UNKNOWN_TARGET_OR_ACTION));
     }
     out
 }
@@ -53,27 +71,81 @@ fn controller_names<'a>(text: &'a str, element: &Element) -> Vec<(Range<usize>, 
     let ranges = values.filter_map(|attribute| if let Value::Text(range) = &attribute.value { Some(range.clone()) } else { None });
     ranges
         .flat_map(|range| {
-            let value = &text[range.clone()];
-            value.split_whitespace().map(move |name| {
-                let start = range.start + (name.as_ptr() as usize - value.as_ptr() as usize);
-                (start..start + name.len(), name)
-            })
+            let start = range.start;
+            words(&text[range]).map(move |(offset, name)| (start + offset..start + offset + name.len(), name))
         })
         .filter(|(_, name)| name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')))
         .collect()
 }
 
+/// The space-separated words of a value, each with its offset in it.
+fn words(value: &str) -> impl Iterator<Item = (usize, &str)> {
+    value.split_whitespace().map(move |word| (word.as_ptr() as usize - value.as_ptr() as usize, word))
+}
+
 fn unknown_message(name: &str, known: &[String]) -> String {
     let mut message = format!("No Stimulus controller `{name}` in app/{CONTROLLERS_DIR}");
+    message.push_str(&suggestion(name, known));
+    message
+}
+
+/// `; did you mean `x`?` for the name of `known` nearest to `name`, when one is near enough.
+fn suggestion(name: &str, known: &[String]) -> String {
     let near = known
         .iter()
         .map(|candidate| (edit_distance(name, candidate), candidate))
         .filter(|&(distance, _)| distance <= MAX_SUGGESTION_DISTANCE && distance < name.chars().count())
         .min_by_key(|&(distance, _)| distance);
-    if let Some((_, candidate)) = near {
-        message.push_str(&format!("; did you mean `{candidate}`?"));
+    near.map_or_else(String::new, |(_, candidate)| format!("; did you mean `{candidate}`?"))
+}
+
+/// A target or a method an element names for the Stimulus controller `controller`.
+struct Mention<'a> {
+    controller: &'a str,
+    name: &'a str,
+    at: Range<usize>,
+    is_target: bool,
+}
+
+impl Mention<'_> {
+    /// What is wrong with the mention, when `members` of its controller lack the name.
+    fn unknown_message(&self, members: &Members) -> Option<String> {
+        let (kind, known, declared) = if self.is_target {
+            ("target", members.targets.as_slice(), members.targets.iter().any(|target| target == self.name))
+        } else {
+            ("method", members.methods.as_slice(), members.has_method(self.name))
+        };
+        let controller = self.controller;
+        (!declared).then(|| format!("`{controller}` controller has no {kind} `{}`{}", self.name, suggestion(self.name, known)))
     }
-    message
+}
+
+/// The targets a static `data-<controller>-target` names and the methods a static `data-action` calls, where each is written.
+fn mentions<'a>(text: &'a str, element: &'a Element) -> Vec<Mention<'a>> {
+    let mut found = Vec::new();
+    for attribute in &element.attributes {
+        let Value::Text(range) = &attribute.value else { continue };
+        let at = |offset: usize, name: &str| range.start + offset..range.start + offset + name.len();
+        let words = words(&text[range.clone()]);
+        if let Some(controller) = attribute.name.strip_prefix("data-").and_then(|name| name.strip_suffix("-target")) {
+            found.extend(words.map(|(offset, name)| Mention { controller, name, at: at(offset, name), is_target: true }));
+        } else if attribute.name == ACTION {
+            for (offset, descriptor) in words {
+                let Some((controller, method_offset, name)) = action_method(descriptor) else { continue };
+                found.push(Mention { controller, name, at: at(offset + method_offset, name), is_target: false });
+            }
+        }
+    }
+    found
+}
+
+/// The controller identifier and the method of an action descriptor (`click->search#go:prevent`, `search#go`), with the
+/// method's offset in the descriptor.
+fn action_method(descriptor: &str) -> Option<(&str, usize, &str)> {
+    let start = descriptor.find("->").map_or(0, |at| at + "->".len());
+    let (controller, after) = descriptor[start..].split_once('#')?;
+    let method = after.split(':').next().filter(|method| !method.is_empty() && method.chars().all(is_name_char))?;
+    Some((controller, start + controller.len() + "#".len(), method))
 }
 
 #[cfg(test)]
@@ -84,6 +156,15 @@ mod tests {
     use crate::lang::TemplateLang::{self, Erb, Haml, Slim};
 
     fn run(lang: TemplateLang, text: &str, controllers: Option<&[&str]>) -> Vec<(String, String)> {
+        run_with(lang, text, controllers, |_| None)
+    }
+
+    fn run_with(
+        lang: TemplateLang,
+        text: &str,
+        controllers: Option<&[&str]>,
+        members: impl Fn(&str) -> Option<Arc<Members>>,
+    ) -> Vec<(String, String)> {
         let version = ruby_prism::Version::Latest;
         let mut elements = markup_elements(lang, text, &[], version);
         let compiled = code_context::compiled(lang, text, None, &[]).unwrap();
@@ -92,12 +173,11 @@ mod tests {
         elements.extend(helper_elements(&compiled, &parsed.node()));
         let index = LineIndex::new(text);
         let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
-        diagnostics(text, &elements, || {
-            controllers.map(|names| Arc::new(Registered::new(names.iter().map(|name| name.to_string()).collect())))
-        })
-        .into_iter()
-        .map(|d| (format!("{} {}", util::code(&d).unwrap(), d.message), text[at(d.range.start)..at(d.range.end)].to_string()))
-        .collect()
+        let registered = || controllers.map(|names| Arc::new(Registered::new(names.iter().map(|name| name.to_string()).collect())));
+        diagnostics(text, &elements, registered, members)
+            .into_iter()
+            .map(|d| (format!("{} {}", util::code(&d).unwrap(), d.message), text[at(d.range.start)..at(d.range.end)].to_string()))
+            .collect()
     }
 
     fn permanent(lang: TemplateLang, text: &str) -> Vec<String> {
@@ -232,5 +312,85 @@ mod tests {
     #[test]
     fn nothing_is_reported_when_the_controllers_cannot_be_told() {
         assert_eq!(run(Erb, "<div data-controller=\"nope\"></div>", None), Vec::new());
+    }
+
+    /// `search` has the targets `query` and `results` and the methods `submit` and `reset`; no other controller can be read.
+    fn search_only(identifier: &str) -> Option<Arc<Members>> {
+        let list = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+        (identifier == "search").then(|| Arc::new(Members { targets: list(&["query", "results"]), methods: list(&["submit", "reset"]) }))
+    }
+
+    fn mentions_in(lang: TemplateLang, text: &str) -> Vec<(String, String)> {
+        let found = run_with(lang, text, Some(&["search"]), search_only);
+        found.into_iter().filter(|(code, _)| code.starts_with(UNKNOWN_TARGET_OR_ACTION)).collect()
+    }
+
+    #[test]
+    fn unknown_targets_and_methods_are_flagged_with_the_nearest_name() {
+        let found = mentions_in(Erb, "<input data-search-target=\"resluts\" data-action=\"input->search#submitt\">");
+        assert_eq!(
+            found,
+            [
+                (
+                    "Stimulus/UnknownTargetOrAction `search` controller has no target `resluts`; did you mean `results`?".into(),
+                    "resluts".into()
+                ),
+                (
+                    "Stimulus/UnknownTargetOrAction `search` controller has no method `submitt`; did you mean `submit`?".into(),
+                    "submitt".into()
+                ),
+            ]
+        );
+        let far = mentions_in(Erb, "<p data-search-target=\"zzzzzz\"></p>");
+        assert_eq!(far[0].0, "Stimulus/UnknownTargetOrAction `search` controller has no target `zzzzzz`");
+        for (lang, text, flagged) in [
+            (Erb, "<p data-search-target=\"query other\"></p>", vec!["other"]),
+            (Erb, "<p data-action=\"search#go\"></p>", vec!["go"]),
+            (Erb, "<p data-action=\"click->search#submit  keydown.enter->search#nope:prevent\"></p>", vec!["nope"]),
+            (Erb, "<p data-action='resize@window->search#nope scroll@document->search#reset'></p>", vec!["nope"]),
+            (Erb, "<p data-action=\"click->search#go:stop:once\"></p>", vec!["go"]),
+            (Erb, "<%= tag.input data: { search_target: \"x\", action: \"search#go\" } %>", vec!["x", "go"]),
+            (Erb, "<%= text_field_tag :q, nil, data: { action: \"input->search#go\" } %>", vec![]),
+            (Erb, "<%= link_to \"x\", y, data: { action: \"search#go\" } %>", vec!["go"]),
+            (Erb, "<%= form_with model: x, data: { search_target: \"x\" } do |f| %><% end %>", vec!["x"]),
+            (Haml, "%input{data: {search_target: \"x\", action: \"click->search#go\"}}\n", vec!["x", "go"]),
+            (Haml, "%input{\"data-search-target\" => \"x\"}\n", vec!["x"]),
+            (Haml, "%input(data-action=\"search#go\")\n", vec!["go"]),
+            (Slim, "input data-search-target=\"x\" data-action=\"search#go\"\n", vec!["x", "go"]),
+            (Slim, "input[data-search-target=\"x\"]\n", vec!["x"]),
+        ] {
+            let found = mentions_in(lang, text);
+            assert_eq!(found.iter().map(|(_, flagged)| flagged.as_str()).collect::<Vec<_>>(), flagged, "{text}");
+        }
+    }
+
+    #[test]
+    fn known_dynamic_and_unreadable_targets_and_methods_are_left_alone() {
+        for (lang, text) in [
+            (Erb, "<p data-search-target=\"query results\" data-action=\"click->search#submit search#reset\"></p>"),
+            (Erb, "<p data-action=\"click->search#connect search#disconnect search#initialize\"></p>"),
+            (Erb, "<p data-search-target=\"<%= name %>\" data-action=\"search#<%= method %>\"></p>"),
+            (Erb, "<p data-action=\"search#a<%= b %>\" data-search-target=\"a<%= b %>\"></p>"),
+            (Erb, "<%= tag.p data: { search_target: name, action: \"search##{name}\" } %>"),
+            (Erb, "<p data-other-target=\"x\" data-action=\"click->other#go\"></p>"),
+            (Erb, "<p data-bs-target=\"#modal\" data-bs-toggle=\"modal\"></p>"),
+            (Erb, "<p data-action=\"click->search\"></p>"),
+            (Erb, "<p data-action=\"click->search#\"></p>"),
+            (Erb, "<p data-action=\"search#a-b\"></p>"),
+            (Erb, "<p data-action=\"Search#x\" data-Other-target=\"x\"></p>"),
+            (Erb, "<p data-search_target=\"x\"></p>"),
+            (Erb, "<p data-search-target></p>"),
+            (Erb, "<p data-search-targets=\"x\" data-search-target-value=\"x\"></p>"),
+            (Erb, "<%= render \"x\", data: { search_target: \"x\", action: \"search#go\" } %>"),
+            (Haml, "%input{data: {search_target: name, action: \"click->search##{method}\"}}\n"),
+            (Slim, "input data-action=\"search##{method}\" data-search-target=name\n"),
+        ] {
+            assert_eq!(mentions_in(lang, text), Vec::new(), "{text}");
+        }
+    }
+
+    #[test]
+    fn targets_and_methods_are_not_looked_up_for_controllers_that_cannot_be_read() {
+        assert_eq!(run(Erb, "<p data-search-target=\"nope\" data-action=\"search#nope\"></p>", Some(&["search"])), Vec::new());
     }
 }

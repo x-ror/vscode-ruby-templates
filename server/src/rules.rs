@@ -162,6 +162,7 @@ pub const RULES: &[Rule] = &[
     lint("Html/VoidChildren", HAML_SLIM, "void-children"),
     new_lint("Html/DuplicateAttribute", TEMPLATES),
     new_lint("Html/AnchorHref", TEMPLATES),
+    new_lint("Html/NestedInteractive", TEMPLATES),
     new_lint("A11y/IframeTitle", TEMPLATES),
     new_lint("A11y/GenericLinkText", TEMPLATES),
     lint("Rails/MissingPartial", ALL, "unresolved-render"),
@@ -179,6 +180,7 @@ pub const RULES: &[Rule] = &[
     new_lint("Rails/UnknownRoute", TEMPLATES),
     new_lint("Turbo/PermanentRequiresId", TEMPLATES),
     new_lint("Stimulus/UnknownController", TEMPLATES),
+    new_lint("Stimulus/UnknownTargetOrAction", TEMPLATES),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -261,6 +263,7 @@ mod tests {
             include_str!("rails/missing_translation.rs"),
             include_str!("rails/unknown_route.rs"),
             include_str!("element_lints.rs"),
+            include_str!("nested_interactive.rs"),
             include_str!("line_length.rs"),
             include_str!("erb/output_control_flow.rs"),
             include_str!("haml/indent.rs"),

@@ -11,14 +11,14 @@ use crate::rails::project::{Framework, Project, Projects};
 use crate::rails::render_call::HamlPipes;
 use crate::rails::{
     attribute_lints, controller_classes, i18n, missing_translation, output_lints, partials, paths, render_refs, routes, stimulus,
-    unknown_route, unsafe_output, view_lints,
+    stimulus_controller, unknown_route, unsafe_output, view_lints,
 };
 use crate::ruby::generated::RUBY_SYNTAX;
 use crate::ruby::strict_locals;
 use crate::ruby::strict_locals::RubyContext;
 use crate::rules::resolve::ResolvedRules;
 use crate::slim;
-use crate::{element_lints, erb, util};
+use crate::{element_lints, erb, nested_interactive, util};
 use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,13 +29,14 @@ pub(crate) const UNRESOLVED_RENDER: &str = "Rails/MissingPartial";
 pub(crate) const STRICT_LOCALS: &str = "Rails/StrictLocals";
 /// Layouts take what the controller sets; their partials are the page's frame.
 const LAYOUTS_FOLDER: &str = "layouts";
-const ELEMENT_LINTS: [&str; 6] = [
+const ELEMENT_LINTS: [&str; 7] = [
     html_lint::code::IMG_MISSING_ALT,
     html_lint::code::DUPLICATE_ID,
     element_lints::DUPLICATE_ATTRIBUTE,
     element_lints::ANCHOR_HREF,
     element_lints::IFRAME_TITLE,
     element_lints::GENERIC_LINK_TEXT,
+    nested_interactive::NESTED_INTERACTIVE,
 ];
 const STRICT_LOCALS_TEMPLATE_SUFFIX_SINCE: &str = "7.2";
 
@@ -91,8 +92,7 @@ pub(crate) fn diagnostics_in(
     let options = ruby_prism::Options::default().version(ruby.grammar).build();
     let parsed = compiled.as_ref().and_then(|compiled| compiled.parse(&options));
     let tree = compiled.as_ref().zip(parsed.as_ref()).map(|(compiled, parsed)| RubyTree { compiled, root: parsed.node() });
-    let attributes_wanted = views_root.is_some()
-        && (rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER));
+    let attributes_wanted = views_root.is_some() && attribute_lints::LINTS.iter().any(|code| rules.reports(code));
     // An ERB template that isn't HTML has no start tags to read.
     let markup = if (elements_wanted || attributes_wanted) && (doc.lang != TemplateLang::Erb || html) {
         attributes::markup_elements(doc.lang, &doc.text, rules.extra_engines(), ruby.grammar)
@@ -104,6 +104,7 @@ pub(crate) fn diagnostics_in(
     let helpers = helpers.unwrap_or_default();
     if elements_wanted {
         out.extend(element_lints::diagnostics(doc.lang, &doc.text, &markup, &helpers));
+        out.extend(nested_interactive::diagnostics(doc.lang, &doc.text, &markup, &helpers));
     }
     if let (Some(path), Some(views_root), Some(tree)) = (&path, &views_root, &tree) {
         out.extend(view_diagnostics(doc, rules, path, views_root, tree, &[markup.as_slice(), helpers.as_slice()].concat(), &ruby));
@@ -146,6 +147,7 @@ fn view_lints_root(rules: &ResolvedRules, project: &Project, path: &Path) -> Opt
         view_lints::RENDER_IN_LOOP,
         attribute_lints::PERMANENT_REQUIRES_ID,
         attribute_lints::UNKNOWN_CONTROLLER,
+        attribute_lints::UNKNOWN_TARGET_OR_ACTION,
         missing_translation::I18N_MISSING_KEY,
         unknown_route::UNKNOWN_ROUTE,
     ];
@@ -174,9 +176,13 @@ fn view_diagnostics(
     let mut out = output_lints::diagnostics(doc.lang, &doc.text, tree.compiled, &tree.root);
     out.extend(view_lints::diagnostics(&doc.text, &view, tree.compiled, &tree.root));
     out.extend(unsafe_output::diagnostics(doc.lang, &doc.text, tree.compiled, &tree.root));
-    if rules.reports(attribute_lints::PERMANENT_REQUIRES_ID) || rules.reports(attribute_lints::UNKNOWN_CONTROLLER) {
+    if attribute_lints::LINTS.iter().any(|code| rules.reports(code)) {
         let registered = || rules.reports(attribute_lints::UNKNOWN_CONTROLLER).then(|| stimulus::registered(path)).flatten();
-        out.extend(attribute_lints::diagnostics(&doc.text, elements, registered));
+        let controller = |identifier: &str| {
+            let wanted = rules.reports(attribute_lints::UNKNOWN_TARGET_OR_ACTION);
+            wanted.then(|| stimulus_controller::controller(path, identifier)).flatten()
+        };
+        out.extend(attribute_lints::diagnostics(&doc.text, elements, registered, controller));
     }
     out
 }
@@ -538,6 +544,60 @@ mod tests {
             assert!(codes(path, lang, text, &options).is_empty(), "{path}");
         }
         assert_eq!(codes("show.html.haml", TemplateLang::Haml, haml, &disabling_haml("A11y/IframeTitle")), ["Html/AnchorHref"]);
+    }
+
+    #[test]
+    fn nested_interactive_content_is_reported_in_html_templates_only() {
+        let codes = |path: &str, lang, text: &str, options: &Options| -> Vec<String> {
+            let uri = format!("file:///v/{path}").parse::<Uri>().unwrap();
+            let doc = Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            diagnostics(&uri, &doc, options).iter().filter_map(|d| util::code(d).map(String::from)).collect()
+        };
+        let options = Options::default();
+        let nested = ["Html/NestedInteractive"];
+        assert_eq!(codes("show.html.erb", TemplateLang::Erb, "<a href=\"/x\"><button>x</button></a>\n", &options), nested);
+        assert_eq!(codes("show.html.haml", TemplateLang::Haml, "= link_to x do\n  = button_to \"y\", z\n", &options), nested);
+        assert_eq!(codes("show.html.slim", TemplateLang::Slim, "form\n  form\n", &options), nested);
+        assert!(codes("show.js.erb", TemplateLang::Erb, "<a href=\"/x\"><button>x</button></a>\n", &options).is_empty());
+        let off = Options::from_init(Some(&serde_json::json!({ "slim": { "disabledDiagnostics": nested } }))).0;
+        assert!(codes("show.html.slim", TemplateLang::Slim, "form\n  form\n", &off).is_empty());
+    }
+
+    #[test]
+    fn stimulus_targets_and_actions_are_checked_against_the_controller_file() {
+        let root = std::env::temp_dir().join(format!("rt-stimulus-members-lint-{}", std::process::id()));
+        let controllers = root.join("app/javascript/controllers");
+        std::fs::create_dir_all(&controllers).unwrap();
+        std::fs::create_dir_all(root.join("app/views/users")).unwrap();
+        std::fs::write(root.join("Gemfile.lock"), format!("{GEM_LOCK}    actionview (8.0.2)\n")).unwrap();
+        let stimulus_import = "import { Controller } from \"@hotwired/stimulus\"\n";
+        let source =
+            format!("{stimulus_import}export default class extends Controller {{\n  static targets = [\"results\"]\n  submit() {{}}\n}}\n");
+        std::fs::write(controllers.join("search_controller.js"), source).unwrap();
+        std::fs::write(controllers.join("base_controller.js"), "import Base from \"lib/base\"\nexport default class extends Base {}\n")
+            .unwrap();
+        let found = |lang, name: &str, text: &str, options: &Options| {
+            let uri = crate::util::file_uri(root.join(name)).unwrap();
+            let doc = Doc { lang, text: text.into(), plain_erb: false, percent_lines: false, version: 0 };
+            let all = diagnostics(&uri, &doc, options);
+            all.iter().filter(|d| util::code(d) == Some("Stimulus/UnknownTargetOrAction")).map(|d| d.message.clone()).collect::<Vec<_>>()
+        };
+        let options = Options::default();
+        let erb = "<p data-search-target=\"resluts\" data-action=\"search#submitt\" data-base-target=\"x\"></p>\n";
+        let messages = found(TemplateLang::Erb, "app/views/users/show.html.erb", erb, &options);
+        assert_eq!(
+            messages,
+            [
+                "`search` controller has no target `resluts`; did you mean `results`?",
+                "`search` controller has no method `submitt`; did you mean `submit`?"
+            ]
+        );
+        let haml = "%p{data: {search_target: \"results\", action: \"click->search#submit\"}}\n%p{data: {search_target: \"x\"}}\n";
+        assert_eq!(found(TemplateLang::Haml, "app/views/users/show.html.haml", haml, &options).len(), 1);
+        assert!(found(TemplateLang::Erb, "lib/templates/show.html.erb", erb, &options).is_empty(), "not a view");
+        let off = Options::from_init(Some(&serde_json::json!({ "erb": { "disabledDiagnostics": ["Stimulus/UnknownTargetOrAction"] } }))).0;
+        assert!(found(TemplateLang::Erb, "app/views/users/show.html.erb", erb, &off).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     fn disabling_haml(code: &str) -> Options {

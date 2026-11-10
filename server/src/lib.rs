@@ -16,6 +16,7 @@ mod html;
 mod lang;
 mod line_length;
 mod lsp;
+mod nested_interactive;
 mod options;
 mod outline;
 mod partial_rename;

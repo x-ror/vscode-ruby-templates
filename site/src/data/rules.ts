@@ -108,6 +108,23 @@ const LINK_TEXT_MESSAGE =
   "Link text `Click here` says nothing out of context; name where the link goes (WCAG 2.4.9, F84)";
 const CONTROLLER_MESSAGE =
   "No Stimulus controller `serch` in app/javascript/controllers; did you mean `search`?";
+const TARGET_MESSAGE =
+  "`search` controller has no target `querry`; did you mean `query`?";
+const METHOD_MESSAGE =
+  "`search` controller has no method `sbumit`; did you mean `submit`?";
+const SEARCH_CONTROLLER = text(
+  'import { Controller } from "@hotwired/stimulus"',
+  "",
+  "export default class extends Controller {",
+  '  static targets = ["query"]',
+  "",
+  "  submit() {}",
+  "}",
+);
+const NESTED_MESSAGE =
+  "`<a>` inside `<a>`: interactive content can't be nested (HTML 4.5.1)";
+const NESTED_FORM_MESSAGE =
+  "`<form>` inside `<form>`: a form can't contain another form (HTML 4.10.3)";
 
 const I18N_MESSAGE =
   "Translation `users.index.titel` is missing in the `en` locale; did you mean `.title`?";
@@ -2151,8 +2168,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 4,
+    status: "available",
+    code: "Stimulus/UnknownTargetOrAction",
+    today:
+      'Checks the static `data-<controller>-target` names (several may be separated by spaces) against the `static targets = ["…"]` of the controller, and each method of `data-action` (`click->search#go`, `search#go`, several descriptors, `:prevent`-style options, `@window` and `@document`, key filters such as `keydown.enter->`) against the methods, accessors and fields its class defines; `connect`, `disconnect` and `initialize` always count. The same goes for `data: { search_target: "…", action: "…" }` in Haml and in the options of the tag, link, button and form helpers. The closest name within two edits is offered. A controller is only read when its identifier is one file in app/javascript/controllers and the app registers its controllers where this can see them (as for `Stimulus/UnknownController`); the file is read as text, and a base controller it extends is followed when it is imported from a relative path or `controllers/…`. Nothing is reported for a controller that extends something other than `Controller` from `@hotwired/stimulus` and a base controller that can\'t be followed (a package), has a `static targets` that is no plain list of strings, defines members by computed names, decorators or `Object.assign(…prototype…)`, has more than one class, or is registered by name with `application.register` instead of a file. ERB, interpolation and `data-action` values without a `#` are skipped. Rails projects only, in templates under app/views.',
+    setting: {
+      label: "Turn it off",
+      code: `[Stimulus.UnknownTargetOrAction]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2168,6 +2192,23 @@ enabled = false`,
           "</div>",
         ),
         note: '`search_controller.js` has `static targets = ["query"]` and a `submit()` method.',
+        files: {
+          "app/javascript/controllers/search_controller.js": SEARCH_CONTROLLER,
+        },
+        faults: [
+          {
+            line: 2,
+            column: 30,
+            message: TARGET_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+          {
+            line: 2,
+            column: 65,
+            message: METHOD_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+        ],
       },
       {
         lang: "haml",
@@ -2180,6 +2221,23 @@ enabled = false`,
           '%div{data: {controller: "search"}}',
           '  %input{data: {search_target: "query", action: "input->search#submit"}}',
         ),
+        files: {
+          "app/javascript/controllers/search_controller.js": SEARCH_CONTROLLER,
+        },
+        faults: [
+          {
+            line: 2,
+            column: 33,
+            message: TARGET_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+          {
+            line: 2,
+            column: 65,
+            message: METHOD_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+        ],
       },
       {
         lang: "slim",
@@ -2192,6 +2250,23 @@ enabled = false`,
           'div data-controller="search"',
           '  input data-search-target="query" data-action="input->search#submit"',
         ),
+        files: {
+          "app/javascript/controllers/search_controller.js": SEARCH_CONTROLLER,
+        },
+        faults: [
+          {
+            line: 2,
+            column: 29,
+            message: TARGET_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+          {
+            line: 2,
+            column: 64,
+            message: METHOD_MESSAGE,
+            code: "Stimulus/UnknownTargetOrAction",
+          },
+        ],
       },
     ],
   },
@@ -2510,8 +2585,15 @@ enabled = false`,
     languages: ["erb", "haml", "slim"],
     type: "warning",
     safe: true,
-    status: "planned",
-    phase: 4,
+    status: "available",
+    code: "Html/NestedInteractive",
+    today:
+      "Reported on the inner element's tag name (or helper name). Inside an `<a>` or `<button>` (also `link_to`, `tag.a`, `button_tag`, `content_tag :button` with a block) these are interactive content and can't be nested (HTML 4.5.1): `<a>` (inside another `<a>` always, inside a `<button>` when it has an `href`), `<button>`, `<input>` (not `type=\"hidden\"`), `<select>`, `<textarea>`, `<label>`, `<iframe>`, `<embed>`, `<details>`, `<audio>` and `<video>` with `controls`, and `<img>` with `usemap`. A `<form>` can't contain a form (HTML 4.10.3), and `button_to` renders a form around its button, so it counts as both, inside `form_with`, `form_for`, `form_tag` and `<form>`. Nesting is the template's own: ERB by the matching start and end tags and `do … end` blocks of the helper, Haml and Slim by indentation (an element on the same line as its parent, `li: a …`, isn't followed). Elements whose start and end tags sit in different branches of an `if`, partials rendered inside the element, a layout's `yield`, and anything inside `<svg>`, `<math>` or `<template>` are not followed. A `<label>` around an `<input>`, a `<summary>` in `<details>`, a `<button form=\"…\">` outside its form and a hidden input are fine. Templates that output HTML only.",
+    setting: {
+      label: "Turn it off",
+      code: `[Html.NestedInteractive]
+enabled = false`,
+    },
     examples: [
       {
         lang: "erb",
@@ -2527,18 +2609,67 @@ enabled = false`,
           "<% end %>",
           '<%= link_to "Edit", edit_user_path(user) %>',
         ),
+        faults: [
+          {
+            line: 2,
+            column: 7,
+            message: NESTED_MESSAGE,
+            code: "Html/NestedInteractive",
+          },
+        ],
+      },
+      {
+        lang: "erb",
+        file: ERB_FILE,
+        before: text(
+          "<%= form_with model: @user do |f| %>",
+          "  <%= f.text_field :name %>",
+          '  <%= button_to "Delete", @user, method: :delete %>',
+          "<% end %>",
+        ),
+        after: text(
+          "<%= form_with model: @user do |f| %>",
+          "  <%= f.text_field :name %>",
+          "<% end %>",
+          '<%= button_to "Delete", @user, method: :delete %>',
+        ),
+        note: "`button_to` renders its own `<form>`.",
+        faults: [
+          {
+            line: 3,
+            column: 7,
+            message: NESTED_FORM_MESSAGE,
+            code: "Html/NestedInteractive",
+          },
+        ],
       },
       {
         lang: "haml",
         file: HAML_FILE,
         before: text('%a{href: "/users"}', '  %a{href: "/users/new"} New'),
         after: text('%a{href: "/users"} Users', '%a{href: "/users/new"} New'),
+        faults: [
+          {
+            line: 2,
+            column: 4,
+            message: NESTED_MESSAGE,
+            code: "Html/NestedInteractive",
+          },
+        ],
       },
       {
         lang: "slim",
         file: SLIM_FILE,
         before: text('a href="/users"', '  a href="/users/new" New'),
         after: text('a href="/users" Users', 'a href="/users/new" New'),
+        faults: [
+          {
+            line: 2,
+            column: 3,
+            message: NESTED_MESSAGE,
+            code: "Html/NestedInteractive",
+          },
+        ],
       },
     ],
   },
