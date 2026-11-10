@@ -16,7 +16,7 @@ use std::ops::Range;
 
 const REFUSED: &str = "element content kept on its line: moving it would change more than whitespace";
 /// Elements that show their whitespace as it is written.
-const SENSITIVE: &[&str] = &["pre", "textarea", "script", "style", "listing", "xmp", "plaintext"];
+pub(super) const SENSITIVE: &[&str] = &["pre", "textarea", "script", "style", "listing", "xmp", "plaintext"];
 /// Elements in which a new line break shows as a space between words.
 const INLINE: &[&str] = &[
     "a", "abbr", "b", "bdi", "bdo", "button", "cite", "code", "data", "dfn", "em", "i", "kbd", "label", "mark", "q", "s", "samp", "small",

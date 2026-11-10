@@ -1,6 +1,7 @@
 //! Whitespace-only formatting of HTML ERB, Haml and Slim: indentation, trailing whitespace, blank lines and the final
 //! newline. Anything else stays byte for byte; a file whose structure is in doubt is left unchanged, with the reason.
 
+mod attributes_per_line;
 pub(crate) mod blank_lines;
 mod element_content;
 mod element_style;
@@ -67,6 +68,8 @@ pub struct Settings {
     pub hash_attributes: Option<AttributeStyle>,
     /// `Layout/ElementContentOnOwnLine`: the lower-case names of the elements whose content moves to its own line; `None` leaves it.
     pub content_on_own_line: Option<Vec<String>>,
+    /// `Layout/AttributesPerLine`: the longest line a start tag may stay on; `None` leaves the tags.
+    pub attributes_per_line: Option<usize>,
 }
 
 impl Default for Settings {
@@ -94,6 +97,7 @@ impl Default for Settings {
             classes_before_ids: false,
             hash_attributes: None,
             content_on_own_line: None,
+            attributes_per_line: None,
         }
     }
 }
@@ -245,6 +249,12 @@ pub(crate) fn format_in(
         keep(element_style::attributes(&source, settings, ruby.grammar), &mut source, &mut notes);
     }
     keep(element_content::apply(lang, &source, settings, extra_engines), &mut source, &mut notes);
+    if attributes_per_line::is_on(lang, settings) {
+        // Lines are measured where the re-indenter puts them; a file it refuses gets its note from the run below.
+        if let Ok(indented) = format_once(template, &source, settings, extra_engines, &ruby) {
+            keep(attributes_per_line::apply(&indented.text, settings), &mut source, &mut notes);
+        }
+    }
     let mut formatted = format_once(template, &source, settings, extra_engines, &ruby)?;
     formatted.notes.extend(notes);
     if formatted.text == *source {

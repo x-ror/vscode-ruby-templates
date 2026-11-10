@@ -198,7 +198,7 @@ enum Shape {
 /// Whether `after` has the tags of `before` but for the changes the rules in `settings` make: the same names but for case, the
 /// same attributes with the same values, whatever the quotes, a boolean attribute with or without its value, a void element
 /// with or without its slash, and the same text between the tags.
-fn same_erb_tags(before: &str, after: &str, settings: &Settings) -> bool {
+pub(super) fn same_erb_tags(before: &str, after: &str, settings: &Settings) -> bool {
     shapes(before, settings) == shapes(after, settings)
 }
 

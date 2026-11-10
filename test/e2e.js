@@ -2856,6 +2856,51 @@ const check = (label, actual, expected) => {
     contentRange?.map((e) => [e.range.start.line, e.range.end.line, e.newText]),
     [[1, 1, "  <div><%= a %></div>"]],
   );
+  // Layout/AttributesPerLine adds lines too: in Format Document, never in Format Selection.
+  const perLineDir = path.join(views, "perline");
+  fs.mkdirSync(perLineDir);
+  fs.writeFileSync(
+    path.join(perLineDir, ".ruby-templates.toml"),
+    "[Layout.AttributesPerLine]\nenabled = true\nmax_line_length = 30\n",
+  );
+  const perLineUri = fileUri(path.join(perLineDir, "a.html.erb"));
+  await aligned.send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: perLineUri,
+        languageId: "erb",
+        version: 1,
+        text: '<div>\n<p class="a" id="b" title="c">x</p>\n</div>\n',
+      },
+    },
+    true,
+  );
+  check(
+    "attributes split in the document",
+    (
+      await aligned.send("textDocument/formatting", {
+        textDocument: { uri: perLineUri },
+        options: blankOptions,
+      })
+    ).result?.[0]?.newText,
+    '<div>\n  <p\n    class="a"\n    id="b"\n    title="c">x</p>\n</div>\n',
+  );
+  const perLineRange = (
+    await aligned.send("textDocument/rangeFormatting", {
+      textDocument: { uri: perLineUri },
+      options: blankOptions,
+      range: {
+        start: { line: 0, character: 0 },
+        end: { line: 3, character: 0 },
+      },
+    })
+  ).result;
+  check(
+    "attributes kept on their line in a range",
+    perLineRange?.map((e) => [e.range.start.line, e.range.end.line, e.newText]),
+    [[1, 1, '  <p class="a" id="b" title="c">x</p>']],
+  );
   // The in-line rules keep every line, so Format Selection applies them to the lines it covers.
   const inlineDir = path.join(views, "inline");
   fs.mkdirSync(inlineDir);

@@ -8,6 +8,11 @@ pub(crate) const LINE_LENGTH: &str = "Layout/LineLength";
 /// Rails reads the strict locals comment from one line, so it can't be wrapped.
 const LOCALS_COMMENT: &str = "# locals:";
 
+/// The characters of a line that count against the limit: trailing whitespace doesn't.
+pub(crate) fn width(line: &str) -> usize {
+    line.trim_end().chars().count()
+}
+
 /// Each line longer than `max` characters, reported from the first character past the limit. Trailing whitespace doesn't
 /// count, and neither does a line that can't be made shorter: one unbroken word (a URL) or the strict locals comment.
 pub(crate) fn diagnostics(text: &str, max: usize) -> Vec<Diagnostic> {
@@ -15,7 +20,7 @@ pub(crate) fn diagnostics(text: &str, max: usize) -> Vec<Diagnostic> {
     lines_with_offsets(text)
         .filter_map(|(start, line)| {
             let line = line.trim_end();
-            let width = line.chars().count();
+            let width = width(line);
             let content = line.trim_start();
             let unbreakable = !content.contains(char::is_whitespace) || content.contains(LOCALS_COMMENT);
             if width <= max || unbreakable {

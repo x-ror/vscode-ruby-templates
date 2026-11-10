@@ -181,6 +181,34 @@ enabled = true
 tags = ["div", "section", "article", "header", "footer", "ul", "ol"]
 ```
 
+## One attribute per line
+
+`Layout/AttributesPerLine` (ERB only, off until enabled) splits a start tag whose line is longer than `max_line_length` characters (100 unless you set another; counted like `Layout/LineLength`, a tab is one). Each attribute goes on a line of its own, one indent level in, and the `>` (or `/>`) stays after the last attribute:
+
+```erb
+<input type="email" name="user[email]" id="user_email" class="form-control form-control-lg" placeholder="Email" required>
+```
+
+becomes
+
+```erb
+<input
+  type="email"
+  name="user[email]"
+  id="user_email"
+  class="form-control form-control-lg"
+  placeholder="Email"
+  required>
+```
+
+The rule runs after `Layout/ElementContentOnOwnLine` and measures the line where the re-indenter leaves it, so the result is stable. Whitespace between attributes is not content, so the page does not change. A tag stays as it is when it has fewer than two attributes, is already over several lines, does not start its line, has an ERB tag between its attributes or in a name, has `<%` control flow in it, has a value over several lines, or sits inside `<pre>` or `<textarea>`. The formatter reads every tag again and keeps the rewrite only when names, attributes, values and slashes are the same; otherwise `--verbose` says why. It adds lines, so _Format Selection_ leaves it out.
+
+```toml
+[Layout.AttributesPerLine]
+enabled = true
+max_line_length = 100
+```
+
 ## Safe by construction
 
 Every result must be stable when formatted again, keep every non-whitespace character and add no diagnostic. Otherwise the file comes back unchanged and the reason is logged in the _Ruby Templates_ channel of the Output panel. The exceptions are `Turbo/PreferTurboAttributes`, below, and the rules above, whose rewrites are the characters the formatter changes besides whitespace.
