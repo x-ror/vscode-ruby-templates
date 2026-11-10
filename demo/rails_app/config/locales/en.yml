@@ -10,3 +10,8 @@ en:
   shared:
     footer:
       copyright: "© Demo Inc."
+  playground:
+    rules:
+      i18n:
+        title: Rules playground
+        empty: Nothing here

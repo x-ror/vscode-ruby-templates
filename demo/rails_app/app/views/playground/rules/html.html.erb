@@ -1,0 +1,21 @@
+<%# Html/DuplicateAttribute (line 2), Html/AnchorHref (3), Html/NestedInteractive (4, 7, 9) and A11y/IframeTitle (10), A11y/GenericLinkText (11-12) warn %>
+<div class="card" class="wide">card</div>
+<a class="btn" data-action="click->hello#greet">Menu</a>
+<a href="/users"><a href="/users/new">New</a></a>
+<%= form_with model: @user do |f| %>
+  <%= f.text_field :name %>
+  <%= button_to "Delete", @user, method: :delete %>
+<% end %>
+<%= link_to users_path do %><%= link_to "Edit", edit_user_path(@user) %><% end %>
+<iframe src="https://example.com/embed"></iframe>
+<%= link_to "Click here", users_path %>
+<a href="/users">Read more</a>
+
+<%# no warning %>
+<a name="top"></a>
+<a id="anchor"></a>
+<a href="/users" class="btn">Users</a>
+<label>Name <input name="name"></label>
+<iframe src="https://example.com/embed" title="Embedded page"></iframe>
+<a href="/users" aria-label="All users">here</a>
+<%= link_to "All users", users_path %>

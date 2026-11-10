@@ -1,0 +1,15 @@
+<%# Rails/SilentRender, Rails/SilentHelper, Rails/DebugOutput: lines 2-6 warn, the rest do not %>
+<% render "users/card", user: @user %>
+<% link_to "Home", root_path %>
+<%= debug @user %>
+<% binding.irb %>
+<% puts "x" %>
+
+<%# no warning %>
+<%= render "users/card", user: @user %>
+<%= link_to "Home", root_path %>
+<% card = render "users/card", user: @user %>
+<% content_for :title do %>Users<% end %>
+<% if Rails.env.development? %>
+  <%= debug @user %>
+<% end %>

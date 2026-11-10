@@ -10,3 +10,8 @@ uk:
   shared:
     footer:
       copyright: "© Демо"
+  playground:
+    rules:
+      i18n:
+        title: Пісочниця правил
+        empty: Тут порожньо

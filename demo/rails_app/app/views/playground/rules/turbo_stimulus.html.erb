@@ -1,0 +1,18 @@
+<%# Turbo/PermanentRequiresId (line 2), Stimulus/UnknownController (line 3), Stimulus/UnknownTargetOrAction (lines 5-6) warn %>
+<div data-turbo-permanent>player</div>
+<div data-controller="serch"></div>
+<div data-controller="search">
+  <input data-search-target="querry">
+  <button data-action="click->search#sbumit">Go</button>
+</div>
+
+<%# no warning %>
+<div id="player" data-turbo-permanent>player</div>
+<%= tag.div id: "side", data: { turbo_permanent: true } do %>side<% end %>
+<div data-controller="search hello clipboard">
+  <input data-search-target="query">
+  <input data-hello-target="name">
+  <input data-clipboard-target="source">
+  <button data-action="click->search#search click->hello#greet clipboard#copy">Go</button>
+  <button data-action="hello#reset">Reset</button>
+</div>

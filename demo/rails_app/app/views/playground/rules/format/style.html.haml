@@ -1,0 +1,7 @@
+-# SpaceAfterScriptMarker, ImplicitDiv, ClassesBeforeIds, HashAttributes
+=render "users/card", user: @user
+-if @user
+  %div.card
+    %section#profile.wide
+      %a.btn{href: "/users", target: "_blank"} Users
+  %div{class: "plain"} stays

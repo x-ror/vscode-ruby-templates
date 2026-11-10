@@ -1,0 +1,5 @@
+<%# Style/ErbTrimMode (line 2), Layout/LineLength (line 5) %>
+<% @users.each do |user| -%>
+  <li><%= user.name %></li>
+<% end %>
+<span class="lead text-muted"><%= link_to "Read the full announcement", users_path, class: "link" %></span>

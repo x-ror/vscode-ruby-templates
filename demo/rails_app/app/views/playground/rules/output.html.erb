@@ -1,0 +1,14 @@
+<%# Rails/UnsafeOutput: lines 2-6 warn, the rest do not %>
+<%= raw @user.bio %>
+<%= @user.bio.html_safe %>
+<%== @user.bio %>
+<a href="<%= raw @user.website %>">Website</a>
+<div data-bio="<%= raw @user.bio.to_json %>"></div>
+
+<%# no warning %>
+<%= raw "<br>" %>
+<%= "&nbsp;".html_safe %>
+<%= sanitize @user.bio %>
+<%= raw sanitize(@user.bio) %>
+<%= t("greeting_html") %>
+<%== render "users/card", user: @user %>

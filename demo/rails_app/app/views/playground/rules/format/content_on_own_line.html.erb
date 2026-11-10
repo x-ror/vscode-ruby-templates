@@ -1,0 +1,5 @@
+<%# Layout/ElementContentOnOwnLine: div and p change, span and a stay %>
+<div class="card" id="<%= dom_id(@user) %>"><%= @user.name %></div>
+<p class="lead"><%= @user.bio %></p>
+<span class="badge"><%= @user.role %></span>
+<a class="btn" href="/users"><%= @user.name %></a>

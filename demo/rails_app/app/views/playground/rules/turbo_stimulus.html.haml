@@ -1,0 +1,15 @@
+-# Turbo/PermanentRequiresId (line 2), Stimulus/UnknownController (line 3), Stimulus/UnknownTargetOrAction (lines 5-6) warn
+%div{data: {turbo_permanent: true}} player
+%div{data: {controller: "serch"}}
+%div{data: {controller: "search"}}
+  %input{data: {search_target: "querry"}}
+  %button{data: {action: "click->search#sbumit"}} Go
+
+-# no warning
+#player{data: {turbo_permanent: true}} player
+%div{data: {controller: "search hello clipboard"}}
+  %input{data: {search_target: "query"}}
+  %input{data: {hello_target: "name"}}
+  %input{data: {clipboard_target: "source"}}
+  %button{data: {action: "click->search#search click->hello#greet clipboard#copy"}} Go
+  %button{data: {action: "hello#reset"}} Reset

@@ -1,0 +1,8 @@
+-# Rails/I18nMissingKey: the key is playground.rules.i18n.<name>; line 3 warns
+%h1= t(".title")
+%h2= t(".titel")
+
+-# no warning: an absolute key, a default, a key that exists
+%p= t("users.index.title")
+%p= t(".unknown", default: "Fallback")
+%p= t(".empty")

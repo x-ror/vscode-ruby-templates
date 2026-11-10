@@ -10,6 +10,8 @@ export default class extends Controller {
   static classes = ["loading"];
   static outlets = ["result-list"];
 
+  submit() {}
+
   search() {
     this.element.classList.add(this.loadingClass);
   }
