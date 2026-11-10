@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+
+- `A11y/GenericLinkText` reports a Slim link with inline text (`a href="/users" Read more`) when a blank line follows it; before, the blank line was taken for a continuation line and the link was skipped.
+
 ## 0.14.0
 
 - `Layout/AttributesPerLine` is a formatter rule for ERB: a start tag that stands first on a line longer than `max_line_length` (default 100, counted like `Layout/LineLength`) gets one attribute per line, one indent level in, with the `>` or `/>` after the last attribute. It is off until enabled with `[Layout.AttributesPerLine]` and `enabled = true` in `.ruby-templates.toml`. Tags with fewer than two attributes, tags already over several lines or not first on their line, tags with an ERB tag between attributes or in a name, `<%` control flow in the tag, values over several lines and tags inside `<pre>` or `<textarea>` are left alone. Lines are measured after the re-indentation, the formatter reads every tag again and keeps the rewrite only when nothing but whitespace between attributes differs, and Format Selection leaves the rule out because it adds lines.
