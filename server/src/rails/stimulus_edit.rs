@@ -15,10 +15,13 @@ pub const CONTROLLER_STUB: &str = "import { Controller } from \"@hotwired/stimul
 const MANIFESTS: [&str; 2] = ["index.js", "index.ts"];
 
 // `application.register("hello", HelloController)` and `import HelloController from "./hello_controller"`, one to a line.
-static REGISTER_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?m)^([ \t]*)(\w+)\.register\(\s*(["'])([^"']+)["']\s*,\s*(\w+)\s*\)(;?)[ \t]*\r?$"#).unwrap());
+static REGISTER_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?m)^([ \t]*)(\w+)\.register\([ \t]*(["'])([^"']+)["'][ \t]*,[ \t]*(\w+)[ \t]*\)(;?)[ \t]*\r?$"#).unwrap()
+});
 static IMPORT_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?m)^import\s+(\w+)\s+from\s+(["'])(\.{1,2}/[^"']+)["'](;?)[ \t]*\r?$"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"(?m)^import[ \t]+(\w+)[ \t]+from[ \t]+(["'])(\.{1,2}/[^"']+)["'](;?)[ \t]*\r?$"#).unwrap());
+// Every name an import statement brings in, from any module.
+static IMPORT_CLAUSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)^import\s+([^"';]+?)\s+from\s+["']"#).unwrap());
 // Controllers that load by themselves: a manifest using them needs no line.
 static LOADING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:eager|lazy)LoadControllersFrom\b|\b(?:require\.context|import\.meta\.glob(?:Eager)?)\(|definitionsFromContext")
@@ -53,11 +56,15 @@ pub fn new_controller(current: &Path, identifier: &str) -> Option<NewController>
     if file.exists() {
         return None;
     }
-    let manifest = MANIFESTS.iter().map(|name| dir.join(name)).find_map(|file| {
+    let listing = MANIFESTS.iter().map(|name| dir.join(name)).find_map(|file| {
         let source = std::fs::read_to_string(&file).ok()?;
-        let insertions = manifest_insertions(&source, identifier, &stem)?;
-        Some(ManifestEdit { file, source, insertions })
+        (source.contains(".register(") && !LOADING.is_match(&source)).then_some((file, source))
     });
+    // A controller its manifest lists but this can't add to would never load.
+    let manifest = match listing {
+        Some((file, source)) => Some(ManifestEdit { insertions: manifest_insertions(&source, identifier, &stem)?, file, source }),
+        None => None,
+    };
     Some(NewController { file, manifest })
 }
 
@@ -79,14 +86,15 @@ fn class_name(identifier: &str) -> Option<String> {
 }
 
 /// The import and the `register` call for `identifier` in a manifest of literal ones: after the last of each, written as they
-/// are. None for a manifest with another way of loading controllers, a call that isn't one line, or no line to copy.
+/// are. None for a manifest with another way of loading controllers, a call that isn't one line, or no relative import to copy.
 fn manifest_insertions(source: &str, identifier: &str, stem: &str) -> Option<Vec<Insertion>> {
     if LOADING.is_match(source) {
         return None;
     }
     let registers: Vec<_> = REGISTER_LINE.captures_iter(source).collect();
     let imports: Vec<_> = IMPORT_LINE.captures_iter(source).collect();
-    let imported = |class: &str| imports.iter().any(|import| &import[1] == class);
+    let is_name_char = |c: char| !(c.is_alphanumeric() || matches!(c, '_' | '$'));
+    let imported = |class: &str| IMPORT_CLAUSE.captures_iter(source).any(|import| import[1].split(is_name_char).any(|name| name == class));
     let every_call_is_a_line = registers.len() == source.matches(".register(").count();
     let class = class_name(identifier)?;
     if registers.is_empty() || !every_call_is_a_line || !registers.iter().all(|register| imported(&register[5])) {
@@ -416,9 +424,24 @@ mod tests {
         ] {
             assert_eq!(registered_in(manifest, "x"), None, "{label}");
         }
+        let multiline = "import HelloController from \"./hello_controller\"\napplication.register(\n  \"hello\",\n  HelloController\n)\n";
+        assert_eq!(registered_in(multiline, "x"), None, "a call over several lines");
+        let spread = "import HelloController from \"./hello_controller\"\napplication.register(\"hello\",\n  HelloController)\n";
+        assert_eq!(registered_in(spread, "x"), None, "a call over two lines");
         assert_eq!(registered_in(MANIFEST, "hello"), None, "already listed");
         assert_eq!(registered_in(MANIFEST, "3d"), None, "not a class name");
         assert_eq!(registered_in(MANIFEST, "a--"), None);
+    }
+
+    #[test]
+    fn a_package_controller_in_the_manifest_is_no_obstacle() {
+        let manifest = "import { application } from \"./application\"\nimport { Dropdown, Modal as Dialog } from \"tailwindcss-stimulus-components\"\nimport HelloController from \"./hello_controller\"\napplication.register(\"dropdown\", Dropdown)\napplication.register(\"modal\", Dialog)\napplication.register(\"hello\", HelloController)\n";
+        assert_eq!(
+            registered_in(manifest, "x").unwrap(),
+            "import { application } from \"./application\"\nimport { Dropdown, Modal as Dialog } from \"tailwindcss-stimulus-components\"\nimport HelloController from \"./hello_controller\"\nimport XController from \"./x_controller\"\napplication.register(\"dropdown\", Dropdown)\napplication.register(\"modal\", Dialog)\napplication.register(\"hello\", HelloController)\napplication.register(\"x\", XController)\n"
+        );
+        let package_only = "import { Dropdown } from \"tailwindcss-stimulus-components\"\napplication.register(\"dropdown\", Dropdown)\n";
+        assert_eq!(registered_in(package_only, "x"), None, "no relative import to copy");
     }
 
     fn app(files: &[(&str, &str)]) -> PathBuf {
@@ -465,6 +488,23 @@ mod tests {
         let new = new_controller(&root.join("app/views/x/index.html.erb"), "admin--users").unwrap();
         assert_eq!(new.file, root.join(javascript).join("admin/users_controller.ts"));
         assert!(new.manifest.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_controller_is_made_where_its_manifest_lists_controllers_but_cannot_take_one_more() {
+        let javascript = "app/javascript/controllers";
+        let multiline = "import HelloController from \"./hello_controller\"\napplication.register(\n  \"hello\",\n  HelloController\n)\n";
+        let root = app(&[
+            ("app/views/x/index.html.erb", ""),
+            (&format!("{javascript}/hello_controller.js"), HEADER),
+            (&format!("{javascript}/index.js"), multiline),
+        ]);
+        let view = root.join("app/views/x/index.html.erb");
+        assert!(new_controller(&view, "x").is_none(), "a call over several lines");
+        std::fs::write(root.join(javascript).join("index.js"), MANIFEST).unwrap();
+        assert!(new_controller(&view, "3d-viewer").is_none(), "no class name");
+        assert!(new_controller(&view, "x").is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

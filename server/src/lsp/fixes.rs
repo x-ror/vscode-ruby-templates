@@ -10,7 +10,7 @@ use crate::rails::missing_translation::I18N_MISSING_KEY;
 use crate::rails::project::Project;
 use crate::rails::unknown_route::UNKNOWN_ROUTE;
 use crate::rails::{i18n, locale_edit, paths, stimulus_edit};
-use crate::util::{self, data_edit, data_str, LineIndex};
+use crate::util::{self, data_edit, data_str, edit_distance, LineIndex};
 use std::collections::HashMap;
 use std::path::Path;
 use tower_lsp_server::jsonrpc::Result;
@@ -18,6 +18,15 @@ use tower_lsp_server::ls_types::*;
 
 /// The empty value a new translation gets, for the user to fill in.
 const NEW_TRANSLATION: &str = "\"\"";
+
+/// Names shorter than this are never replaced by Auto Fix: one edit changes too much of them to tell the intent.
+const MIN_PREFERRED_NAME_LENGTH: usize = 4;
+
+/// Whether `suggestion` is close enough to `flagged` to be what was meant: at most a third of the name changed.
+fn is_confident(flagged: &str, suggestion: &str) -> bool {
+    let length = flagged.chars().count();
+    length >= MIN_PREFERRED_NAME_LENGTH && edit_distance(flagged, suggestion) * 3 <= length
+}
 
 /// Whether the quick fixes of `d` read files, which is done off the server task.
 fn reads_files(d: &Diagnostic) -> bool {
@@ -41,8 +50,13 @@ fn changes_in(uri: &Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
 
 /// The fixes that edit the document itself: the name a rule suggests, in place of what it flagged, and the attribute a rule adds.
 pub(super) fn document_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -> Vec<CodeActionOrCommand> {
-    let replace = |d: &Diagnostic, title: String, new_text: String| {
-        quick_fix(title, d, changes_in(uri, vec![TextEdit::new(d.range, new_text)]), true)
+    let replace = |d: &Diagnostic, title: String, new_text: String, suggestion: &str| {
+        let flagged = util::position_to_offset(&doc.text, d.range.start)
+            .zip(util::position_to_offset(&doc.text, d.range.end))
+            .and_then(|(start, end)| doc.text.get(start..end))
+            .map(|text| text.trim_matches(['"', '\'']));
+        let preferred = flagged.is_some_and(|flagged| is_confident(flagged, suggestion));
+        quick_fix(title, d, changes_in(uri, vec![TextEdit::new(d.range, new_text)]), preferred)
     };
     diagnostics
         .iter()
@@ -50,17 +64,17 @@ pub(super) fn document_fixes(uri: &Uri, doc: &Doc, diagnostics: &[Diagnostic]) -
             let action = match util::code(d)? {
                 UNKNOWN_ROUTE => {
                     let route = data_str(d, "replace")?;
-                    replace(d, format!("Replace with `{route}`"), route.to_string())
+                    replace(d, format!("Replace with `{route}`"), route.to_string(), route)
                 }
                 I18N_MISSING_KEY => {
                     let key = data_str(d, "suggest")?;
                     let range = util::position_to_offset(&doc.text, d.range.start)?..util::position_to_offset(&doc.text, d.range.end)?;
                     let quote = doc.text.get(range)?.chars().next().filter(|quote| matches!(quote, '"' | '\''))?;
-                    replace(d, format!("Use `{key}`"), format!("{quote}{key}{quote}"))
+                    replace(d, format!("Use `{key}`"), format!("{quote}{key}{quote}"), key)
                 }
                 UNKNOWN_CONTROLLER | UNKNOWN_TARGET_OR_ACTION => {
                     let name = data_str(d, "suggest")?;
-                    replace(d, format!("Use `{name}`"), name.to_string())
+                    replace(d, format!("Use `{name}`"), name.to_string(), name)
                 }
                 IMG_MISSING_ALT => {
                     let edit = data_edit(d)?;
@@ -245,6 +259,26 @@ mod tests {
         );
         let target = diagnostic("Stimulus/UnknownTargetOrAction", range(0, 23, 30), json!({ "kind": "target", "suggest": "results" }));
         assert_eq!(fixed("<p data-search-target=\"resluts\">", &[target])[0].2, "<p data-search-target=\"results\">");
+    }
+
+    #[test]
+    fn only_a_name_close_to_the_flagged_one_is_preferred() {
+        let key = |flagged: &str, suggest: &str| {
+            let text = format!("<%= t(\"{flagged}\") %>");
+            let end = 7 + flagged.chars().count() as u32;
+            fixed(&text, &[diagnostic("Rails/I18nMissingKey", range(0, 6, end + 1), json!({ "suggest": suggest }))])[0].1
+        };
+        assert!(!key(".x", ".a"), "too short");
+        assert!(!key(".ab", ".ac"), "a third of a short name");
+        assert!(key(".titel", ".title"));
+        assert!(!key(".titel", ".heading"), "too far");
+        let controller = |flagged: &str, suggest: &str| {
+            let text = format!("<div data-controller=\"{flagged}\">");
+            let end = 22 + flagged.len() as u32;
+            fixed(&text, &[diagnostic("Stimulus/UnknownController", range(0, 22, end), json!({ "suggest": suggest }))])[0].1
+        };
+        assert!(!controller("ab", "ac"));
+        assert!(controller("serch", "search"));
     }
 
     #[test]

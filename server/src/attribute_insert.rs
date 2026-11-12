@@ -1,7 +1,7 @@
 //! The edit that gives an element an attribute with an empty value, for the quick fixes that add `alt` or `id`: where it goes
 //! and how the template's language spells it.
 
-use crate::attributes::{last_argument_bytes, Element};
+use crate::attributes::{ends_in_options, last_argument_bytes, Element};
 use crate::lang::TemplateLang;
 use crate::util::find_balanced;
 use ruby_prism::{CallNode, Visit};
@@ -84,7 +84,10 @@ impl<'pr> Visit<'pr> for ImageTag {
         let starts_the_code = call.message_loc().is_some_and(|name| name.start() == 0);
         if self.end.is_none() && starts_the_code && call.receiver().is_none() && call.name().as_slice() == b"image_tag" {
             let arguments: Vec<_> = call.arguments().into_iter().flat_map(|list| list.arguments().iter().collect::<Vec<_>>()).collect();
-            self.end = last_argument_bytes(&arguments).map(|(_, end)| end);
+            // `image_tag("a", opts, alt: "")` has too many arguments: only a lone source or a trailing hash takes the keyword.
+            if arguments.len() == 1 || ends_in_options(&arguments) {
+                self.end = last_argument_bytes(&arguments).map(|(_, end)| end);
+            }
             return;
         }
         ruby_prism::visit_call_node(self, call);
@@ -133,6 +136,8 @@ mod tests {
         );
         assert_eq!(with_attribute(Erb, "<%= image_tag %>", "img", "alt"), None);
         assert_eq!(with_attribute(Erb, "<%= image_tag \"a\", {} %>", "img", "alt"), None);
+        assert_eq!(with_attribute(Erb, "<%= image_tag \"a\", opts %>", "img", "alt"), None);
+        assert_eq!(with_attribute(Erb, "<%= image_tag(\"a\", options) %>", "img", "alt"), None);
     }
 
     #[test]
@@ -141,6 +146,8 @@ mod tests {
         assert_eq!(image_tag_arguments_end("image_tag(\"a.png\", class: \"b\") if x"), Some(29));
         assert_eq!(image_tag_arguments_end("image_tag \"a.png\" do"), None);
         assert_eq!(image_tag_arguments_end("image_tag"), None);
+        assert_eq!(image_tag_arguments_end("image_tag \"a.png\", opts"), None);
+        assert_eq!(image_tag_arguments_end("image_tag(\"a.png\", { class: \"b\" })"), Some(31));
         assert_eq!(image_tag_arguments_end("image_tags \"a.png\""), None);
     }
 

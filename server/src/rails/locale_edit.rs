@@ -3,12 +3,23 @@
 //! aliases, anchors, merges, lists, several documents) gets no edit.
 
 use super::i18n::{scalar_value, split_anchor, split_key};
+use regex::Regex;
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::sync::LazyLock;
 
 const DEFAULT_INDENT: usize = 2;
-/// Plain scalars that YAML 1.1, which Psych reads, makes something else than a string.
-const NOT_STRINGS: [&str; 10] = ["y", "n", "yes", "no", "on", "off", "true", "false", "null", "~"];
+/// Plain scalars that Psych reads as a boolean or null, in any case.
+const NOT_STRINGS: [&str; 8] = ["yes", "no", "on", "off", "true", "false", "null", "~"];
+/// Booleans to other YAML 1.1 parsers, strings to Psych: quoted when written, found when read.
+const BOOLEAN_LETTERS: [&str; 2] = ["y", "n"];
+/// The plain scalars Psych reads as an integer, a time, a date or a symbol, as far as a key without a dot can be one.
+static NOT_STRING_FORMS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?:[-+]?(?:0b[01_,]+|0[0-7_,]+|0|[1-9](?:[0-9]|,[0-9]|_[0-9])*|0x[0-9a-fA-F_,]+)|[-+]?[0-9][0-9_]*(?::[0-5]?[0-9]){1,2}|\d{4}-\d{1,2}-\d{1,2}(?:[Tt ]\d{1,2}:\d\d:\d\d)?|:.+)$",
+    )
+    .unwrap()
+});
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
@@ -33,6 +44,8 @@ struct Line<'a> {
     indent: usize,
     kind: Kind,
     entry: Option<Entry<'a>>,
+    /// A `|+` or `>+` scalar starts here: the blank lines after it are part of its value.
+    keeps_blank_lines: bool,
 }
 
 /// The offset in `text` (without a BOM) and the text to insert there to add `path` (a locale and the keys below it) with the
@@ -60,6 +73,9 @@ pub fn add_key(text: &str, path: &[&str], value: &str) -> Option<(usize, String)
         }
         let found = keys.into_iter().find(|&at| lines[at].entry.as_ref().is_some_and(|entry| names(entry, name)));
         let Some(at) = found else {
+            if ends_in_kept_blank_lines(&lines, range.end - 1) {
+                return None;
+            }
             return Some((lines[range.end - 1].end, format!("{eol}{}", block(missing, indent, unit, value, eol))));
         };
         let entry = lines[at].entry.as_ref()?;
@@ -89,7 +105,7 @@ fn read_lines(text: &str) -> Option<Vec<Line<'_>>> {
             continue;
         }
         if scalar_owner.is_some_and(|owner| indent > owner) {
-            lines.push(Line { end, indent, kind: Kind::Continuation, entry: None });
+            lines.push(Line { end, indent, kind: Kind::Continuation, entry: None, keeps_blank_lines: false });
             continue;
         }
         scalar_owner = None;
@@ -101,7 +117,8 @@ fn read_lines(text: &str) -> Option<Vec<Line<'_>>> {
         }
         if body == "-" || body.starts_with("- ") {
             scalar_owner = Some(indent);
-            lines.push(Line { end, indent, kind: Kind::Item, entry: None });
+            let keeps_blank_lines = keeps_blank_lines(&body[1..]);
+            lines.push(Line { end, indent, kind: Kind::Item, entry: None, keeps_blank_lines });
             continue;
         }
         let (key, rest) = split_key(body)?;
@@ -115,9 +132,21 @@ fn read_lines(text: &str) -> Option<Vec<Line<'_>>> {
             scalar_owner = Some(indent);
         }
         let anchored = split_anchor(rest).0.is_some();
-        lines.push(Line { end, indent, kind: Kind::Key, entry: Some(Entry { key, quoted, has_value, anchored }) });
+        let entry = Some(Entry { key, quoted, has_value, anchored });
+        lines.push(Line { end, indent, kind: Kind::Key, entry, keeps_blank_lines: keeps_blank_lines(rest) });
     }
     Some(lines)
+}
+
+/// Whether `rest`, after a key's colon or an item's dash, opens a block scalar that keeps its trailing blank lines.
+fn keeps_blank_lines(rest: &str) -> bool {
+    let header = split_anchor(rest).1;
+    header.starts_with(['|', '>']) && header.split_whitespace().next().is_some_and(|indicators| indicators.contains('+'))
+}
+
+/// Whether the entry that line `last` belongs to ends in a scalar whose value a line inserted after it would cut short.
+fn ends_in_kept_blank_lines(lines: &[Line], last: usize) -> bool {
+    lines[..=last].iter().rfind(|line| line.kind != Kind::Continuation).is_some_and(|owner| owner.keeps_blank_lines)
 }
 
 /// The indentation one level of nesting adds: what the first nested key has over its parent.
@@ -153,15 +182,19 @@ fn block_end(lines: &[Line], range: &Range<usize>, at: usize) -> usize {
     (at + 1..range.end).find(|&next| leaves(&lines[next])).unwrap_or(range.end)
 }
 
-/// Whether `entry` is the key `name`: a plain key that YAML reads as a boolean, null or number isn't a string.
+/// Whether `entry` is the key `name`: a plain key that Psych reads as a boolean, null or number isn't a string.
 fn names(entry: &Entry, name: &str) -> bool {
-    entry.key == name && (entry.quoted || !needs_quotes(name))
+    entry.key == name && (entry.quoted || plain_reads_as_string(name))
+}
+
+fn plain_reads_as_string(key: &str) -> bool {
+    !key.is_empty() && !NOT_STRINGS.iter().any(|word| key.eq_ignore_ascii_case(word)) && !NOT_STRING_FORMS.is_match(key)
 }
 
 fn needs_quotes(key: &str) -> bool {
     let starts_like_a_word = key.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_');
     let plain = key.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '?' | '!'));
-    !starts_like_a_word || !plain || NOT_STRINGS.iter().any(|word| key.eq_ignore_ascii_case(word))
+    !starts_like_a_word || !plain || NOT_STRINGS.iter().chain(&BOOLEAN_LETTERS).any(|word| key.eq_ignore_ascii_case(word))
 }
 
 fn key_text(key: &str) -> String {
@@ -287,6 +320,29 @@ mod tests {
         assert_eq!(added(quoted, "yes.c").unwrap(), "en:\n  \"no\":\n    a: 1\n  'yes':\n    b: 1\n    c: \"\"\n");
         // `no:` is `false` to Psych, so the string key `no` is a new one.
         assert_eq!(added("en:\n  no:\n    a: 1\n", "no.c").unwrap(), "en:\n  no:\n    a: 1\n  \"no\":\n    c: \"\"\n");
+    }
+
+    #[test]
+    fn existing_plain_keys_that_psych_reads_as_strings_are_found() {
+        for key in ["2fa", "1st", "y", "n", "Y", "yes_no", "nope"] {
+            let text = format!("en:\n  {key}:\n    a: 1\n");
+            assert_eq!(added(&text, &format!("{key}.b")).unwrap(), format!("en:\n  {key}:\n    a: 1\n    b: \"\"\n"), "{key}");
+        }
+        for key in ["NO", "Null", "~", "12", "0x1f", "1_000", "2024-01-02", "12:30", ":sym"] {
+            let text = format!("en:\n  {key}:\n    a: 1\n");
+            let expected = format!("    a: 1\n  \"{key}\":\n    b: \"\"\n");
+            assert!(added(&text, &format!("{key}.b")).unwrap().ends_with(&expected), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_key_is_not_added_after_a_scalar_that_keeps_its_blank_lines() {
+        assert_eq!(added("en:\n  a: |+\n    one\n\n  b: 1\n", "c").unwrap(), "en:\n  a: |+\n    one\n\n  b: 1\n  c: \"\"\n");
+        assert_eq!(added("en:\n  users:\n    a: |+\n      one\n\n  other: 1\n", "users.b"), None);
+        assert_eq!(added("en:\n  a: >+ # kept\n    one\n\n", "b"), None);
+        assert_eq!(added("en:\n  a: |+\n\n", "b"), None);
+        assert_eq!(added("en:\n  a: |-\n    one\n", "b").unwrap(), "en:\n  a: |-\n    one\n  b: \"\"\n");
+        assert_eq!(added("en:\n  a: |\n    one\n\n", "b").unwrap(), "en:\n  a: |\n    one\n  b: \"\"\n\n");
     }
 
     #[test]

@@ -27,6 +27,7 @@ import {
   previewPage,
   errorPage,
 } from "../src/render.js";
+import { withoutDirtyEdits } from "../src/codeActions.js";
 import { spawnSync } from "node:child_process";
 
 // convertedFileName
@@ -387,3 +388,36 @@ assert.ok(
 assert.ok(page.includes('<pre>&lt;p title="t"&gt;&amp;&lt;/p&gt;</pre>'));
 assert.ok(!errorPage("T", "d").includes("<p "));
 assert.ok(errorPage("T", "d", "<hint>").includes("&lt;hint&gt;"));
+
+// withoutDirtyEdits
+{
+  const uri = (text) => ({ toString: () => text });
+  const editing = (...uris) => ({
+    edit: { entries: () => uris.map((text) => [uri(text), []]) },
+  });
+  const own = editing("file:///view.erb");
+  const locale = editing("file:///en.yml");
+  const both = editing("file:///view.erb", "file:///en.yml");
+  const command = { command: "x" };
+  const kept = (dirty) =>
+    withoutDirtyEdits(
+      [own, locale, both, command],
+      new Set(dirty),
+      "file:///view.erb",
+    );
+  assert.deepStrictEqual(kept([]), [own, locale, both, command]);
+  assert.deepStrictEqual(kept(["file:///view.erb"]), [
+    own,
+    locale,
+    both,
+    command,
+  ]);
+  assert.deepStrictEqual(kept(["file:///view.erb", "file:///en.yml"]), [
+    own,
+    command,
+  ]);
+  assert.strictEqual(
+    withoutDirtyEdits(undefined, new Set(), "file:///view.erb"),
+    undefined,
+  );
+}

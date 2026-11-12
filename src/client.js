@@ -9,6 +9,7 @@ import {
 } from "vscode-languageclient/node";
 
 import { SECTION, settings } from "./workspace.js";
+import { withoutDirtyEdits } from "./codeActions.js";
 
 /** @type {LanguageClient | undefined} */
 let client;
@@ -168,6 +169,18 @@ async function doStart(context) {
       initializationFailedHandler: () => false,
       initializationOptions: initializationOptions(config),
       synchronize: { fileEvents: watchers },
+      middleware: {
+        // File fixes are computed from disk: not offered over a file with unsaved edits, which the server never sees.
+        provideCodeActions: async (document, range, context, token, next) => {
+          const actions = await next(document, range, context, token);
+          const dirty = new Set(
+            vscode.workspace.textDocuments
+              .filter(({ isDirty }) => isDirty)
+              .map(({ uri }) => uri.toString()),
+          );
+          return withoutDirtyEdits(actions, dirty, document.uri.toString());
+        },
+      },
     },
   );
   client = started;

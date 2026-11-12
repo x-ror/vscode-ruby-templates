@@ -3368,7 +3368,7 @@ const check = (label, actual, expected) => {
     [
       [["Use `hello`", true, { [view]: ["3:22-3:26 hello"] }]],
       [
-        ["Use `name`", true, { [view]: ["4:48-4:51 name"] }],
+        ["Use `name`", false, { [view]: ["4:48-4:51 name"] }],
         [
           `Add \`nme\` to static targets in ${hello}`,
           false,
