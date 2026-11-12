@@ -182,7 +182,7 @@ fn view_diagnostics(
             let wanted = rules.reports(attribute_lints::UNKNOWN_TARGET_OR_ACTION);
             wanted.then(|| stimulus_controller::controller(path, identifier)).flatten()
         };
-        out.extend(attribute_lints::diagnostics(&doc.text, elements, registered, controller));
+        out.extend(attribute_lints::diagnostics(doc.lang, &doc.text, elements, registered, controller));
     }
     out
 }

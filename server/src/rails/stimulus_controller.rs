@@ -14,13 +14,13 @@ const MAX_PARENTS: usize = 3;
 const BASE_METHODS: [&str; 4] = ["initialize", "connect", "disconnect", "dispatch"];
 
 // A class header, with the modifiers and names around `extends` (`class Name extends Base<T> `).
-static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\b([\w\s$<>,.]*)\{").unwrap());
+pub(super) static CLASS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bclass\b([\w\s$<>,.]*)\{").unwrap());
 static STIMULUS_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"import\s*(?:\w+\s*,\s*)?\{[^}]*\bController\b[^}]*\}\s*from\s*["'](?:@hotwired/)?stimulus["']"#).unwrap()
 });
-static TARGETS_DECLARATION: LazyLock<Regex> =
+pub(super) static TARGETS_DECLARATION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bstatic\s+(?:(?:get|readonly|override|declare|public)\s+)*targets\b").unwrap());
-static TARGETS_LIST: LazyLock<Regex> = LazyLock::new(|| {
+pub(super) static TARGETS_LIST: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"\bstatic\s+(?:(?:readonly|override|public)\s+)*targets\s*=\s*\[\s*(?:(?:"[^"\n]*"|'[^'\n]*')\s*,?\s*)*\]"#).unwrap()
 });
 // Methods and targets that come in without a declaration in the class.
@@ -202,7 +202,7 @@ fn starts_member(previous: Option<char>) -> bool {
 }
 
 /// The byte of the `}` that closes the `{` at `open`.
-fn matching_brace(code: &str, open: usize) -> Option<usize> {
+pub(super) fn matching_brace(code: &str, open: usize) -> Option<usize> {
     let mut depth = 0usize;
     for (at, c) in code[open..].char_indices() {
         match c {
@@ -221,7 +221,7 @@ fn matching_brace(code: &str, open: usize) -> Option<usize> {
 
 /// `source` with its comments, and with `strings` the text of its strings, regular expressions and template literals, replaced
 /// by spaces: the same bytes in the same places, so what is left has only code in it. The quotes stay.
-fn blank(source: &str, strings: bool) -> String {
+pub(super) fn blank(source: &str, strings: bool) -> String {
     let mut out = String::with_capacity(source.len());
     let mut at = 0;
     let mut last_code = None::<char>;

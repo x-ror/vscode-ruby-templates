@@ -318,6 +318,17 @@ pub fn controllers(current: &Path) -> Vec<String> {
     out
 }
 
+/// Whether most of the app's controller files are TypeScript, which a controller made for it should be too.
+pub fn mostly_typescript(current: &Path) -> bool {
+    let Some(app) = app_root(current) else { return false };
+    let files = WalkDir::new(app.join(CONTROLLERS_DIR)).into_iter().flatten().filter(|entry| entry.file_type().is_file());
+    let names = files.map(|entry| entry.path().to_string_lossy().into_owned());
+    let (typescript, other) = names
+        .filter(|name| CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix)))
+        .partition::<Vec<_>, _>(|name| name.ends_with(".ts") || name.ends_with(".tsx"));
+    typescript.len() > other.len()
+}
+
 /// What the app registers as Stimulus controllers.
 #[derive(Debug)]
 pub struct Registered {

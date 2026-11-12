@@ -3176,6 +3176,265 @@ const check = (label, actual, expected) => {
     ),
     [path.join(oddDir, "_note.html.erb")],
   );
+  // Quick fixes of the rules that know the answer, from the diagnostics the server publishes: their `data` comes back.
+  const fixRoot = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "rt-fixes-")),
+  );
+  const helloController =
+    'import { Controller } from "@hotwired/stimulus"\n\nexport default class extends Controller {\n  static targets = ["name"]\n\n  greet() {\n  }\n}\n';
+  const manifestLines = [
+    'import { application } from "./application"',
+    "",
+    'import HelloController from "./hello_controller"',
+    'application.register("hello", HelloController)',
+    "",
+  ];
+  const fixFiles = {
+    "Gemfile.lock": "GEM\n  specs:\n    actionview (7.1.3)\n",
+    "config/application.rb": "",
+    "config/locales/en.yml": "en:\n  users:\n    index:\n      title: Users\n",
+    "app/javascript/controllers/hello_controller.js": helloController,
+    "app/javascript/controllers/index.js": manifestLines.join("\n"),
+  };
+  for (const [name, content] of Object.entries(fixFiles)) {
+    fs.mkdirSync(path.dirname(path.join(fixRoot, name)), { recursive: true });
+    fs.writeFileSync(path.join(fixRoot, name), content);
+  }
+  const fixViewText = [
+    '<%= link_to "x", usrs_path(1) %>',
+    '<%= t(".titel") %>',
+    '<%= t(".heading") %>',
+    '<div data-controller="helo"></div>',
+    '<div data-controller="hello" data-hello-target="nme" data-action="click->hello#gret"></div>',
+    '<div data-controller="hello" data-hello-target="output" data-action="click->hello#rotate"></div>',
+    '<img src="a.png">',
+    '<%= image_tag "a.png" %>',
+    "<div data-turbo-permanent></div>",
+    "",
+  ].join("\n");
+  const fixView = path.join(fixRoot, "app/views/users/index.html.erb");
+  fs.mkdirSync(path.dirname(fixView), { recursive: true });
+  fs.writeFileSync(fixView, fixViewText);
+  const fixViewUri = fileUri(fixView);
+  const inFixRoot = (uri) =>
+    path.relative(fixRoot, fileURLToPath(uri)).replaceAll(path.sep, "/");
+  const fixServer = async (capabilities) => {
+    const srv = startServer();
+    await srv.send("initialize", {
+      processId: null,
+      rootUri: fileUri(fixRoot),
+      capabilities,
+    });
+    await srv.send("initialized", {}, true);
+    const routes = ["users", "user"].map((name) => ({
+      name,
+      verb: "GET",
+      path: `/${name}`,
+    }));
+    await srv.send("rubyTemplates/routes", { root: fixRoot, routes }, true);
+    const text = fixViewText;
+    const didOpen = {
+      textDocument: { uri: fixViewUri, languageId: "erb", version: 1, text },
+    };
+    await srv.send("textDocument/didOpen", didOpen, true);
+    const published = () =>
+      srv.notes
+        .filter(
+          (n) =>
+            n.method === "textDocument/publishDiagnostics" &&
+            n.params.uri === fixViewUri,
+        )
+        .at(-1)?.params.diagnostics ?? [];
+    for (
+      let waited = 0;
+      waited < 3000 && published().length < 11;
+      waited += 50
+    ) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // The quick fixes for the `nth` diagnostic with `code` on `line`, counted from the left.
+    const actions = async (code, line, nth = 0) => {
+      const found = published()
+        .filter((d) => d.code === code && d.range.start.line === line)
+        .sort((a, b) => a.range.start.character - b.range.start.character);
+      if (!found[nth]) return `no ${code} on line ${line}`;
+      const { result } = await srv.send("textDocument/codeAction", {
+        textDocument: { uri: fixViewUri },
+        range: found[nth].range,
+        context: { diagnostics: [found[nth]] },
+      });
+      return result.filter((a) => a.kind === "quickfix");
+    };
+    return { srv, actions, flagged: published().length };
+  };
+  const spelled = (e) =>
+    `${e.range.start.line}:${e.range.start.character}-${e.range.end.line}:${e.range.end.character} ${e.newText}`;
+  // Title, preferred, and the edits per file of each action that only changes existing files.
+  const edited = (list) =>
+    list.map((a) => [
+      a.title,
+      a.isPreferred,
+      Object.fromEntries(
+        Object.entries(a.edit.changes).map(([uri, edits]) => [
+          inFixRoot(uri),
+          edits.map(spelled),
+        ]),
+      ),
+    ]);
+  const view = "app/views/users/index.html.erb";
+  const hello = "app/javascript/controllers/hello_controller.js";
+  const withFiles = await fixServer({
+    workspace: {
+      workspaceEdit: {
+        documentChanges: true,
+        resourceOperations: ["create", "rename", "delete"],
+      },
+    },
+  });
+  check("quick fixes: the diagnostics come with data", withFiles.flagged, 11);
+  check(
+    "quick fix: replace a route helper",
+    edited(await withFiles.actions("Rails/UnknownRoute", 0)),
+    [["Replace with `users_path`", true, { [view]: ["0:17-0:26 users_path"] }]],
+  );
+  const titleEnd = "      title: Users".length;
+  check(
+    "quick fixes: a missing key is replaced or added to the default locale's file",
+    [
+      edited(await withFiles.actions("Rails/I18nMissingKey", 1)),
+      edited(await withFiles.actions("Rails/I18nMissingKey", 2)),
+    ],
+    [
+      [
+        ["Use `.title`", true, { [view]: ['1:6-1:14 ".title"'] }],
+        [
+          "Add `users.index.titel` to config/locales/en.yml",
+          false,
+          {
+            "config/locales/en.yml": [
+              `3:${titleEnd}-3:${titleEnd} \n      titel: ""`,
+            ],
+          },
+        ],
+      ],
+      [
+        [
+          "Add `users.index.heading` to config/locales/en.yml",
+          false,
+          {
+            "config/locales/en.yml": [
+              `3:${titleEnd}-3:${titleEnd} \n      heading: ""`,
+            ],
+          },
+        ],
+      ],
+    ],
+  );
+  const created = (
+    await withFiles.actions("Stimulus/UnknownController", 3)
+  ).find((a) => a.title.startsWith("Create"));
+  const importEnd = manifestLines[2].length;
+  const registerEnd = manifestLines[3].length;
+  check(
+    "quick fix: create a controller and list it in the manifest",
+    [
+      created?.title,
+      created?.isPreferred,
+      created?.edit.documentChanges.map((change) =>
+        change.kind === "create"
+          ? `create ${inFixRoot(change.uri)} ${JSON.stringify(change.options)}`
+          : `${inFixRoot(change.textDocument.uri)} ${change.textDocument.version} ${change.edits.map(spelled).join(" | ")}`,
+      ),
+    ],
+    [
+      "Create app/javascript/controllers/helo_controller.js",
+      false,
+      [
+        'create app/javascript/controllers/helo_controller.js {"ignoreIfExists":false,"overwrite":false}',
+        'app/javascript/controllers/helo_controller.js null 0:0-0:0 import { Controller } from "@hotwired/stimulus"\n\nexport default class extends Controller {\n}\n',
+        `app/javascript/controllers/index.js null 2:${importEnd}-2:${importEnd} \nimport HeloController from "./helo_controller" | 3:${registerEnd}-3:${registerEnd} \napplication.register("helo", HeloController)`,
+      ],
+    ],
+  );
+  check(
+    "quick fixes: names Stimulus lints suggest",
+    [
+      (await withFiles.actions("Stimulus/UnknownController", 3)).filter((a) =>
+        a.title.startsWith("Use"),
+      ),
+      await withFiles.actions("Stimulus/UnknownTargetOrAction", 4, 0),
+      await withFiles.actions("Stimulus/UnknownTargetOrAction", 4, 1),
+    ].map((list) => (typeof list === "string" ? list : edited(list))),
+    [
+      [["Use `hello`", true, { [view]: ["3:22-3:26 hello"] }]],
+      [
+        ["Use `name`", true, { [view]: ["4:48-4:51 name"] }],
+        [
+          `Add \`nme\` to static targets in ${hello}`,
+          false,
+          { [hello]: ['3:26-3:26 , "nme"'] },
+        ],
+      ],
+      [
+        ["Use `greet`", true, { [view]: ["4:79-4:83 greet"] }],
+        [
+          `Add method \`gret()\` to ${hello}`,
+          false,
+          { [hello]: ["7:0-7:0 \n  gret() {\n  }\n"] },
+        ],
+      ],
+    ],
+  );
+  check(
+    "quick fixes: a target and a method are added to the controller",
+    [
+      edited(await withFiles.actions("Stimulus/UnknownTargetOrAction", 5, 0)),
+      edited(await withFiles.actions("Stimulus/UnknownTargetOrAction", 5, 1)),
+    ],
+    [
+      [
+        [
+          `Add \`output\` to static targets in ${hello}`,
+          false,
+          { [hello]: ['3:26-3:26 , "output"'] },
+        ],
+      ],
+      [
+        [
+          `Add method \`rotate()\` to ${hello}`,
+          false,
+          { [hello]: ["7:0-7:0 \n  rotate() {\n  }\n"] },
+        ],
+      ],
+    ],
+  );
+  check(
+    "quick fixes: alt and id are added",
+    [
+      await withFiles.actions("Html/ImgAlt", 6),
+      await withFiles.actions("Html/ImgAlt", 7),
+      await withFiles.actions("Turbo/PermanentRequiresId", 8),
+    ].map(edited),
+    [
+      [['Add `alt=""`', false, { [view]: ['6:4-6:4  alt=""'] }]],
+      [['Add `alt: ""`', false, { [view]: ['7:21-7:21 , alt: ""'] }]],
+      [["Add `id`", false, { [view]: ['8:4-8:4  id=""'] }]],
+    ],
+  );
+  await withFiles.srv.send("shutdown", {});
+  await withFiles.srv.send("exit", {}, true);
+  // A client that can't create files is offered no file to create.
+  const withoutFiles = await fixServer({});
+  check(
+    "quick fix: no controller file for a client that cannot create files",
+    (await withoutFiles.actions("Stimulus/UnknownController", 3)).map(
+      (a) => a.title,
+    ),
+    ["Use `hello`"],
+  );
+  await withoutFiles.srv.send("shutdown", {});
+  await withoutFiles.srv.send("exit", {}, true);
+  fs.rmSync(fixRoot, { recursive: true, force: true });
   await aligned.send("shutdown", {});
   await aligned.send("exit", {}, true);
   await send("shutdown", {});

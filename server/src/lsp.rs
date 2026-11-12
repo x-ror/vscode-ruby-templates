@@ -1,4 +1,5 @@
 mod complete;
+mod fixes;
 mod locals;
 
 use crate::checks::{diagnostics_in, Doc, STRICT_LOCALS, UNRESOLVED_RENDER};
@@ -70,6 +71,7 @@ pub async fn serve() {
         dynamic_formatting: OnceLock::new(),
         dynamic_watching: OnceLock::new(),
         semantic_refresh: OnceLock::new(),
+        file_operations: OnceLock::new(),
         publishes: Arc::default(),
         next_publish: AtomicU64::new(0),
     })
@@ -110,6 +112,8 @@ struct Backend {
     dynamic_watching: OnceLock<Option<Watching>>,
     /// The client takes `workspace/semanticTokens/refresh`.
     semantic_refresh: OnceLock<bool>,
+    /// The client applies workspace edits that create files and edit them in one go.
+    file_operations: OnceLock<bool>,
     /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
     local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
@@ -138,6 +142,9 @@ impl LanguageServer for Backend {
         let relative = watching.relative_pattern_support.unwrap_or(false);
         let _ = self.dynamic_watching.set((watching.dynamic_registration == Some(true)).then_some(Watching { roots, relative }));
         let _ = self.semantic_refresh.set(workspace.semantic_tokens.and_then(|t| t.refresh_support).unwrap_or(false));
+        let workspace_edit = workspace.workspace_edit.unwrap_or_default();
+        let creates = workspace_edit.resource_operations.is_some_and(|operations| operations.contains(&ResourceOperationKind::Create));
+        let _ = self.file_operations.set(creates && workspace_edit.document_changes == Some(true));
         Ok(InitializeResult {
             offset_encoding: None,
             server_info: Some(ServerInfo { name: SERVER_NAME.into(), version: Some(env!("CARGO_PKG_VERSION").into()) }),
@@ -588,6 +595,8 @@ impl LanguageServer for Backend {
         actions.extend(silent_output_fixes(&uri, &doc, &diagnostics));
         actions.extend(output_control_flow_fixes(&uri, &diagnostics));
         actions.extend(unused_variable_fixes(&uri, &doc, &project, &path, &diagnostics));
+        actions.extend(fixes::document_fixes(&uri, &doc, &diagnostics));
+        actions.extend(self.file_fixes(&path, &diagnostics).await?);
         Ok(Some(actions))
     }
 

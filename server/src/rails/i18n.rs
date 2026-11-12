@@ -218,6 +218,15 @@ impl Catalog {
         lookup(&self.locales, key).any(|(_, t)| self.fallbacks || t.locale == self.default_locale)
     }
 
+    /// The file that holds the group of the default locale closest to `key` (`users.index` for `users.index.title`), where a
+    /// new entry for `key` belongs; none when no group of `key` has an entry.
+    pub fn file_near<'a>(&'a self, key: &'a str) -> Option<&'a Path> {
+        let groups = key.match_indices('.').map(|(at, _)| &key[..at]).rev();
+        let mut groups =
+            groups.flat_map(|group| lookup(&self.locales, group).filter(|(_, t)| t.locale == self.default_locale && t.value.is_none()));
+        groups.next().map(|(file, _)| file)
+    }
+
     /// The keys of the default locale below `scope`, each from the dot that follows it (`.title`).
     pub fn keys_under(&self, scope: &str) -> Vec<&str> {
         let prefix = format!("{scope}.");
@@ -516,7 +525,7 @@ fn push_list_item(key: &mut Translation, item: &str) -> bool {
 }
 
 /// `key: rest` / `"key": rest`.
-fn split_key(line: &str) -> Option<(&str, &str)> {
+pub(super) fn split_key(line: &str) -> Option<(&str, &str)> {
     if let Some(q) = line.chars().next().filter(|c| *c == '"' || *c == '\'') {
         let close = line[1..].find(q)? + 1;
         return Some((&line[1..close], line[close + 1..].strip_prefix(':')?));
@@ -527,7 +536,7 @@ fn split_key(line: &str) -> Option<(&str, &str)> {
 }
 
 /// The anchor name (`&name`) that starts `rest`, and what follows it.
-fn split_anchor(rest: &str) -> (Option<&str>, &str) {
+pub(super) fn split_anchor(rest: &str) -> (Option<&str>, &str) {
     let rest = rest.trim();
     let Some(after) = rest.strip_prefix('&') else { return (None, rest) };
     let (name, tail) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
@@ -536,7 +545,7 @@ fn split_anchor(rest: &str) -> (Option<&str>, &str) {
 
 /// The scalar after `key:`, without quotes or comment, and the quote left open when it continues on
 /// the next line; `None` when a mapping follows.
-fn scalar_value(rest: &str) -> Option<(String, Option<char>)> {
+pub(super) fn scalar_value(rest: &str) -> Option<(String, Option<char>)> {
     let rest = split_anchor(rest).1;
     if rest.is_empty() || rest.starts_with('#') {
         return None;
