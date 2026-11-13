@@ -7,17 +7,17 @@ import path from "path";
 import { pathToFileURL } from "url";
 
 const exe = process.platform === "win32" ? ".exe" : "";
-// CI builds per target and passes the binary in.
-const bin =
-  process.env.RUBY_TEMPLATES ??
-  path.join(
-    import.meta.dirname,
-    "..",
-    "server",
-    "target",
-    "release",
-    `ruby-templates${exe}`,
-  );
+// CI builds per target and passes the binary in, relative to the repo; cases run from other folders.
+const bin = process.env.RUBY_TEMPLATES
+  ? path.resolve(process.env.RUBY_TEMPLATES)
+  : path.join(
+      import.meta.dirname,
+      "..",
+      "server",
+      "target",
+      "release",
+      `ruby-templates${exe}`,
+    );
 const run = (args, input, cwd) => {
   const r = spawnSync(bin, args, { encoding: "utf8", input, cwd });
   if (r.error) throw r.error;
