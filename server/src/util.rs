@@ -12,6 +12,19 @@ pub fn slash_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// `path` resolved as `fs::canonicalize` does, without the `\\?\` Windows puts before a drive, which URIs and paths the
+/// user typed don't have.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    std::fs::canonicalize(path).map(without_verbatim_drive)
+}
+
+fn without_verbatim_drive(path: PathBuf) -> PathBuf {
+    let mut components = path.components();
+    let Some(std::path::Component::Prefix(prefix)) = components.next() else { return path };
+    let std::path::Prefix::VerbatimDisk(drive) = prefix.kind() else { return path };
+    PathBuf::from(format!("{}:{}", drive as char, components.as_path().display()))
+}
+
 /// Convert a byte offset within `text` to an LSP position (line, UTF-16 column); for many offsets, use one `LineIndex`.
 pub fn offset_to_position(text: &str, offset: usize) -> Position {
     let offset = char_floor(text, offset);
@@ -405,6 +418,20 @@ pub fn raw_lines(text: &str) -> impl Iterator<Item = (usize, &str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn a_canonical_drive_path_loses_its_verbatim_prefix() {
+        assert_eq!(without_verbatim_drive(PathBuf::from(r"\\?\C:\app\views")), Path::new(r"C:\app\views"));
+        assert_eq!(without_verbatim_drive(PathBuf::from(r"\\?\UNC\host\share\a")), Path::new(r"\\?\UNC\host\share\a"));
+    }
+
+    #[test]
+    fn canonicalize_keeps_a_plain_absolute_path() {
+        let here = canonicalize(Path::new(".")).unwrap();
+        assert!(here.is_absolute());
+        assert!(!here.to_string_lossy().starts_with(r"\\?\"));
+    }
 
     #[test]
     fn edit_distance_counts_single_character_changes() {

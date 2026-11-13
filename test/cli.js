@@ -4,26 +4,30 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 
 const exe = process.platform === "win32" ? ".exe" : "";
-// CI builds per target and passes the binary in.
-const bin =
-  process.env.RUBY_TEMPLATES ??
-  path.join(
-    import.meta.dirname,
-    "..",
-    "server",
-    "target",
-    "release",
-    `ruby-templates${exe}`,
-  );
-const run = (args, input) => {
-  const r = spawnSync(bin, args, { encoding: "utf8", input });
+// CI builds per target and passes the binary in, relative to the repo; cases run from other folders.
+const bin = process.env.RUBY_TEMPLATES
+  ? path.resolve(process.env.RUBY_TEMPLATES)
+  : path.join(
+      import.meta.dirname,
+      "..",
+      "server",
+      "target",
+      "release",
+      `ruby-templates${exe}`,
+    );
+const run = (args, input, cwd) => {
+  const r = spawnSync(bin, args, { encoding: "utf8", input, cwd });
   if (r.error) throw r.error;
   return r;
 };
 
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-cli-")));
+// The native call expands Windows short names (RUNNER~1) as the binary's canonical paths do.
+const root = fs.realpathSync.native(
+  fs.mkdtempSync(path.join(os.tmpdir(), "rt-cli-")),
+);
 const views = path.join(root, "app", "views", "users");
 fs.mkdirSync(views, { recursive: true });
 const file = (name, text) => {
@@ -662,6 +666,161 @@ try {
       "[Layout.TrailingWhitespace]\nenabled = false\n",
     );
   }
+
+  // --format: relative paths, characters instead of UTF-16 units, escaping, and a config problem.
+  const ci = path.join(root, "ci");
+  fs.mkdirSync(path.join(ci, "app", "views"), { recursive: true });
+  fs.writeFileSync(
+    path.join(ci, "app", "views", "a b.html.erb"),
+    '<p>😀д</p><img src="a">\n',
+  );
+  fs.writeFileSync(path.join(ci, ".ruby-templates.toml"), "[Html.ImgAlt\n");
+  const checkCi = (format) =>
+    run(["check", "app", "--format", format], undefined, ci);
+  const imgAlt =
+    "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)";
+  const tomlProblem = "invalid TOML: unclosed table, expected `]`";
+  r = checkCi("text");
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    `.ruby-templates.toml:1:13: warning: ${tomlProblem}\n` +
+      `${path.join("app", "views", "a b.html.erb")}:1:11: warning: ${imgAlt}\n`,
+    "text keeps UTF-16 columns and the platform's separators",
+  );
+  r = checkCi("github");
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    `::warning file=.ruby-templates.toml,line=1,col=13,endLine=1,endColumn=13,title=Config/Invalid::${tomlProblem}\n` +
+      `::warning file=app/views/a b.html.erb,line=1,col=10,endLine=1,endColumn=14,title=Html/ImgAlt::${imgAlt}\n`,
+  );
+  r = checkCi("json");
+  assert.strictEqual(r.status, 1);
+  assert.deepStrictEqual(r.stdout.trim().split("\n").map(JSON.parse), [
+    {
+      file: ".ruby-templates.toml",
+      line: 1,
+      column: 13,
+      endLine: 1,
+      endColumn: 13,
+      severity: "warning",
+      rule: "Config/Invalid",
+      message: tomlProblem,
+    },
+    {
+      file: "app/views/a b.html.erb",
+      line: 1,
+      column: 10,
+      endLine: 1,
+      endColumn: 14,
+      severity: "warning",
+      rule: "Html/ImgAlt",
+      message: imgAlt,
+    },
+  ]);
+  r = checkCi("sarif");
+  assert.strictEqual(r.status, 1);
+  const sarif = JSON.parse(r.stdout);
+  const [sarifRun] = sarif.runs;
+  assert.strictEqual(sarif.version, "2.1.0");
+  assert.strictEqual(sarifRun.tool.driver.name, "ruby-templates");
+  assert.strictEqual(sarifRun.columnKind, "unicodeCodePoints");
+  const site = "https://x-ror.github.io/vscode-ruby-templates/reference/";
+  assert.deepStrictEqual(sarifRun.tool.driver.rules, [
+    {
+      id: "Config/Invalid",
+      shortDescription: { text: "A problem in a .ruby-templates.toml." },
+      helpUri: `${site}rules/#configuration`,
+    },
+    {
+      id: "Html/ImgAlt",
+      shortDescription: { text: "An image without alt text." },
+      fullDescription: { text: "An image without alt text." },
+      helpUri: `${site}diagnostics/#html-imgalt`,
+    },
+  ]);
+  assert.deepStrictEqual(sarifRun.results[1], {
+    ruleId: "Html/ImgAlt",
+    level: "warning",
+    message: { text: imgAlt },
+    locations: [
+      {
+        physicalLocation: {
+          artifactLocation: {
+            uri: pathToFileURL(path.join(ci, "app", "views", "a b.html.erb"))
+              .href,
+          },
+          region: { startLine: 1, startColumn: 10, endLine: 1, endColumn: 14 },
+        },
+      },
+    ],
+  });
+  assert.strictEqual(sarifRun.results[0].ruleId, "Config/Invalid");
+  assert.strictEqual(sarifRun.results[0].level, "warning");
+  // Where a config problem prints doesn't depend on which worker gets there first.
+  for (let i = 0; i < 12; i++) {
+    fs.writeFileSync(path.join(ci, "app", `b${i}.html.erb`), "<p>ok</p>\n");
+  }
+  for (let i = 0; i < 5; i++) {
+    const lines = checkCi("github").stdout.trim().split("\n");
+    assert.strictEqual(lines.length, 2, lines.join("\n"));
+    assert.match(lines[0], /^::warning file=\.ruby-templates\.toml,/);
+  }
+  fs.writeFileSync(
+    path.join(ci, "app", "bom.html.erb"),
+    '\uFEFF<img src="a">\n',
+  );
+  assert.match(
+    run(["check", "app/bom.html.erb", "--format", "github"], undefined, ci)
+      .stdout,
+    /file=app\/bom\.html\.erb,line=1,col=1,endLine=1,endColumn=5,/,
+    "a byte order mark takes no column",
+  );
+  if (process.platform !== "win32") {
+    const link = path.join(root, "ci-link");
+    fs.symlinkSync(ci, link);
+    r = run(
+      ["check", path.join(link, "app", "bom.html.erb"), "--format", "json"],
+      undefined,
+      link,
+    );
+    assert.strictEqual(
+      JSON.parse(r.stdout.split("\n").at(-2)).file,
+      "app/bom.html.erb",
+    );
+  }
+  fs.rmSync(path.join(ci, "app", "bom.html.erb"));
+  r = run(["check", views, "--format", "json"]);
+  assert.ok(
+    r.stdout
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .some((f) => f.severity === "error"),
+    "syntax errors are errors",
+  );
+  r = run(["check", clean, "--format", "sarif"]);
+  assert.strictEqual(r.status, 0, "no findings, exit 0");
+  assert.deepStrictEqual(JSON.parse(r.stdout).runs[0].results, []);
+  r = run(["check", "--format", "xml", clean]);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /unknown format xml/);
+
+  fs.mkdirSync(path.join(ci, "fmt"));
+  fs.writeFileSync(path.join(ci, "fmt", "m,n.html.slim"), "div\n p  \n");
+  fs.writeFileSync(path.join(ci, ".ruby-templates.toml"), "");
+  r = run(["format", "--check", "--format", "github", "fmt"], undefined, ci);
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    "::warning file=fmt/m%2Cn.html.slim,title=Format::needs formatting; run `ruby-templates format --write`\n",
+  );
+  assert.strictEqual(
+    run(["format", "--format", "github", "fmt"], undefined, ci).status,
+    2,
+    "--format github needs --check",
+  );
 
   console.log("cli ok");
 } finally {

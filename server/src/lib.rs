@@ -22,6 +22,7 @@ mod options;
 mod outline;
 mod partial_rename;
 mod rails;
+mod report;
 mod ruby;
 mod rules;
 mod semantic_tokens;
