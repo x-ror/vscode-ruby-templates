@@ -417,13 +417,14 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> 
 
 fn format_command(args: &FormatArgs) -> i32 {
     let cwd = crate::util::canonicalize(Path::new(".")).ok();
+    let mut reported = HashSet::new();
     if let Some(path) = &args.stdin_path {
         let mut text = String::new();
         if let Err(e) = std::io::stdin().read_to_string(&mut text) {
             eprintln!("cannot read stdin: {e}");
             return USAGE;
         }
-        return format_text(path, true, &text, args, cwd.as_deref(), (&mut Projects::new(), &mut Configs::new()));
+        return format_text(path, true, &text, args, cwd.as_deref(), (&mut Projects::new(), &mut Configs::new()), &mut reported);
     }
     let files = template_files(&args.paths);
     // Several files on stdout would run together.
@@ -441,7 +442,7 @@ fn format_command(args: &FormatArgs) -> i32 {
                 continue;
             }
         };
-        code = code.max(format_text(&path, named, &text, args, cwd.as_deref(), (&mut projects, &mut configs)));
+        code = code.max(format_text(&path, named, &text, args, cwd.as_deref(), (&mut projects, &mut configs), &mut reported));
     }
     code
 }
@@ -465,8 +466,10 @@ fn format_text(
     args: &FormatArgs,
     cwd: Option<&Path>,
     (projects, configs): (&mut Projects, &mut Configs),
+    reported: &mut HashSet<PathBuf>,
 ) -> i32 {
     let shown = path.display();
+    let mut has_config_problems = false;
     let result = match (absolute_file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
             let rules = resolve(&uri, lang, &Options::default(), configs);
@@ -475,6 +478,14 @@ fn format_text(
             settings.align_comments |= args.align_comments;
             if args.verbose {
                 print_verbose(&shown.to_string(), &settings, &resolved.notes, (&rules, cwd));
+            }
+            for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
+                has_config_problems = true;
+                if !args.verbose && reported.insert(file.path.clone()) {
+                    let mut problems = String::new();
+                    print_problems(file, cwd, &mut problems);
+                    eprint!("{problems}");
+                }
             }
             if let Some(by) = rules.excluded_by() {
                 format::skip(SkipKind::NotHandled, format!("excluded by {}", by.display()))
@@ -486,7 +497,7 @@ fn format_text(
         }
         _ => format::skip(SkipKind::NotHandled, "not an ERB, Haml or Slim template"),
     };
-    let mut code = OK;
+    let mut code = if has_config_problems { FINDINGS } else { OK };
     let formatted = match result {
         Ok(formatted) => {
             if args.verbose {
@@ -529,7 +540,7 @@ fn format_text(
     match std::fs::write(path, formatted) {
         Ok(()) => {
             println!("{shown}");
-            OK
+            code
         }
         Err(e) => {
             eprintln!("cannot write {shown}: {e}");
@@ -606,5 +617,32 @@ mod tests {
         let found: Vec<PathBuf> = template_files(std::slice::from_ref(&root)).into_iter().map(|f| f.path).collect();
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(found, [root.join("app/views/users/show.html.erb")]);
+    }
+
+    #[test]
+    fn format_returns_findings_on_invalid_config() {
+        let root = std::env::temp_dir().join(format!("rt-cli-config-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".ruby-templates.toml"), "[UnknownDept]\n").unwrap();
+        let file = root.join("a.html.erb");
+        std::fs::write(&file, "<p>hi</p>\n").unwrap();
+        let check_args = FormatArgs { check: true, paths: vec![file.clone()], ..Default::default() };
+        let mut reported = HashSet::new();
+        let exit =
+            format_text(&file, true, "<p>hi</p>\n", &check_args, Some(&root), (&mut Projects::new(), &mut Configs::new()), &mut reported);
+        assert_eq!(exit, FINDINGS);
+        assert!(reported.contains(&root.join(".ruby-templates.toml")));
+        let write_args = FormatArgs { write: true, paths: vec![file.clone()], ..Default::default() };
+        let write_exit = format_text(
+            &file,
+            true,
+            "<div><p>hi</p></div>\n",
+            &write_args,
+            Some(&root),
+            (&mut Projects::new(), &mut Configs::new()),
+            &mut reported,
+        );
+        assert_eq!(write_exit, FINDINGS);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

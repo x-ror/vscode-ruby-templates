@@ -305,8 +305,8 @@ fn leaves<'a>(table: &'a DeTable<'a>) -> Vec<(String, Key<'a>, Value<'a>)> {
     for (key, value) in table {
         let name: &str = key.get_ref();
         match value.get_ref().as_table() {
-            Some(inner) => out.extend(inner.iter().map(|(sub, v)| (format!("{name}.{}", sub.get_ref()), sub, v))),
-            None => out.push((name.to_string(), key, value)),
+            Some(inner) if !inner.is_empty() => out.extend(inner.iter().map(|(sub, v)| (format!("{name}.{}", sub.get_ref()), sub, v))),
+            _ => out.push((name.to_string(), key, value)),
         }
     }
     out
@@ -503,6 +503,11 @@ colour = 1
                 "7:24: `disabled_diagnostics` must be a list of strings",
                 "8:2: unknown department `Nope`; the departments are Syntax, Html, A11y, Rails, Turbo, Stimulus, Layout, Style",
             ]
+        );
+        let empty_sub = read("[erb]\n[erb.unknown]\n");
+        assert_eq!(
+            messages(&empty_sub),
+            ["2:6: unknown key `unknown` in [erb]; it takes format.enabled, format.align_comments, diagnostics.enabled, disabled_diagnostics"]
         );
     }
 }

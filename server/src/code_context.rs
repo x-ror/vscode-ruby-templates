@@ -101,11 +101,15 @@ fn render_in_code(
     line_start: usize,
     r: &render_refs::RenderRef,
 ) -> bool {
+    if lang == TemplateLang::Erb {
+        let Some(code_start) = erb::span_at(spans, line_start + r.start) else { return false };
+        let call = line_start + r.call;
+        return code_start <= call && ruby::code_end(&text[code_start..call]) == ruby::CodeEnd::Code;
+    }
     let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
     let in_ruby = || in_ruby_context(lang, text, spans, line_start + r.start);
     let code_start = match (lang, role) {
-        // A tag opened on an earlier line puts the whole line before `render` in Ruby.
-        (TemplateLang::Erb, _) => in_ruby().then(|| line[..r.call].rfind("<%").map_or(0, |open| open + 2)),
+        (TemplateLang::Erb, _) => unreachable!(),
         (TemplateLang::Haml, LineRole::Start) => haml::indent::haml_code_start(line).filter(|&code| code <= r.call),
         (TemplateLang::Haml, LineRole::Ruby) => Some(0),
         (TemplateLang::Haml, LineRole::Text) => None,
@@ -271,5 +275,20 @@ mod tests {
         let haml = "%p\n= link_to";
         assert!(in_ruby_context(TemplateLang::Haml, haml, &[], haml.len()));
         assert!(!in_ruby_context(TemplateLang::Haml, haml, &[], 2));
+    }
+
+    #[test]
+    fn render_filter_tracks_multiline_erb_strings() {
+        let text = "<% s = \"\n  render 'inside_string'\n\" %>\n<%= render 'real' %>\n";
+        let keep = render_filter(TemplateLang::Erb, text, &[]);
+        let mut kept = Vec::new();
+        for (i, (line_start, line)) in util::lines_with_offsets(text).enumerate() {
+            for r in render_refs::render_refs(line) {
+                if keep(i, line_start, &r) {
+                    kept.push(r.name);
+                }
+            }
+        }
+        assert_eq!(kept, ["real"]);
     }
 }
