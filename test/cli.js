@@ -682,8 +682,8 @@ try {
   assert.strictEqual(
     r.stdout,
     `.ruby-templates.toml:1:13: warning: ${tomlProblem}\n` +
-      `app/views/a b.html.erb:1:11: warning: ${imgAlt}\n`,
-    "text keeps UTF-16 columns",
+      `${path.join("app", "views", "a b.html.erb")}:1:11: warning: ${imgAlt}\n`,
+    "text keeps UTF-16 columns and the platform's separators",
   );
   r = checkCi("github");
   assert.strictEqual(r.status, 1);

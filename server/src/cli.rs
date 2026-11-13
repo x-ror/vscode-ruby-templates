@@ -212,7 +212,7 @@ fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
 }
 
 fn absolute_file_uri(path: &Path) -> Option<Uri> {
-    let absolute = std::fs::canonicalize(path).or_else(|_| std::path::absolute(path)).ok()?;
+    let absolute = crate::util::canonicalize(path).or_else(|_| std::path::absolute(path)).ok()?;
     crate::util::file_uri(absolute)
 }
 
@@ -241,7 +241,7 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32, format: 
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
     let next = AtomicUsize::new(0);
     let view_roots = Arc::new(view_roots::Cache::default());
-    let cwd = std::fs::canonicalize(".").ok();
+    let cwd = crate::util::canonicalize(Path::new(".")).ok();
     let output = Output { format, cwd: cwd.as_deref() };
     let (sender, results) = mpsc::channel();
     std::thread::scope(|scope| {
@@ -364,7 +364,7 @@ fn shown_path<'a>(path: &'a Path, cwd: Option<&Path>) -> &'a Path {
 
 /// `path` from the working folder `cwd` however either is spelled (`./`, symlinks); outside it, the path as it is.
 fn relative_path(path: &Path, cwd: Option<&Path>) -> PathBuf {
-    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let real = crate::util::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let from_cwd = cwd.and_then(|cwd| real.strip_prefix(cwd).ok()).unwrap_or(&real);
     from_cwd.components().filter(|part| *part != Component::CurDir).collect()
 }
@@ -416,7 +416,7 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> 
 }
 
 fn format_command(args: &FormatArgs) -> i32 {
-    let cwd = std::fs::canonicalize(".").ok();
+    let cwd = crate::util::canonicalize(Path::new(".")).ok();
     if let Some(path) = &args.stdin_path {
         let mut text = String::new();
         if let Err(e) = std::io::stdin().read_to_string(&mut text) {
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn paths_are_shown_from_the_real_working_folder() {
-        let root = std::fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("rt-cli-relative-{}", std::process::id()));
+        let root = crate::util::canonicalize(&std::env::temp_dir()).unwrap().join(format!("rt-cli-relative-{}", std::process::id()));
         std::fs::create_dir_all(root.join("app")).unwrap();
         std::fs::write(root.join("app/a.erb"), "").unwrap();
         let cwd = Some(root.as_path());
