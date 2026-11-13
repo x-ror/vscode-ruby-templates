@@ -19,7 +19,8 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
 }
 
 /// Byte offset where the Ruby expression that `offset` is in starts: an ERB tag's code, a Slim Ruby range, or a Haml
-/// line's code or attribute hash. `role` is the Haml role of `offset`'s line.
+/// line's code or attribute hash; a call continued over lines (`,` or `\` ends the line) starts on its first line.
+/// `role` is the Haml role of `offset`'s line.
 pub(crate) fn code_start(lang: TemplateLang, text: &str, offset: usize, role: LineRole, extra_engines: &[String]) -> Option<usize> {
     let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
     match lang {
@@ -27,10 +28,19 @@ pub(crate) fn code_start(lang: TemplateLang, text: &str, offset: usize, role: Li
         TemplateLang::Slim => {
             let parsed = slim::parser::parse(text, extra_engines);
             // A range ends at its last character, so the space typed after `link_to "Users",` is outside it.
-            let end = text[..offset].trim_end_matches([' ', '\t']).len();
-            parsed.ruby.iter().find(|r| r.start <= end && end <= r.end).map(|r| r.start)
+            let end = text[..offset].trim_end().len();
+            let found = parsed.ruby.iter().rposition(|r| r.start <= end && end <= r.end)?;
+            // Slim has one range per physical line.
+            let continued = |previous: &std::ops::Range<usize>| text[previous.clone()].trim_end().ends_with([',', '\\']);
+            let first = (0..found).rev().take_while(|&i| continued(&parsed.ruby[i])).last().unwrap_or(found);
+            Some(parsed.ruby[first].start)
         }
-        TemplateLang::Haml if role == LineRole::Ruby => Some(line_start),
+        TemplateLang::Haml if role == LineRole::Ruby => {
+            let start_line = line_roles(lang, text)[..text[..offset].matches('\n').count()].iter().rposition(|r| *r == LineRole::Start);
+            let head = start_line.and_then(|n| util::lines_with_offsets(text).nth(n));
+            let head_code = head.and_then(|(start, line)| Some(start + haml::ruby_start(line, line.len())?));
+            head_code.or(Some(line_start))
+        }
         TemplateLang::Haml => {
             let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
             haml::ruby_start(line, offset - line_start).map(|col| line_start + col)
@@ -231,6 +241,14 @@ mod tests {
         assert_eq!(start(TemplateLang::Haml, "%p= link_to \"x\", |", LineRole::Start), Some(" link_to \"x\", |"));
         assert_eq!(start(TemplateLang::Haml, "%a{href: link_to(\"x\", |)}", LineRole::Start), Some("href: link_to(\"x\", |)}"));
         assert_eq!(start(TemplateLang::Haml, "%p Hello, |", LineRole::Start), None);
+        let slim = "= link_to \"x\",\n  path,\n  cl|";
+        assert_eq!(start(TemplateLang::Slim, slim, LineRole::Start), Some("link_to \"x\",\n  path,\n  cl|"));
+        let slim = "= a\n= b,\n  |";
+        assert_eq!(start(TemplateLang::Slim, slim, LineRole::Start), Some("b,\n  |"));
+        let haml = "= link_to \"x\",\n  path, cl|";
+        assert_eq!(start(TemplateLang::Haml, haml, LineRole::Ruby), Some(" link_to \"x\",\n  path, cl|"));
+        let haml = "%a{href: x,\n  data: |}";
+        assert_eq!(start(TemplateLang::Haml, haml, LineRole::Ruby), Some("href: x,\n  data: |}"));
     }
 
     #[test]

@@ -1730,6 +1730,10 @@ const check = (label, actual, expected) => {
     haml: ['= link_to "Users", ', "haml"],
     slim: ["= format_price 1, ", "slim"],
     html: ['<p>link_to "Users", </p>', "erb"],
+    comment: ['<%= link_to "x", path,\n  # a, b\n  class: ', "erb"],
+    slimLines: ['= link_to "x",\n  path, ', "slim"],
+    options: ['<%= render partial: "x", locals: ', "erb"],
+    interpolation: ['<%= link_to "#{format_price(1, ', "erb"],
   };
   const signatureAt = async (name) => {
     const [text, languageId] = signatures[name];
@@ -1741,11 +1745,12 @@ const check = (label, actual, expected) => {
       { textDocument: { uri: sigUri, languageId, version: 1, text } },
       true,
     );
+    const lines = text.split("\n");
     const { result } = await req(
       "textDocument/signatureHelp",
       sigUri,
-      0,
-      text.length,
+      lines.length - 1,
+      lines.at(-1).length,
     );
     const info = result?.signatures[0];
     return (
@@ -1775,6 +1780,43 @@ const check = (label, actual, expected) => {
     await signatureAt("html"),
     undefined,
   );
+  check(
+    "signature help: comment line in a tag",
+    (await signatureAt("comment"))?.slice(0, 2),
+    ["link_to(name, options = nil, html_options = nil)", 2],
+  );
+  check(
+    "signature help: Slim call over lines",
+    (await signatureAt("slimLines"))?.slice(0, 2),
+    ["link_to(name, options = nil, html_options = nil)", 2],
+  );
+  check(
+    "signature help: keywords are one hash",
+    (await signatureAt("options"))?.slice(0, 2),
+    ["render(options = {}, locals = {}, &block)", 0],
+  );
+  check(
+    "signature help: open interpolation",
+    (await signatureAt("interpolation"))?.slice(0, 2),
+    ["def format_price(x)", 1],
+  );
+  const helperFile = path.join(root, "app", "helpers", "users_helper.rb");
+  const helperText = fs.readFileSync(helperFile, "utf8");
+  const rewriteHelper = async (text) => {
+    fs.writeFileSync(helperFile, text);
+    await send(
+      "workspace/didChangeWatchedFiles",
+      { changes: [{ uri: fileUri(helperFile), type: 2 }] },
+      true,
+    );
+  };
+  await rewriteHelper(helperText.replace("(x)", "(x, y)"));
+  check(
+    "signature help: app helper cache follows the file",
+    (await signatureAt("slim"))?.[0],
+    "def format_price(x, y)",
+  );
+  await rewriteHelper(helperText);
   const shadowUri = fileUri(path.join(views, "users", "shadow.html.erb"));
   await send(
     "textDocument/didOpen",

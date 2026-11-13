@@ -3,12 +3,14 @@
 use crate::ruby;
 use tower_lsp_server::ls_types::*;
 
-/// A call the cursor is in: its name, how many arguments precede the cursor's, and that argument's `key:` if it has one.
+/// A call the cursor is in: its name, how many arguments precede the cursor's, that argument's `key:` if it has one,
+/// and the index of the first `key:` argument, which starts the trailing options hash.
 #[derive(Debug, PartialEq)]
 pub struct Call {
     pub name: String,
     pub index: usize,
     pub keyword: Option<String>,
+    pub first_keyword: Option<usize>,
 }
 
 enum Kind {
@@ -24,6 +26,8 @@ struct Frame {
     /// The bracket that ends it; `None` for a call without parentheses and for a `do` block.
     close: Option<char>,
     commas: usize,
+    /// The index of the first argument before the current one that is a `key:` argument.
+    first_keyword: Option<usize>,
     /// Where the current argument starts.
     arg_start: usize,
 }
@@ -49,8 +53,12 @@ pub fn calls_before(code: &str) -> Vec<Call> {
         let start = i;
         i += 1;
         match byte {
-            b'"' | b'\'' | b'`' => i = string_end(bytes, start),
-            b'#' => i = code[start..].find('\n').map_or(bytes.len(), |end| start + end),
+            b'"' | b'\'' | b'`' => i = string_end(bytes, start).unwrap_or_else(|inside| inside),
+            b'#' => {
+                // The comment doesn't change what the line ended with.
+                i = code[start..].find('\n').map_or(bytes.len(), |end| start + end);
+                continue;
+            }
             b'(' | b'[' => push(&mut stack, Kind::Group, Some(closer(byte)), i),
             b'{' if matches!(last, b')' | b'_' | b'?' | b'!') || last.is_ascii_alphanumeric() => {
                 push(&mut stack, Kind::Block, Some('}'), i);
@@ -60,6 +68,9 @@ pub fn calls_before(code: &str) -> Vec<Call> {
             b')' | b']' | b'}' => close(&mut stack, byte as char),
             b',' => {
                 if let Some(frame) = stack.last_mut() {
+                    if frame.first_keyword.is_none() && keyword_of(&code[frame.arg_start..start]).is_some() {
+                        frame.first_keyword = Some(frame.commas);
+                    }
                     frame.commas += 1;
                     frame.arg_start = i;
                 }
@@ -108,14 +119,18 @@ pub fn calls_before(code: &str) -> Vec<Call> {
         match &frame.kind {
             Kind::Block => break,
             Kind::Group => {}
-            Kind::Call(name) => calls.push(Call { name: name.clone(), index: frame.commas, keyword: keyword_of(&code[frame.arg_start..]) }),
+            Kind::Call(name) => {
+                let keyword = keyword_of(&code[frame.arg_start..]);
+                let first_keyword = frame.first_keyword.or(keyword.as_ref().map(|_| frame.commas));
+                calls.push(Call { name: name.clone(), index: frame.commas, keyword, first_keyword });
+            }
         }
     }
     calls
 }
 
 fn push(stack: &mut Vec<Frame>, kind: Kind, close: Option<char>, arg_start: usize) {
-    stack.push(Frame { kind, close, commas: 0, arg_start });
+    stack.push(Frame { kind, close, commas: 0, first_keyword: None, arg_start });
 }
 
 fn closer(open: u8) -> char {
@@ -137,35 +152,40 @@ fn close(stack: &mut Vec<Frame>, bracket: char) {
 }
 
 /// Just past the string that starts at `open`, interpolations included; the end of `bytes` when it isn't closed.
-fn string_end(bytes: &[u8], open: usize) -> usize {
+/// `Err` is where the code of an interpolation that the input ends in starts: the cursor is in that code.
+fn string_end(bytes: &[u8], open: usize) -> Result<usize, usize> {
     let quote = bytes[open];
     let mut i = open + 1;
     while i < bytes.len() {
         match bytes[i] {
             b'\\' => i += 2,
-            b'#' if quote == b'"' && bytes.get(i + 1) == Some(&b'{') => i = interpolation_end(bytes, i + 2),
-            b if b == quote => return i + 1,
+            b'#' if quote == b'"' && bytes.get(i + 1) == Some(&b'{') => i = interpolation_end(bytes, i + 2)?,
+            b if b == quote => return Ok(i + 1),
             _ => i += 1,
         }
     }
-    bytes.len()
+    Ok(bytes.len())
 }
 
-/// Just past the `}` that closes the interpolation whose code starts at `start`.
-fn interpolation_end(bytes: &[u8], start: usize) -> usize {
+fn skip_string(bytes: &[u8], open: usize) -> usize {
+    string_end(bytes, open).unwrap_or(bytes.len())
+}
+
+/// Just past the `}` that closes the interpolation whose code starts at `start`; `Err(start)` when the input ends first.
+fn interpolation_end(bytes: &[u8], start: usize) -> Result<usize, usize> {
     let mut depth = 0;
     let mut i = start;
     while i < bytes.len() {
         match bytes[i] {
-            b'"' | b'\'' => i = string_end(bytes, i) - 1,
+            b'"' | b'\'' => i = string_end(bytes, i)? - 1,
             b'{' => depth += 1,
-            b'}' if depth == 0 => return i + 1,
+            b'}' if depth == 0 => return Ok(i + 1),
             b'}' => depth -= 1,
             _ => {}
         }
         i += 1;
     }
-    bytes.len()
+    Err(start)
 }
 
 /// Just past the identifier at `start`, with its `?` or `!`.
@@ -197,12 +217,17 @@ fn starts_arguments(after: &str) -> bool {
         let word = &argument[..argument.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(argument.len())];
         return !ruby::KEYWORDS.contains(&word) || matches!(word, "nil" | "true" | "false" | "self");
     }
-    first.is_ascii_digit() || matches!(first, '"' | '\'' | ':' | '@' | '[' | '-' | '~')
+    // `a ? b : c` has a `:` and a space; a symbol has its name right after.
+    let symbol = || argument[1..].starts_with(|c: char| c.is_ascii_alphabetic() || matches!(c, '_' | '"' | '\''));
+    first.is_ascii_digit() || matches!(first, '"' | '\'' | '@' | '[' | '-' | '~') || first == ':' && symbol()
 }
 
 /// The `key` of an argument that starts with `key:`.
 fn keyword_of(argument: &str) -> Option<String> {
-    let argument = argument.trim_start();
+    let mut argument = argument.trim_start();
+    while let Some(comment) = argument.strip_prefix('#') {
+        argument = comment.split_once('\n').map_or("", |(_, rest)| rest).trim_start();
+    }
     let end = argument.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
     let after = &argument[end..];
     (end > 0 && after.starts_with(':') && !after.starts_with("::")).then(|| argument[..end].to_string())
@@ -238,7 +263,7 @@ fn parameters(label: &str) -> Vec<Parameter> {
     let bytes = label.as_bytes();
     while i < bytes.len() {
         match bytes[i] {
-            b'"' | b'\'' => i = string_end(bytes, i) - 1,
+            b'"' | b'\'' => i = skip_string(bytes, i) - 1,
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' if depth > 0 => depth -= 1,
             b',' if depth == 0 => {
@@ -274,19 +299,21 @@ fn parameter(label: &str, start: usize, end: usize) -> Option<Parameter> {
     Some(Parameter { kind, span: (begin, begin + text.len()) })
 }
 
-/// The parameter an argument of `call` is: its keyword's, else the positional one, else the `**options` that takes the rest.
+/// The parameter an argument of `call` is: its `key:`'s parameter, else the `**options` that takes the keywords, else
+/// the positional one. The keyword arguments are one options hash, so one positional parameter whatever their number.
 fn active_parameter(parameters: &[Parameter], call: &Call) -> Option<usize> {
     let position_of = |wanted: fn(&ParameterKind) -> bool| parameters.iter().position(|p| wanted(&p.kind));
-    let by_keyword = call.keyword.as_ref().and_then(|key| parameters.iter().position(|p| p.kind == ParameterKind::Keyword(key.clone())));
+    let keyword_splat = || position_of(|k| *k == ParameterKind::KeywordSplat);
     let positional: Vec<usize> =
         (0..parameters.len()).filter(|&i| matches!(parameters[i].kind, ParameterKind::Positional | ParameterKind::Splat)).collect();
-    let by_position =
-        positional.get(call.index).copied().or_else(|| positional.last().copied().filter(|&i| parameters[i].kind == ParameterKind::Splat));
-    by_keyword
-        .or_else(|| call.keyword.is_some().then(|| position_of(|k| *k == ParameterKind::KeywordSplat)).flatten())
-        .or(by_position)
-        .or_else(|| position_of(|k| *k == ParameterKind::KeywordSplat))
-        .or_else(|| position_of(|k| matches!(k, ParameterKind::Keyword(_))))
+    let by_position = |index: usize| {
+        positional.get(index).copied().or_else(|| positional.last().copied().filter(|&i| parameters[i].kind == ParameterKind::Splat))
+    };
+    let Some(first_keyword) = call.first_keyword else {
+        return by_position(call.index).or_else(keyword_splat).or_else(|| position_of(|k| matches!(k, ParameterKind::Keyword(_))));
+    };
+    let named = call.keyword.as_ref().and_then(|key| parameters.iter().position(|p| p.kind == ParameterKind::Keyword(key.clone())));
+    named.or_else(keyword_splat).or_else(|| by_position(call.index.min(first_keyword)))
 }
 
 /// The signature help for `call` of the method written as `label`; none for a method without parameters.
@@ -362,6 +389,9 @@ mod tests {
         assert_eq!(innermost("foo(link_to \"x\", y, "), at("link_to", 2));
         assert_eq!(innermost("foo(link_to \"x\", y), "), None, "foo is closed");
         assert_eq!(innermost("link_to"), None);
+        assert_eq!(innermost("link_to \"x\", admin ? format_price : root_path, "), at("link_to", 2), "a ternary is no call");
+        assert_eq!(innermost("link_to a ? b : c, "), at("link_to", 1));
+        assert_eq!(innermost("link_to :users, "), at("link_to", 1));
         assert_eq!(innermost("link_to = 1"), None);
     }
 
@@ -370,6 +400,18 @@ mod tests {
         assert!(calls_before("link_to \"Users").is_empty(), "inside a string");
         assert!(calls_before("link_to \"x\", # a, b").is_empty(), "inside a comment");
         assert!(calls_before("").is_empty());
+    }
+
+    #[test]
+    fn code_around_comments_and_interpolations() {
+        let calls = calls_before("link_to \"x\", path,\n  # a, b\n  class: ");
+        assert_eq!(
+            calls.iter().map(|c| (c.name.as_str(), c.index, c.keyword.as_deref())).collect::<Vec<_>>(),
+            [("link_to", 2, Some("class"))]
+        );
+        let calls = calls_before("link_to \"#{format_price(1, ");
+        assert_eq!(calls.iter().map(|c| (c.name.as_str(), c.index)).collect::<Vec<_>>(), [("format_price", 1), ("link_to", 0)]);
+        assert_eq!(innermost("link_to \"#{x} y\", "), at("link_to", 1));
     }
 
     #[test]
@@ -398,6 +440,13 @@ mod tests {
         assert_eq!(highlighted(link_to, "link_to("), Some("name = nil".into()));
         assert_eq!(highlighted(link_to, "link_to \"x\", "), Some("options = nil".into()));
         assert_eq!(highlighted(link_to, "link_to \"x\", y, class: "), Some("html_options = nil".into()));
+        assert_eq!(highlighted(link_to, "link_to \"x\", y, class: \"a\", data: "), Some("html_options = nil".into()), "one options hash");
+        assert_eq!(highlighted(link_to, "link_to \"x\", y, class: \"a\", "), Some("html_options = nil".into()));
+        assert_eq!(
+            highlighted("render(options = {}, locals = {}, &block)", "render partial: \"x\", locals: "),
+            Some("options = {}".into())
+        );
+        assert_eq!(highlighted("image_tag(source, options = {})", "image_tag \"a.png\", class: \"x\", alt: "), Some("options = {}".into()));
         assert_eq!(highlighted(link_to, "link_to \"x\", y, z, "), None, "past the parameters");
         let frame = "turbo_frame_tag(*ids, src: nil, target: nil, **attributes, &block)";
         assert_eq!(highlighted(frame, "turbo_frame_tag \"a\", "), Some("*ids".into()));
@@ -416,13 +465,15 @@ mod tests {
         assert!(parameters("def current_user").is_empty());
         assert!(parameters("def total = sum(1)").is_empty());
         assert!(parameters("local_assigns — partial locals hash").is_empty());
-        assert!(signature_help("def current_user", None, &Call { name: "x".into(), index: 0, keyword: None }).is_none());
+        assert!(
+            signature_help("def current_user", None, &Call { name: "x".into(), index: 0, keyword: None, first_keyword: None }).is_none()
+        );
     }
 
     #[test]
     fn parameter_offsets_count_utf16() {
         let label = "price(note = \"€💶\", amount)";
-        let call = Call { name: "price".into(), index: 1, keyword: None };
+        let call = Call { name: "price".into(), index: 1, keyword: None, first_keyword: None };
         let help = signature_help(label, None, &call).unwrap();
         let ParameterLabel::LabelOffsets(offsets) = help.signatures[0].parameters.as_ref().unwrap()[1].label.clone() else { panic!() };
         let units: Vec<u16> = label.encode_utf16().collect();
