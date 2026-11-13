@@ -183,7 +183,17 @@ fn hash_key(inner: &str) -> Option<(&str, AttrPlace)> {
             }
             // After a nested value closes, the key is behind us until the next `,`.
             (None, '}' | ')' | ']') => {
-                open.pop();
+                let expected = match ch {
+                    '}' => '{',
+                    ')' => '(',
+                    _ => '[',
+                };
+                if open.last().is_some_and(|&(b, _)| b == expected) {
+                    open.pop();
+                }
+                if open.is_empty() {
+                    return None;
+                }
                 segment = None;
             }
             (None, ',') => segment = Some(i + 1),
@@ -407,6 +417,9 @@ mod tests {
             let (line, col) = split(src);
             assert_eq!(completion_context(&line, col), want, "{src:?}");
         }
+        assert_eq!(hash_key("a: 1}, "), None);
+        assert_eq!(hash_key("a: foo(1, 2}, "), None);
+        assert_eq!(hash_key("a: foo(1, 2), "), Some(("", AttrPlace::Hash)));
     }
 
     #[test]

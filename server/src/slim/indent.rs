@@ -260,11 +260,9 @@ fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
     let mut pos = 0usize;
-    let b = s.as_bytes();
-    while pos < b.len() {
-        let ch = b[pos] as char;
-        if ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':') {
-            pos += 1;
+    for ch in s.chars() {
+        if ch.is_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':') {
+            pos += ch.len_utf8();
         } else {
             break;
         }
@@ -787,6 +785,10 @@ mod tests {
     #[test]
     fn non_ascii_text_after_tag() {
         assert!(slim("p Größe\np ü\nspan.x ä=1 b\n").is_empty());
+        assert!(slim(".café(a=1\n  b=2)\n  p ok\n").is_empty());
+        let closed = diagnostics(".café/\n  p\n", &[]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].message, "Unexpected indentation");
     }
 
     #[test]

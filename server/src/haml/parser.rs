@@ -1620,6 +1620,7 @@ enum Mode {
     Heredoc {
         id: usize,
         interpolates: bool,
+        dashed: bool,
     },
 }
 
@@ -1707,7 +1708,10 @@ impl BraceScanner {
     /// whole line; true when it did.
     fn closes_at_line_start(&mut self, line: &str) -> bool {
         let closes = match self.modes.last() {
-            Some(&Mode::Heredoc { id, .. }) => line == self.heredoc_ids[id],
+            Some(&Mode::Heredoc { id, dashed, .. }) => {
+                let trimmed = line.trim_start_matches([' ', '\t']);
+                (dashed || trimmed.len() == line.len()) && trimmed == self.heredoc_ids[id]
+            }
             Some(Mode::Text { closer: '\n', .. }) => true,
             _ => false,
         };
@@ -1758,6 +1762,10 @@ impl BraceScanner {
         match ch {
             ' ' | '\t' => {}
             '#' => return None,
+            '$' if matches!(next, Some('"' | '\'' | '`' | '/')) => {
+                after = i + 2;
+                self.previous = Some('x');
+            }
             '"' | '`' | '\'' => self.modes.push(Mode::Text { closer: ch, opener: None, nested: 0, interpolates: ch != '\'' }),
             '/' if literal_expected => self.modes.push(Mode::Text { closer: '/', opener: None, nested: 0, interpolates: true }),
             '%' if literal_expected => after = self.percent_literal(chars, i),
@@ -1798,8 +1806,9 @@ impl BraceScanner {
     fn heredoc_or_operator(&mut self, chars: &[(usize, char)], at: usize, literal_expected: bool) -> usize {
         match heredoc_start(chars, at) {
             Some((id, interpolates, end)) if literal_expected || chars[at + 2..end].iter().any(|&(_, c)| c == '~' || c == '-') => {
+                let dashed = matches!(chars.get(at + 2), Some((_, '~' | '-')));
                 self.heredoc_ids.push(id);
-                self.pending_heredocs.push(Mode::Heredoc { id: self.heredoc_ids.len() - 1, interpolates });
+                self.pending_heredocs.push(Mode::Heredoc { id: self.heredoc_ids.len() - 1, interpolates, dashed });
                 self.previous = Some('"');
                 end
             }
@@ -2481,6 +2490,12 @@ mod tests {
         );
         assert_eq!(roles("%p\n\n\n"), [Structural { depth: 0 }]);
         assert_eq!(roles("\n\n%p"), [Blank, Blank, Structural { depth: 0 }]);
+    }
+
+    #[test]
+    fn multiline_hash_handles_global_vars_and_indented_heredocs() {
+        assert_eq!(error_of("%p{ a: $\",\n  b: 1 }\n  child"), None);
+        assert_eq!(error_of("%p{ a: <<~EOS,\n  body\n  EOS\n  b: 1 }\n  child"), None);
     }
 
     /// `HAML_PAIRS=dir cargo test --release pairs -- --ignored`: `dir` holds `N.a`, `N.b` and `N.eq` (`1` when Haml

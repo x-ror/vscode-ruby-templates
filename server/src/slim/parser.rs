@@ -594,6 +594,9 @@ impl<'a> Parser<'a> {
     fn match_engine(&self, r: &'a str) -> Option<Engine<'a>> {
         let name = *self.engines.iter().find(|e| r.starts_with(**e))?;
         let after = &r[name.len()..];
+        if !after.chars().next().is_some_and(|c| c == ':' || is_space(c) || closing_bracket(c).is_some()) {
+            return None;
+        }
         let colon = after.rfind(':')?;
         let attrs_end = self.pos + name.len() + colon;
         let attrs_start = attrs_end - trim_start(&after[..colon]).len();
@@ -1164,6 +1167,11 @@ mod tests {
         assert_eq!(ruby(text), ["not_ruby"]);
         let extra = ["mjml".to_string()];
         assert!(parse(text, &extra).ruby.is_empty());
+        // Tag names that merely start with an engine name (`javascript_pack: ...`) remain tags.
+        let tag_with_prefix = "javascript_pack:\n  = x";
+        let parsed = parse(tag_with_prefix, &[]);
+        assert!(parsed.markers.iter().all(|(_, m)| *m != Marker::Engine));
+        assert_eq!(ruby(tag_with_prefix), ["x"]);
     }
 
     #[test]
