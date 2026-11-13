@@ -50,7 +50,8 @@ const SERVER_NAME: &str = "ruby-templates-ls";
 /// The client's notification with the app's routes.
 const ROUTES_NOTIFICATION: &str = "rubyTemplates/routes";
 
-const SLIM_FORMATTING_REGISTRATION: &str = "slim-formatting";
+const FORMATTING_REGISTRATION: &str = "formatting";
+const RANGE_FORMATTING_REGISTRATION: &str = "range-formatting";
 
 /// Runs the language server on stdin/stdout until the client exits.
 pub async fn serve() {
@@ -66,6 +67,7 @@ pub async fn serve() {
         local_callers: DashMap::new(),
         app_helpers: Arc::default(),
         warming: Arc::default(),
+        projects: Arc::default(),
         view_roots: Arc::default(),
         routes: Arc::default(),
         options: Arc::default(),
@@ -98,6 +100,8 @@ struct Backend {
     cache_generation: Arc<AtomicU64>,
     /// The cache roots a background fill is reading, so documents opened together start one fill each.
     warming: Arc<DashSet<PathBuf>>,
+    /// Each app's cached project metadata, cleared when a watched file may have changed it.
+    projects: Arc<DashMap<project::ProjectKey, Project>>,
     /// Each app's view roots, found off the server task and dropped when a watched file may have changed them.
     view_roots: Arc<view_roots::Cache>,
     /// Routes per Rails root, as the client last sent them.
@@ -109,9 +113,8 @@ struct Backend {
     config_reports: Arc<ConfigReports>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
     roots: OnceLock<Vec<PathBuf>>,
-    /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration:
-    /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
-    dynamic_formatting: OnceLock<bool>,
+    /// Formatting and range formatting are dynamically registered for supported template languages when supported by the client.
+    dynamic_formatting: OnceLock<(bool, bool)>,
     /// The client takes `workspace/didChangeWatchedFiles` registrations, for config files outside the workspace folders.
     dynamic_watching: OnceLock<Option<Watching>>,
     /// The client takes `workspace/semanticTokens/refresh`.
@@ -140,9 +143,10 @@ impl LanguageServer for Backend {
         let root_uri = params.root_uri.iter().cloned();
         let folders = params.workspace_folders.unwrap_or_default().into_iter().map(|f| f.uri);
         let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| util::file_path(&u)).collect());
-        let dynamic_formatting =
-            params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
-        let _ = self.dynamic_formatting.set(dynamic_formatting);
+        let text_doc = params.capabilities.text_document.as_ref();
+        let fmt = text_doc.and_then(|t| t.formatting.as_ref()).and_then(|f| f.dynamic_registration).unwrap_or(false);
+        let range_fmt = text_doc.and_then(|t| t.range_formatting.as_ref()).and_then(|f| f.dynamic_registration).unwrap_or(false);
+        let _ = self.dynamic_formatting.set((fmt, range_fmt));
         let workspace = params.capabilities.workspace.unwrap_or_default();
         let watching = workspace.did_change_watched_files.unwrap_or_default();
         let roots = self.roots.get().cloned().unwrap_or_default();
@@ -211,15 +215,33 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        if self.dynamic_formatting.get() == Some(&true) {
-            let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
-            let registration = Registration {
-                id: SLIM_FORMATTING_REGISTRATION.into(),
+        let &(fmt, range_fmt) = self.dynamic_formatting.get().unwrap_or(&(false, false));
+        let selector = serde_json::json!({
+            "documentSelector": [
+                { "language": "erb" },
+                { "language": "haml" },
+                { "language": "slim" },
+                { "language": "skim" }
+            ]
+        });
+        let mut registrations = Vec::new();
+        if fmt {
+            registrations.push(Registration {
+                id: FORMATTING_REGISTRATION.into(),
                 method: "textDocument/formatting".into(),
+                register_options: Some(selector.clone()),
+            });
+        }
+        if range_fmt {
+            registrations.push(Registration {
+                id: RANGE_FORMATTING_REGISTRATION.into(),
+                method: "textDocument/rangeFormatting".into(),
                 register_options: Some(selector),
-            };
-            if let Err(e) = self.client.register_capability(vec![registration]).await {
-                self.client.log_message(MessageType::WARNING, format!("Slim formatting not registered: {e}")).await;
+            });
+        }
+        if !registrations.is_empty() {
+            if let Err(e) = self.client.register_capability(registrations).await {
+                self.client.log_message(MessageType::WARNING, format!("Formatting not registered: {e}")).await;
             }
         }
         self.client.log_message(MessageType::INFO, format!("{SERVER_NAME} ready")).await;
@@ -274,9 +296,15 @@ impl LanguageServer for Backend {
         let events: Vec<(PathBuf, FileChangeType)> =
             p.changes.into_iter().filter_map(|e| Some((util::file_path(&e.uri)?, e.typ))).collect();
         self.cache_generation.fetch_add(1, Ordering::SeqCst);
+        self.projects.clear();
         self.local_callers.clear();
+        let mut config_changed = false;
         for (path, _) in events.iter().filter(|(path, _)| path.ends_with(FILE_NAME)) {
+            config_changed = true;
             self.config_reports.forget(&self.client, path).await;
+        }
+        if config_changed {
+            self.resolved.clear();
         }
         if may_change_view_roots(&events) {
             self.view_roots.clear();
@@ -559,8 +587,11 @@ impl LanguageServer for Backend {
         }
         let path = util::file_path(&uri);
         let extra_engines = self.engines(&uri);
+        let (projects, view_roots, generation) =
+            (Arc::clone(&self.projects), Arc::clone(&self.view_roots), Arc::clone(&self.cache_generation));
         let data = off_server_task(move || {
-            let close = path.map_or_else(Default::default, |path| Project::for_template(&path).strict_locals_close());
+            let close =
+                path.map_or_else(Default::default, |path| cached_project(&projects, &view_roots, &generation, &path).strict_locals_close());
             semantic_tokens::tokens(lang, &text, close, &extra_engines)
         })
         .await?;
@@ -638,7 +669,7 @@ impl LanguageServer for Backend {
     async fn prepare_rename(&self, p: TextDocumentPositionParams) -> Result<Option<PrepareRenameResponse>> {
         let Some(doc) = self.template_doc(&p.text_document.uri) else { return Ok(None) };
         let Some(path) = util::file_path(&p.text_document.uri) else { return Ok(None) };
-        if Project::for_template(&path).is_gem_file(&path) {
+        if self.project_for(&path).is_gem_file(&path) {
             return Ok(None);
         }
         Ok(self.strict_local_at(&p.text_document.uri, &doc, p.position).map(|local| PrepareRenameResponse::Range(local.range)))
@@ -760,7 +791,7 @@ impl LanguageServer for Backend {
                     .is_some_and(|u| TemplateLang::from_uri_or_id(&u, None).is_some_and(|lang| lang != TemplateLang::Liquid))
             };
             let templates: Vec<PathBuf> = self.views_files(&views).iter().filter(is_template).cloned().collect();
-            let project = Project::for_views(&views).with_view_cache(Arc::clone(&self.view_roots));
+            let project = self.project_for(&views.join("_"));
             for (name, kind, file) in partials::named_templates(&project, &views, &templates) {
                 if !util::fuzzy_match(&name.to_lowercase(), &query) {
                     continue;
@@ -784,18 +815,19 @@ impl LanguageServer for Backend {
         let to_path = |uri: &str| util::file_path(&uri.parse::<Uri>().ok()?);
         let renames: Vec<(PathBuf, PathBuf)> = p.files.iter().filter_map(|f| Some((to_path(&f.old_uri)?, to_path(&f.new_uri)?))).collect();
         // A gem's files are read-only: renaming one rewrites nothing.
-        let renames: Vec<_> = renames.into_iter().filter(|(old, _)| !Project::for_template(old).is_gem_file(old)).collect();
+        let renames: Vec<_> = renames.into_iter().filter(|(old, _)| !self.project_for(old).is_gem_file(old)).collect();
         let mut roots: Vec<PathBuf> = renames.iter().filter_map(|(old, _)| paths::views_root(old)).collect();
         roots.sort();
         roots.dedup();
         let open = self.open_texts();
         let mut engines = self.engines_lookup();
-        let view_roots = Arc::clone(&self.view_roots);
+        let (projects, view_roots, generation) =
+            (Arc::clone(&self.projects), Arc::clone(&self.view_roots), Arc::clone(&self.cache_generation));
         let changes = off_server_task(move || {
             let mut changes = HashMap::new();
             for views in roots {
                 let sources = partial_rename::sources(&views, &open, &mut engines);
-                let project = Project::for_views(&views).with_view_cache(Arc::clone(&view_roots));
+                let project = cached_project(&projects, &view_roots, &generation, &views.join("_"));
                 changes.extend(partial_rename::render_edits(&project, &renames, &sources));
             }
             changes
@@ -813,8 +845,7 @@ impl LanguageServer for Backend {
         Ok(Some(vec![TextEdit::new(Range::new(Position::new(0, 0), end), formatted)]))
     }
 
-    /// Only the lines in the range change, with nesting read from the whole document; not advertised, the client's
-    /// ERB and Haml providers ask for it.
+    /// Only the lines in the range change, with nesting read from the whole document.
     async fn range_formatting(&self, p: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options, true).await else { return Ok(None) };
         Ok(line_edits(&text, &formatted, p.range.start.line as usize..=p.range.end.line as usize))
@@ -926,12 +957,14 @@ impl Backend {
         // Unique across closes and reopens, which may restart a document's versions.
         let run = self.next_publish.fetch_add(1, Ordering::Relaxed);
         self.publishes.insert(uri.clone(), run);
-        let (client, docs, publishes, options, view_roots) = (
+        let (client, docs, publishes, options, cached_projects, view_roots, generation) = (
             self.client.clone(),
             Arc::clone(&self.docs),
             Arc::clone(&self.publishes),
             Arc::clone(&self.options),
+            Arc::clone(&self.projects),
             Arc::clone(&self.view_roots),
+            Arc::clone(&self.cache_generation),
         );
         let (resolved, config_reports, app_routes) =
             (Arc::clone(&self.resolved), Arc::clone(&self.config_reports), Arc::clone(&self.routes));
@@ -945,7 +978,8 @@ impl Backend {
             let Ok((diags, rules)) = off_server_task(move || {
                 let mut projects = Projects::new();
                 if let Some(path) = util::file_path(&checked) {
-                    Project::memoized(&mut projects, &path, Some(&view_roots));
+                    let project = cached_project(&cached_projects, &view_roots, &generation, &path);
+                    projects.insert(Project::key_for(&path), project);
                 }
                 let rules = resolve(&checked, doc.lang, options.get_or_init(Options::default), &mut Configs::new());
                 let routes = util::file_path(&checked).map(|path| routes_of(&app_routes, &path)).unwrap_or_default();
@@ -970,7 +1004,7 @@ impl Backend {
 
     /// The project of `path` sharing the view roots kept in the cache.
     fn project_for(&self, path: &Path) -> Project {
-        Project::for_template(path).with_view_cache(Arc::clone(&self.view_roots))
+        cached_project(&self.projects, &self.view_roots, &self.cache_generation, path)
     }
 
     /// `project_for`, with the view roots found off the server task first when this app's aren't cached yet, and kept in
@@ -1029,7 +1063,7 @@ impl Backend {
                 warming.remove(&views);
             }
             if let Some(dir) = locales {
-                fill(&cached_locales, &dir, &generation, || Arc::new(i18n::locale_files(&dir)));
+                fill(&cached_locales, dir.clone(), &generation, || Arc::new(i18n::locale_files(&dir)));
                 warming.remove(&dir);
             }
         });
@@ -1037,7 +1071,10 @@ impl Backend {
 
     fn locale_files(&self, current: &Path) -> LocaleFiles {
         let Some(dir) = i18n::locales_dir(current) else { return LocaleFiles::default() };
-        self.locales.entry(dir.clone()).or_insert_with(|| Arc::new(i18n::locale_files(&dir))).clone()
+        if let Some(files) = self.locales.get(&dir) {
+            return Arc::clone(&files);
+        }
+        fill(&self.locales, dir.clone(), &self.cache_generation, || Arc::new(i18n::locale_files(&dir)))
     }
 
     /// `rubyTemplates/routes`: `{ root, routes }` from the client's `bin/rails runner`.
@@ -1072,14 +1109,14 @@ async fn off_server_task<T: Send + 'static>(work: impl FnOnce() -> T + Send + 's
     tokio::task::spawn_blocking(work).await.map_err(|_| tower_lsp_server::jsonrpc::Error::internal_error())
 }
 
-/// The entry under `root`, from `read()` unless it is filled meanwhile; reads again when a watched-file event came in
+/// The entry under `key`, from `read()` unless it is filled meanwhile; reads again when a watched-file event came in
 /// while it read, since what it read may predate the change. The generation is checked under the entry's lock,
-/// which the event's invalidation (`retain`, after the bump) takes too.
-fn fill<T: Clone>(cache: &DashMap<PathBuf, T>, root: &Path, generation: &AtomicU64, read: impl Fn() -> T) -> T {
+/// which the event's invalidation (`retain` / `clear`, after the bump) takes too.
+fn fill<K: Eq + std::hash::Hash + Clone, T: Clone>(cache: &DashMap<K, T>, key: K, generation: &AtomicU64, read: impl Fn() -> T) -> T {
     loop {
         let started = generation.load(Ordering::SeqCst);
         let value = read();
-        match cache.entry(root.to_path_buf()) {
+        match cache.entry(key.clone()) {
             Entry::Occupied(entry) => return entry.get().clone(),
             Entry::Vacant(slot) if generation.load(Ordering::SeqCst) == started => return slot.insert(value).clone(),
             Entry::Vacant(_) => {}
@@ -1092,7 +1129,20 @@ fn views_listing(templates: &DashMap<PathBuf, Arc<Vec<PathBuf>>>, views: &Path, 
     if let Some(files) = templates.get(views) {
         return Arc::clone(&files);
     }
-    fill(templates, views, generation, || Arc::new(paths::files_under(views, usize::MAX)))
+    fill(templates, views.to_path_buf(), generation, || Arc::new(paths::files_under(views, usize::MAX)))
+}
+
+fn cached_project(
+    projects: &DashMap<project::ProjectKey, Project>,
+    view_roots: &Arc<view_roots::Cache>,
+    generation: &AtomicU64,
+    path: &Path,
+) -> Project {
+    let key = Project::key_for(path);
+    if let Some(project) = projects.get(&key) {
+        return project.clone();
+    }
+    fill(projects, key.clone(), generation, || Project::from_key(&key).with_view_cache(Arc::clone(view_roots)))
 }
 
 fn rename_filter(glob: &str, matches: FileOperationPatternKind) -> FileOperationFilter {
@@ -1334,7 +1384,7 @@ fn known_signature(lang: TemplateLang, app: Option<(&Path, &AppHelpers, &AtomicU
     }
     let (path, cache, generation) = app?;
     let key = paths::app_root(path)?.join("helpers").join(name);
-    let (signature, markdown) = fill(cache, &key, generation, || helper_defs::describe_first(path, name))?;
+    let (signature, markdown) = fill(cache, key, generation, || helper_defs::describe_first(path, name))?;
     Some((signature, Some(markdown)))
 }
 

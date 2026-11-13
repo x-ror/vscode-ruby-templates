@@ -199,6 +199,7 @@ const startServer = () => {
     buf = Buffer.alloc(0);
   const pending = new Map();
   const notes = [];
+  const registrations = [];
   proc.stdout.on("data", (d) => {
     buf = Buffer.concat([buf, d]);
     for (;;) {
@@ -212,6 +213,18 @@ const startServer = () => {
       if (msg.id !== undefined && pending.has(msg.id)) {
         pending.get(msg.id)(msg);
         pending.delete(msg.id);
+      } else if (msg.id !== undefined && msg.method) {
+        if (msg.method === "client/registerCapability") {
+          registrations.push(...(msg.params?.registrations || []));
+        }
+        const reply = JSON.stringify({
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: null,
+        });
+        proc.stdin.write(
+          `Content-Length: ${Buffer.byteLength(reply)}\r\n\r\n${reply}`,
+        );
       } else notes.push(msg);
     }
   });
@@ -226,7 +239,7 @@ const startServer = () => {
       proc.stdin.write(`Content-Length: ${Buffer.byteLength(s)}\r\n\r\n${s}`);
       if (isNote) res();
     });
-  return { send, notes };
+  return { send, notes, registrations };
 };
 const { send, notes } = startServer();
 const rel = (p) => p.replace(fileUri(root), "");
@@ -1567,12 +1580,19 @@ const check = (label, actual, expected) => {
       rangeEdits[0].newText === "  %i",
     JSON.stringify(rangeEdits),
   );
-  // Without dynamic registration nothing is advertised: the client's own ERB and Haml providers decide when to ask.
+  // Without dynamic registration nothing is advertised.
   const staticFormatting = init.result.capabilities.documentFormattingProvider;
   expect(
     "no static formatter",
     staticFormatting === undefined,
     staticFormatting,
+  );
+  const staticRangeFormatting =
+    init.result.capabilities.documentRangeFormattingProvider;
+  expect(
+    "no static range formatter",
+    staticRangeFormatting === undefined,
+    staticRangeFormatting,
   );
 
   await send(
@@ -3527,6 +3547,72 @@ const check = (label, actual, expected) => {
   await withoutFiles.srv.send("shutdown", {});
   await withoutFiles.srv.send("exit", {}, true);
   fs.rmSync(fixRoot, { recursive: true, force: true });
+  const dyn = startServer();
+  await dyn.send("initialize", {
+    processId: null,
+    rootUri: fileUri(root),
+    capabilities: {
+      textDocument: {
+        formatting: { dynamicRegistration: true },
+        rangeFormatting: { dynamicRegistration: true },
+      },
+    },
+  });
+  await dyn.send("initialized", {}, true);
+  const slimRangeUri = fileUri(
+    path.join(views, "users", "dyn_range.html.slim"),
+  );
+  await dyn.send(
+    "textDocument/didOpen",
+    {
+      textDocument: {
+        uri: slimRangeUri,
+        languageId: "slim",
+        version: 1,
+        text: "div\n    p\n        b x\n    i\n",
+      },
+    },
+    true,
+  );
+  const slimRangeEdits =
+    (
+      await dyn.send("textDocument/rangeFormatting", {
+        textDocument: { uri: slimRangeUri },
+        options: { tabSize: 2, insertSpaces: true },
+        range: {
+          start: { line: 3, character: 0 },
+          end: { line: 3, character: 0 },
+        },
+      })
+    ).result || [];
+  expect(
+    "slim range formatting",
+    slimRangeEdits.length === 1 &&
+      slimRangeEdits[0].range.start.line === 3 &&
+      slimRangeEdits[0].newText === "  i",
+    JSON.stringify(slimRangeEdits),
+  );
+  for (let i = 0; i < 40 && dyn.registrations.length < 2; i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const registeredByMethod = new Map(
+    dyn.registrations.map((r) => [
+      r.method,
+      (r.registerOptions?.documentSelector || []).map((s) => s.language),
+    ]),
+  );
+  check(
+    "dynamic formatting registration",
+    registeredByMethod.get("textDocument/formatting"),
+    ["erb", "haml", "slim", "skim"],
+  );
+  check(
+    "dynamic range formatting registration",
+    registeredByMethod.get("textDocument/rangeFormatting"),
+    ["erb", "haml", "slim", "skim"],
+  );
+  await dyn.send("shutdown", {});
+  await dyn.send("exit", {}, true);
   await aligned.send("shutdown", {});
   await aligned.send("exit", {}, true);
   await send("shutdown", {});

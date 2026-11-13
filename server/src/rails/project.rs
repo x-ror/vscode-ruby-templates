@@ -29,7 +29,7 @@ pub type Projects = HashMap<ProjectKey, Project>;
 
 /// What `Project::for_template` reads for a template: the nearest `Gemfile.lock`'s folder (with the
 /// initializers of the template's app) and the nearest `.ruby-version`.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProjectKey {
     lock_dir: Option<PathBuf>,
     template_app: Option<PathBuf>,
@@ -58,7 +58,7 @@ pub struct Project {
     /// The folder of the `Gemfile.lock`, which Rails.root is.
     root: Option<PathBuf>,
     /// Ruby files in namespace folders of `app/models` (relative paths), listed on first use: a Project is one app's.
-    namespaced_models: OnceLock<Vec<PathBuf>>,
+    namespaced_models: Arc<OnceLock<Vec<PathBuf>>>,
     /// `controller_classes::view_prefixes` by view folder: read from controller files once per Project.
     view_prefixes: Arc<Mutex<HashMap<PathBuf, Option<Vec<String>>>>>,
     /// Each app's controllers (by app folder) read once, on first use.
@@ -68,11 +68,11 @@ pub struct Project {
     /// Gems from the lockfile that could ship views (`view_roots::view_capable_gems`).
     view_capable_gems: Vec<(String, String)>,
     /// Every view root, searched on first use.
-    view_roots: OnceLock<Arc<view_roots::ViewRoots>>,
+    view_roots: Arc<OnceLock<Arc<view_roots::ViewRoots>>>,
     /// Where the language server keeps view roots between requests; without it they are searched per `Project`.
     view_cache: Option<Arc<view_roots::Cache>>,
     /// Does the app's code add view paths? Read on first use, and not kept beyond this `Project`: no watcher sees it change.
-    code_adds_view_paths: OnceLock<bool>,
+    code_adds_view_paths: Arc<OnceLock<bool>>,
 }
 
 impl Project {
@@ -84,14 +84,14 @@ impl Project {
             formats: Vec::new(),
             prefixes_partial_paths: true,
             root: None,
-            namespaced_models: OnceLock::new(),
+            namespaced_models: Arc::default(),
             view_prefixes: Arc::default(),
             controller_scan: Arc::default(),
             adds_view_paths: false,
             view_capable_gems: Vec::new(),
-            view_roots: OnceLock::new(),
+            view_roots: Arc::default(),
             view_cache: None,
-            code_adds_view_paths: OnceLock::new(),
+            code_adds_view_paths: Arc::default(),
         }
     }
 
@@ -119,13 +119,17 @@ impl Project {
     /// The project of the nearest `Gemfile.lock` above `template`, unknown when there is none, with the formats
     /// registered by the initializers of the app that holds `template` and of the lockfile's app (Mime::SET is
     /// process-wide, so an engine's views see the host app's registrations).
+    #[cfg(test)]
     pub fn for_template(template: &Path) -> Self {
         Self::load(&ProjectKey::of(template))
     }
 
-    /// The project of the templates in the views folder `views`.
-    pub fn for_views(views: &Path) -> Self {
-        Self::for_template(&views.join("_"))
+    pub fn key_for(template: &Path) -> ProjectKey {
+        ProjectKey::of(template)
+    }
+
+    pub fn from_key(key: &ProjectKey) -> Self {
+        Self::load(key)
     }
 
     /// The project of `template`, loaded once per `ProjectKey` for a run over many templates; it keeps its view roots
@@ -144,8 +148,13 @@ impl Project {
         let lock_dir = key.lock_dir.as_deref();
         let lock_text = lock_dir.and_then(|dir| std::fs::read_to_string(dir.join(LOCKFILE)).ok());
         let project = lock_text.as_deref().map_or_else(Self::unknown, Self::from_lockfile);
-        let configs: Vec<AppConfig> =
-            key.template_app.iter().map(PathBuf::as_path).chain(lock_dir).map(|app| read_app_config(&app.join("config"))).collect();
+        let configs: Vec<AppConfig> = key
+            .template_app
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(lock_dir.filter(|dir| key.template_app.as_deref() != Some(*dir)))
+            .map(|app| read_app_config(&app.join("config")))
+            .collect();
         let prefixes_partial_paths = configs.iter().all(|config| config.prefixes_partial_paths);
         let adds_view_paths = configs.iter().any(|config| config.adds_view_paths)
             || lock_dir.zip(lock_text.as_deref()).is_some_and(|(dir, lock)| path_gem_has_views(lock, dir));
@@ -227,14 +236,14 @@ impl Project {
             formats: Vec::new(),
             prefixes_partial_paths: true,
             root: None,
-            namespaced_models: OnceLock::new(),
+            namespaced_models: Arc::default(),
             view_prefixes: Arc::default(),
             controller_scan: Arc::default(),
             adds_view_paths: false,
             view_capable_gems: view_roots::view_capable_gems(lock),
-            view_roots: OnceLock::new(),
+            view_roots: Arc::default(),
             view_cache: None,
-            code_adds_view_paths: OnceLock::new(),
+            code_adds_view_paths: Arc::default(),
         }
     }
 

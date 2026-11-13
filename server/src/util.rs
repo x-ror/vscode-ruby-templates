@@ -166,9 +166,9 @@ pub fn open_or_read(open: Option<String>, path: &Path) -> Option<String> {
 
 /// `file:///C%3A/…` as `file:///C:/…`; `None` for a URI without an escaped drive.
 fn drive_colon_unescaped(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("file:///")?;
+    let rest = uri.get(..8).filter(|scheme| scheme.eq_ignore_ascii_case("file:///")).map(|_| &uri[8..])?;
     let drive = rest.chars().next().filter(char::is_ascii_alphabetic)?;
-    let path = rest[1..].strip_prefix("%3A")?;
+    let path = rest.get(1..4).filter(|colon| colon.eq_ignore_ascii_case("%3a")).map(|_| &rest[4..])?;
     Some(format!("file:///{drive}:{path}"))
 }
 
@@ -598,6 +598,8 @@ mod tests {
     #[test]
     fn drive_colons_are_spelled_as_node_and_the_url_crate_do() {
         assert_eq!(drive_colon_unescaped("file:///C%3A/Users/a%20b/x.erb").as_deref(), Some("file:///C:/Users/a%20b/x.erb"));
+        assert_eq!(drive_colon_unescaped("file:///c%3a/Users/x.erb").as_deref(), Some("file:///c:/Users/x.erb"));
+        assert_eq!(drive_colon_unescaped("FILE:///C%3A/Users/x.erb").as_deref(), Some("file:///C:/Users/x.erb"));
         assert_eq!(drive_colon_unescaped("file:///home/x%3Ay.erb"), None);
         assert_eq!(drive_colon_unescaped("untitled:Untitled-1"), None);
         let uri: Uri = "file:///C:/Users/x.erb".parse().unwrap();
