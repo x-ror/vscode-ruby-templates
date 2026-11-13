@@ -17,8 +17,8 @@ const bin =
     "release",
     `ruby-templates${exe}`,
   );
-const run = (args, input) => {
-  const r = spawnSync(bin, args, { encoding: "utf8", input });
+const run = (args, input, cwd) => {
+  const r = spawnSync(bin, args, { encoding: "utf8", input, cwd });
   if (r.error) throw r.error;
   return r;
 };
@@ -662,6 +662,117 @@ try {
       "[Layout.TrailingWhitespace]\nenabled = false\n",
     );
   }
+
+  // --format: relative paths, characters instead of UTF-16 units, escaping, and a config problem.
+  const ci = path.join(root, "ci");
+  fs.mkdirSync(path.join(ci, "app", "views"), { recursive: true });
+  fs.writeFileSync(
+    path.join(ci, "app", "views", "a b.html.erb"),
+    '<p>😀д</p><img src="a">\n',
+  );
+  fs.writeFileSync(path.join(ci, ".ruby-templates.toml"), "[Html.ImgAlt\n");
+  const checkCi = (format) =>
+    run(["check", "app", "--format", format], undefined, ci);
+  const imgAlt =
+    "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)";
+  const tomlProblem = "invalid TOML: unclosed table, expected `]`";
+  r = checkCi("text");
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    `.ruby-templates.toml:1:13: warning: ${tomlProblem}\n` +
+      `app/views/a b.html.erb:1:11: warning: ${imgAlt}\n`,
+    "text keeps UTF-16 columns",
+  );
+  r = checkCi("github");
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    `::warning file=.ruby-templates.toml,line=1,col=13,endLine=1,endColumn=13::${tomlProblem}\n` +
+      `::warning file=app/views/a b.html.erb,line=1,col=10,endLine=1,endColumn=14,title=Html/ImgAlt::${imgAlt}\n`,
+  );
+  r = checkCi("json");
+  assert.strictEqual(r.status, 1);
+  assert.deepStrictEqual(r.stdout.trim().split("\n").map(JSON.parse), [
+    {
+      file: ".ruby-templates.toml",
+      line: 1,
+      column: 13,
+      endLine: 1,
+      endColumn: 13,
+      severity: "warning",
+      rule: null,
+      message: tomlProblem,
+    },
+    {
+      file: "app/views/a b.html.erb",
+      line: 1,
+      column: 10,
+      endLine: 1,
+      endColumn: 14,
+      severity: "warning",
+      rule: "Html/ImgAlt",
+      message: imgAlt,
+    },
+  ]);
+  r = checkCi("sarif");
+  assert.strictEqual(r.status, 1);
+  const sarif = JSON.parse(r.stdout);
+  const [sarifRun] = sarif.runs;
+  assert.strictEqual(sarif.version, "2.1.0");
+  assert.strictEqual(sarifRun.tool.driver.name, "ruby-templates");
+  assert.deepStrictEqual(sarifRun.tool.driver.rules, [
+    {
+      id: "Html/ImgAlt",
+      helpUri:
+        "https://x-ror.github.io/vscode-ruby-templates/reference/rules/#html-imgalt",
+    },
+  ]);
+  assert.deepStrictEqual(sarifRun.results[1], {
+    ruleId: "Html/ImgAlt",
+    level: "warning",
+    message: { text: imgAlt },
+    locations: [
+      {
+        physicalLocation: {
+          artifactLocation: { uri: "app/views/a%20b.html.erb" },
+          region: { startLine: 1, startColumn: 10, endLine: 1, endColumn: 14 },
+        },
+      },
+    ],
+  });
+  assert.strictEqual(sarifRun.results[0].ruleId, undefined);
+  assert.strictEqual(sarifRun.results[0].level, "warning");
+  r = run(["check", views, "--format", "json"]);
+  assert.ok(
+    r.stdout
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .some((f) => f.severity === "error"),
+    "syntax errors are errors",
+  );
+  r = run(["check", clean, "--format", "sarif"]);
+  assert.strictEqual(r.status, 0, "no findings, exit 0");
+  assert.deepStrictEqual(JSON.parse(r.stdout).runs[0].results, []);
+  r = run(["check", "--format", "xml", clean]);
+  assert.strictEqual(r.status, 2);
+  assert.match(r.stderr, /unknown format xml/);
+
+  fs.mkdirSync(path.join(ci, "fmt"));
+  fs.writeFileSync(path.join(ci, "fmt", "m,n.html.slim"), "div\n p  \n");
+  fs.writeFileSync(path.join(ci, ".ruby-templates.toml"), "");
+  r = run(["format", "--check", "--format", "github", "fmt"], undefined, ci);
+  assert.strictEqual(r.status, 1);
+  assert.strictEqual(
+    r.stdout,
+    "::warning file=fmt/m%2Cn.html.slim,title=Format::needs formatting; run `ruby-templates format --write`\n",
+  );
+  assert.strictEqual(
+    run(["format", "--format", "github", "fmt"], undefined, ci).status,
+    2,
+    "--format github needs --check",
+  );
 
   console.log("cli ok");
 } finally {

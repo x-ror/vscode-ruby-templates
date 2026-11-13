@@ -8,6 +8,7 @@ use crate::lang::TemplateLang;
 use crate::options::Options;
 use crate::rails::project::{Project, Projects};
 use crate::rails::view_roots;
+use crate::report::{self, Finding, Format, Severity};
 use crate::rules::file::ConfigFile;
 use crate::rules::resolve::{resolve, Configs, ResolvedRules};
 use crate::util;
@@ -17,7 +18,7 @@ use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use tower_lsp_server::ls_types::{DiagnosticSeverity, Uri};
+use tower_lsp_server::ls_types::{DiagnosticSeverity, Range, Uri};
 
 const OK: i32 = 0;
 const FINDINGS: i32 = 1;
@@ -27,8 +28,8 @@ const WORKER_STACK: usize = 8 << 20;
 
 const HELP: &str = "\
 Usage:
-  ruby-templates check <files|dirs>...
-  ruby-templates format [--check | --write] [--verbose] [--align-comments] <files|dirs>...
+  ruby-templates check [--format text|github|sarif|json] <files|dirs>...
+  ruby-templates format [--check | --write] [--format text|github] [--verbose] [--align-comments] <files|dirs>...
   ruby-templates format [--check] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
 check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates, and with Layout/LineLength (off) the lines
@@ -50,6 +51,10 @@ format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespa
         the result goes to stdout.
         --align-comments moves the lines inside ERB comments with the line the comment opens on.
 
+--format picks how check prints: text (the default), github (workflow commands that annotate a pull request), sarif
+(SARIF 2.1.0 for code scanning) or json (one object per line). With format --check, github prints a warning per file that
+would change. In github, sarif and json the columns count characters and start at 1.
+
 Both read .ruby-templates.toml files, from the file's folder up. Exit codes: 0 ok, 1 diagnostics (errors or
 warnings), a problem in a .ruby-templates.toml, or files that would change, 2 usage or I/O error, a formatter bug,
 or (for check) a named file that isn't a template.
@@ -61,7 +66,7 @@ pub fn legacy(args: &[String]) -> Option<i32> {
         [flag, file] if flag == "--format" => Some(legacy_format(file)),
         [flag, files @ ..] if flag == "--check" => {
             let files: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
-            Some(check(&files, DiagnosticSeverity::ERROR, FINDINGS))
+            Some(check(&files, DiagnosticSeverity::ERROR, FINDINGS, Format::Text))
         }
         _ => None,
     }
@@ -84,9 +89,8 @@ fn legacy_format(file: &str) -> i32 {
 
 pub fn run(args: &[String]) -> i32 {
     match args.split_first() {
-        Some((command, rest)) if command == "check" => match paths(rest) {
-            Ok(files) if files.is_empty() => usage("check needs files or folders"),
-            Ok(files) => check(&files, DiagnosticSeverity::WARNING, USAGE),
+        Some((command, rest)) if command == "check" => match CheckArgs::parse(rest) {
+            Ok(parsed) => check(&parsed.paths, DiagnosticSeverity::WARNING, USAGE, parsed.format),
             Err(message) => usage(&message),
         },
         Some((command, rest)) if command == "format" => match FormatArgs::parse(rest) {
@@ -106,8 +110,28 @@ fn usage(message: &str) -> i32 {
     USAGE
 }
 
-fn paths(args: &[String]) -> Result<Vec<PathBuf>, String> {
-    args.iter().map(|a| if a.starts_with('-') { Err(format!("unknown option {a}")) } else { Ok(PathBuf::from(a)) }).collect()
+#[derive(Debug, PartialEq)]
+struct CheckArgs {
+    format: Format,
+    paths: Vec<PathBuf>,
+}
+
+impl CheckArgs {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let (mut format, mut paths) = (Format::Text, Vec::new());
+        let mut args = args.iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--format" => format = Format::parse(args.next().ok_or("--format needs a name")?)?,
+                flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
+                path => paths.push(path.into()),
+            }
+        }
+        if paths.is_empty() {
+            return Err("check needs files or folders".into());
+        }
+        Ok(CheckArgs { format, paths })
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -116,6 +140,7 @@ struct FormatArgs {
     write: bool,
     verbose: bool,
     align_comments: bool,
+    format: Format,
     /// Read the text from stdin; the path picks the language and the config.
     stdin_path: Option<PathBuf>,
     paths: Vec<PathBuf>,
@@ -132,11 +157,15 @@ impl FormatArgs {
                 "--write" => parsed.write = true,
                 "--verbose" => parsed.verbose = true,
                 "--align-comments" => parsed.align_comments = true,
+                "--format" => parsed.format = Format::parse(args.next().ok_or("--format needs a name")?)?,
                 "--stdin-filepath" => parsed.stdin_path = Some(args.next().ok_or("--stdin-filepath needs a path")?.into()),
                 "-" => stdin = true,
                 flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
                 path => parsed.paths.push(path.into()),
             }
+        }
+        if parsed.format != Format::Text && (!parsed.check || parsed.format != Format::Github) {
+            return Err("format takes --format github only with --check".into());
         }
         if parsed.check && parsed.write {
             return Err("--check and --write exclude each other".into());
@@ -193,7 +222,7 @@ fn language(path: &Path) -> Option<TemplateLang> {
 
 /// Prints diagnostics as `file:line:col: severity: message`; 1 when one is at least as severe as `fail_at`, `bad_file`
 /// for a file that can't be read or isn't a template.
-fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
+fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32, format: Format) -> i32 {
     let files = template_files(paths);
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
     let next = AtomicUsize::new(0);
@@ -209,7 +238,7 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(index) else { break };
                     // The printer hung up (stdout closed): nothing left to do.
-                    let checked = check_file(&file.path, fail_at, bad_file, (&mut projects, &mut configs), view_roots, reported);
+                    let checked = check_file(&file.path, (fail_at, bad_file, format), (&mut projects, &mut configs), view_roots, reported);
                     if sender.send((index, checked)).is_err() {
                         break;
                     }
@@ -221,7 +250,7 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32) -> i32 {
             }
         }
         drop(sender);
-        print_in_order(results)
+        print_in_order(results, format)
     })
 }
 
@@ -229,42 +258,69 @@ struct Checked {
     stdout: String,
     stderr: String,
     code: i32,
+    /// The diagnostics of a format that prints all of them at the end.
+    findings: Vec<Finding>,
+}
+
+impl Checked {
+    fn new(code: i32) -> Self {
+        Checked { stdout: String::new(), stderr: String::new(), code, findings: Vec::new() }
+    }
+
+    /// Records a diagnostic of `text` in `format`; `path` is as the text format shows it.
+    fn add(&mut self, format: Format, path: &Path, text: &str, (severity, rule, message): (Severity, Option<&str>, &str), range: Range) {
+        if format == Format::Text {
+            let name = match severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+                Severity::Note => "info",
+            };
+            let (line, col) = (range.start.line + 1, range.start.character + 1);
+            let _ = writeln!(self.stdout, "{}:{line}:{col}: {name}: {message}", path.display());
+            return;
+        }
+        let finding = Finding::new(shown_path(path), text, severity, rule, message, range);
+        match format {
+            Format::Github => self.stdout.push_str(&report::github_line(&finding)),
+            Format::Json => self.stdout.push_str(&report::json_line(&finding)),
+            _ => return self.findings.push(finding),
+        }
+        self.stdout.push('\n');
+    }
 }
 
 fn check_file(
     path: &Path,
-    fail_at: DiagnosticSeverity,
-    bad_file: i32,
+    (fail_at, bad_file, format): (DiagnosticSeverity, i32, Format),
     (projects, configs): (&mut Projects, &mut Configs),
     view_roots: &Arc<view_roots::Cache>,
     reported: &Mutex<HashSet<PathBuf>>,
 ) -> Checked {
     let shown = path.display();
-    let failed = |stderr| Checked { stdout: String::new(), stderr, code: bad_file };
+    let failed = |stderr| Checked { stderr, ..Checked::new(bad_file) };
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = absolute_file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     // Every worker's projects of one app share its view roots.
     Project::memoized(projects, path, Some(view_roots));
-    let mut checked = Checked { stdout: String::new(), stderr: String::new(), code: OK };
+    let mut checked = Checked::new(OK);
     let rules = resolve(&uri, lang, &Options::default(), configs);
     for file in rules.files() {
         // Each file's problems print once, with the first template it applies to.
         if !file.problems.is_empty() && reported.lock().is_ok_and(|mut seen| seen.insert(file.path.clone())) {
-            print_problems(file, &mut checked.stdout);
+            let config_text = std::fs::read_to_string(&file.path).unwrap_or_default();
+            for problem in &file.problems {
+                let details = (Severity::Warning, None, problem.message.as_str());
+                checked.add(format, shown_path(&file.path), &config_text, details, problem.range);
+            }
             if DiagnosticSeverity::WARNING <= fail_at {
                 checked.code = FINDINGS;
             }
         }
     }
-    for d in diagnostics_in(&uri, &Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 }, &rules, projects, &[]) {
+    let doc = Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 };
+    for d in diagnostics_in(&uri, &doc, &rules, projects, &[]) {
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
-        let name = match severity {
-            DiagnosticSeverity::ERROR => "error",
-            DiagnosticSeverity::WARNING => "warning",
-            _ => "info",
-        };
-        let (line, col) = (d.range.start.line + 1, d.range.start.character + 1);
-        let _ = writeln!(checked.stdout, "{shown}:{line}:{col}: {name}: {}", d.message);
+        checked.add(format, path, &doc.text, (Severity::of(severity), util::code(&d), &d.message), d.range);
         // Lower numbers are more severe.
         if severity <= fail_at {
             checked.code = FINDINGS;
@@ -287,16 +343,18 @@ fn print_problems(file: &ConfigFile, out: &mut String) {
 }
 
 /// Prints each file's result in walk order as it arrives; the worst exit code, `USAGE` once stdout is closed.
-fn print_in_order(results: mpsc::Receiver<(usize, Checked)>) -> i32 {
+fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> i32 {
     let mut stdout = BufWriter::new(std::io::stdout().lock());
     let mut waiting = BTreeMap::new();
     let mut next = 0;
     let mut code = OK;
+    let mut findings = Vec::new();
     for (index, checked) in results {
         waiting.insert(index, checked);
         while let Some(checked) = waiting.remove(&next) {
             next += 1;
             code = code.max(checked.code);
+            findings.extend(checked.findings);
             let printed = stdout.write_all(checked.stdout.as_bytes()).and_then(|()| {
                 if checked.stderr.is_empty() {
                     return Ok(());
@@ -309,6 +367,9 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>) -> i32 {
                 return USAGE;
             }
         }
+    }
+    if format == Format::Sarif && writeln!(stdout, "{}", report::sarif(&findings)).is_err() {
+        return USAGE;
     }
     if stdout.flush().is_err() {
         return USAGE;
@@ -400,7 +461,9 @@ fn format_text(path: &Path, named: bool, text: &str, args: &FormatArgs, (project
     };
     let changed = formatted != text;
     if args.check {
-        if changed {
+        if changed && args.format == Format::Github {
+            println!("{}", report::github_unformatted(shown_path(path)));
+        } else if changed {
             println!("{shown}");
         }
         return code.max(if changed { FINDINGS } else { OK });
@@ -446,6 +509,20 @@ mod tests {
         assert!(FormatArgs::parse(&args(&["--align-comments", "a.html.erb"])).unwrap().align_comments);
         for bad in [&["--check", "--write", "a"][..], &["-"], &["--stdin-filepath"], &["--stdin-filepath", "a", "b"], &["--wat", "a"], &[]]
         {
+            assert!(FormatArgs::parse(&args(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn output_format_arguments() {
+        let parsed = CheckArgs::parse(&args(&["--format", "sarif", "app/views"])).unwrap();
+        assert_eq!(parsed, CheckArgs { format: Format::Sarif, paths: vec!["app/views".into()] });
+        assert_eq!(CheckArgs::parse(&args(&["a.erb"])).unwrap().format, Format::Text);
+        for bad in [&["--format", "xml", "a"][..], &["--format"], &["--format", "json"], &["--wat", "a"]] {
+            assert!(CheckArgs::parse(&args(bad)).is_err(), "{bad:?}");
+        }
+        assert_eq!(FormatArgs::parse(&args(&["--check", "--format", "github", "a"])).unwrap().format, Format::Github);
+        for bad in [&["--format", "github", "a"][..], &["--check", "--format", "json", "a"], &["--write", "--format", "github", "a"]] {
             assert!(FormatArgs::parse(&args(bad)).is_err(), "{bad:?}");
         }
     }

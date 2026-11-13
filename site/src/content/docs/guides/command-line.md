@@ -79,3 +79,35 @@ With `@x-ror/ruby-templates` in your `package.json` dev dependencies, add steps 
 ```
 
 Each step fails the job when the command exits with a non-zero code.
+
+## CI
+
+`check --format` changes how the diagnostics print; the exit codes stay the same.
+
+| Format   | Output                                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `text`   | `file:line:column: severity: message`, the default                                                                |
+| `github` | GitHub Actions workflow commands, which annotate the files of a pull request                                      |
+| `sarif`  | One SARIF 2.1.0 log, for code scanning                                                                            |
+| `json`   | One JSON object per line, with `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `rule` and `message` |
+
+In `github`, `sarif` and `json` the paths are relative to the current folder and the columns count characters from 1, as GitHub shows them; `text` keeps the editor's UTF-16 columns. Errors are `error`, warnings `warning` and the Rails `info` diagnostics `notice` (`note` in SARIF and JSON). A problem in a `.ruby-templates.toml` is reported the same way, against that file.
+
+Annotations on the pull request:
+
+```yaml
+- uses: actions/setup-node@v4
+- run: npx @x-ror/ruby-templates check app/views --format github
+```
+
+Code scanning alerts, from the SARIF file (the step that creates it must not stop the job, so the upload runs):
+
+```yaml
+- run: npx @x-ror/ruby-templates check app/views --format sarif > templates.sarif
+  continue-on-error: true
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: templates.sarif
+```
+
+`format --check --format github` annotates each file that would change with a `Format` warning.
