@@ -24,7 +24,7 @@ use crate::rules::resolve::{resolve, Configs, ResolvedRules};
 use crate::slim;
 use crate::slim::hover;
 use crate::util::{file_location, line_location};
-use crate::{config, erb, format, haml, helpers, outline, partial_rename, ruby, semantic_tokens, util};
+use crate::{config, erb, format, haml, helpers, outline, partial_rename, ruby, semantic_tokens, signature_help, util};
 use dashmap::mapref::entry::Entry;
 use dashmap::{DashMap, DashSet};
 use haml::indent::LineRole;
@@ -39,6 +39,9 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 type LocaleFiles = Arc<i18n::Locales>;
+
+/// An app helper's signature and hover Markdown, per helper.
+type AppHelpers = DashMap<PathBuf, Option<(String, String)>>;
 
 const DIAGNOSTICS_DEBOUNCE: Duration = Duration::from_millis(200);
 
@@ -61,6 +64,7 @@ pub async fn serve() {
         locales: Arc::default(),
         cache_generation: Arc::default(),
         local_callers: DashMap::new(),
+        app_helpers: Arc::default(),
         warming: Arc::default(),
         view_roots: Arc::default(),
         routes: Arc::default(),
@@ -114,6 +118,9 @@ struct Backend {
     semantic_refresh: OnceLock<bool>,
     /// The client applies workspace edits that create files and edit them in one go.
     file_operations: OnceLock<bool>,
+    /// App helpers' signature and docs, keyed by the app's `helpers` directory joined with the name (`None`: no such helper);
+    /// cleared with the other caches when a helper or controller file may have changed.
+    app_helpers: Arc<AppHelpers>,
     /// How many `render` calls pass each (partial, local), for hover; cleared when any view's text may have changed.
     local_callers: DashMap<(PathBuf, String), usize>,
     /// The latest diagnostics run per open document: runs finish in any order, and only the latest may publish.
@@ -161,6 +168,10 @@ impl LanguageServer for Backend {
                     work_done_progress_options: Default::default(),
                 }),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(["(", ",", " "].map(String::from).to_vec()),
+                    ..Default::default()
+                }),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
                 semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
                     legend: semantic_tokens::legend(),
@@ -277,6 +288,7 @@ impl LanguageServer for Backend {
             i18n::clear_catalogs();
         }
         if may_change_helpers(&events) {
+            self.app_helpers.clear();
             unknown_route::clear_cache();
         }
         self.templates.retain(|root, _| !stale(root, &events, false));
@@ -495,6 +507,29 @@ impl LanguageServer for Backend {
         })
         .await
         .map(|md| md.and_then(markdown_hover))
+    }
+
+    async fn signature_help(&self, p: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let uri = p.text_document_position_params.text_document.uri;
+        let pos = p.text_document_position_params.position;
+        let Some(doc) = self.template_doc(&uri) else { return Ok(None) };
+        let Some(offset) = util::position_to_offset(&doc.text, pos) else { return Ok(None) };
+        let role = line_roles(doc.lang, &doc.text).get(pos.line as usize).copied().unwrap_or(LineRole::Start);
+        let Some(start) = code_context::code_start(doc.lang, &doc.text, offset, role, &self.engines(&uri)) else { return Ok(None) };
+        let calls = signature_help::calls_before(&doc.text[start..offset]);
+        if calls.is_empty() {
+            return Ok(None);
+        }
+        let (lang, path) = (doc.lang, util::file_path(&uri));
+        let (app_helpers, generation) = (Arc::clone(&self.app_helpers), Arc::clone(&self.cache_generation));
+        off_server_task(move || {
+            calls.iter().find_map(|call| {
+                let app = path.as_deref().map(|path| (path, &*app_helpers, &*generation));
+                let (label, docs) = known_signature(lang, app, &call.name)?;
+                signature_help::signature_help(&label, docs, call)
+            })
+        })
+        .await
     }
 
     async fn folding_range(&self, p: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
@@ -1281,10 +1316,26 @@ fn markdown_hover(value: String) -> Option<Hover> {
 
 fn helper_hover(h: &helpers::Helper) -> String {
     let signature = format!("```ruby\n{}\n```", h.detail);
-    match h.doc_url() {
-        Some(url) => format!("{signature}\n\n[API docs]({url})"),
+    match helper_docs(h) {
+        Some(docs) => format!("{signature}\n\n{docs}"),
         None => signature,
     }
+}
+
+fn helper_docs(h: &helpers::Helper) -> Option<String> {
+    Some(format!("`{}`\n\n[API docs]({})", h.module?, h.doc_url()?))
+}
+
+/// The signature label and documentation of the helper `name`: a Rails helper, else one the app defines, read once
+/// per app and name into `cache` (also when there is none: every local the user types is asked about).
+fn known_signature(lang: TemplateLang, app: Option<(&Path, &AppHelpers, &AtomicU64)>, name: &str) -> Option<(String, Option<String>)> {
+    if let Some(h) = helpers_for(lang).find(|h| h.name == name) {
+        return Some((h.detail.to_string(), helper_docs(h)));
+    }
+    let (path, cache, generation) = app?;
+    let key = paths::app_root(path)?.join("helpers").join(name);
+    let (signature, markdown) = fill(cache, &key, generation, || helper_defs::describe_first(path, name))?;
+    Some((signature, Some(markdown)))
 }
 
 /// "Output it" for each silent render or helper, which turns its tag into an output tag.

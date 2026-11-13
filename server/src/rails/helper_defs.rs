@@ -85,11 +85,16 @@ fn enclosing<'a>(lines: &[&'a str], line: usize) -> Option<&'a str> {
 
 /// Markdown for helper `name` called in the view `current`: the first definition's signature, where it comes from and its comment.
 pub fn hover(current: &Path, name: &str) -> Option<String> {
+    describe_first(current, name).map(|(_, markdown)| markdown)
+}
+
+/// The first definition of helper `name`: its `def` line as written, and the hover Markdown.
+pub fn describe_first(current: &Path, name: &str) -> Option<(String, String)> {
     let (file, line) = definitions(current, name).into_iter().next()?;
     describe(current, &file, line)
 }
 
-fn describe(current: &Path, file: &Path, line: usize) -> Option<String> {
+fn describe(current: &Path, file: &Path, line: usize) -> Option<(String, String)> {
     let text = std::fs::read_to_string(file).ok()?;
     let lines: Vec<&str> = text.lines().collect();
     let mut signature = lines.get(line)?.trim().trim_start_matches("helper_method ").to_string();
@@ -124,7 +129,7 @@ fn describe(current: &Path, file: &Path, line: usize) -> Option<String> {
         out.push_str("\n\n");
         out.push_str(&comment.into_iter().rev().collect::<Vec<_>>().join("\n"));
     }
-    Some(out)
+    Some((signature, out))
 }
 
 #[cfg(test)]

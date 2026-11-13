@@ -51,6 +51,19 @@ pub fn in_ruby(line: &str, col: usize) -> bool {
     before.rfind("#{").is_some_and(|open| !before[open..].contains('}'))
 }
 
+/// Byte column where the Ruby that `col` is in starts: after a `-`/`=` marker, or inside a tag's `{}` or `[]` group.
+pub fn ruby_start(line: &str, col: usize) -> Option<usize> {
+    let col = col.min(line.len());
+    if let Some(start) = haml_code_start(line).filter(|&start| start <= col) {
+        return Some(start);
+    }
+    let ws = leading_ws(line).len();
+    let content = &line[ws..];
+    let rel = col.checked_sub(ws).filter(|_| is_haml_tag(content))?;
+    let group = tag_attr_groups(content).into_iter().find(|g| inside(g, rel))?;
+    (group.open != '(').then_some(ws + group.start + 1)
+}
+
 fn inside(group: &AttrGroup, col: usize) -> bool {
     col > group.start && group.end.is_none_or(|end| col < end)
 }

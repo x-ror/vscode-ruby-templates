@@ -105,7 +105,8 @@ pub fn code_end(code: &str) -> CodeEnd {
                 Some((_, depth)) => *depth -= 1,
                 None => {}
             },
-            (None, '#') if next != Some('{') => return CodeEnd::Comment,
+            // A comment ends at the newline, so only one on the last line decides.
+            (None, '#') if next != Some('{') && !chars.any(|c| c == '\n') => return CodeEnd::Comment,
             _ => {}
         }
     }
@@ -418,6 +419,9 @@ mod tests {
         assert_eq!(code_end("x = \"a # b\""), CodeEnd::Code);
         assert_eq!(code_end("x = 1 # c"), CodeEnd::Comment);
         assert_eq!(code_end("x = #{y}"), CodeEnd::Code);
+        assert_eq!(code_end("x = 1, # c\n  y: 2"), CodeEnd::Code, "the comment ended at the newline");
+        assert_eq!(code_end("x = 1, # c\n  y: \"a"), CodeEnd::String);
+        assert_eq!(code_end("x = 1\n  # c"), CodeEnd::Comment);
         assert_eq!(code_end("x = ?#, y"), CodeEnd::Code);
         assert_eq!(code_end("x = %q{#}, y # c"), CodeEnd::Comment);
         assert_eq!(code_end("x = %(#{\")\"}) # c"), CodeEnd::Comment);

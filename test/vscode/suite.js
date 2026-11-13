@@ -266,6 +266,30 @@ const checks = {
     await until("cursor on def show", () => editor.selection.active.line === 4);
   },
 
+  async "signature help for a helper in ERB, Haml and Slim"() {
+    for (const [ext, character] of [
+      ["erb", 21],
+      ["haml", 19],
+      ["slim", 19],
+    ]) {
+      const editor = await open(`app/views/users/sig.html.${ext}`);
+      const help = await until(`${ext} signature help`, () =>
+        vscode.commands.executeCommand(
+          "vscode.executeSignatureHelpProvider",
+          editor.document.uri,
+          new vscode.Position(0, character),
+        ),
+      );
+      const [signature] = help.signatures;
+      assert.ok(signature.label.startsWith("link_to("), signature.label);
+      assert.strictEqual(
+        signature.parameters[help.activeParameter].label[0],
+        signature.label.indexOf("options"),
+        ext,
+      );
+    }
+  },
+
   async "route helpers from bin/rails"() {
     if (spawnSync("ruby", ["-v"]).status !== 0) return "skipped: no ruby";
     const editor = await open("app/views/users/routes.html.erb");
