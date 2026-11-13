@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0
 
 - Signature help for Rails helpers and the app's own helpers in `app/helpers`: typing `(`, `,` or a space after `link_to "Users"` in ERB, Haml and Slim code shows the signature with the current parameter highlighted, counting commas outside strings, hashes, arrays and nested calls, and following `key:` to its keyword or `**options`. Inside a nested call, the innermost known helper is shown.
 - `ruby-templates check --format github|sarif|json` prints GitHub Actions annotations, a SARIF 2.1.0 log for code scanning or JSON lines instead of the text lines (`text` stays the default); columns count characters from 1 there. `format --check --format github` annotates each file that would change.
