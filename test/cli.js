@@ -4,6 +4,7 @@ import { spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { pathToFileURL } from "url";
 
 const exe = process.platform === "win32" ? ".exe" : "";
 // CI builds per target and passes the binary in.
@@ -688,7 +689,7 @@ try {
   assert.strictEqual(r.status, 1);
   assert.strictEqual(
     r.stdout,
-    `::warning file=.ruby-templates.toml,line=1,col=13,endLine=1,endColumn=13::${tomlProblem}\n` +
+    `::warning file=.ruby-templates.toml,line=1,col=13,endLine=1,endColumn=13,title=Config/Invalid::${tomlProblem}\n` +
       `::warning file=app/views/a b.html.erb,line=1,col=10,endLine=1,endColumn=14,title=Html/ImgAlt::${imgAlt}\n`,
   );
   r = checkCi("json");
@@ -701,7 +702,7 @@ try {
       endLine: 1,
       endColumn: 13,
       severity: "warning",
-      rule: null,
+      rule: "Config/Invalid",
       message: tomlProblem,
     },
     {
@@ -721,11 +722,19 @@ try {
   const [sarifRun] = sarif.runs;
   assert.strictEqual(sarif.version, "2.1.0");
   assert.strictEqual(sarifRun.tool.driver.name, "ruby-templates");
+  assert.strictEqual(sarifRun.columnKind, "unicodeCodePoints");
+  const site = "https://x-ror.github.io/vscode-ruby-templates/reference/";
   assert.deepStrictEqual(sarifRun.tool.driver.rules, [
     {
+      id: "Config/Invalid",
+      shortDescription: { text: "A problem in a .ruby-templates.toml." },
+      helpUri: `${site}rules/#configuration`,
+    },
+    {
       id: "Html/ImgAlt",
-      helpUri:
-        "https://x-ror.github.io/vscode-ruby-templates/reference/rules/#html-imgalt",
+      shortDescription: { text: "An image without alt text." },
+      fullDescription: { text: "An image without alt text." },
+      helpUri: `${site}diagnostics/#html-imgalt`,
     },
   ]);
   assert.deepStrictEqual(sarifRun.results[1], {
@@ -735,14 +744,50 @@ try {
     locations: [
       {
         physicalLocation: {
-          artifactLocation: { uri: "app/views/a%20b.html.erb" },
+          artifactLocation: {
+            uri: pathToFileURL(path.join(ci, "app", "views", "a b.html.erb"))
+              .href,
+          },
           region: { startLine: 1, startColumn: 10, endLine: 1, endColumn: 14 },
         },
       },
     ],
   });
-  assert.strictEqual(sarifRun.results[0].ruleId, undefined);
+  assert.strictEqual(sarifRun.results[0].ruleId, "Config/Invalid");
   assert.strictEqual(sarifRun.results[0].level, "warning");
+  // Where a config problem prints doesn't depend on which worker gets there first.
+  for (let i = 0; i < 12; i++) {
+    fs.writeFileSync(path.join(ci, "app", `b${i}.html.erb`), "<p>ok</p>\n");
+  }
+  for (let i = 0; i < 5; i++) {
+    const lines = checkCi("github").stdout.trim().split("\n");
+    assert.strictEqual(lines.length, 2, lines.join("\n"));
+    assert.match(lines[0], /^::warning file=\.ruby-templates\.toml,/);
+  }
+  fs.writeFileSync(
+    path.join(ci, "app", "bom.html.erb"),
+    '\uFEFF<img src="a">\n',
+  );
+  assert.match(
+    run(["check", "app/bom.html.erb", "--format", "github"], undefined, ci)
+      .stdout,
+    /file=app\/bom\.html\.erb,line=1,col=1,endLine=1,endColumn=5,/,
+    "a byte order mark takes no column",
+  );
+  if (process.platform !== "win32") {
+    const link = path.join(root, "ci-link");
+    fs.symlinkSync(ci, link);
+    r = run(
+      ["check", path.join(link, "app", "bom.html.erb"), "--format", "json"],
+      undefined,
+      link,
+    );
+    assert.strictEqual(
+      JSON.parse(r.stdout.split("\n").at(-2)).file,
+      "app/bom.html.erb",
+    );
+  }
+  fs.rmSync(path.join(ci, "app", "bom.html.erb"));
   r = run(["check", views, "--format", "json"]);
   assert.ok(
     r.stdout

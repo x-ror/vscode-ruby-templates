@@ -7,6 +7,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use tower_lsp_server::ls_types::{DiagnosticSeverity, Position, Range};
 
+/// The rule id of a problem in a `.ruby-templates.toml`, which no diagnostic code covers.
+pub const CONFIG_PROBLEM: &str = "Config/Invalid";
+const BYTE_ORDER_MARK: char = '\u{feff}';
 const SITE: &str = "https://x-ror.github.io/vscode-ruby-templates/";
 const SARIF_SCHEMA: &str = "https://json.schemastore.org/sarif-2.1.0.json";
 
@@ -65,11 +68,12 @@ impl Severity {
     }
 }
 
-/// A diagnostic as these formats show it: the path from the working folder with forward slashes, and 1-based positions
-/// whose columns count Unicode characters, not the UTF-16 units of the LSP.
+/// A diagnostic as these formats show it: the path from the working folder with forward slashes (`uri` is the absolute
+/// `file:` URI for SARIF), and 1-based positions whose columns count Unicode characters, not the UTF-16 units of the LSP.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub path: String,
+    pub uri: String,
     pub severity: Severity,
     pub rule: Option<String>,
     pub message: String,
@@ -80,10 +84,11 @@ pub struct Finding {
 }
 
 impl Finding {
-    pub fn new(path: &Path, text: &str, severity: Severity, rule: Option<&str>, message: &str, range: Range) -> Self {
+    pub fn new(path: &Path, uri: &str, text: &str, severity: Severity, rule: Option<&str>, message: &str, range: Range) -> Self {
         let ((line, column), (end_line, end_column)) = (character_position(text, range.start), character_position(text, range.end));
         Finding {
             path: util::slash_path(path),
+            uri: uri.to_string(),
             severity,
             rule: rule.map(str::to_string),
             message: message.to_string(),
@@ -95,10 +100,12 @@ impl Finding {
     }
 }
 
-/// The 1-based line and character column of an LSP position in `text`.
+/// The 1-based line and character column of an LSP position in `text`; a leading byte order mark takes no column.
 fn character_position(text: &str, position: Position) -> (u32, u32) {
     let (_, line, byte) = util::line_at(text, position);
-    (position.line + 1, line[..byte].chars().count() as u32 + 1)
+    let column = line[..byte].chars().count() as u32 + 1;
+    let marked = position.line == 0 && text.starts_with(BYTE_ORDER_MARK);
+    (position.line + 1, if marked { column.saturating_sub(1).max(1) } else { column })
 }
 
 /// Escapes a workflow command's message, or its property value when `property` (which also holds `:` and `,`).
@@ -118,7 +125,7 @@ fn escape(value: &str, property: bool) -> String {
 }
 
 pub fn github_line(finding: &Finding) -> String {
-    let Finding { path, severity, rule, message, line, column, end_line, end_column } = finding;
+    let Finding { path, severity, rule, message, line, column, end_line, end_column, .. } = finding;
     let mut properties = format!("file={},line={line},col={column},endLine={end_line},endColumn={end_column}", escape(path, true));
     if let Some(rule) = rule {
         properties.push_str(&format!(",title={}", escape(rule, true)));
@@ -155,6 +162,7 @@ pub fn sarif(findings: &[Finding]) -> String {
         "$schema": SARIF_SCHEMA,
         "version": "2.1.0",
         "runs": [{
+            "columnKind": "unicodeCodePoints",
             "tool": { "driver": {
                 "name": "ruby-templates",
                 "version": env!("CARGO_PKG_VERSION"),
@@ -169,9 +177,14 @@ pub fn sarif(findings: &[Finding]) -> String {
 
 fn rule_descriptor(id: &str) -> Value {
     let mut descriptor = json!({ "id": id });
-    if let Some(rule) = rules::by_name(id) {
+    if id == CONFIG_PROBLEM {
+        descriptor["shortDescription"] = json!({ "text": "A problem in a .ruby-templates.toml." });
+        descriptor["helpUri"] = json!(format!("{SITE}reference/rules/#configuration"));
+    } else if let Some(rule) = rules::by_name(id) {
         let anchor = rule.name.to_lowercase().replace('/', "-");
-        descriptor["helpUri"] = json!(format!("{SITE}reference/rules/#{anchor}"));
+        descriptor["shortDescription"] = json!({ "text": rule.summary });
+        descriptor["fullDescription"] = json!({ "text": rule.summary });
+        descriptor["helpUri"] = json!(format!("{SITE}reference/diagnostics/#{anchor}"));
     }
     descriptor
 }
@@ -181,7 +194,7 @@ fn sarif_result(finding: &Finding) -> Value {
         "level": finding.severity.level(),
         "message": { "text": finding.message },
         "locations": [{ "physicalLocation": {
-            "artifactLocation": { "uri": percent_encode_path(&finding.path) },
+            "artifactLocation": { "uri": finding.uri },
             "region": {
                 "startLine": finding.line,
                 "startColumn": finding.column,
@@ -196,18 +209,6 @@ fn sarif_result(finding: &Finding) -> Value {
     result
 }
 
-/// A path as a URI reference: everything but unreserved characters and `/` becomes `%XX`.
-fn percent_encode_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => out.push(byte as char),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +216,7 @@ mod tests {
     fn finding(rule: Option<&str>, message: &str) -> Finding {
         Finding {
             path: "app/views/a b.erb".into(),
+            uri: "file:///work/app/views/a%20b.erb".into(),
             severity: Severity::Warning,
             rule: rule.map(str::to_string),
             message: message.into(),
@@ -251,8 +253,16 @@ mod tests {
         let (line, column) = character_position(text, start);
         assert_eq!((line, column), (1, 3 + 1 + 1 + 1));
         let range = Range::new(start, Position::new(0, 3 + 2 + 1 + 5));
-        let found = Finding::new(Path::new("a.erb"), text, Severity::Error, None, "m", range);
+        let found = Finding::new(Path::new("a.erb"), "file:///a.erb", text, Severity::Error, None, "m", range);
         assert_eq!((found.column, found.end_column), (6, 11));
+    }
+
+    #[test]
+    fn a_byte_order_mark_takes_no_column() {
+        let text = "\u{feff}<img>\n<b>";
+        assert_eq!(character_position(text, Position::new(0, 1)), (1, 1));
+        assert_eq!(character_position(text, Position::new(0, 2)), (1, 2));
+        assert_eq!(character_position(text, Position::new(1, 1)), (2, 2));
     }
 
     #[test]
@@ -262,17 +272,24 @@ mod tests {
     }
 
     #[test]
-    fn sarif_lists_the_rules_found_with_their_help() {
-        let log: Value = serde_json::from_str(&sarif(&[finding(Some("Rails/SilentRender"), "m"), finding(None, "syntax")])).unwrap();
+    fn sarif_describes_the_rules_found() {
+        let found = [finding(Some("Rails/SilentRender"), "m"), finding(Some("Syntax/Ruby"), "s"), finding(Some(CONFIG_PROBLEM), "c")];
+        let log: Value = serde_json::from_str(&sarif(&found)).unwrap();
         let run = &log["runs"][0];
         assert_eq!(log["version"], "2.1.0");
+        assert_eq!(run["columnKind"], "unicodeCodePoints");
         let rules = run["tool"]["driver"]["rules"].as_array().unwrap();
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0]["id"], "Rails/SilentRender");
-        assert_eq!(rules[0]["helpUri"], format!("{SITE}reference/rules/#rails-silentrender"));
+        let ids: Vec<&str> = rules.iter().map(|r| r["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["Config/Invalid", "Rails/SilentRender", "Syntax/Ruby"]);
+        assert_eq!(rules[0]["helpUri"], format!("{SITE}reference/rules/#configuration"));
+        assert_eq!(rules[1]["helpUri"], format!("{SITE}reference/diagnostics/#rails-silentrender"));
+        assert_eq!(rules[2]["helpUri"], format!("{SITE}reference/diagnostics/#syntax-ruby"));
+        let summary = rules::by_name("Syntax/Ruby").unwrap().summary;
+        assert_eq!(rules[2]["shortDescription"]["text"], summary);
+        assert_eq!(rules[2]["fullDescription"]["text"], summary);
         assert_eq!(run["results"][0]["ruleId"], "Rails/SilentRender");
-        assert!(run["results"][1].get("ruleId").is_none());
-        assert_eq!(run["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"], "app/views/a%20b.erb");
+        let location = &run["results"][0]["locations"][0]["physicalLocation"];
+        assert_eq!(location["artifactLocation"]["uri"], "file:///work/app/views/a%20b.erb");
     }
 
     #[test]

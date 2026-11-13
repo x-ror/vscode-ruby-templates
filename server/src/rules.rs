@@ -40,6 +40,8 @@ pub struct ListOption {
 #[derive(Debug)]
 pub struct Rule {
     pub name: &'static str,
+    /// What a lint rule reports, as the diagnostics page of the site words it; empty for a formatting rule.
+    pub summary: &'static str,
     /// Skim counts as Slim.
     pub languages: &'static [TemplateLang],
     pub kind: Kind,
@@ -67,17 +69,17 @@ impl Rule {
     }
 }
 
-const fn lint(name: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
-    Rule { alias: Some(alias), ..new_lint(name, languages) }
+const fn lint(name: &'static str, summary: &'static str, languages: &'static [TemplateLang], alias: &'static str) -> Rule {
+    Rule { alias: Some(alias), ..new_lint(name, summary, languages) }
 }
 
 /// A lint rule with no code from before 0.11 to accept.
-const fn new_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
-    Rule { name, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], lists: &[], alias: None }
+const fn new_lint(name: &'static str, summary: &'static str, languages: &'static [TemplateLang]) -> Rule {
+    Rule { name, summary, languages, kind: Kind::Lint, on_by_default: languages, options: &[], choices: &[], lists: &[], alias: None }
 }
 
-const fn off_by_default_lint(name: &'static str, languages: &'static [TemplateLang]) -> Rule {
-    Rule { on_by_default: &[], ..new_lint(name, languages) }
+const fn off_by_default_lint(name: &'static str, summary: &'static str, languages: &'static [TemplateLang]) -> Rule {
+    Rule { on_by_default: &[], ..new_lint(name, summary, languages) }
 }
 
 const fn format_rule(
@@ -87,7 +89,7 @@ const fn format_rule(
     options: &'static [CountOption],
     choices: &'static [ChoiceOption],
 ) -> Rule {
-    Rule { name, languages, kind: Kind::Format, on_by_default, options, choices, lists: &[], alias: None }
+    Rule { name, summary: "", languages, kind: Kind::Format, on_by_default, options, choices, lists: &[], alias: None }
 }
 
 pub const EMPTY_LINES: &str = "Layout/EmptyLines";
@@ -140,48 +142,52 @@ const HAML_SLIM: &[TemplateLang] = &[Haml, Slim];
 const TEMPLATES: &[TemplateLang] = &[Erb, Haml, Slim];
 
 pub const RULES: &[Rule] = &[
-    lint("Syntax/Ruby", ALL, "ruby-syntax"),
-    lint("Syntax/Template", HAML_SLIM, "syntax-error"),
-    lint("Syntax/UnclosedErbTag", &[Erb], "unclosed-tag"),
-    lint("Syntax/InconsistentIndent", &[Haml], "inconsistent-indent"),
-    lint("Syntax/TopLevelIndent", &[Haml], "top-level-indent"),
-    lint("Syntax/IllegalNesting", &[Haml], "illegal-nesting"),
-    lint("Syntax/DoctypeChildren", HAML_SLIM, "doctype-children"),
-    lint("Syntax/UnmatchedBranch", &[Haml], "unmatched-branch"),
-    lint("Syntax/ExplicitEnd", HAML_SLIM, "explicit-end"),
-    lint("Syntax/IllegalElement", &[Haml], "illegal-element"),
-    lint("Syntax/UnknownFilter", &[Haml], "unknown-filter"),
-    lint("Syntax/SelfClosingContent", &[Haml], "self-closing-content"),
-    lint("Syntax/UnclosedAttribute", HAML_SLIM, "unclosed-attribute"),
-    lint("Syntax/BadDedent", &[Slim], "bad-dedent"),
-    lint("Syntax/UnknownEngine", &[Slim], "unknown-engine"),
-    lint("Html/UnexpectedCloseTag", &[Erb], "unexpected-close-tag"),
-    lint("Html/MismatchedCloseTag", &[Erb], "mismatched-close-tag"),
-    lint("Html/UnclosedElement", &[Erb], "unclosed-element"),
-    lint("Html/ImgAlt", TEMPLATES, "img-missing-alt"),
-    lint("Html/DuplicateId", TEMPLATES, "duplicate-id"),
-    lint("Html/VoidChildren", HAML_SLIM, "void-children"),
-    new_lint("Html/DuplicateAttribute", TEMPLATES),
-    new_lint("Html/AnchorHref", TEMPLATES),
-    new_lint("Html/NestedInteractive", TEMPLATES),
-    new_lint("A11y/IframeTitle", TEMPLATES),
-    new_lint("A11y/GenericLinkText", TEMPLATES),
-    lint("Rails/MissingPartial", ALL, "unresolved-render"),
-    lint("Rails/StrictLocals", ALL, "strict-locals"),
-    new_lint("Rails/SilentRender", TEMPLATES),
-    new_lint("Rails/SilentHelper", TEMPLATES),
-    new_lint("Rails/DebugOutput", TEMPLATES),
-    new_lint("Rails/InstanceVariableInPartial", TEMPLATES),
-    new_lint("Rails/UnusedStrictLocal", TEMPLATES),
-    new_lint("Rails/UnusedBlockArgument", TEMPLATES),
-    new_lint("Rails/RenderInLoop", TEMPLATES),
-    new_lint("Rails/OutputControlFlow", &[Erb]),
-    new_lint("Rails/UnsafeOutput", TEMPLATES),
-    new_lint("Rails/I18nMissingKey", TEMPLATES),
-    new_lint("Rails/UnknownRoute", TEMPLATES),
-    new_lint("Turbo/PermanentRequiresId", TEMPLATES),
-    new_lint("Stimulus/UnknownController", TEMPLATES),
-    new_lint("Stimulus/UnknownTargetOrAction", TEMPLATES),
+    lint("Syntax/Ruby", "Ruby in the template that doesn't parse.", ALL, "ruby-syntax"),
+    lint("Syntax/Template", "Any other error the Haml or Slim parser raises.", HAML_SLIM, "syntax-error"),
+    lint("Syntax/UnclosedErbTag", "A `<%` with no `%>` after it.", &[Erb], "unclosed-tag"),
+    lint("Syntax/InconsistentIndent", "Indentation Haml can't follow.", &[Haml], "inconsistent-indent"),
+    lint("Syntax/TopLevelIndent", "The first line is indented.", &[Haml], "top-level-indent"),
+    lint("Syntax/IllegalNesting", "Lines nested under something that can't hold them.", &[Haml], "illegal-nesting"),
+    lint("Syntax/DoctypeChildren", "Lines nested under the doctype.", HAML_SLIM, "doctype-children"),
+    lint("Syntax/UnmatchedBranch", "An `else`, `elsif` or `when` that doesn't line up with its block.", &[Haml], "unmatched-branch"),
+    lint("Syntax/ExplicitEnd", "A `- end` line.", HAML_SLIM, "explicit-end"),
+    lint("Syntax/IllegalElement", "A `.` or `#` with no class or id name after it.", &[Haml], "illegal-element"),
+    lint("Syntax/UnknownFilter", "A filter Haml doesn't have.", &[Haml], "unknown-filter"),
+    lint("Syntax/SelfClosingContent", "Content after a tag closed with `/`.", &[Haml], "self-closing-content"),
+    lint("Syntax/UnclosedAttribute", "An attribute list or value that is never closed.", HAML_SLIM, "unclosed-attribute"),
+    lint("Syntax/BadDedent", "A line un-indented to a level no open line has.", &[Slim], "bad-dedent"),
+    lint("Syntax/UnknownEngine", "An embedded engine Slim doesn't know.", &[Slim], "unknown-engine"),
+    lint("Html/UnexpectedCloseTag", "An end tag with no open element of that name.", &[Erb], "unexpected-close-tag"),
+    lint("Html/MismatchedCloseTag", "An end tag that doesn't close the innermost open element.", &[Erb], "mismatched-close-tag"),
+    lint("Html/UnclosedElement", "An element whose end tag never comes.", &[Erb], "unclosed-element"),
+    lint("Html/ImgAlt", "An image without alt text.", TEMPLATES, "img-missing-alt"),
+    lint("Html/DuplicateId", "The same static id twice in one template.", TEMPLATES, "duplicate-id"),
+    lint("Html/VoidChildren", "Content inside a void element such as `img` or `input`.", HAML_SLIM, "void-children"),
+    new_lint("Html/DuplicateAttribute", "An attribute given twice on one tag.", TEMPLATES),
+    new_lint("Html/AnchorHref", "An `<a>` without an `href`, which is not a link and cannot be reached with the keyboard.", TEMPLATES),
+    new_lint("Html/NestedInteractive", "An interactive element inside another: a link in a link, a form in a form.", TEMPLATES),
+    new_lint("A11y/IframeTitle", "An `<iframe>` without a `title`, which screen readers use to name it.", TEMPLATES),
+    new_lint("A11y/GenericLinkText", "Link text that says nothing out of context: \"click here\", \"here\", \"read more\".", TEMPLATES),
+    lint("Rails/MissingPartial", "A `render` of a partial or template that isn't in app/views.", ALL, "unresolved-render"),
+    lint("Rails/StrictLocals", "A `render` whose locals don't match the partial's `locals:` comment.", ALL, "strict-locals"),
+    new_lint("Rails/SilentRender", "A `render` in a tag that outputs nothing.", TEMPLATES),
+    new_lint("Rails/SilentHelper", "A helper that returns markup, called in a tag that outputs nothing.", TEMPLATES),
+    new_lint("Rails/DebugOutput", "Debugging left in a view.", TEMPLATES),
+    new_lint("Rails/InstanceVariableInPartial", "An instance variable read inside a partial.", TEMPLATES),
+    new_lint("Rails/UnusedStrictLocal", "A local in the `locals:` comment that the partial never uses.", TEMPLATES),
+    new_lint("Rails/UnusedBlockArgument", "A block argument the block never uses.", TEMPLATES),
+    new_lint("Rails/RenderInLoop", "A partial rendered once per item inside a loop.", TEMPLATES),
+    new_lint("Rails/OutputControlFlow", "Control flow in an output tag.", &[Erb]),
+    new_lint("Rails/UnsafeOutput", "Output that skips Rails' HTML escaping.", TEMPLATES),
+    new_lint("Rails/I18nMissingKey", "A lazy translation key with no entry in `config/locales`.", TEMPLATES),
+    new_lint("Rails/UnknownRoute", "A `*_path` or `*_url` helper that the app's routes don't define.", TEMPLATES),
+    new_lint("Turbo/PermanentRequiresId", "An element with `data-turbo-permanent` and no `id`.", TEMPLATES),
+    new_lint("Stimulus/UnknownController", "A `data-controller` name that no Stimulus controller has.", TEMPLATES),
+    new_lint(
+        "Stimulus/UnknownTargetOrAction",
+        "A `data-*-target` or `data-action` method that its Stimulus controller doesn't have.",
+        TEMPLATES,
+    ),
     format_rule(EMPTY_LINES, TEMPLATES, &[], &[CountOption { key: "max", default: 1 }], &[]),
     // ERB is rendered byte for byte, so its end is output.
     format_rule(TRAILING_EMPTY_LINES, TEMPLATES, HAML_SLIM, &[], &[]),
@@ -204,8 +210,11 @@ pub const RULES: &[Rule] = &[
     format_rule(IMPLICIT_DIV, HAML_SLIM, &[], &[], &[]),
     format_rule(CLASSES_BEFORE_IDS, &[Haml], &[], &[], &[]),
     format_rule(HASH_ATTRIBUTES, &[Haml], &[], &[], &[ATTRIBUTES_STYLE]),
-    off_by_default_lint("Style/ErbTrimMode", &[Erb]),
-    Rule { options: &[CountOption { key: "max", default: 100 }], ..off_by_default_lint(LINE_LENGTH, TEMPLATES) },
+    off_by_default_lint("Style/ErbTrimMode", "Both `%>` and `-%>` in one template.", &[Erb]),
+    Rule {
+        options: &[CountOption { key: "max", default: 100 }],
+        ..off_by_default_lint(LINE_LENGTH, "A line longer than the limit.", TEMPLATES)
+    },
     // Adds whitespace to the page, so it is for the tags where that shows nowhere.
     Rule { lists: &[BLOCK_TAGS], ..format_rule(ELEMENT_CONTENT_ON_OWN_LINE, TEMPLATES, &[], &[], &[]) },
     format_rule(ATTRIBUTES_PER_LINE, &[Erb], &[], &[CountOption { key: "max_line_length", default: 100 }], &[]),
@@ -275,6 +284,24 @@ mod tests {
         let declared: HashSet<&str> = sources.iter().flat_map(|src| re.captures_iter(src).map(|c| c.get(1).unwrap().as_str())).collect();
         let registered: HashSet<&str> = RULES.iter().filter(|rule| rule.kind == Kind::Lint).map(|rule| rule.name).collect();
         assert_eq!(declared, registered);
+    }
+
+    /// Each lint rule's summary is the one the site's diagnostics page shows for its code, and every code there is a rule.
+    #[test]
+    fn summaries_match_the_diagnostics_page() {
+        let page = include_str!("../../site/src/data/diagnostics.ts");
+        let entry = regex::Regex::new(r#"(?s)code: "([^"]+)",.*?\n    summary:\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'),"#).unwrap();
+        let mut seen = HashSet::new();
+        for part in page.split("\n  {\n").skip(1) {
+            let found = entry.captures(part).expect("a diagnostics entry with a code and a summary");
+            let summary = found.get(2).or(found.get(3)).unwrap().as_str().replace("\\\"", "\"");
+            let rule = by_name(&found[1]).unwrap_or_else(|| panic!("{} is not a rule", &found[1]));
+            assert_eq!(rule.summary, summary, "{}", rule.name);
+            seen.insert(rule.name);
+        }
+        for rule in RULES.iter().filter(|rule| rule.kind == Kind::Lint) {
+            assert!(seen.contains(rule.name), "{} is not on the diagnostics page", rule.name);
+        }
     }
 
     /// The site's catalogue lists each registered rule, for the same languages, as the same kind of rule and as one that exists.

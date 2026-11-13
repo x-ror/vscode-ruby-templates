@@ -91,7 +91,7 @@ Each step fails the job when the command exits with a non-zero code.
 | `sarif`  | One SARIF 2.1.0 log, for code scanning                                                                            |
 | `json`   | One JSON object per line, with `file`, `line`, `column`, `endLine`, `endColumn`, `severity`, `rule` and `message` |
 
-In `github`, `sarif` and `json` the paths are relative to the current folder and the columns count characters from 1, as GitHub shows them; `text` keeps the editor's UTF-16 columns. Errors are `error`, warnings `warning` and the Rails `info` diagnostics `notice` (`note` in SARIF and JSON). A problem in a `.ruby-templates.toml` is reported the same way, against that file.
+In `github`, `sarif` and `json` the paths are relative to the current folder, so run the command from the repository root for GitHub to find the files; SARIF carries absolute `file:` URIs, which code scanning maps to the repository. Columns count characters from 1, as GitHub shows them, and a leading byte order mark takes none; `text` keeps the editor's UTF-16 columns. These formats also carry the rule: `Html/ImgAlt` is the `title` of an annotation, the `rule` of a JSON line, and a SARIF rule with its summary and a link to the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/). A problem in a `.ruby-templates.toml` has the rule `Config/Invalid`. Errors are `error`, warnings `warning` and the Rails `info` diagnostics `notice` (`note` in SARIF and JSON). A problem in a `.ruby-templates.toml` is reported the same way, against that file, before the results of the first template that uses it.
 
 Annotations on the pull request:
 
