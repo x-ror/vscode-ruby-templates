@@ -24,7 +24,10 @@ const run = (args, input, cwd) => {
   return r;
 };
 
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rt-cli-")));
+// The native call expands Windows short names (RUNNER~1) as the binary's canonical paths do.
+const root = fs.realpathSync.native(
+  fs.mkdtempSync(path.join(os.tmpdir(), "rt-cli-")),
+);
 const views = path.join(root, "app", "views", "users");
 fs.mkdirSync(views, { recursive: true });
 const file = (name, text) => {
