@@ -427,6 +427,10 @@
       {
         "language": "slim",
         "path": "./snippets/slim.json"
+      },
+      {
+        "language": "skim",
+        "path": "./snippets/slim.json"
       }
     ],
     "commands": [
@@ -498,37 +502,37 @@
         "command": "rubyTemplates.toggleErbTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.toggleHamlPrefix",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == haml"
+        "when": "editorTextFocus && !editorReadonly && editorLangId == haml"
       },
       {
         "command": "rubyTemplates.toggleSlimTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == slim"
+        "when": "editorTextFocus && !editorReadonly && (editorLangId == slim || editorLangId == skim)"
       },
       {
         "command": "rubyTemplates.wrapInErb",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.wrapInSlim",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId == slim"
+        "when": "editorTextFocus && !editorReadonly && (editorLangId == slim || editorLangId == skim)"
       },
       {
         "command": "rubyTemplates.preview",
         "key": "ctrl+alt+p",
         "mac": "cmd+alt+p",
-        "when": "editorTextFocus && (editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim)"
+        "when": "editorTextFocus && (editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/)"
       }
     ],
     "menus": {
@@ -545,17 +549,17 @@
         },
         {
           "command": "rubyTemplates.toggleSlimTag",
-          "when": "editorLangId == slim",
+          "when": "editorLangId =~ /^(slim|skim)$/",
           "group": "rubyTemplates@1"
         },
         {
           "command": "rubyTemplates.wrapInSlim",
-          "when": "editorLangId == slim && editorHasSelection",
+          "when": "editorLangId =~ /^(slim|skim)$/ && editorHasSelection",
           "group": "rubyTemplates@2"
         },
         {
           "command": "rubyTemplates.preview",
-          "when": "editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim",
+          "when": "editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/",
           "group": "rubyTemplates@3"
         },
         {
@@ -565,7 +569,7 @@
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "(editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim) && editorHasSelection && resourceScheme == file",
+          "when": "(editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/) && editorHasSelection && resourceScheme == file",
           "group": "rubyTemplates@2"
         },
         {
@@ -580,7 +584,7 @@
         },
         {
           "command": "rubyTemplates.convertToErb",
-          "when": "editorLangId == haml || editorLangId == slim",
+          "when": "editorLangId =~ /^(haml|slim|skim)$/",
           "group": "rubyTemplates@5"
         }
       ],
@@ -588,6 +592,14 @@
         {
           "command": "rubyTemplates.switchRelated",
           "when": "resourceScheme == file && (editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim|ruby)$/)"
+        },
+        {
+          "command": "rubyTemplates.preview",
+          "when": "editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/"
+        },
+        {
+          "command": "rubyTemplates.showRenderedSource",
+          "when": "editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/"
         },
         {
           "command": "rubyTemplates.toggleErbTag",
@@ -599,11 +611,11 @@
         },
         {
           "command": "rubyTemplates.toggleSlimTag",
-          "when": "editorLangId == slim"
+          "when": "editorLangId =~ /^(slim|skim)$/"
         },
         {
           "command": "rubyTemplates.wrapInSlim",
-          "when": "editorLangId == slim"
+          "when": "editorLangId =~ /^(slim|skim)$/"
         },
         {
           "command": "rubyTemplates.convertToHaml",
@@ -615,11 +627,11 @@
         },
         {
           "command": "rubyTemplates.convertToErb",
-          "when": "editorLangId == haml || editorLangId == slim"
+          "when": "editorLangId =~ /^(haml|slim|skim)$/"
         },
         {
           "command": "rubyTemplates.extractPartial",
-          "when": "(editorLangId =~ /^erb/ || editorLangId == haml || editorLangId == slim) && resourceScheme == file"
+          "when": "(editorLangId =~ /^erb/ || editorLangId =~ /^(haml|slim|skim)$/) && resourceScheme == file"
         },
         {
           "command": "rubyTemplates.toggleHamlPrefix",

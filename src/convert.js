@@ -21,7 +21,7 @@ const CONVERTERS = {
  */
 function convertedFileName(fileName, from, target) {
   const renamed = fileName.replace(
-    /\.(erb|erubis?|haml|rhtml|slim)(\.tt)?$/i,
+    /\.(erb|erubis?|haml|rhtml|slim|skim)(\.tt)?$/i,
     `.${target}$2`,
   );
   return from !== "html" && renamed !== fileName

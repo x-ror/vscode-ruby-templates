@@ -44,6 +44,12 @@ const cases = [
   ["SHOW.HTML.ERB", "erb", "haml", "SHOW.HTML.haml"],
   ["show.html.erubi", "erb", "slim", "show.html.slim"],
   ["show.html.erubis", "erb", "haml", "show.html.haml"],
+  [
+    "app/views/users/show.html.skim",
+    "slim",
+    "erb",
+    "app/views/users/show.html.erb",
+  ],
 ];
 for (const [name, from, target, expected] of cases) {
   const actual = convertedFileName(name, from, target);
@@ -330,7 +336,12 @@ assert.strictEqual(
 // engineOf
 assert.strictEqual(engineOf("erb-js"), "erb");
 assert.strictEqual(engineOf("haml"), "haml");
-assert.ok(isTemplateLanguage("erb-percent") && !isTemplateLanguage("liquid"));
+assert.strictEqual(engineOf("skim"), "slim");
+assert.ok(
+  isTemplateLanguage("erb-percent") &&
+    isTemplateLanguage("skim") &&
+    !isTemplateLanguage("liquid"),
+);
 assert.ok(isErb("erb") && isErb("erb-js") && !isErb("haml"));
 
 // viewsRoot: the innermost app/views, with either separator
@@ -382,11 +393,14 @@ assert.ok(missingToolMessage("x", "liquid").includes("gem install x"));
 // previewPage, errorPage
 const page = previewPage("a<b>.erb", "erb", '<p title="t">&</p>');
 assert.ok(page.includes("a&lt;b&gt;.erb · erb"));
+assert.ok(page.includes('http-equiv="Content-Security-Policy"'));
 assert.ok(
   page.includes('srcdoc="&lt;p title=&quot;t&quot;&gt;&amp;&lt;/p&gt;"'),
 );
 assert.ok(page.includes('<pre>&lt;p title="t"&gt;&amp;&lt;/p&gt;</pre>'));
-assert.ok(!errorPage("T", "d").includes("<p "));
+const err = errorPage("T", "d");
+assert.ok(err.includes('http-equiv="Content-Security-Policy"'));
+assert.ok(!err.includes("<p "));
 assert.ok(errorPage("T", "d", "<hint>").includes("&lt;hint&gt;"));
 
 // withoutDirtyEdits

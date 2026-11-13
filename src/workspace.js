@@ -4,7 +4,7 @@ import path from "path";
 
 const SECTION = "rubyTemplates";
 
-const settings = () => vscode.workspace.getConfiguration(SECTION);
+const settings = (scope) => vscode.workspace.getConfiguration(SECTION, scope);
 
 /** The executable set in `rubyTemplates.commands.<name>`, else `name` itself. */
 const commandPath = (name) => settings().get(`commands.${name}`, name);
@@ -34,10 +34,11 @@ async function confirmOverwrite(uri) {
 }
 
 function workspaceFolderFor(doc) {
-  return (
-    vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath ||
-    path.dirname(doc.uri.fsPath)
-  );
+  const ws = doc && vscode.workspace.getWorkspaceFolder(doc.uri);
+  if (ws) return ws.uri.fsPath;
+  if (doc?.uri.scheme === "file" && doc.uri.fsPath)
+    return path.dirname(doc.uri.fsPath);
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
 export {

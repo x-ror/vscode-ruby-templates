@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import path from "path";
 
 import { CONVERTERS, convertedFileName } from "./convert.js";
+import { engineOf } from "./languages.js";
 import {
   commandPath,
   useBundler,
@@ -76,11 +77,18 @@ async function saveAs(fileName, content) {
   });
 }
 
-/** Replaces `src`, the text the conversion started from, and switches the document to `language`. */
-async function replaceContents(ed, src, content, language) {
+/** Replaces the current contents if unchanged since conversion started, and switches the document to `language`. */
+async function replaceContents(ed, version, content, language) {
+  if (ed.document.version !== version) {
+    vscode.window.showWarningMessage(
+      "Template changed while converting; conversion cancelled.",
+    );
+    return;
+  }
+  const text = ed.document.getText();
   const full = new vscode.Range(
     ed.document.positionAt(0),
-    ed.document.positionAt(src.length),
+    ed.document.positionAt(text.length),
   );
   await ed.edit((eb) => eb.replace(full, content));
   await vscode.languages.setTextDocumentLanguage(ed.document, language);
@@ -90,7 +98,7 @@ async function convert(target) {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
   const doc = ed.document;
-  const from = doc.languageId;
+  const from = engineOf(doc.languageId);
   const converter = CONVERTERS[`${from}>${target}`];
   if (!converter) {
     vscode.window.showInformationMessage(
@@ -98,6 +106,7 @@ async function convert(target) {
     );
     return;
   }
+  const version = doc.version;
   const src = doc.getText();
   const converted = await runConverter(converter, doc, src);
   if (converted === undefined) return;
@@ -107,7 +116,7 @@ async function convert(target) {
   if (destination === "untitled") await openUntitled(target, converted);
   else if (destination === "save") await saveAs(newName, converted);
   else if (destination === "replace")
-    await replaceContents(ed, src, converted, target);
+    await replaceContents(ed, version, converted, target);
 }
 
 export { convert };

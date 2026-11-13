@@ -55,7 +55,7 @@ const escapeHtml = (s) =>
 
 /** The preview webview: `html` in a sandboxed frame above its source. */
 function previewPage(name, languageId, html) {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <style>
   body{font-family:system-ui,sans-serif;margin:0}
   .bar{display:flex;gap:1rem;align-items:center;padding:.4rem .8rem;font-size:12px;background:var(--vscode-editorWidget-background);border-bottom:1px solid var(--vscode-widget-border,#444)}
@@ -71,7 +71,7 @@ function previewPage(name, languageId, html) {
 }
 
 function errorPage(title, detail, hint) {
-  return `<!DOCTYPE html><html><body style="font-family:system-ui;padding:1rem">
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';"></head><body style="font-family:system-ui;padding:1rem">
 <h3 style="color:var(--vscode-errorForeground)">${escapeHtml(title)}</h3>
 <pre style="white-space:pre-wrap">${escapeHtml(detail)}</pre>
 ${hint ? `<p style="opacity:.8">${escapeHtml(hint)}</p>` : ""}</body></html>`;

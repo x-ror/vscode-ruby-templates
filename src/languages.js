@@ -6,7 +6,11 @@ const ERB_PERCENT = "erb-percent";
 
 // Host-specific ERB ids (erb-js, erb-css, ...) render and compile like plain ERB.
 const engineOf = (languageId) =>
-  languageId.startsWith("erb-") ? "erb" : languageId;
+  languageId.startsWith("erb-")
+    ? "erb"
+    : languageId === "skim"
+      ? "slim"
+      : languageId;
 
 const isTemplateLanguage = (languageId) =>
   TEMPLATE_LANGS.has(engineOf(languageId));
