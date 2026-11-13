@@ -2,14 +2,16 @@
 //! repeated ids and attributes, and link text that says nothing. ERB's `alt` and id checks stay in `erb::html_lint`, which
 //! also knows the ERB branches.
 
+use crate::attribute_insert::empty_attribute;
 use crate::attributes::{Attribute, Element, Value};
 use crate::erb::html_lint::{self, ALT_RULE, NO_ALT_AVAILABLE};
 use crate::lang::TemplateLang;
 use crate::ruby::{analyze, BlockEffect, CONTINUERS};
-use crate::util::{coded, lines_with_offsets, warning, LineIndex};
+use crate::util::{coded, lines_with_offsets, warning, with_data, LineIndex};
+use serde_json::json;
 use std::collections::HashMap;
 use std::ops::Range;
-use tower_lsp_server::ls_types::Diagnostic;
+use tower_lsp_server::ls_types::{Diagnostic, TextEdit};
 
 pub(crate) const DUPLICATE_ATTRIBUTE: &str = "Html/DuplicateAttribute";
 pub(crate) const ANCHOR_HREF: &str = "Html/AnchorHref";
@@ -35,7 +37,13 @@ pub(crate) fn diagnostics(lang: TemplateLang, text: &str, markup: &[Element], he
     let mut out = Vec::new();
     if lang != TemplateLang::Erb {
         for element in markup.iter().chain(helpers).filter(|element| element.name == "img") {
-            out.extend(missing_alt(text, element).map(|(at, message)| report(&at, message, html_lint::code::IMG_MISSING_ALT)));
+            if let Some((at, message)) = missing_alt(text, element) {
+                let found = report(&at, message, html_lint::code::IMG_MISSING_ALT);
+                out.push(match empty_attribute(lang, text, element, "alt") {
+                    Some((offset, added)) => with_data(found, json!({ "edit": TextEdit::new(index.range(offset, offset), added) })),
+                    None => found,
+                });
+            }
         }
         out.extend(
             duplicate_ids(text, &lines, markup, &index)
@@ -284,6 +292,25 @@ mod tests {
             assert!(flagged(lang, html_lint::code::IMG_MISSING_ALT, text).is_empty(), "{text}");
         }
         assert!(flagged(Haml, alt, "%img{src: x, generator_unable_to_provide_required_alt: 'x'}\n").len() == 1);
+    }
+
+    #[test]
+    fn images_without_alt_carry_the_edit_that_adds_it() {
+        let fix = |lang: TemplateLang, text: &str| {
+            let markup = crate::attributes::markup_elements(lang, text, &[], ruby_prism::Version::Latest);
+            let compiled = crate::code_context::compiled(lang, text, None, &[]).unwrap();
+            let options = ruby_prism::Options::default().build();
+            let parsed = compiled.parse(&options).unwrap();
+            let helpers = crate::attributes::helper_elements(&compiled, &parsed.node());
+            let found = diagnostics(lang, text, &markup, &helpers);
+            crate::util::edited(text, &crate::util::data_edit(&found[0]).unwrap())
+        };
+        assert_eq!(fix(Haml, "%img{src: x}\n"), "%img{src: x, alt: \"\"}\n");
+        assert_eq!(fix(Haml, "%img(src=\"a\")\n"), "%img(src=\"a\" alt=\"\")\n");
+        assert_eq!(fix(Haml, "%p\n  %img\n"), "%p\n  %img(alt=\"\")\n");
+        assert_eq!(fix(Slim, "img.big src=x\n"), "img.big alt=\"\" src=x\n");
+        assert_eq!(fix(Slim, "= image_tag \"a.png\"\n"), "= image_tag \"a.png\", alt: \"\"\n");
+        assert_eq!(fix(Haml, "= tag.img src: x\n"), "= tag.img src: x, alt: \"\"\n");
     }
 
     #[test]

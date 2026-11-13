@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use tower_lsp_server::ls_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, Location, NumberOrString, Position, Range,
-    TextDocumentContentChangeEvent, Uri,
+    TextDocumentContentChangeEvent, TextEdit, Uri,
 };
 
 pub const BOM: char = '\u{feff}';
@@ -216,6 +216,22 @@ pub fn code(d: &Diagnostic) -> Option<&str> {
     }
 }
 
+/// Attach `data` that the quick fix of `d` needs, which clients send back with the diagnostic.
+pub fn with_data(mut d: Diagnostic, data: serde_json::Value) -> Diagnostic {
+    d.data = Some(data);
+    d
+}
+
+/// The string `key` of the data set by `with_data`.
+pub fn data_str<'a>(d: &'a Diagnostic, key: &str) -> Option<&'a str> {
+    d.data.as_ref()?.get(key)?.as_str()
+}
+
+/// The edit of the data set by `with_data(d, json!({ "edit": … }))`.
+pub fn data_edit(d: &Diagnostic) -> Option<TextEdit> {
+    serde_json::from_value(d.data.as_ref()?.get("edit")?.clone()).ok()
+}
+
 pub fn completion_item(label: impl Into<String>, kind: CompletionItemKind, detail: impl Into<String>) -> CompletionItem {
     CompletionItem { label: label.into(), kind: Some(kind), detail: Some(detail.into()), ..Default::default() }
 }
@@ -322,6 +338,15 @@ pub fn apply_change(text: &mut String, change: TextDocumentContentChangeEvent) {
 }
 
 /// Writes `files` (path relative to `root`, text) for a test, creating folders.
+/// `text` with the `edit` of a quick fix applied.
+#[cfg(test)]
+pub fn edited(text: &str, edit: &TextEdit) -> String {
+    let mut out = text.to_string();
+    let change = TextDocumentContentChangeEvent { range: Some(edit.range), range_length: None, text: edit.new_text.clone() };
+    apply_change(&mut out, change);
+    out
+}
+
 #[cfg(test)]
 pub fn write_files(root: &Path, files: &[(&str, &str)]) {
     for (file, text) in files {

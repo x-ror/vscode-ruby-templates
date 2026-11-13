@@ -1,14 +1,15 @@
 //! HTML checks for ERB views with an HTML host: `alt` text and duplicate ids. Names follow Herb's rules
 //! (`html-img-require-alt`, `html-no-duplicate-ids`).
 
+use crate::attribute_insert::image_tag_arguments_end;
 use crate::erb;
 use crate::html::TEXT_ELEMENTS;
 use crate::ruby::{analyze, BlockEffect};
-use crate::util::{coded, warning, LineIndex};
+use crate::util::{coded, warning, with_data, LineIndex};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use tower_lsp_server::ls_types::Diagnostic;
+use tower_lsp_server::ls_types::{Diagnostic, Range, TextEdit};
 
 /// Stable diagnostic codes, shared with ERB's `rubyTemplates.erb.disabledDiagnostics`.
 pub mod code {
@@ -102,7 +103,12 @@ pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
         let tag_range = index.range(tag.start, tag.start + "<img".len());
         let has_alt = tag.attrs.iter().any(|a| a.name == "alt" || (a.name == NO_ALT_AVAILABLE && a.value.is_none_or(|(s, e)| s == e)));
         if !tag.dynamic && !has_alt {
-            out.push(coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT));
+            let found = coded(warning(tag_range, format!("`<img>` without `alt`: {ALT_RULE}")), code::IMG_MISSING_ALT);
+            let after_name = index.position(tag.start + "<img".len());
+            out.push(with_data(
+                found,
+                serde_json::json!({ "edit": TextEdit::new(Range::new(after_name, after_name), " alt=\"\"".into()) }),
+            ));
         }
     }
     out.extend(image_tags_without_alt(text, &spans, &index));
@@ -211,10 +217,14 @@ fn image_tags_without_alt<'a>(text: &'a str, spans: &'a [(usize, usize)], index:
         let code = &text[s..e.min(text.len())];
         let call = IMAGE_TAG.find(code)?;
         (!ALT_OPTION.is_match(&code[call.end()..])).then(|| {
-            coded(
-                warning(index.range(s + call.start(), s + call.end()), format!("`image_tag` without `alt:`: {ALT_RULE}")),
-                code::IMG_MISSING_ALT,
-            )
+            let range = index.range(s + call.start(), s + call.end());
+            let found = coded(warning(range, format!("`image_tag` without `alt:`: {ALT_RULE}")), code::IMG_MISSING_ALT);
+            let call_code = code.strip_suffix('%').unwrap_or(code)[call.start()..].trim_end();
+            let end = image_tag_arguments_end(call_code).map(|end| index.position(s + call.start() + end));
+            match end {
+                Some(end) => with_data(found, serde_json::json!({ "edit": TextEdit::new(Range::new(end, end), ", alt: \"\"".into()) })),
+                None => found,
+            }
         })
     })
 }
@@ -305,6 +315,16 @@ mod tests {
         assert_eq!(codes("<img src=\"/a.png\" generator-unable-to-provide-required-alt=\"x\">").len(), 1);
         // A no-break or ideographic space after the name is part of an attribute name, not a crash.
         assert_eq!(codes("<img\u{a0}src=\"a\">\n<div\u{3000}class=\"x\">"), [(0, code::IMG_MISSING_ALT.to_string())]);
+    }
+
+    #[test]
+    fn the_diagnostic_carries_the_edit_that_adds_alt() {
+        let fixed = |text: &str| crate::util::edited(text, &crate::util::data_edit(&diagnostics(text).remove(0)).unwrap());
+        assert_eq!(fixed("<p>\n  <img\n    src=\"/a.png\">\n</p>"), "<p>\n  <img alt=\"\"\n    src=\"/a.png\">\n</p>");
+        assert_eq!(fixed("<%= image_tag \"a.png\", class: \"x\" %>"), "<%= image_tag \"a.png\", class: \"x\", alt: \"\" %>");
+        assert_eq!(fixed("<%= image_tag(\"a.png\") -%>"), "<%= image_tag(\"a.png\", alt: \"\") -%>");
+        assert_eq!(fixed("<%= link_to image_tag(user.avatar), user %>"), "<%= link_to image_tag(user.avatar, alt: \"\"), user %>");
+        assert_eq!(crate::util::data_edit(&diagnostics("<%= image_tag \"a.png\" do %>").remove(0)), None, "code that doesn't parse");
     }
 
     #[test]

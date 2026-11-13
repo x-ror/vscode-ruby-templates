@@ -42,9 +42,12 @@ pub(crate) fn diagnostics(
                 return None;
             }
             let (start, end) = compiled.template_span(start, end)?;
-            let hint = closest(catalog, scope, &key).map(|near| format!("; did you mean `{near}`?")).unwrap_or_default();
-            let message = format!("Translation `{full}` is missing in the `{}` locale{hint}", catalog.default_locale());
-            Some(util::coded(util::warning(index.range(start, end), message), I18N_MISSING_KEY))
+            let near = closest(catalog, scope, &key);
+            let hint = near.as_deref().map(|near| format!("; did you mean `{near}`?")).unwrap_or_default();
+            let locale = catalog.default_locale();
+            let message = format!("Translation `{full}` is missing in the `{locale}` locale{hint}");
+            let found = util::coded(util::warning(index.range(start, end), message), I18N_MISSING_KEY);
+            Some(util::with_data(found, serde_json::json!({ "key": full, "locale": locale, "suggest": near })))
         })
         .collect()
 }
@@ -164,6 +167,23 @@ mod tests {
             found(Erb, "users/index.html.erb", "<%= t(\".nothing\") %>\n")[0].1,
             "Translation `users.index.nothing` is missing in the `en` locale"
         );
+    }
+
+    #[test]
+    fn the_diagnostic_carries_the_key_and_the_one_meant() {
+        let (root, catalog) = catalog(LOCALE);
+        let run = |text: &str| {
+            let compiled = code_context::compiled(Erb, text, None, &[]).unwrap();
+            let options = ruby_prism::Options::default().build();
+            let result = compiled.parse(&options).unwrap();
+            let view = root.join("app/views/users/index.html.erb");
+            diagnostics(text, &view, &Project::unknown(), &catalog, &compiled, &result.node()).remove(0).data
+        };
+        let near = run("<%= t(\".titel\") %>");
+        let far = run("<%= t(\".nothing\") %>");
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(near, Some(serde_json::json!({ "key": "users.index.titel", "locale": "en", "suggest": ".title" })));
+        assert_eq!(far, Some(serde_json::json!({ "key": "users.index.nothing", "locale": "en", "suggest": null })));
     }
 
     #[test]

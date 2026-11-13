@@ -103,8 +103,10 @@ pub(crate) fn diagnostics(text: &str, template: &Template, routes: &[Route], com
             continue;
         }
         let Some((start, end)) = compiled.template_span(call.start, call.end) else { continue };
-        let message = format!("`{}` is not a route helper of this app; did you mean `{near}{suffix}`?", call.name);
-        out.push(util::coded(util::warning(index.range(start, end), message), UNKNOWN_ROUTE));
+        let replacement = format!("{near}{suffix}");
+        let message = format!("`{}` is not a route helper of this app; did you mean `{replacement}`?", call.name);
+        let found = util::coded(util::warning(index.range(start, end), message), UNKNOWN_ROUTE);
+        out.push(util::with_data(found, serde_json::json!({ "replace": replacement })));
     }
     out
 }
@@ -201,8 +203,8 @@ mod tests {
         parse(Path::new("/"), &serde_json::Value::Array(names.iter().map(|name| serde_json::json!({ "name": name })).collect()))
     }
 
-    /// The flagged text and message of each finding in a template of an app whose helper defines `custom_path`.
-    fn found_in(lang: TemplateLang, text: &str, strict_locals: Option<&Signature>, devise: bool) -> Vec<(String, String)> {
+    /// The findings in a template of an app whose helper defines `custom_path`.
+    fn findings(lang: TemplateLang, text: &str, strict_locals: Option<&Signature>, devise: bool) -> Vec<Diagnostic> {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("rt-unknown-route-{}-{n}", std::process::id()));
@@ -219,9 +221,15 @@ mod tests {
         let result = compiled.parse(&options).unwrap();
         let template = Template { path: &path, strict_locals, devise };
         let found = diagnostics(text, &template, &routes(), &compiled, &result.node());
+        std::fs::remove_dir_all(&root).unwrap();
+        found
+    }
+
+    /// The flagged text and message of each finding in a template of an app whose helper defines `custom_path`.
+    fn found_in(lang: TemplateLang, text: &str, strict_locals: Option<&Signature>, devise: bool) -> Vec<(String, String)> {
         let index = LineIndex::new(text);
         let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
-        std::fs::remove_dir_all(&root).unwrap();
+        let found = findings(lang, text, strict_locals, devise);
         found.into_iter().map(|d| (text[at(d.range.start)..at(d.range.end)].to_string(), d.message)).collect()
     }
 
@@ -242,6 +250,12 @@ mod tests {
         assert_eq!(flagged(Haml, "= link_to \"x\", usr_path(@user)\n"), ["usr_path"]);
         assert_eq!(flagged(Slim, "= link_to \"x\", usr_path(@user)\n"), ["usr_path"]);
         assert_eq!(flagged(Erb, "<%= edit_user_url(@user) %><%= edt_user_url(@user) %>\n"), ["edt_user_url"]);
+    }
+
+    #[test]
+    fn the_diagnostic_carries_the_route_meant() {
+        let found = findings(Erb, "<%= edt_user_url(@user) %>\n", None, false);
+        assert_eq!(util::data_str(&found[0], "replace"), Some("edit_user_url"));
     }
 
     #[test]

@@ -1,14 +1,17 @@
 //! Lints on the attributes an element is written with: `data-turbo-permanent` without an `id`, a `data-controller` name that
 //! no Stimulus controller has, and a target or action that names something its controller doesn't have.
 
+use crate::attribute_insert::empty_attribute;
 use crate::attributes::{Element, Value};
+use crate::lang::TemplateLang;
 use crate::rails::stimulus::{is_name_char, Registered, CONTROLLERS_DIR};
 use crate::rails::stimulus_controller::Members;
 use crate::util::{self, edit_distance, LineIndex};
+use serde_json::json;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
-use tower_lsp_server::ls_types::Diagnostic;
+use tower_lsp_server::ls_types::{Diagnostic, TextEdit};
 
 pub(crate) const PERMANENT_REQUIRES_ID: &str = "Turbo/PermanentRequiresId";
 pub(crate) const UNKNOWN_CONTROLLER: &str = "Stimulus/UnknownController";
@@ -27,6 +30,7 @@ const MAX_SUGGESTION_DISTANCE: usize = 2;
 /// none means they can't be told, and no name is reported. `controller` reads what the controller of an identifier declares;
 /// none means it can't be read with confidence, and nothing is reported for it.
 pub(crate) fn diagnostics(
+    lang: TemplateLang,
     text: &str,
     elements: &[Element],
     registered: impl FnOnce() -> Option<Arc<Registered>>,
@@ -36,22 +40,32 @@ pub(crate) fn diagnostics(
     let message = "`data-turbo-permanent` needs an `id`: Turbo matches the element across pages by it";
     let mut out: Vec<Diagnostic> = elements
         .iter()
-        .filter_map(permanent_without_id)
-        .map(|at| util::coded(util::warning(index.range(at.start, at.end), message), PERMANENT_REQUIRES_ID))
+        .filter_map(|element| Some((element, permanent_without_id(element)?)))
+        .map(|(element, at)| {
+            let found = util::coded(util::warning(index.range(at.start, at.end), message), PERMANENT_REQUIRES_ID);
+            match empty_attribute(lang, text, element, ID) {
+                Some((offset, added)) => util::with_data(found, json!({ "edit": TextEdit::new(index.range(offset, offset), added) })),
+                None => found,
+            }
+        })
         .collect();
     let named: Vec<(Range<usize>, &str)> = elements.iter().flat_map(|element| controller_names(text, element)).collect();
     if let Some(known) = (!named.is_empty()).then(registered).flatten() {
         let unknown = named.into_iter().filter(|(_, name)| !known.knows(name));
         out.extend(unknown.map(|(at, name)| {
-            let message = unknown_message(name, &known.names);
-            util::coded(util::warning(index.range(at.start, at.end), message), UNKNOWN_CONTROLLER)
+            let near = suggestion(name, &known.names);
+            let message = format!("No Stimulus controller `{name}` in app/{CONTROLLERS_DIR}{}", did_you_mean(near));
+            let found = util::coded(util::warning(index.range(at.start, at.end), message), UNKNOWN_CONTROLLER);
+            util::with_data(found, json!({ "controller": name, "suggest": near }))
         }));
     }
     let mut controllers: HashMap<&str, Option<Arc<Members>>> = HashMap::new();
     for mention in elements.iter().flat_map(|element| mentions(text, element)) {
         let members = controllers.entry(mention.controller).or_insert_with(|| controller(mention.controller));
-        let Some(message) = members.as_deref().and_then(|members| mention.unknown_message(members)) else { continue };
-        out.push(util::coded(util::warning(index.range(mention.at.start, mention.at.end), message), UNKNOWN_TARGET_OR_ACTION));
+        let Some((message, near)) = members.as_deref().and_then(|members| mention.unknown_message(members)) else { continue };
+        let found = util::coded(util::warning(index.range(mention.at.start, mention.at.end), message), UNKNOWN_TARGET_OR_ACTION);
+        let kind = if mention.is_target { "target" } else { "method" };
+        out.push(util::with_data(found, json!({ "controller": mention.controller, "kind": kind, "name": mention.name, "suggest": near })));
     }
     out
 }
@@ -83,20 +97,18 @@ fn words(value: &str) -> impl Iterator<Item = (usize, &str)> {
     value.split_whitespace().map(move |word| (word.as_ptr() as usize - value.as_ptr() as usize, word))
 }
 
-fn unknown_message(name: &str, known: &[String]) -> String {
-    let mut message = format!("No Stimulus controller `{name}` in app/{CONTROLLERS_DIR}");
-    message.push_str(&suggestion(name, known));
-    message
-}
-
-/// `; did you mean `x`?` for the name of `known` nearest to `name`, when one is near enough.
-fn suggestion(name: &str, known: &[String]) -> String {
+/// The name of `known` nearest to `name`, when one is near enough to be the one meant.
+fn suggestion<'a>(name: &str, known: &'a [String]) -> Option<&'a str> {
     let near = known
         .iter()
         .map(|candidate| (edit_distance(name, candidate), candidate))
         .filter(|&(distance, _)| distance <= MAX_SUGGESTION_DISTANCE && distance < name.chars().count())
         .min_by_key(|&(distance, _)| distance);
-    near.map_or_else(String::new, |(_, candidate)| format!("; did you mean `{candidate}`?"))
+    near.map(|(_, candidate)| candidate.as_str())
+}
+
+fn did_you_mean(near: Option<&str>) -> String {
+    near.map_or_else(String::new, |candidate| format!("; did you mean `{candidate}`?"))
 }
 
 /// A target or a method an element names for the Stimulus controller `controller`.
@@ -108,15 +120,16 @@ struct Mention<'a> {
 }
 
 impl Mention<'_> {
-    /// What is wrong with the mention, when `members` of its controller lack the name.
-    fn unknown_message(&self, members: &Members) -> Option<String> {
+    /// What is wrong with the mention, when `members` of its controller lack the name, and the name nearest to it.
+    fn unknown_message<'m>(&self, members: &'m Members) -> Option<(String, Option<&'m str>)> {
         let (kind, known, declared) = if self.is_target {
             ("target", members.targets.as_slice(), members.targets.iter().any(|target| target == self.name))
         } else {
             ("method", members.methods.as_slice(), members.has_method(self.name))
         };
         let controller = self.controller;
-        (!declared).then(|| format!("`{controller}` controller has no {kind} `{}`{}", self.name, suggestion(self.name, known)))
+        let near = suggestion(self.name, known);
+        (!declared).then(|| (format!("`{controller}` controller has no {kind} `{}`{}", self.name, did_you_mean(near)), near))
     }
 }
 
@@ -174,10 +187,59 @@ mod tests {
         let index = LineIndex::new(text);
         let at = |position| (0..=text.len()).find(|&offset| index.position(offset) == position).unwrap();
         let registered = || controllers.map(|names| Arc::new(Registered::new(names.iter().map(|name| name.to_string()).collect())));
-        diagnostics(text, &elements, registered, members)
+        diagnostics(lang, text, &elements, registered, members)
             .into_iter()
             .map(|d| (format!("{} {}", util::code(&d).unwrap(), d.message), text[at(d.range.start)..at(d.range.end)].to_string()))
             .collect()
+    }
+
+    /// The first diagnostic with `code`, with the text the quick fix that its data describes makes of `text`.
+    fn fixed_by(lang: TemplateLang, text: &str, code: &str, members: impl Fn(&str) -> Option<Arc<Members>>) -> (Diagnostic, String) {
+        let version = ruby_prism::Version::Latest;
+        let mut elements = markup_elements(lang, text, &[], version);
+        let compiled = code_context::compiled(lang, text, None, &[]).unwrap();
+        let options = ruby_prism::Options::default().version(version).build();
+        let parsed = compiled.parse(&options).unwrap();
+        elements.extend(helper_elements(&compiled, &parsed.node()));
+        let registered = || Some(Arc::new(Registered::new(vec!["search".to_string()])));
+        let found = diagnostics(lang, text, &elements, registered, members).into_iter().find(|d| util::code(d) == Some(code)).unwrap();
+        let edit = util::data_edit(&found);
+        let fixed = edit.map_or_else(String::new, |edit| util::edited(text, &edit));
+        (found, fixed)
+    }
+
+    #[test]
+    fn permanent_elements_carry_the_edit_that_adds_an_id() {
+        let fix = |lang, text| fixed_by(lang, text, PERMANENT_REQUIRES_ID, |_| None).1;
+        assert_eq!(fix(Erb, "<div data-turbo-permanent>\n</div>\n"), "<div id=\"\" data-turbo-permanent>\n</div>\n");
+        assert_eq!(
+            fix(Erb, "<%= tag.div data: { turbo_permanent: true } do %>x<% end %>"),
+            "<%= tag.div data: { turbo_permanent: true }, id: \"\" do %>x<% end %>"
+        );
+        assert_eq!(fix(Haml, "%div{data: {turbo_permanent: true}}\n"), "%div{data: {turbo_permanent: true}, id: \"\"}\n");
+        assert_eq!(fix(Haml, ".card(data-turbo-permanent)\n"), ".card(data-turbo-permanent id=\"\")\n");
+        assert_eq!(fix(Slim, "div data-turbo-permanent=true\n"), "div id=\"\" data-turbo-permanent=true\n");
+    }
+
+    #[test]
+    fn names_carry_what_the_fixes_need() {
+        let data = |lang, text, code| fixed_by(lang, text, code, search_only).0.data;
+        assert_eq!(
+            data(Erb, "<div data-controller=\"serch\"></div>", UNKNOWN_CONTROLLER),
+            Some(json!({ "controller": "serch", "suggest": "search" }))
+        );
+        assert_eq!(
+            data(Erb, "<div data-controller=\"zzzzzz\"></div>", UNKNOWN_CONTROLLER),
+            Some(json!({ "controller": "zzzzzz", "suggest": null }))
+        );
+        assert_eq!(
+            data(Erb, "<p data-search-target=\"resluts\"></p>", UNKNOWN_TARGET_OR_ACTION),
+            Some(json!({ "controller": "search", "kind": "target", "name": "resluts", "suggest": "results" }))
+        );
+        assert_eq!(
+            data(Haml, "%p{data: {action: \"search#submitt\"}}\n", UNKNOWN_TARGET_OR_ACTION),
+            Some(json!({ "controller": "search", "kind": "method", "name": "submitt", "suggest": "submit" }))
+        );
     }
 
     fn permanent(lang: TemplateLang, text: &str) -> Vec<String> {

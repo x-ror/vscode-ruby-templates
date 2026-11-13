@@ -682,6 +682,7 @@ impl<'a> Parser<'a> {
         }
         let r = self.rest();
         self.skip(r.bytes().take_while(|b| matches!(b, b'<' | b'>' | b'\'')).count());
+        element.head_end = Some(self.at());
         let first_attribute = self.out.pieces.len();
         self.parse_attributes(&mut names, &mut element);
         let element_index = self.out.elements.len();

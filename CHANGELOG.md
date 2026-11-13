@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Quick fixes for the rules that already know the answer. `Rails/UnknownRoute` offers "Replace with `user_path`" and `Rails/I18nMissingKey` "Use `.title`" for the closest name (the preferred fix), `Stimulus/UnknownController` "Use `search`" and `Stimulus/UnknownTargetOrAction` "Use `results`" or "Use `submit`" likewise.
+- "Add `users.index.title` to config/locales/en.yml" inserts a missing translation key with an empty value, below its closest group in the default locale's file, else into `config/locales/<locale>.yml`, created when absent. The file is edited as text, so comments, quotes and line endings stay; keys YAML would read as something else (`no`, `on`, `1st`) are quoted, and nothing is offered where the key can't be placed with certainty: a flow mapping, an alias, an anchor or a merge key on the way, a list, tab indentation or several documents.
+- "Create app/javascript/controllers/serch_controller.js" writes a stub for an unknown Stimulus controller (`.ts` when most of the app's controllers are TypeScript) and, in an app whose `controllers/index.js` lists each one with an import and `application.register` and loads none by itself, adds those two lines in the file's style. "Add `results` to static targets" and "Add method `submitt()`" edit the controller the template names, only when the file is read with confidence. Creating files needs a client that applies file operations in a workspace edit.
+- `Html/ImgAlt` offers "Add `alt=""`" (ERB, Haml and Slim, in the attribute hash or list the tag has; `alt: ""` as the last argument of `image_tag`) and `Turbo/PermanentRequiresId` offers "Add `id`" (`id=""`, or `id: ""` in a Haml hash and helper options).
+
 ## 0.14.1
 
 - `A11y/GenericLinkText` reports a Slim link with inline text (`a href="/users" Read more`) when a blank line follows it; before, the blank line was taken for a continuation line and the link was skipped.
