@@ -26,6 +26,7 @@ mod report;
 mod ruby;
 mod rules;
 mod semantic_tokens;
+mod signature_help;
 mod slim;
 mod util;
 

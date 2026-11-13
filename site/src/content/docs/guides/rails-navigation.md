@@ -94,7 +94,7 @@ Routes are read with `bin/rails runner`, in trusted workspaces only. Turn this o
 
 Your own helpers, such as `format_price(…)`, go to their `def` in `app/helpers` or to a controller's `helper_method`. Hover shows the signature and the comment above it.
 
-Rails helpers (`link_to`, `turbo_frame_tag`, …) complete with snippet arguments and have hover docs. In Haml files, `succeed`, `precede`, `surround`, `preserve` and `find_and_preserve` get completion and hover too.
+Rails helpers (`link_to`, `turbo_frame_tag`, …) complete with snippet arguments and have hover docs. While you type a call (`link_to "Users", `), signature help shows the parameters and highlights the one you are at, for Rails helpers and your own helpers in `app/helpers`. In Haml files, `succeed`, `precede`, `surround`, `preserve` and `find_and_preserve` get completion and hover too.
 
 ## Form builder
 

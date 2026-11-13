@@ -18,6 +18,27 @@ pub(crate) fn code_at(lang: TemplateLang, text: &str, offset: usize, extra_engin
     }
 }
 
+/// Byte offset where the Ruby expression that `offset` is in starts: an ERB tag's code, a Slim Ruby range, or a Haml
+/// line's code or attribute hash. `role` is the Haml role of `offset`'s line.
+pub(crate) fn code_start(lang: TemplateLang, text: &str, offset: usize, role: LineRole, extra_engines: &[String]) -> Option<usize> {
+    let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+    match lang {
+        TemplateLang::Erb => erb::span_at(&erb::code_spans(text), offset),
+        TemplateLang::Slim => {
+            let parsed = slim::parser::parse(text, extra_engines);
+            // A range ends at its last character, so the space typed after `link_to "Users",` is outside it.
+            let end = text[..offset].trim_end_matches([' ', '\t']).len();
+            parsed.ruby.iter().find(|r| r.start <= end && end <= r.end).map(|r| r.start)
+        }
+        TemplateLang::Haml if role == LineRole::Ruby => Some(line_start),
+        TemplateLang::Haml => {
+            let line = util::lines_with_offsets(&text[line_start..]).next().map_or("", |(_, line)| line);
+            haml::ruby_start(line, offset - line_start).map(|col| line_start + col)
+        }
+        TemplateLang::Skim | TemplateLang::Ruby | TemplateLang::Liquid => None,
+    }
+}
+
 /// The Ruby the template compiles to; with `close`, the strict locals comment makes the method's parameters.
 pub(crate) fn compiled(lang: TemplateLang, text: &str, close: Option<Close>, extra_engines: &[String]) -> Option<Compiled> {
     match lang {
@@ -194,6 +215,22 @@ mod tests {
         let assigned = "<% item = @items.first %>\n<%= item.name %>\n";
         assert_eq!(definition(TemplateLang::Erb, assigned), Some((3, "item")));
         assert_eq!(definition(TemplateLang::Erb, "<%= item.name %>\n"), None, "a helper call");
+    }
+
+    #[test]
+    fn code_starts_in_every_language() {
+        fn start(lang: TemplateLang, text: &str, role: LineRole) -> Option<&str> {
+            code_start(lang, text, text.find('|').unwrap(), role, &[]).map(|start| &text[start..])
+        }
+        let erb = "<p>a</p>\n<%= link_to \"x\", |%>";
+        assert_eq!(start(TemplateLang::Erb, erb, LineRole::Start), Some("= link_to \"x\", |%>"));
+        assert_eq!(start(TemplateLang::Erb, "<p>link_to |</p>", LineRole::Start), None);
+        let slim = "p\n  = link_to \"x\", |";
+        assert_eq!(start(TemplateLang::Slim, slim, LineRole::Start), Some("link_to \"x\", |"));
+        assert_eq!(start(TemplateLang::Slim, "p Hello, |", LineRole::Start), None);
+        assert_eq!(start(TemplateLang::Haml, "%p= link_to \"x\", |", LineRole::Start), Some(" link_to \"x\", |"));
+        assert_eq!(start(TemplateLang::Haml, "%a{href: link_to(\"x\", |)}", LineRole::Start), Some("href: link_to(\"x\", |)}"));
+        assert_eq!(start(TemplateLang::Haml, "%p Hello, |", LineRole::Start), None);
     }
 
     #[test]

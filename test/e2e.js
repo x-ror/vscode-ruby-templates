@@ -1725,6 +1725,56 @@ const check = (label, actual, expected) => {
       null,
     ],
   );
+  const signatures = {
+    erb: ['<%= link_to t(".x", count: 1), user_path(@user), ', "erb"],
+    haml: ['= link_to "Users", ', "haml"],
+    slim: ["= format_price 1, ", "slim"],
+    html: ['<p>link_to "Users", </p>', "erb"],
+  };
+  const signatureAt = async (name) => {
+    const [text, languageId] = signatures[name];
+    const sigUri = fileUri(
+      path.join(views, "users", `sig_${name}.html.${languageId}`),
+    );
+    await send(
+      "textDocument/didOpen",
+      { textDocument: { uri: sigUri, languageId, version: 1, text } },
+      true,
+    );
+    const { result } = await req(
+      "textDocument/signatureHelp",
+      sigUri,
+      0,
+      text.length,
+    );
+    const info = result?.signatures[0];
+    return (
+      info && [
+        info.label,
+        result.activeParameter,
+        info.documentation?.value.split("\n").pop(),
+      ]
+    );
+  };
+  check("signature help: ERB, nested call", await signatureAt("erb"), [
+    "link_to(name, options = nil, html_options = nil)",
+    2,
+    "[API docs](https://api.rubyonrails.org/classes/ActionView/Helpers/UrlHelper.html#method-i-link_to)",
+  ]);
+  check("signature help: Haml", (await signatureAt("haml"))?.slice(0, 2), [
+    "link_to(name, options = nil, html_options = nil)",
+    1,
+  ]);
+  check(
+    "signature help: Slim app helper",
+    (await signatureAt("slim"))?.slice(0, 2),
+    ["def format_price(x)", 1],
+  );
+  check(
+    "signature help: none in HTML text",
+    await signatureAt("html"),
+    undefined,
+  );
   const shadowUri = fileUri(path.join(views, "users", "shadow.html.erb"));
   await send(
     "textDocument/didOpen",
