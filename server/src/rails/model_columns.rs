@@ -199,17 +199,40 @@ fn source_of(code: &str, name: &str) -> Option<Source> {
 
 /// The text inside the parentheses that end `call`, trimmed; empty when it has none.
 fn trailing_arguments(call: &str) -> &str {
-    let Some(inner) = call.strip_suffix(')') else { return "" };
-    let mut depth = 0;
-    for (i, ch) in inner.char_indices().rev() {
-        match ch {
-            ')' => depth += 1,
-            '(' if depth == 0 => return inner[i + 1..].trim(),
-            '(' => depth -= 1,
+    if !call.ends_with(')') {
+        return "";
+    }
+    let mut depth = 0usize;
+    let mut open_at = None;
+    let mut quote = None;
+    let mut chars = call.char_indices();
+    while let Some((i, ch)) = chars.next() {
+        match (quote, ch) {
+            (Some(_), '\\') => {
+                chars.next();
+            }
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(ch),
+            (None, '(') => {
+                if depth == 0 {
+                    open_at = Some(i + 1);
+                }
+                depth += 1;
+            }
+            (None, ')') => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && i + 1 < call.len() {
+                    open_at = None;
+                }
+            }
             _ => {}
         }
     }
-    ""
+    match open_at.filter(|_| depth == 0 && quote.is_none()) {
+        Some(start) => call[start..call.len() - 1].trim(),
+        None => "",
+    }
 }
 
 /// The `@collection` of the block whose first variable `variable` is declared at `declared`, when the text right
@@ -406,5 +429,12 @@ mod tests {
         assert_eq!(tables(&view, "Admin::Report"), ["reports"]);
         assert!(tables(&view, "Missing").is_empty());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn trailing_arguments_ignores_parentheses_in_strings() {
+        assert_eq!(trailing_arguments("find_by(\"a = '('\")"), "\"a = '('\"");
+        assert_eq!(trailing_arguments("where(\"a = ')'\").first"), "");
+        assert_eq!(trailing_arguments("find_by(\"a = ')'\", :id)"), "\"a = ')'\", :id");
     }
 }

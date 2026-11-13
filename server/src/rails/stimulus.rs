@@ -5,6 +5,7 @@ use crate::util::slash_path;
 use dashmap::DashMap;
 use regex::Regex;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 use walkdir::WalkDir;
@@ -231,8 +232,12 @@ pub fn indented_element(before: &str) -> &str {
 /// Whether `text` leaves a bracket open, counting none inside quotes.
 fn unclosed(text: &str) -> bool {
     let (mut depth, mut quote) = (0i32, None);
-    for c in text.chars() {
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
         match (quote, c) {
+            (Some(_), '\\') => {
+                chars.next();
+            }
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '\'') => quote = Some(c),
@@ -354,11 +359,13 @@ impl Registered {
     }
 }
 
+static REGISTERED_GEN: AtomicU64 = AtomicU64::new(0);
 /// `registered` per app folder: it walks app/javascript and reads its scripts, which each diagnostics run would repeat.
-static REGISTERED: LazyLock<DashMap<PathBuf, Option<Arc<Registered>>>> = LazyLock::new(DashMap::new);
+static REGISTERED: LazyLock<DashMap<PathBuf, (u64, Option<Arc<Registered>>)>> = LazyLock::new(DashMap::new);
 
 /// Drops what `registered` and the controllers read from their files remember, when a watched file may have changed it.
 pub fn clear_cache() {
+    REGISTERED_GEN.fetch_add(1, Ordering::SeqCst);
     REGISTERED.clear();
     super::stimulus_controller::clear_cache();
 }
@@ -367,11 +374,14 @@ pub fn clear_cache() {
 /// controllers loaded from another folder, an importmap pin, a library or a computed name.
 pub fn registered(current: &Path) -> Option<Arc<Registered>> {
     let app = app_root(current)?;
-    if let Some(found) = REGISTERED.get(&app) {
-        return found.clone();
+    let generation = REGISTERED_GEN.load(Ordering::SeqCst);
+    if let Some(found) = REGISTERED.get(&app).filter(|entry| entry.0 == generation) {
+        return found.1.clone();
     }
     let found = scan_registered(current).map(Arc::new);
-    REGISTERED.insert(app, found.clone());
+    if REGISTERED_GEN.load(Ordering::SeqCst) == generation {
+        REGISTERED.insert(app, (generation, found.clone()));
+    }
     found
 }
 
@@ -816,5 +826,13 @@ export default class extends Controller {
             assert!(resolve(&current, id).is_empty(), "{id}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unclosed_respects_escaped_quotes_in_wrappers() {
+        assert!(unclosed("(\\\"still open\""));
+        assert!(!unclosed("(\"\\\"\")"));
+        let before = "%div(\n  title=\"a\\\"\"\n  data-c";
+        assert!(indented_element(before).starts_with("%div("));
     }
 }

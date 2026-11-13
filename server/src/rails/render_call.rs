@@ -228,6 +228,8 @@ fn is_method_chain(line: &str) -> bool {
 const BLOCK_CLOSERS: [&str; 2] = ["\nend", "\n}"];
 
 fn read_code<'a>(text: &'a str, call_at: usize, name_at: usize, code: &str, ruby: Version) -> Result<Call<'a>, Failure> {
+    let end = (call_at + code.len()).min(text.len());
+    let text = if text.is_char_boundary(end) { &text[..end] } else { text };
     match parse(text, call_at, name_at, code, ruby) {
         Err(Failure::EndsEarly) => {}
         plain => return plain.map(|found| found.call),
@@ -268,8 +270,12 @@ fn parse<'a>(text: &'a str, call_at: usize, name_at: usize, source: &str, ruby: 
     }
     let last_token_at = code.len() - code.rsplit(char::is_whitespace).next().map_or(0, str::len);
     // Prism puts an unterminated string at its opening and a heredoc at its tag (`<<~EOS`): more lines may close them.
-    let opens_literal =
-        |at: usize| source[..at].trim_end_matches(['~', '-']).ends_with("<<") || source[at..].starts_with(['"', '\'', '%', '/', '`']);
+    let opens_literal = |at: usize| {
+        source[..at].trim_end_matches(['~', '-']).ends_with("<<")
+            || source[at..].starts_with(['"', '\'', '%', '/', '`'])
+            || source[at..].starts_with(":\"")
+            || source[at..].starts_with(":'")
+    };
     let ends_early = |error: ruby_prism::Diagnostic| {
         let at = error.location().start() as usize;
         at >= last_token_at || opens_literal(at)
@@ -378,12 +384,30 @@ impl<'a> Finder<'a> {
 
     fn pair(&self, assoc: &AssocNode, read_hash: bool) -> Option<Pair<'a>> {
         let key_span = self.range(&assoc.key().as_symbol_node()?.content_loc());
-        let key = &self.text[key_span.clone()];
+        let key = self.text.get(key_span.clone())?;
         let value = assoc.value();
         let hash = value.as_hash_node().filter(|_| read_hash && key == "locals").map(|hash| Hash {
             inner: self.call_at + hash.opening_loc().end() as usize..self.call_at + hash.closing_loc().start() as usize,
             items: hash.elements().iter().map(|item| self.pair(&item.as_assoc_node()?, false)).collect(),
         });
         Some(Pair { key, key_span, whole: self.range(&assoc.location()), value: self.text.get(self.range(&value.location()))?, hash })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiline_quoted_symbol_and_eof_block_closer() {
+        let quoted_sym = "<%= render \"users/card\",\n  tag: :\"a b\nc\"\n%>";
+        let name_at = quoted_sym.find("users/card").unwrap();
+        let call = read(quoted_sym, quoted_sym.find("render").unwrap(), name_at, false, Version::Latest).unwrap();
+        assert_eq!(call.pairs.iter().map(|p| p.key).collect::<Vec<_>>(), ["tag"]);
+
+        let eof_block = "<%= render \"users/card\", a: 1 do |x|\n";
+        let name_at = eof_block.find("users/card").unwrap();
+        let call = read(eof_block, eof_block.find("render").unwrap(), name_at, false, Version::Latest).unwrap();
+        assert_eq!(call.pairs.iter().map(|p| p.key).collect::<Vec<_>>(), ["a"]);
     }
 }
