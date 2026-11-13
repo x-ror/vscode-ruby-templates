@@ -91,27 +91,62 @@ pub(crate) fn indent(text: &str, settings: &Settings, partial: bool, ruby: &Ruby
         .into_iter()
         .collect();
     let decided = decide(&lines, &roles, &units, &levels.levels, unit);
-    let infos = line_infos(&tokens, &starts, &roles, &levels);
+    let infos = line_infos(&tokens, &paired, &starts, &roles, &levels);
     Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided, trim_trailing), lines: infos, notes })
 }
 
 /// Per line: whether a blank line may go, its level, what it opens (the last block or element its tags open, if the
 /// nesting is deeper after the line than at its start) and whether it leads with a closer.
-fn line_infos(tokens: &[Token], starts: &[usize], roles: &[Role], levels: &Levels) -> Vec<LineInfo> {
+fn line_infos(tokens: &[Token], paired: &HashSet<usize>, starts: &[usize], roles: &[Role], levels: &Levels) -> Vec<LineInfo> {
     let mut found = vec![(LineRole::Other, 0); starts.len()];
-    for token in tokens {
+    let mut openers: Vec<Vec<(LineRole, usize)>> = vec![Vec::new(); starts.len()];
+    for (i, token) in tokens.iter().enumerate() {
         let (start, end) = span(token);
         let line = line_of(starts, start);
-        let role = match token {
-            Token::Erb(e) if matches!(e.effect, BlockEffect::Continue) => LineRole::Branch,
-            _ if found[line].0 == LineRole::Branch => continue,
-            Token::Erb(e) if matches!(e.effect, BlockEffect::Open(_)) => LineRole::Opens(Body::Block),
+        if found[line].0 == LineRole::Branch {
+            continue;
+        }
+        let tail = line_of(starts, end.saturating_sub(1)) - line;
+        match token {
+            Token::Erb(e) => match e.effect {
+                BlockEffect::Continue => found[line] = (LineRole::Branch, tail),
+                BlockEffect::Open(n) => {
+                    for _ in 0..n {
+                        openers[line].push((LineRole::Opens(Body::Block), tail));
+                    }
+                }
+                BlockEffect::Close(n) => {
+                    for _ in 0..n {
+                        if matches!(openers[line].last(), Some((LineRole::Opens(Body::Block), _))) {
+                            openers[line].pop();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                BlockEffect::Neutral => {}
+            },
             // Whitespace counts in these, and their end tag's line has no level to close them.
-            Token::Open { tag, .. } if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") => LineRole::Other,
-            Token::Open { .. } => LineRole::Opens(Body::Element),
-            _ => continue,
-        };
-        found[line] = (role, line_of(starts, end.saturating_sub(1)) - line);
+            Token::Open { tag, .. } if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") => {}
+            Token::Open { pairs, .. } if *pairs || paired.contains(&i) => {
+                openers[line].push((LineRole::Opens(Body::Element), tail));
+            }
+            Token::Close { tag, .. }
+                if !NO_END_TAG.contains(&tag.name.as_str()) && (!OPTIONAL_END.contains(&tag.name.as_str()) || paired.contains(&i)) =>
+            {
+                if matches!(openers[line].last(), Some((LineRole::Opens(Body::Element), _))) {
+                    openers[line].pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    for (slot, stack) in found.iter_mut().zip(openers) {
+        if slot.0 != LineRole::Branch {
+            if let Some(last) = stack.last().copied() {
+                *slot = last;
+            }
+        }
     }
     (0..starts.len())
         .map(|i| {
@@ -168,7 +203,7 @@ fn regions(text: &str, tokens: &[Token], starts: &[usize], align_comments: bool)
                     fixed.push((q + 1, q_end - 1));
                     keep_end.push((q + 1, q_end - 1));
                 }
-                if let Token::Open { tag, .. } = token {
+                if let Token::Open { tag, pairs: true, .. } = token {
                     if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") {
                         let Some(close) = closing(&tokens[i + 1..], &tag.name) else {
                             let message = format!("line {}: `<{}>` is never closed", line_of(starts, tag.start) + 1, tag.name);
@@ -794,5 +829,16 @@ mod tests {
         for helper in ["<%= javascript_tag do %>", "<%= content_tag :pre do %>", "<%= tag.textarea(name: \"a\") do %>"] {
             assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", false).is_err(), "{helper}");
         }
+    }
+
+    #[test]
+    fn inline_closed_elements_and_self_closing_pre() {
+        assert_eq!(fmt("<div>\n<pre />\n</div>"), "<div>\n  <pre />\n</div>");
+        let block_line = indent("<% if cond %><span>x</span>\ny\n<% end %>", "  ", false).unwrap();
+        assert_eq!(block_line.lines[0].role, LineRole::Opens(Body::Block));
+        let elem_line = indent("<div><% if a %>x<% end %>\ny\n</div>", "  ", false).unwrap();
+        assert_eq!(elem_line.lines[0].role, LineRole::Opens(Body::Element));
+        let void_line = indent("<% if cond %> <br>\ny\n<% end %>", "  ", false).unwrap();
+        assert_eq!(void_line.lines[0].role, LineRole::Opens(Body::Block));
     }
 }

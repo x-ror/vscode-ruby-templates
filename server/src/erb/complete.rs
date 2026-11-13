@@ -73,6 +73,38 @@ fn in_start_tag(head: &str, regions: &[(usize, usize)]) -> bool {
     quote.is_none()
 }
 
+fn tag_close(before: &str, from: usize, regions: &[(usize, usize)]) -> Option<bool> {
+    let bytes = before.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut at = from;
+    let mut gt = None;
+    while at < bytes.len() {
+        if inside(regions, at) {
+            at += 1;
+            continue;
+        }
+        match (quote, bytes[at]) {
+            (Some(q), b) if b == q => quote = None,
+            (None, q @ (b'"' | b'\'')) => quote = Some(q),
+            (None, b'<') => return None,
+            (None, b'>') => {
+                gt = Some(at);
+                break;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    let gt = gt?;
+    let mut attr_bytes = before[from..=gt].as_bytes().to_vec();
+    for (idx, b) in attr_bytes.iter_mut().enumerate() {
+        if inside(regions, from + idx) && *b != b'\n' {
+            *b = b'~';
+        }
+    }
+    Some(tags::tag_end(&attr_bytes, 0).is_some_and(|tag| tag.self_closing))
+}
+
 /// The innermost element still open at the end of `before`, by a plain scan of its markup.
 fn open_element(before: &str) -> Option<String> {
     let regions = non_markup(before);
@@ -83,10 +115,8 @@ fn open_element(before: &str) -> Option<String> {
             continue;
         }
         let name = name.as_str().to_ascii_lowercase();
-        let rest = &before[whole.end()..];
         // A start tag still being typed (`<a hre`) has no `>` before the next tag.
-        let Some(gt) = rest.find('>').filter(|&gt| !rest[..gt].contains('<')) else { continue };
-        let self_closing = tags::tag_end(&rest.as_bytes()[..=gt], 0).is_some_and(|tag| tag.self_closing);
+        let Some(self_closing) = tag_close(before, whole.end(), &regions) else { continue };
         if &cap[1] == "/" {
             if let Some(at) = stack.iter().rposition(|open| *open == name) {
                 stack.truncate(at);
@@ -169,6 +199,9 @@ mod tests {
         assert_eq!(close("<div><i />"), ["div>"]);
         assert_eq!(close("<%# <section> %><div><p></p>"), ["div>"]);
         assert_eq!(close("<section>\n  <butt\n  <a hre\n  "), ["section>"]);
+        assert_eq!(close("<div data-action=\"click->a#b\"><p></p></"), ["div>"]);
+        assert_eq!(close("<div <%= attrs if a > b %>></"), ["div>"]);
+        assert_eq!(close("<section><x-card class=<%= x %> /></"), ["section>"]);
     }
 
     #[test]

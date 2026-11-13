@@ -42,15 +42,27 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
             out.push((i, end));
             at = end;
         } else if let Some(name) = TEXT_ELEMENTS.iter().find(|n| names_tag(&rest[1..], n)) {
-            // The body starts after the start tag's `>`, skipping ERB in its attributes.
+            // The body starts after the start tag's `>`, skipping ERB and quoted attributes.
             let mut body = i + 1;
-            while let Some(gt) = text[body..].find(['>', '<']).map(|e| body + e) {
-                if text[gt..].starts_with("<%") {
-                    body = till("%>", gt + 2);
+            let mut quote: Option<u8> = None;
+            let bytes = text.as_bytes();
+            while body < bytes.len() {
+                if bytes[body..].starts_with(b"<%") {
+                    let end = till("%>", body + 2);
+                    out.push((body, end));
+                    body = end;
                     continue;
                 }
-                body = gt + 1;
-                break;
+                match (quote, bytes[body]) {
+                    (Some(q), b) if b == q => quote = None,
+                    (None, q @ (b'"' | b'\'')) => quote = Some(q),
+                    (None, b'>' | b'<') => {
+                        body += 1;
+                        break;
+                    }
+                    _ => {}
+                }
+                body += 1;
             }
             let close =
                 text[body..].match_indices("</").map(|(e, _)| body + e).find(|&e| names_tag(&text[e + 2..], name)).unwrap_or(text.len());
@@ -213,18 +225,28 @@ fn quoted_end(text: &str, regions: &[(usize, usize)], pos: usize, quote: char) -
 
 /// `image_tag` calls in output tags whose options give no `alt:` (a `**splat` may).
 fn image_tags_without_alt<'a>(text: &'a str, spans: &'a [(usize, usize)], index: &'a LineIndex) -> impl Iterator<Item = Diagnostic> + 'a {
-    spans.iter().filter_map(move |&(s, e)| {
+    spans.iter().flat_map(move |&(s, e)| {
         let code = &text[s..e.min(text.len())];
-        let call = IMAGE_TAG.find(code)?;
-        (!ALT_OPTION.is_match(&code[call.end()..])).then(|| {
+        IMAGE_TAG.find_iter(code).filter_map(move |call| {
+            let before = &code[..call.start()];
+            let line_before = &before[before.rfind('\n').map_or(0, |n| n + 1)..];
+            if crate::ruby::code_end(before) != crate::ruby::CodeEnd::Code || crate::ruby::comment_before(line_before) {
+                return None;
+            }
+            let rest = &code[call.end()..];
+            let args =
+                if rest.starts_with('(') { crate::util::find_balanced(rest, '(', ')').map_or(rest, |end| &rest[..end]) } else { rest };
+            if ALT_OPTION.is_match(args) {
+                return None;
+            }
             let range = index.range(s + call.start(), s + call.end());
             let found = coded(warning(range, format!("`image_tag` without `alt:`: {ALT_RULE}")), code::IMG_MISSING_ALT);
             let call_code = code.strip_suffix('%').unwrap_or(code)[call.start()..].trim_end();
             let end = image_tag_arguments_end(call_code).map(|end| index.position(s + call.start() + end));
-            match end {
+            Some(match end {
                 Some(end) => with_data(found, serde_json::json!({ "edit": TextEdit::new(Range::new(end, end), ", alt: \"\"".into()) })),
                 None => found,
-            }
+            })
         })
     })
 }
@@ -272,10 +294,27 @@ fn template_bodies(text: &str, regions: &[(usize, usize)]) -> Vec<(usize, usize)
     let mut at = 0;
     while let Some(open) = lower[at..].find("<template").map(|i| at + i) {
         at = open + 1;
-        if inside(regions, open) {
+        if inside(regions, open) || !names_tag(&lower[open + 1..], "template") {
             continue;
         }
-        let close = lower[open..].find("</template").map_or(text.len(), |e| open + e);
+        let mut depth = 1usize;
+        let mut scan = open + "<template".len();
+        let mut close = text.len();
+        while let Some(pos) = lower[scan..].find('<').map(|i| scan + i) {
+            scan = pos + 1;
+            if inside(regions, pos) {
+                continue;
+            }
+            if names_tag(&lower[pos + 1..], "template") {
+                depth += 1;
+            } else if lower[pos..].starts_with("</") && names_tag(&lower[pos + 2..], "template") {
+                depth -= 1;
+                if depth == 0 {
+                    close = pos;
+                    break;
+                }
+            }
+        }
         out.push((open, close));
         at = close.max(at);
     }
@@ -367,5 +406,17 @@ mod tests {
         assert!(inside(&regions, at("c %")) && inside(&regions, at("x --")) && inside(&regions, at("a < b")));
         assert!(!inside(&regions, at("<p>")) && !inside(&regions, at("<b>")) && !inside(&regions, at("</script>")));
         assert!(inside(&non_markup("<style>.a{"), 9));
+        assert!(codes("<script data-action=\"click->a#b\"><img src=x></script>").is_empty());
+    }
+
+    #[test]
+    fn template_tags_and_image_tag_calls() {
+        assert_eq!(codes("<template-card><div id=\"a\"></div></template-card><div id=\"a\"></div>"), [(0, code::DUPLICATE_ID.to_string())]);
+        assert!(codes(
+            "<template><template><div id=\"b\"></div></template><div id=\"c\"></div></template><div id=\"b\"></div><div id=\"c\"></div>"
+        )
+        .is_empty());
+        assert_eq!(codes("<%= image_tag(\"a.png\") + image_tag(\"b.png\", alt: \"B\") %>"), [(0, code::IMG_MISSING_ALT.to_string())]);
+        assert!(codes("<%= \"image_tag('a.png')\" %>\n<%= x # image_tag(\"a.png\") %>").is_empty());
     }
 }

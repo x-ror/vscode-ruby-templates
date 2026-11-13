@@ -328,11 +328,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb::ruby::ErbTag<'a>, BlockEffect)
         if closing {
             tokens.push(Token::Close { tag, quoted });
         } else if TEXT_ELEMENTS.contains(&tag.name.as_str()) && !self_closing {
-            let close = format!("</{}", tag.name);
-            let close = find(&html, end, close.as_bytes()).map(|close_start| {
-                let after = close_start + close.len();
-                (close_start, after + (html.get(after) == Some(&b'>')) as usize)
-            });
+            let close = find_raw_close(&html, end, &tag.name);
             i = close.map_or(html.len(), |(_, close_end)| close_end);
             tokens.push(Token::Raw { tag, close });
         } else {
@@ -347,6 +343,24 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb::ruby::ErbTag<'a>, BlockEffect)
 
 fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
+}
+
+fn find_raw_close(html: &[u8], from: usize, name: &str) -> Option<(usize, usize)> {
+    let close = format!("</{name}");
+    let mut search = from;
+    while let Some(close_start) = find(html, search, close.as_bytes()) {
+        let after = close_start + close.len();
+        if html.get(after).is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/')) {
+            let mut end = after;
+            while matches!(html.get(end), Some(&b) if b != b'>' && b != b'<') {
+                end += 1;
+            }
+            let close_end = if html.get(end) == Some(&b'>') { end + 1 } else { after };
+            return Some((close_start, close_end));
+        }
+        search = after;
+    }
+    None
 }
 
 pub(crate) struct TagEnd {
@@ -401,7 +415,8 @@ fn split<'a>(
     let mut html = text.as_bytes().to_ascii_lowercase();
     let mut events = Vec::new();
     for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
-        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+        let fill = if tag.is_comment() { b' ' } else { b'~' };
+        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = fill);
         let (effect, keyword, code) = if tag.is_comment() {
             (BlockEffect::Neutral, "", "")
         } else {
@@ -1031,5 +1046,14 @@ mod tests {
     fn broken_erb_is_skipped() {
         assert!(diagnostics("<div><% if a %>").is_empty());
         assert!(diagnostics("<div><% foo").is_empty());
+    }
+
+    #[test]
+    fn unquoted_erb_attr_and_raw_close_prefix() {
+        assert!(diagnostics("<div class=<%= x %>/></div>").is_empty());
+        assert!(diagnostics("<x-card class=<%= x %> />").is_empty());
+        assert!(diagnostics("<div class=<%= x %> \"data-x\"></div>").is_empty());
+        assert!(diagnostics("<style>.a{}</style-guide><b></style>").is_empty());
+        assert_eq!(messages("<style>.a{}</style-guide></style><div>"), ["`<div>` is never closed (HTML 13.2.6.4.7)"]);
     }
 }
