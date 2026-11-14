@@ -1758,6 +1758,10 @@ impl BraceScanner {
         match ch {
             ' ' | '\t' => {}
             '#' => return None,
+            '$' if matches!(next, Some('"' | '\'' | '`')) => {
+                after = i + 2;
+                self.previous = Some('"');
+            }
             '"' | '`' | '\'' => self.modes.push(Mode::Text { closer: ch, opener: None, nested: 0, interpolates: ch != '\'' }),
             '/' if literal_expected => self.modes.push(Mode::Text { closer: '/', opener: None, nested: 0, interpolates: true }),
             '%' if literal_expected => after = self.percent_literal(chars, i),
@@ -2481,6 +2485,14 @@ mod tests {
         );
         assert_eq!(roles("%p\n\n\n"), [Structural { depth: 0 }]);
         assert_eq!(roles("\n\n%p"), [Blank, Blank, Structural { depth: 0 }]);
+    }
+
+    #[test]
+    fn multiline_hash_handles_quote_globals() {
+        for global in ["$\"", "$'", "$`"] {
+            assert_eq!(error_of(&format!("%p{{ a: {global},\n  b: 1 }}\n  child")), None, "{global}");
+        }
+        assert_eq!(error_of("%p{a: x if $\" /2,\n b: 1}\n  child"), None);
     }
 
     /// `HAML_PAIRS=dir cargo test --release pairs -- --ignored`: `dir` holds `N.a`, `N.b` and `N.eq` (`1` when Haml
