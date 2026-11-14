@@ -7,7 +7,7 @@ use crate::format::SkipKind;
 use crate::lang::TemplateLang;
 use crate::options::Options;
 use crate::rails::paths;
-use crate::rails::project::{Project, Projects};
+use crate::rails::project::{missing_lockfile_note, Project, Projects};
 use crate::rails::view_roots;
 use crate::report::{self, Finding, Format, Severity};
 use crate::rules::file::ConfigFile;
@@ -33,8 +33,8 @@ Usage:
   ruby-templates format [--check | --write] [--format text|github] [--verbose] [--align-comments] <files|dirs>...
   ruby-templates format [--check] [--format text|github] [--verbose] [--align-comments] --stdin-filepath <path> [-]
 
-check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates, and with Layout/LineLength (off) the lines
-        over its max.
+check   prints the diagnostics of ERB, Haml, Slim, Jbuilder and Builder templates (for Jbuilder and Builder, partials and
+        locals, not Ruby syntax errors), and with Layout/LineLength (off) the lines over its max.
 format  re-indents HTML ERB, Haml and Slim templates and fixes trailing whitespace. The rules Layout/EmptyLines,
         Layout/EmptyLinesAroundBlockBody, Layout/EmptyLinesAroundElementBody and Layout/EmptyLinesAroundBranches (all
         off) and Layout/TrailingEmptyLines (on for Haml and Slim, off for ERB) set blank lines and the final newline.
@@ -297,12 +297,14 @@ struct Checked {
     /// The problems of each `.ruby-templates.toml` the file uses; the printer shows a file's once, with its first template.
     config: Vec<(PathBuf, Rendered)>,
     stderr: String,
+    /// The Rails-looking app the file is in when it has no `Gemfile.lock`; the printer notes each app once.
+    unlocked_app: Option<PathBuf>,
     code: i32,
 }
 
 impl Checked {
     fn new(code: i32) -> Self {
-        Checked { rendered: Rendered::default(), config: Vec::new(), stderr: String::new(), code }
+        Checked { rendered: Rendered::default(), config: Vec::new(), stderr: String::new(), unlocked_app: None, code }
     }
 }
 
@@ -329,8 +331,9 @@ fn check_file(
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = absolute_file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     // Every worker's projects of one app share its view roots.
-    Project::memoized(projects, path, Some(view_roots));
+    let project = Project::memoized(projects, path, Some(view_roots));
     let mut checked = Checked::new(OK);
+    checked.unlocked_app = project.rails_root_without_lockfile(path);
     let rules = resolve(&uri, lang, &Options::default(), configs);
     for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
         let rendered = render_config_problems(file, output);
@@ -377,22 +380,27 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> 
     let mut code = OK;
     let mut findings = Vec::new();
     let mut reported = HashSet::new();
+    let mut noted_apps = HashSet::new();
     for (index, checked) in results {
         waiting.insert(index, checked);
         while let Some(checked) = waiting.remove(&next) {
             next += 1;
             code = code.max(checked.code);
+            let mut stderr = checked.stderr;
+            if let Some(app) = checked.unlocked_app.filter(|app| noted_apps.insert(app.clone())) {
+                stderr.push_str(&missing_lockfile_note(&app));
+            }
             let new_config = checked.config.into_iter().filter(|(path, _)| reported.insert(path.clone()));
             let shown: Vec<Rendered> = new_config.map(|(_, rendered)| rendered).chain([checked.rendered]).collect();
             let text: String = shown.iter().map(|rendered| rendered.stdout.as_str()).collect();
             findings.extend(shown.into_iter().flat_map(|rendered| rendered.findings));
             let printed = stdout.write_all(text.as_bytes()).and_then(|()| {
-                if checked.stderr.is_empty() {
+                if stderr.is_empty() {
                     return Ok(());
                 }
                 // Keep stderr lines in place among the diagnostics.
                 stdout.flush()?;
-                std::io::stderr().write_all(checked.stderr.as_bytes())
+                std::io::stderr().write_all(stderr.as_bytes())
             });
             if printed.is_err() {
                 return USAGE;

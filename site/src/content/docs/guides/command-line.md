@@ -19,7 +19,7 @@ npm install --save-dev @x-ror/ruby-templates
 npx ruby-templates check app/views
 ```
 
-`check` prints the diagnostics (errors and warnings) of ERB, Haml, Slim, Jbuilder and Builder templates, one per line with the file, line and column:
+`check` prints the diagnostics (errors and warnings) of ERB, Haml, Slim, Jbuilder and Builder templates, one per line with the file, line and column. Jbuilder and Builder views are plain Ruby: `check` reports their partial and `locals:` problems, as the editor does, and leaves their Ruby syntax errors to Ruby LSP or `ruby -c`:
 
 ```text
 app/views/users/index.html.erb:4:3: error: unexpected end-of-input, assuming it is closing the parent top level context

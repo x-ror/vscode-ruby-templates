@@ -6,7 +6,9 @@
 - `Rails/MissingPartial` finds a partial in the format of the template that renders it, whichever gem or initializer registered that format: `index.mobile.haml` renders `_card.mobile.haml` (`mobile-fu`'s `:mobile`, a custom `.amp`) without a report.
 - `Rails/UnsafeOutput` no longer reports a safe call with a trailing `if` or `unless` (`== render "a" if x`, `<%== render "a" unless x %>`, `!= render "a" if x`).
 - `ruby-templates check` and `format` skip `lib/templates` (Rails generator templates), `vendor`, `tmp`, `public` and `log` when walking a folder, as well as hidden folders and `node_modules`; `app/views` may hold folders with those names, and files named on the command line are always processed. `.gitignore` is not read.
+- `ruby-templates check` prints one note on stderr per Rails-looking app (`app/views` or `config/application.rb`) that has no `Gemfile.lock`, saying that the `Rails/*`, `Stimulus/*` and `Turbo/*` rules are off for lack of it. Exit codes and stdout don't change.
 - ERB formatting no longer refuses a file for an inline `<%= tag.style x %>`, `<%= tag.script(src: x) %>`, `<%= javascript_tag "x" %>` or `content_tag :script, x`; only the block forms (`javascript_tag do`) still leave the file as it is.
+- `ruby-templates check --help` and the command line guide say that Jbuilder and Builder views get their partial and `locals:` checks, not Ruby syntax errors, which stay with Ruby LSP.
 - `insert_final_newline = true` in `.editorconfig` turns `Layout/TrailingEmptyLines` on for ERB (off by default there); `enabled = false` in a `.ruby-templates.toml` still wins.
 - `Rails/UnsafeOutput` no longer reports a string whose interpolations are all safe (`"Hi #{h(name)}".html_safe`) or `truncate(...)` without `escape: false`.
 - `Rails/UnsafeOutput` quotes long or multi-line code cut with `…` instead of saying "its value".

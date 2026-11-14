@@ -60,6 +60,48 @@ try {
     /notes\.txt/,
     "folders yield templates only",
   );
+  const lockNotes = r.stderr.match(/^note: .*has no Gemfile\.lock.*$/gm) ?? [];
+  assert.strictEqual(lockNotes.length, 1, "one note per app\n" + r.stderr);
+  assert.ok(
+    lockNotes[0].includes(root) &&
+      /Rails\/\*, Stimulus\/\* and Turbo\/\*/.test(lockNotes[0]),
+  );
+  r = run(["check", "--format", "json", views]);
+  assert.strictEqual(r.status, 1);
+  assert.ok(
+    r.stdout
+      .split("\n")
+      .filter(Boolean)
+      .every((line) => JSON.parse(line)),
+    "stdout stays machine readable",
+  );
+  const locked = path.join(root, "locked");
+  fs.mkdirSync(path.join(locked, "app", "views"), { recursive: true });
+  fs.writeFileSync(
+    path.join(locked, "Gemfile.lock"),
+    "GEM\n  specs:\n    actionview (8.0.2)\n",
+  );
+  fs.writeFileSync(
+    path.join(locked, "app", "views", "a.html.erb"),
+    "<p>a</p>\n",
+  );
+  r = run(["check", path.join(locked, "app", "views")]);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.strictEqual(r.stderr, "", "a lockfile: no note");
+  const jbuilder = path.join(locked, "app", "views", "a.json.jbuilder");
+  fs.writeFileSync(jbuilder, 'json.partial! "posts/gone"\njson.x foo(\n');
+  r = run(["check", jbuilder]);
+  assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+  assert.match(
+    r.stdout,
+    /a\.json\.jbuilder:1:\d+: warning: Missing partial posts\/_gone/,
+  );
+  assert.doesNotMatch(
+    r.stdout,
+    /error:/,
+    "Ruby syntax in Jbuilder is Ruby LSP's",
+  );
+  fs.rmSync(locked, { recursive: true });
   const nested = file(
     "nested.html.erb",
     `<% ${"[".repeat(5000)}${"]".repeat(5000)} %>\n`,
@@ -78,7 +120,7 @@ try {
   );
   r = run(["check", liquid]);
   assert.strictEqual(r.status, 0, r.stdout + r.stderr);
-  assert.strictEqual(r.stdout + r.stderr, "", "Liquid has no checks");
+  assert.strictEqual(r.stdout, "", "Liquid has no checks");
   r = run(["format", liquid]);
   assert.strictEqual(r.status, 0, r.stderr);
   assert.strictEqual(r.stdout, fs.readFileSync(liquid, "utf8"), "kept as is");
