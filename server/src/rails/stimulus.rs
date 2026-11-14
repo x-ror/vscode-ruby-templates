@@ -392,8 +392,11 @@ fn scan_registered(current: &Path) -> Option<Registered> {
     let mut names = controllers(current);
     let mut engines = importmap.is_some();
     let files = WalkDir::new(&javascript).into_iter().filter_entry(|entry| entry.file_name() != "node_modules").flatten();
-    for file in files.filter(|entry| is_loader_file(entry.path())) {
+    for file in files.filter(is_loader_file) {
         let source = std::fs::read_to_string(file.path()).ok()?;
+        if !may_register(&source) {
+            continue;
+        }
         names.extend(loader_names(&source, file.path().parent()?, &controllers_dir)?);
         engines |= LOAD_CALL.is_match(&source);
     }
@@ -402,10 +405,18 @@ fn scan_registered(current: &Path) -> Option<Registered> {
     Some(Registered { names, controllers: controllers_dir, engines })
 }
 
-fn is_loader_file(path: &Path) -> bool {
+fn is_loader_file(entry: &walkdir::DirEntry) -> bool {
+    let path = entry.path();
     let is_script = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| SCRIPT_EXTENSIONS.contains(&ext));
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    path.is_file() && is_script && !CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+    let name = entry.file_name().to_str().unwrap_or_default();
+    entry.file_type().is_file() && is_script && !CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+}
+
+/// A cheap check before `loader_names`' regexes: only a script with one of these can register a controller, load a
+/// folder or glob, or hand the application to a library.
+fn may_register(source: &str) -> bool {
+    const MARKERS: [&str; 6] = [".register(", "LoadControllersFrom(", "require.context(", "import.meta.glob", "application", "Application"];
+    MARKERS.iter().any(|marker| source.contains(marker))
 }
 
 /// Whether importmap.rb pins controllers other than the ones in app/javascript/controllers under `controllers/`.
@@ -772,6 +783,36 @@ export default class extends Controller {
         assert!(registered(&view).is_none());
         std::fs::remove_dir_all(&root).unwrap();
         clear_cache();
+    }
+
+    #[test]
+    fn the_prefilter_keeps_every_script_loader_names_reads() {
+        let reads = [
+            "app.register(\"a\", A)",
+            "eagerLoadControllersFrom(\"controllers\", app)",
+            "lazyLoadControllersFrom('controllers', app)",
+            "const c = require.context(\".\", true)",
+            "import.meta.globEager(\"./*\")",
+            "lib.install(application)",
+            "const app = Application.start()\nregisterAll(app, 1)",
+        ];
+        for source in reads {
+            assert!(may_register(source), "{source}");
+        }
+        assert!(!may_register("export function f(a) { return a.registered(1) }"));
+        let root = std::env::temp_dir().join(format!("rt-stimulus-prefilter-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::util::write_files(
+            &root,
+            &[
+                ("app/javascript/controllers/hello_controller.js", ""),
+                ("app/javascript/boot/stimulus_setup.mjs", "stimulus.register(\"boot-made\", Boot)"),
+                ("app/javascript/lib/big.js", &"var a = 1;\n".repeat(10_000)),
+            ],
+        );
+        let found = scan_registered(&root.join("app/views/x/y.html.erb")).unwrap();
+        assert_eq!(found.names, ["boot-made", "hello"]);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

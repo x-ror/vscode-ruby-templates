@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `ruby-templates check` is much faster on apps with many locale files or a large `app/javascript` (one template: 700 ms to 45 ms on a 500-locale-file, 700-script app): `Rails/I18nMissingKey` reads only the locale files that declare the default locale (once, not per worker thread), and the Stimulus check opens only the scripts that can register controllers.
 - `Rails/MissingPartial` finds a partial in the format of the template that renders it, whichever gem or initializer registered that format: `index.mobile.haml` renders `_card.mobile.haml` (`mobile-fu`'s `:mobile`, a custom `.amp`) without a report.
 - `Rails/UnsafeOutput` no longer reports a safe call with a trailing `if` or `unless` (`== render "a" if x`, `<%== render "a" unless x %>`, `!= render "a" if x`).
 - `ruby-templates check` and `format` skip `lib/templates` (Rails generator templates), `vendor`, `tmp`, `public` and `log` when walking a folder, as well as hidden folders and `node_modules`; `app/views` may hold folders with those names, and files named on the command line are always processed. `.gitignore` is not read.
