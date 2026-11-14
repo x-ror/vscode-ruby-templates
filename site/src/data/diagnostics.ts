@@ -673,7 +673,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "Output that skips Rails' HTML escaping.",
     explanation:
-      "`raw x`, `x.html_safe` and `safe_concat x` are reported on the method name, and the unescaped output markers `<%==` (ERB), `!=` and `!~` (Haml) and `==` (Slim) on the marker. `raw x.to_json` in a `<script>` is the usual idiom and is not reported. Not reported when the value is certainly safe: a literal without interpolation, `yield`, `content_for`, a `t` call with a literal key ending in `_html` or `.html`, or a call to `sanitize`, `safe_join`, `strip_tags`, `json_escape`, `j`, `escape_javascript`, `h`, `html_escape`, `link_to`, `content_tag`, `render`, `capture` and the like, or an escaper on `ERB::Util`, `CGI` or `Rack::Utils`. Not checked in text templates. Rails projects only, in templates under app/views.",
+      '`raw x`, `x.html_safe` and `safe_concat x` are reported on the method name, and the unescaped output markers `<%==` (ERB), `!=` and `!~` (Haml) and `==` (Slim) on the marker. `raw x.to_json` in a `<script>` is the usual idiom and is not reported. Not reported when the value is certainly safe: a literal whose interpolations are all safe (`"Hi #{h(name)}"`), `yield`, `content_for`, a `t` call with a literal key ending in `_html` or `.html`, or a call to `sanitize`, `safe_join`, `strip_tags`, `json_escape`, `j`, `escape_javascript`, `h`, `html_escape`, `link_to`, `content_tag`, `render`, `capture`, `truncate` (unless `escape: false`) and the like, or an escaper on `ERB::Util`, `CGI` or `Rack::Utils`. Not checked in text templates. Rails projects only, in templates under app/views.',
     example: {
       file: "app/views/users/show.html.erb",
       lang: "erb",

@@ -8,6 +8,8 @@
 - `ruby-templates check` and `format` skip `lib/templates` (Rails generator templates), `vendor`, `tmp`, `public` and `log` when walking a folder, as well as hidden folders and `node_modules`; `app/views` may hold folders with those names, and files named on the command line are always processed. `.gitignore` is not read.
 - ERB formatting no longer refuses a file for an inline `<%= tag.style x %>`, `<%= tag.script(src: x) %>`, `<%= javascript_tag "x" %>` or `content_tag :script, x`; only the block forms (`javascript_tag do`) still leave the file as it is.
 - `insert_final_newline = true` in `.editorconfig` turns `Layout/TrailingEmptyLines` on for ERB (off by default there); `enabled = false` in a `.ruby-templates.toml` still wins.
+- `Rails/UnsafeOutput` no longer reports a string whose interpolations are all safe (`"Hi #{h(name)}".html_safe`) or `truncate(...)` without `escape: false`.
+- `Rails/UnsafeOutput` quotes long or multi-line code cut with `…` instead of saying "its value".
 - **Behaviour change:** `Rails/InstanceVariableInPartial` is information instead of a warning, so `ruby-templates check` no longer fails on it; the editor still shows it.
 - **Breaking:** the kebab-case diagnostic codes from before 0.11 (`img-missing-alt`, `unresolved-render`, ...) are no longer accepted in `disabledDiagnostics`, in the VS Code settings or `.ruby-templates.toml`. Use the rule names (`Html/ImgAlt`, `Rails/MissingPartial`), listed in the diagnostics reference; the toml reports an old code as an unknown rule.
 - **Breaking:** `ruby-templates-ls --check` and `ruby-templates-ls --format` are removed. Use `ruby-templates check` and `ruby-templates format`.
