@@ -35,14 +35,14 @@ const indexFaults = [
     line: 6,
     column: 3,
     message: "`<img>` without `alt`: the alt attribute must be specified (HTML 4.8.4.4.1)",
-    code: "img-missing-alt",
+    code: "Html/ImgAlt",
   },
-  { line: 7, column: 15, message: "Missing partial users/_car", code: "unresolved-render" },
+  { line: 7, column: 15, message: "Missing partial users/_car", code: "Rails/MissingPartial" },
   {
     line: 8,
     column: 1,
     message: "End tag `</span>` doesn't close the open `<div>` (line 5) (HTML 13.2.6.4.7)",
-    code: "mismatched-close-tag",
+    code: "Html/MismatchedCloseTag",
   },
 ];
 

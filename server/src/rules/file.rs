@@ -1,6 +1,6 @@
 //! `.ruby-templates.toml`, read against the rule registry. A part that can't be read is dropped with a `Problem`; the rest is kept.
 
-use super::{by_code, by_name, departments, ChoiceOption, CountOption, Kind, ListOption, Rule};
+use super::{by_name, departments, ChoiceOption, CountOption, Kind, ListOption, Rule};
 use crate::glob::Glob;
 use crate::util::LineIndex;
 use std::ops::Range as Span;
@@ -45,7 +45,7 @@ pub struct LanguageTable {
     pub format_enabled: Option<bool>,
     pub align_comments: Option<bool>,
     pub diagnostics_enabled: Option<bool>,
-    /// Rule names, aliases already resolved.
+    /// Rule names.
     pub disabled_diagnostics: Option<Vec<String>>,
     pub extra_engines: Option<Vec<String>>,
 }
@@ -282,17 +282,20 @@ impl Reader<'_> {
         Some(globs)
     }
 
-    /// Rule names from names or old codes; the ones that are neither are dropped.
+    /// Rule names; anything else is reported and dropped.
     fn rule_names(&mut self, name: &str, value: Value) -> Option<Vec<String>> {
         let mut names = Vec::new();
-        for (code, span) in self.strings(name, value)? {
-            match by_code(&code) {
+        for (rule_name, span) in self.strings(name, value)? {
+            match by_name(&rule_name) {
                 Some(rule) if rule.kind == Kind::Lint => names.push(rule.name.to_string()),
                 Some(rule) => self.problem(
                     span,
                     format!("`{}` formats, it has no diagnostic; switch it in [{}]", rule.name, rule.name.replace('/', ".")),
                 ),
-                None => self.problem(span, format!("unknown rule `{code}`")),
+                None if rule_name.contains('-') => {
+                    self.problem(span, format!("unknown rule `{rule_name}`; diagnostics are named by rule (`Html/ImgAlt`) since 0.11"))
+                }
+                None => self.problem(span, format!("unknown rule `{rule_name}`")),
             }
         }
         Some(names)
@@ -341,7 +344,7 @@ exclude = ["vendor/**", "tmp/**"]
 format.enabled = false
 format.align_comments = true
 diagnostics.enabled = true
-disabled_diagnostics = ["Html/ImgAlt", "unclosed-element"]
+disabled_diagnostics = ["Html/ImgAlt", "Html/UnclosedElement"]
 
 [slim]
 extra_engines = ["mjml"]
@@ -403,6 +406,19 @@ colour = 1
             ["Html/DuplicateId", "Html/ImgAlt", "Rails/StrictLocals"]
         );
         assert_eq!(file.rules[0].1.exclude.as_ref().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn a_code_from_before_0_11_is_an_unknown_rule_that_says_so() {
+        let file = read("[erb]\ndisabled_diagnostics = [\"img-missing-alt\", \"Html/ImgAltt\"]\n");
+        assert_eq!(
+            messages(&file),
+            [
+                "2:25: unknown rule `img-missing-alt`; diagnostics are named by rule (`Html/ImgAlt`) since 0.11",
+                "2:44: unknown rule `Html/ImgAltt`"
+            ]
+        );
+        assert_eq!(file.languages[0].1.disabled_diagnostics.as_deref(), Some(&[][..]));
     }
 
     #[test]

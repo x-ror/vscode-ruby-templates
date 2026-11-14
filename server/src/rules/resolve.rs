@@ -3,7 +3,7 @@
 
 use super::file::{parse, ConfigFile, LanguageTable, RuleTable, FILE_NAME};
 use super::{
-    by_code, by_name, ChoiceOption, CountOption, Kind, ListOption, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY,
+    by_name, ChoiceOption, CountOption, Kind, ListOption, Rule, AROUND_BLOCK_BODY, AROUND_BRANCHES, AROUND_ELEMENT_BODY,
     ATTRIBUTES_PER_LINE, ATTRIBUTE_QUOTES, BLOCK_TAGS, BOOLEAN_ATTRIBUTES, CLASSES_BEFORE_IDS, ELEMENT_CONTENT_ON_OWN_LINE, EMPTY_LINES,
     EMPTY_LINES_STYLE, ERB_COMMENT_SYNTAX, HASH_ATTRIBUTES, HTML_ATTRIBUTES, IMPLICIT_DIV, INDENTATION_STYLE, INDENT_STYLE,
     PREFER_TURBO_ATTRIBUTES, RULES, SINGLE_QUOTES, SLASH, SPACE_AFTER_SCRIPT_MARKER, SPACE_INSIDE_ERB_TAG, SPACE_IN_HTML_TAG, TABS,
@@ -106,7 +106,7 @@ impl ResolvedRules {
             .map(|(file, _)| file.path.clone());
         let disabled = in_lists(|t| t.disabled_diagnostics.as_ref()).unwrap_or_else(|| {
             let codes = editor.disabled(lang).iter();
-            let lint_name = |code: &String| match by_code(code) {
+            let lint_name = |code: &String| match by_name(code) {
                 Some(rule) => (rule.kind == Kind::Lint).then(|| rule.name.to_string()),
                 None => Some(code.clone()),
             };
@@ -374,7 +374,7 @@ mod tests {
 
     #[test]
     fn nested_files_override_key_by_key() {
-        let outer = "[erb]\nformat.enabled = false\ndisabled_diagnostics = [\"duplicate-id\"]\n[Html.ImgAlt]\nenabled = false\n";
+        let outer = "[erb]\nformat.enabled = false\ndisabled_diagnostics = [\"Html/DuplicateId\"]\n[Html.ImgAlt]\nenabled = false\n";
         let inner = "[erb]\ndisabled_diagnostics = [\"Html/UnclosedElement\"]\n[Html.ImgAlt]\nenabled = true\n";
         let files =
             [(".ruby-templates.toml", outer), ("app/views/.ruby-templates.toml", inner), ("app/views/a.html.erb", ""), ("b.html.erb", "")];
@@ -461,9 +461,9 @@ mod tests {
         let project =
             Project::new("editor", &[(".ruby-templates.toml", toml), ("a.html.erb", ""), ("b.html.slim", ""), ("c.html.haml", "")]);
         let settings = editor(serde_json::json!({
-            "erb": { "format": { "enabled": false, "alignComments": true }, "disabledDiagnostics": ["img-missing-alt"] },
+            "erb": { "format": { "enabled": false, "alignComments": true }, "disabledDiagnostics": ["Html/ImgAlt"] },
             "slim": { "extraEngines": ["other"], "diagnostics": { "enabled": false } },
-            "haml": { "diagnostics": { "enabled": false }, "disabledDiagnostics": ["syntax-error"] },
+            "haml": { "diagnostics": { "enabled": false }, "disabledDiagnostics": ["Syntax/Template"] },
         }));
         let erb = project.resolve("a.html.erb", TemplateLang::Erb, &settings);
         assert!(erb.format_enabled() && erb.reports(IMG) && !erb.format_settings(Settings::default()).align_comments);
@@ -471,17 +471,9 @@ mod tests {
         assert_eq!(slim.extra_engines(), ["mjml"]);
         assert!(!slim.diagnostics_enabled(), "silent in the file: the editor's switch applies");
         let haml = project.resolve("c.html.haml", TemplateLang::Haml, &settings);
-        assert!(!haml.diagnostics_enabled() && !haml.reports("Syntax/Template"), "old codes from the editor are normalized");
+        assert!(!haml.diagnostics_enabled() && !haml.reports("Syntax/Template"));
         let without = Project::new("editor-only", &[("a.html.erb", "")]).resolve("a.html.erb", TemplateLang::Erb, &settings);
         assert!(!without.format_enabled() && !without.reports(IMG) && without.format_settings(Settings::default()).align_comments);
-    }
-
-    #[test]
-    fn old_codes_and_new_names_both_disable() {
-        let toml = "[haml]\ndisabled_diagnostics = [\"void-children\", \"Syntax/IllegalNesting\"]\n";
-        let project = Project::new("alias", &[(".ruby-templates.toml", toml), ("a.html.haml", "")]);
-        let rules = project.resolve("a.html.haml", TemplateLang::Haml, &Options::default());
-        assert!(!rules.reports("Html/VoidChildren") && !rules.reports("Syntax/IllegalNesting") && rules.reports("Syntax/Template"));
     }
 
     #[test]

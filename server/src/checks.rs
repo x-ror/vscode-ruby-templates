@@ -679,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_list_every_rule_and_accept_the_old_codes() {
+    fn settings_list_every_rule() {
         let manifest: serde_json::Value = serde_json::from_str(include_str!("../../package.json")).unwrap();
         let items = |lang: &str| {
             manifest["contributes"]["configuration"]["properties"][format!("rubyTemplates.{lang}.disabledDiagnostics")]["items"].clone()
@@ -688,12 +688,10 @@ mod tests {
             [("erb", TemplateLang::Erb), ("haml", TemplateLang::Haml), ("slim", TemplateLang::Slim), ("jbuilder", TemplateLang::Ruby)]
         {
             let items = items(section);
-            let listed: BTreeSet<&str> = items["anyOf"][0]["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+            let listed: BTreeSet<&str> = items["enum"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
             let lints = || crate::rules::RULES.iter().filter(|rule| rule.kind == crate::rules::Kind::Lint);
             let rules: BTreeSet<&str> = lints().filter(|rule| rule.applies_to(lang)).map(|rule| rule.name).collect();
             assert_eq!(listed, rules, "{section}");
-            let old_codes = regex::Regex::new(items["anyOf"][1]["pattern"].as_str().unwrap()).unwrap();
-            assert!(lints().all(|rule| rule.alias.is_none_or(|alias| old_codes.is_match(alias))), "{section}");
         }
         // A literal code would bypass the constants this test collects.
         let literal = regex::Regex::new(r#"(?m)coded\(.*,\s*"[a-z0-9-]+"\)[);,]*$"#).unwrap();

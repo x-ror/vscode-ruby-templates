@@ -254,7 +254,10 @@ const check = (label, actual, expected) => {
     rootUri: fileUri(root),
     capabilities: {},
     initializationOptions: {
-      slim: { extraEngines: ["mjml"], disabledDiagnostics: ["explicit-end"] },
+      slim: {
+        extraEngines: ["mjml"],
+        disabledDiagnostics: ["Syntax/ExplicitEnd"],
+      },
     },
   });
   await send("initialized", {}, true);

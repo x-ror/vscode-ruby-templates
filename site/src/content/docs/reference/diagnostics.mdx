@@ -34,8 +34,6 @@ Or list the codes to turn off for a language in your `settings.json`:
 "rubyTemplates.haml.disabledDiagnostics": ["Rails/MissingPartial"]
 ```
 
-Before 0.11 the codes were kebab-case words (`img-missing-alt`, `unresolved-render`). They still work in both places, and each entry below that had one names its earlier code.
-
 `rubyTemplates.slim.disabledDiagnostics` also applies to Skim templates, and `rubyTemplates.jbuilder.disabledDiagnostics` to Jbuilder and Builder views. To silence a whole language, set `rubyTemplates.erb.diagnostics.enabled`, `rubyTemplates.haml.diagnostics.enabled` or `rubyTemplates.slim.diagnostics.enabled` to `false` (in a `.ruby-templates.toml`: `diagnostics.enabled = false` under `[erb]`, `[haml]` or `[slim]`). Liquid templates and Thor templates (`*.tt`) get no diagnostics.
 
 The [rules reference](/vscode-ruby-templates/reference/rules/) lists the checks and formatter rules planned next, next to the ones that report these codes.

@@ -69,7 +69,7 @@ exclude = ["vendor/**", "tmp/**"]  # no checks and no formatting for these files
 format.enabled = false             # no formatting for ERB
 format.align_comments = true       # same as --align-comments
 diagnostics.enabled = true         # false: no diagnostics for ERB
-disabled_diagnostics = ["Html/ImgAlt", "unclosed-element"]  # rule names, or the codes of 0.10 and earlier
+disabled_diagnostics = ["Html/ImgAlt", "Html/UnclosedElement"]
 
 [haml]                             # format.enabled, diagnostics.enabled, disabled_diagnostics
 [slim]                             # the same, and: extra_engines = ["mjml"]; Skim files too

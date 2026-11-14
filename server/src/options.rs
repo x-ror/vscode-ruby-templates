@@ -93,14 +93,14 @@ mod tests {
     fn options_keep_valid_fields() {
         let init = serde_json::json!({
             "slim": { "extraEngines": "mjml", "disabledDiagnostics": ["bad-dedent", 3] },
-            "erb": { "disabledDiagnostics": ["unclosed-element"] },
+            "erb": { "disabledDiagnostics": ["Html/UnclosedElement"] },
             "haml": { "disabledDiagnostics": "illegal-nesting" }
         });
         let (options, ignored) = Options::from_init(Some(&init));
         assert!(options.extra_engines.is_empty());
         assert_eq!(options.disabled(TemplateLang::Slim), ["bad-dedent"]);
         assert_eq!(options.disabled(TemplateLang::Skim), ["bad-dedent"]);
-        assert_eq!(options.disabled(TemplateLang::Erb), ["unclosed-element"]);
+        assert_eq!(options.disabled(TemplateLang::Erb), ["Html/UnclosedElement"]);
         assert!(options.disabled(TemplateLang::Haml).is_empty() && options.disabled(TemplateLang::Liquid).is_empty());
         assert_eq!(ignored.len(), 3, "{ignored:?}");
         let (none, ignored) = Options::from_init(None);

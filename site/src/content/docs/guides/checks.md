@@ -87,7 +87,7 @@ enabled = false
 exclude = ["app/views/legacy/**"]
 ```
 
-Or by code, per language, in your user or workspace settings (the kebab-case codes of earlier versions, such as `img-missing-alt`, still work):
+Or by code, per language, in your user or workspace settings:
 
 ```json
 {
