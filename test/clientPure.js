@@ -421,3 +421,22 @@ assert.ok(errorPage("T", "d", "<hint>").includes("&lt;hint&gt;"));
     undefined,
   );
 }
+
+// Slim line commands are purely syntactic, so they apply to Skim files too
+{
+  const { contributes } = JSON.parse(
+    fs.readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8"),
+  );
+  const slimCommands = [
+    "rubyTemplates.toggleSlimTag",
+    "rubyTemplates.wrapInSlim",
+  ];
+  const entries = [
+    ...contributes.keybindings,
+    ...Object.values(contributes.menus).flat(),
+  ].filter((entry) => slimCommands.includes(entry.command));
+  assert.ok(entries.length >= 6);
+  for (const { command, when } of entries) {
+    assert.ok(when.includes("skim"), `${command}: ${when}`);
+  }
+}
