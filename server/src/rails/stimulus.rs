@@ -409,7 +409,9 @@ fn is_loader_file(entry: &walkdir::DirEntry) -> bool {
     let path = entry.path();
     let is_script = path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| SCRIPT_EXTENSIONS.contains(&ext));
     let name = entry.file_name().to_str().unwrap_or_default();
-    entry.file_type().is_file() && is_script && !CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+    (entry.file_type().is_file() || entry.path_is_symlink() && path.is_file())
+        && is_script
+        && !CONTROLLER_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 
 /// A cheap check before `loader_names`' regexes: only a script with one of these can register a controller, load a
@@ -812,6 +814,21 @@ export default class extends Controller {
         );
         let found = scan_registered(&root.join("app/views/x/y.html.erb")).unwrap();
         assert_eq!(found.names, ["boot-made", "hello"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_script_outside_app_javascript_registers_controllers() {
+        let root = std::env::temp_dir().join(format!("rt-stimulus-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::util::write_files(
+            &root,
+            &[("app/javascript/controllers/hello_controller.js", ""), ("shared/setup.js", "application.register(\"ext\", X)")],
+        );
+        std::os::unix::fs::symlink(root.join("shared/setup.js"), root.join("app/javascript/setup.js")).unwrap();
+        let found = scan_registered(&root.join("app/views/x/y.html.erb")).unwrap();
+        assert_eq!(found.names, ["ext", "hello"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
