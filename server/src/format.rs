@@ -26,6 +26,8 @@ use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, FormattingOptio
 pub struct Settings {
     /// Columns per nesting level.
     pub indent_size: usize,
+    /// `.editorconfig`'s `insert_final_newline = true`: turns `Layout/TrailingEmptyLines` on where it is off by default (ERB).
+    pub insert_final_newline: bool,
     /// `Layout/TrailingEmptyLines`: end the file with exactly one line ending; off for a range, which can't change the lines.
     pub trailing_empty_lines: bool,
     /// `Layout/EmptyLines`: the longest run of blank lines kept; `None` leaves them all.
@@ -76,6 +78,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             indent_size: 2,
+            insert_final_newline: false,
             trailing_empty_lines: true,
             max_empty_lines: None,
             align_comments: false,

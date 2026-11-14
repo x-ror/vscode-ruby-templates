@@ -1,5 +1,5 @@
-//! The indentation width and style of a file, from the project's `.editorconfig`. The editor's tab size and `insertSpaces` go on top
-//! in the language server (`Settings::with_editor`). Every other property is ignored and listed in the notes.
+//! The indentation width and style and the final newline of a file, from the project's `.editorconfig`. The editor's tab size and
+//! `insertSpaces` go on top in the language server (`Settings::with_editor`). Every other property is ignored and listed in the notes.
 
 use crate::format::{IndentStyle, Settings};
 use crate::glob::Glob;
@@ -15,17 +15,21 @@ pub struct Resolved {
 pub fn settings_for(path: &Path) -> Resolved {
     let mut notes = Vec::new();
     let defaults = Settings::default();
-    let (size, style) = editorconfig_indent(path, &mut notes);
-    let settings =
-        Settings { indent_size: size.unwrap_or(defaults.indent_size), indent_style: style.unwrap_or(defaults.indent_style), ..defaults };
+    let properties = editorconfig_properties(path, &mut notes);
+    let settings = Settings {
+        indent_size: indent_size(&properties).unwrap_or(defaults.indent_size),
+        indent_style: indent_style(&properties).unwrap_or(defaults.indent_style),
+        insert_final_newline: property(&properties, "insert_final_newline") == Some("true"),
+        ..defaults
+    };
     Resolved { settings, notes }
 }
 
-/// The indentation width and style from the `.editorconfig` properties that apply to `path`: files from the root (or the topmost
-/// `root = true`) down, later sections and nearer files winning, as the EditorConfig spec has it.
-fn editorconfig_indent(path: &Path, notes: &mut Vec<String>) -> (Option<usize>, Option<IndentStyle>) {
+/// The `.editorconfig` properties that apply to `path`: files from the root (or the topmost `root = true`) down, later sections
+/// and nearer files winning, as the EditorConfig spec has it.
+fn editorconfig_properties(path: &Path, notes: &mut Vec<String>) -> Vec<(String, String)> {
     if path.file_name().is_none() {
-        return (None, None);
+        return Vec::new();
     }
     let mut properties = Vec::new();
     for (dir, text) in editorconfig_files(path).iter().rev() {
@@ -37,7 +41,7 @@ fn editorconfig_indent(path: &Path, notes: &mut Vec<String>) -> (Option<usize>, 
     for (key, value) in properties.iter().filter(|(k, v)| v != "unset" && !is_understood(k, v)) {
         notes.push(format!(".editorconfig: ignored {key} = {value}"));
     }
-    (indent_size(&properties), indent_style(&properties))
+    properties
 }
 
 /// The folders above `path` that hold an `.editorconfig`, with its text: nearest first, up to the first `root = true`.
@@ -109,6 +113,8 @@ fn is_understood(key: &str, value: &str) -> bool {
         "indent_style" => matches!(value, "space" | "tab"),
         "indent_size" => value == "tab" || positive_number(value).is_some(),
         "tab_width" => positive_number(value).is_some(),
+        // `false` changes nothing: the final newline is only ever added.
+        "insert_final_newline" => value == "true",
         _ => false,
     }
 }
@@ -193,6 +199,16 @@ mod tests {
             (IndentStyle::Tabs, IndentStyle::Spaces, IndentStyle::Spaces)
         );
         assert!(project.settings("a.html.erb").notes.iter().all(|n| !n.contains("ignored")), "indent_style is understood");
+    }
+
+    #[test]
+    fn editorconfig_insert_final_newline_true_is_read() {
+        let text = "[*.erb]\ninsert_final_newline = true\n[*.slim]\ninsert_final_newline = false\n";
+        let project = Project::new("newline", &[(".editorconfig", text), ("a.html.erb", ""), ("b.html.slim", ""), ("c.html.haml", "")]);
+        let newline = |file: &str| project.settings(file).settings.insert_final_newline;
+        assert_eq!((newline("a.html.erb"), newline("b.html.slim"), newline("c.html.haml")), (true, false, false));
+        let notes = project.settings("a.html.erb").notes;
+        assert!(notes.iter().all(|n| !n.contains("ignored")), "{notes:?}");
     }
 
     #[test]

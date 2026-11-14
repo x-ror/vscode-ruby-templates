@@ -34,6 +34,8 @@ pub struct ResolvedRules {
     /// `Layout/EmptyLines`: the longest run of blank lines kept; `None` when the rule is off.
     max_empty_lines: Option<usize>,
     trailing_empty_lines: bool,
+    /// `trailing_empty_lines` as an `insert_final_newline = true` in `.editorconfig` sets it: on unless the config turns the rule off.
+    trailing_empty_lines_with_final_newline: bool,
     around_block_body: Option<Style>,
     around_element_body: Option<Style>,
     around_branches: Option<Style>,
@@ -112,8 +114,14 @@ impl ResolvedRules {
             };
             codes.filter_map(lint_name).collect()
         });
-        let off: HashSet<String> =
-            RULES.iter().filter(|rule| !rule_on(&files, template, lang, rule)).map(|rule| rule.name.to_string()).chain(disabled).collect();
+        let off: HashSet<String> = RULES
+            .iter()
+            .filter(|rule| !rule_on(&files, template, lang, rule, rule.is_on_by_default(lang)))
+            .map(|rule| rule.name.to_string())
+            .chain(disabled)
+            .collect();
+        let trailing_empty_lines_with_final_newline =
+            by_name(TRAILING_EMPTY_LINES).is_some_and(|rule| rule_on(&files, template, lang, rule, true));
         let max_empty_lines = by_name(EMPTY_LINES)
             .filter(|rule| !off.contains(rule.name))
             .and_then(|rule| rule.options.iter().find(|option| option.key == "max").map(|option| count(&files, rule, option)));
@@ -127,6 +135,7 @@ impl ResolvedRules {
             extra_engines: in_lists(|t| t.extra_engines.as_ref()).unwrap_or_else(|| editor.extra_engines.clone()),
             max_empty_lines,
             trailing_empty_lines: !off.contains(TRAILING_EMPTY_LINES),
+            trailing_empty_lines_with_final_newline,
             around_block_body: style(&files, &off, AROUND_BLOCK_BODY),
             around_element_body: style(&files, &off, AROUND_ELEMENT_BODY),
             around_branches: style(&files, &off, AROUND_BRANCHES),
@@ -211,7 +220,11 @@ impl ResolvedRules {
         Settings {
             align_comments: self.align_comments,
             max_empty_lines: self.max_empty_lines,
-            trailing_empty_lines: self.trailing_empty_lines,
+            trailing_empty_lines: if base.insert_final_newline {
+                self.trailing_empty_lines_with_final_newline
+            } else {
+                self.trailing_empty_lines
+            },
             around_block_body: self.around_block_body,
             around_element_body: self.around_element_body,
             around_branches: self.around_branches,
@@ -304,10 +317,10 @@ fn style(files: &[Arc<ConfigFile>], off: &HashSet<String>, name: &str) -> Option
 
 /// The nearest file that sets the rule's `enabled` or its department's decides, the rule's beating the department's within
 /// that file; unset means the rule's default. Then the rule's `include` and `exclude`.
-fn rule_on(files: &[Arc<ConfigFile>], template: &Path, lang: TemplateLang, rule: &Rule) -> bool {
+/// `default_on` is what a rule the config doesn't mention is.
+fn rule_on(files: &[Arc<ConfigFile>], template: &Path, lang: TemplateLang, rule: &Rule, default_on: bool) -> bool {
     let department = |file: &ConfigFile| file.departments.iter().find(|(d, _)| *d == rule.department()).map(|&(_, enabled)| enabled);
-    let enabled = nearest(files, |f| rule_table(f, rule).and_then(|table| table.enabled).or_else(|| department(f)))
-        .unwrap_or(rule.is_on_by_default(lang));
+    let enabled = nearest(files, |f| rule_table(f, rule).and_then(|table| table.enabled).or_else(|| department(f))).unwrap_or(default_on);
     let included =
         nearest(files, |f| Some((f, rule_table(f, rule)?.include.as_ref()?))).is_none_or(|(f, globs)| matches_any(f, globs, template));
     let excluded =
@@ -481,6 +494,19 @@ mod tests {
         let project = Project::new("langs", &[("a.html.haml", "")]);
         let haml = project.resolve("a.html.haml", TemplateLang::Haml, &Options::default());
         assert!(!haml.reports("Html/UnclosedElement") && haml.reports("Html/VoidChildren"));
+    }
+
+    #[test]
+    fn editorconfig_final_newline_turns_trailing_empty_lines_on_unless_the_config_says_otherwise() {
+        let wants = Settings { insert_final_newline: true, ..Settings::default() };
+        let project = Project::new("final-newline", &[("a.html.erb", "")]);
+        assert!(project.erb("a.html.erb").format_settings(wants.clone()).trailing_empty_lines, "off by default for ERB");
+        assert!(!project.erb("a.html.erb").format_settings(Settings::default()).trailing_empty_lines);
+        let off = Project::new(
+            "final-newline-off",
+            &[(".ruby-templates.toml", "[Layout.TrailingEmptyLines]\nenabled = false\n"), ("a.html.erb", "")],
+        );
+        assert!(!off.erb("a.html.erb").format_settings(wants).trailing_empty_lines, "the rule's own switch wins");
     }
 
     #[test]
