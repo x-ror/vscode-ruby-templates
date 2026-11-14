@@ -8,7 +8,7 @@ use crate::ruby::strict_locals::{self, Close};
 use crate::util::{self, LineIndex};
 use ruby_prism::{BlockNode, CallNode, ConstantId, Location, Node, Visit};
 use std::collections::HashSet;
-use tower_lsp_server::ls_types::{Diagnostic, Range, TextEdit};
+use tower_lsp_server::ls_types::{Diagnostic, DiagnosticSeverity, Range, TextEdit};
 
 pub(crate) const INSTANCE_VARIABLE_IN_PARTIAL: &str = "Rails/InstanceVariableInPartial";
 pub(crate) const UNUSED_STRICT_LOCAL: &str = "Rails/UnusedStrictLocal";
@@ -132,7 +132,7 @@ fn instance_variables(index: &LineIndex, compiled: &Compiled, root: &Node) -> Ve
             let (start, end) = compiled.template_span(start, end)?;
             seen.insert(name.clone()).then(|| {
                 let message = format!("`{name}` is read in a partial, so it works only where the controller sets it; pass it as a local");
-                util::coded(util::warning(index.range(start, end), message), INSTANCE_VARIABLE_IN_PARTIAL)
+                util::coded(util::diag(index.range(start, end), DiagnosticSeverity::INFORMATION, message), INSTANCE_VARIABLE_IN_PARTIAL)
             })
         })
         .collect()
@@ -499,6 +499,7 @@ mod tests {
             run(Erb, "<%= @user %>", true)[0].message,
             "`@user` is read in a partial, so it works only where the controller sets it; pass it as a local"
         );
+        assert_eq!(run(Erb, "<%= @user %>", true)[0].severity, Some(DiagnosticSeverity::INFORMATION));
     }
 
     #[test]

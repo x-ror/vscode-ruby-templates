@@ -6,7 +6,7 @@ tableOfContents: false
 
 import DiagnosticRoster from "../../../components/DiagnosticRoster.astro";
 
-Every check the language server runs reports its problems under a stable code, which is the name of its rule: `Html/ImgAlt`, `Syntax/Ruby`. In VS Code the code appears next to the message in the Problems panel and in the hover over the underlined text, with the language as the source (`erb`, `haml`, `slim`, or `ruby` for Jbuilder and Builder views). The `ruby-templates check` command prints the same messages as `file:line:column: severity: message`, without the code (`--format github`, `json` and `sarif` include it), and exits with 1 when it finds an error or a warning, or a problem in a `.ruby-templates.toml`.
+Every check the language server runs reports its problems under a stable code, which is the name of its rule: `Html/ImgAlt`, `Syntax/Ruby`. In VS Code the code appears next to the message in the Problems panel and in the hover over the underlined text, with the language as the source (`erb`, `haml`, `slim`, or `ruby` for Jbuilder and Builder views). The `ruby-templates check` command prints the same messages as `file:line:column: severity: message`, without the code (`--format github`, `json` and `sarif` include it), and exits with 1 when it finds an error or a warning (not for information, such as `Rails/InstanceVariableInPartial`), or a problem in a `.ruby-templates.toml`.
 
 The messages are those of Erubi, Rails, Haml 7, Slim 5 and Prism, or quote the section of the HTML standard that is broken. Each entry below shows a template that triggers the code and the message `ruby-templates check` prints for it, at the same line and column.
 

@@ -1328,7 +1328,7 @@ enabled = false`,
     status: "available",
     code: "Rails/InstanceVariableInPartial",
     today:
-      "The first read of each `@name` in a partial (a file starting with `_`), also inside `#{}`. Not reported: a variable the partial assigns itself (`@count = 0`, `@x ||= …`), `defined?(@name)`, ActionView's own (`@output_buffer`, `@virtual_path`, `@view_flow`, anything starting `@_`) and partials under app/views/layouts. Only in Rails projects, in templates under app/views.",
+      "The first read of each `@name` in a partial (a file starting with `_`), also inside `#{}`. Not reported: a variable the partial assigns itself (`@count = 0`, `@x ||= …`), `defined?(@name)`, ActionView's own (`@output_buffer`, `@virtual_path`, `@view_flow`, anything starting `@_`) and partials under app/views/layouts. Reported as information: visible in the editor, and `ruby-templates check` prints it without failing. Only in Rails projects, in templates under app/views.",
     setting: {
       label: "Turn it off",
       code: `[Rails.InstanceVariableInPartial]
