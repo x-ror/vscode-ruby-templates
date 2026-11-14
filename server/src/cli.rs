@@ -314,6 +314,18 @@ impl Checked {
     }
 }
 
+fn render_config_problems(file: &ConfigFile, output: Output) -> Rendered {
+    // Only the formats that show columns need the file's text.
+    let text = if output.format == Format::Text { String::new() } else { std::fs::read_to_string(&file.path).unwrap_or_default() };
+    let shown = shown_path(&file.path, output.cwd);
+    let source = Source { shown, path: &file.path, text: &text };
+    let mut rendered = Rendered::default();
+    for problem in &file.problems {
+        rendered.add(output, &source, (Severity::Warning, Some(report::CONFIG_PROBLEM), &problem.message), problem.range);
+    }
+    rendered
+}
+
 fn check_file(
     path: &Path,
     (fail_at, bad_file): (DiagnosticSeverity, i32),
@@ -330,15 +342,7 @@ fn check_file(
     let mut checked = Checked::new(OK);
     let rules = resolve(&uri, lang, &Options::default(), configs);
     for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
-        // Only the formats that show columns need the file's text.
-        let config_text =
-            if output.format == Format::Text { String::new() } else { std::fs::read_to_string(&file.path).unwrap_or_default() };
-        let shown = shown_path(&file.path, output.cwd);
-        let source = Source { shown, path: &file.path, text: &config_text };
-        let mut rendered = Rendered::default();
-        for problem in &file.problems {
-            rendered.add(output, &source, (Severity::Warning, Some(report::CONFIG_PROBLEM), &problem.message), problem.range);
-        }
+        let rendered = render_config_problems(file, output);
         checked.config.push((file.path.clone(), rendered));
         if DiagnosticSeverity::WARNING <= fail_at {
             checked.code = FINDINGS;
@@ -417,13 +421,14 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> 
 
 fn format_command(args: &FormatArgs) -> i32 {
     let cwd = crate::util::canonicalize(Path::new(".")).ok();
+    let mut reported = HashSet::new();
     if let Some(path) = &args.stdin_path {
         let mut text = String::new();
         if let Err(e) = std::io::stdin().read_to_string(&mut text) {
             eprintln!("cannot read stdin: {e}");
             return USAGE;
         }
-        return format_text(path, true, &text, args, cwd.as_deref(), (&mut Projects::new(), &mut Configs::new()));
+        return format_text(path, true, &text, args, cwd.as_deref(), (&mut Projects::new(), &mut Configs::new(), &mut reported));
     }
     let files = template_files(&args.paths);
     // Several files on stdout would run together.
@@ -441,7 +446,7 @@ fn format_command(args: &FormatArgs) -> i32 {
                 continue;
             }
         };
-        code = code.max(format_text(&path, named, &text, args, cwd.as_deref(), (&mut projects, &mut configs)));
+        code = code.max(format_text(&path, named, &text, args, cwd.as_deref(), (&mut projects, &mut configs, &mut reported)));
     }
     code
 }
@@ -458,15 +463,27 @@ fn print_verbose(shown: &str, settings: &format::Settings, notes: &[String], (ru
     }
 }
 
+/// Config problems go to stderr, as stdout carries the formatted text; `--check --format github` annotates them.
+fn report_config_problems(file: &ConfigFile, args: &FormatArgs, cwd: Option<&Path>) {
+    if args.check && args.format == Format::Github {
+        print!("{}", render_config_problems(file, Output { format: Format::Github, cwd }).stdout);
+        return;
+    }
+    let mut problems = String::new();
+    print_problems(file, cwd, &mut problems);
+    eprint!("{problems}");
+}
+
 fn format_text(
     path: &Path,
     named: bool,
     text: &str,
     args: &FormatArgs,
     cwd: Option<&Path>,
-    (projects, configs): (&mut Projects, &mut Configs),
+    (projects, configs, reported): (&mut Projects, &mut Configs, &mut HashSet<PathBuf>),
 ) -> i32 {
     let shown = path.display();
+    let mut has_config_problems = false;
     let result = match (absolute_file_uri(path), language(path)) {
         (Some(uri), Some(lang)) => {
             let rules = resolve(&uri, lang, &Options::default(), configs);
@@ -475,6 +492,12 @@ fn format_text(
             settings.align_comments |= args.align_comments;
             if args.verbose {
                 print_verbose(&shown.to_string(), &settings, &resolved.notes, (&rules, cwd));
+            }
+            for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
+                has_config_problems = true;
+                if !args.verbose && reported.insert(file.path.clone()) {
+                    report_config_problems(file, args, cwd);
+                }
             }
             if let Some(by) = rules.excluded_by() {
                 format::skip(SkipKind::NotHandled, format!("excluded by {}", by.display()))
@@ -512,7 +535,8 @@ fn format_text(
         } else if changed {
             println!("{shown}");
         }
-        return code.max(if changed { FINDINGS } else { OK });
+        let invalid_config = if has_config_problems { FINDINGS } else { OK };
+        return code.max(if changed { FINDINGS } else { invalid_config });
     }
     if !args.write {
         return match std::io::stdout().write_all(formatted.as_bytes()) {
