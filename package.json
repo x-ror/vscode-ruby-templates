@@ -498,31 +498,31 @@
         "command": "rubyTemplates.toggleErbTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.toggleHamlPrefix",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == haml"
+        "when": "editorTextFocus && !editorReadonly && editorLangId == haml"
       },
       {
         "command": "rubyTemplates.toggleSlimTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == slim"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^(slim|skim)$/"
       },
       {
         "command": "rubyTemplates.wrapInErb",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.wrapInSlim",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId == slim"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^(slim|skim)$/"
       },
       {
         "command": "rubyTemplates.preview",
@@ -545,12 +545,12 @@
         },
         {
           "command": "rubyTemplates.toggleSlimTag",
-          "when": "editorLangId == slim",
+          "when": "editorLangId =~ /^(slim|skim)$/",
           "group": "rubyTemplates@1"
         },
         {
           "command": "rubyTemplates.wrapInSlim",
-          "when": "editorLangId == slim && editorHasSelection",
+          "when": "editorLangId =~ /^(slim|skim)$/ && editorHasSelection",
           "group": "rubyTemplates@2"
         },
         {
@@ -599,11 +599,11 @@
         },
         {
           "command": "rubyTemplates.toggleSlimTag",
-          "when": "editorLangId == slim"
+          "when": "editorLangId =~ /^(slim|skim)$/"
         },
         {
           "command": "rubyTemplates.wrapInSlim",
-          "when": "editorLangId == slim"
+          "when": "editorLangId =~ /^(slim|skim)$/"
         },
         {
           "command": "rubyTemplates.convertToHaml",

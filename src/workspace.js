@@ -1,5 +1,6 @@
 // Small vscode helpers shared by the commands.
 import * as vscode from "vscode";
+import os from "os";
 import path from "path";
 
 const SECTION = "rubyTemplates";
@@ -33,11 +34,12 @@ async function confirmOverwrite(uri) {
   return ok === "Overwrite";
 }
 
+/** Folder commands run in: the document's workspace folder or directory, else the first folder, else home. */
 function workspaceFolderFor(doc) {
-  return (
-    vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath ||
-    path.dirname(doc.uri.fsPath)
-  );
+  const folder = vscode.workspace.getWorkspaceFolder(doc.uri);
+  if (folder) return folder.uri.fsPath;
+  if (doc.uri.scheme === "file") return path.dirname(doc.uri.fsPath);
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
 }
 
 export {
