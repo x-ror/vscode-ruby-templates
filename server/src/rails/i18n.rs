@@ -7,8 +7,7 @@ use dashmap::DashMap;
 use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use walkdir::WalkDir;
 
 // `t "a.b"`, `t(".x")`, `translate`, `I18n.t`; not `obj.t(…)`. `#` keeps interpolated keys out.
@@ -95,13 +94,21 @@ impl Locales {
     }
 }
 
+/// Every locale file below `dir`: what hover and completion show.
 pub fn locale_files(dir: &Path) -> Locales {
+    read_locales(dir, None)
+}
+
+/// The files below `dir` with a key `only` (all files when `None`), parsed.
+fn read_locales(dir: &Path, only: Option<&str>) -> Locales {
     let parsed: Vec<(PathBuf, Vec<Translation>)> = WalkDir::new(dir)
         .sort_by_file_name()
         .into_iter()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "yml" || x == "yaml"))
-        .filter_map(|e| Some((e.path().to_path_buf(), parse(&std::fs::read_to_string(e.path()).ok()?))))
+        .filter_map(|e| Some((e.path().to_path_buf(), std::fs::read_to_string(e.path()).ok()?)))
+        .filter(|(_, text)| only.is_none_or(|locale| declares_locale(text, locale)))
+        .map(|(path, text)| (path, parse(&text)))
         .collect();
     let mut files = Vec::with_capacity(parsed.len());
     let mut by_key = Vec::new();
@@ -115,6 +122,15 @@ pub fn locale_files(dir: &Path) -> Locales {
     Locales { files, by_key, locales }
 }
 
+/// Whether a line of the file has `locale` as a key, found without parsing it: a file name doesn't tell (`devise.en.yml`,
+/// `en/users.yml`, `app.yml` holding `en:`), and `parse` takes the first key at any indent as the locale. Over-matches
+/// nested keys, which only costs a parse.
+fn declares_locale(text: &str, locale: &str) -> bool {
+    let text = text.strip_prefix(crate::util::BOM).unwrap_or(text);
+    let top_level = text.lines().filter(|line| line.contains(locale) && !line.trim_start().starts_with(['#', '-']));
+    top_level.filter_map(|line| split_key(line.trim_start())).any(|(key, _)| key == locale)
+}
+
 pub fn lookup<'a>(files: &'a Locales, key: &'a str) -> impl Iterator<Item = (&'a Path, &'a Translation)> {
     files.starting_with(key).filter(move |(_, t)| t.key == key)
 }
@@ -125,25 +141,19 @@ pub struct Catalog {
     default_locale: String,
     /// The app sets `i18n.fallbacks`, so a key of any locale may answer.
     fallbacks: bool,
+    /// Every locale, read on the first key the default one lacks; with fallbacks only.
+    every: OnceLock<Locales>,
+    dir: PathBuf,
 }
 
-static CATALOGS: LazyLock<DashMap<PathBuf, Option<Arc<Catalog>>>> = LazyLock::new(DashMap::new);
-/// Bumped by every `clear_catalogs`, so a catalog read before it, which may predate the change, isn't kept.
-static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Per app root, the catalog read once: threads asking at the same time wait for the one that reads it.
+type CatalogSlot = Arc<OnceLock<Option<Arc<Catalog>>>>;
+static CATALOGS: LazyLock<DashMap<PathBuf, CatalogSlot>> = LazyLock::new(DashMap::new);
 
-/// Forgets the catalogs read so far; the next `catalog` reads the files again.
+/// Forgets the catalogs read so far; the next `catalog` reads the files again. A read in progress finishes into a slot
+/// that is no longer listed, so it can't bring back a catalog older than the clear.
 pub fn clear_catalogs() {
-    GENERATION.fetch_add(1, Ordering::SeqCst);
     CATALOGS.clear();
-}
-
-/// Keeps `found` for `root` unless a clear came after `started`, checked under the entry's lock as `clear` takes it too.
-fn remember(root: PathBuf, found: &Option<Arc<Catalog>>, started: u64) {
-    if let dashmap::mapref::entry::Entry::Vacant(slot) = CATALOGS.entry(root) {
-        if GENERATION.load(Ordering::SeqCst) == started {
-            slot.insert(found.clone());
-        }
-    }
 }
 
 /// The catalog of the app `current` belongs to, kept until `clear_catalogs`. `None` when the app's translations can't all
@@ -154,13 +164,8 @@ pub fn catalog(project: &Project, current: &Path) -> Option<Arc<Catalog>> {
         return None;
     }
     let root = rails_root(current)?;
-    if let Some(found) = CATALOGS.get(&root) {
-        return found.clone();
-    }
-    let started = GENERATION.load(Ordering::SeqCst);
-    let found = read_catalog(&root).map(Arc::new);
-    remember(root, &found, started);
-    found
+    let slot = CatalogSlot::clone(&CATALOGS.entry(root.clone()).or_default());
+    slot.get_or_init(|| read_catalog(&root).map(Arc::new)).clone()
 }
 
 fn read_catalog(root: &Path) -> Option<Catalog> {
@@ -174,8 +179,9 @@ fn read_catalog(root: &Path) -> Option<Catalog> {
     if !ruby_files_under(&dir).is_empty() {
         return None;
     }
-    let locales = locale_files(&dir);
-    locales.locales.contains(&default_locale).then_some(Catalog { locales, default_locale, fallbacks: FALLBACKS.is_match(&config) })
+    let fallbacks = FALLBACKS.is_match(&config);
+    let locales = read_locales(&dir, Some(&default_locale));
+    locales.locales.contains(&default_locale).then_some(Catalog { locales, default_locale, fallbacks, every: OnceLock::new(), dir })
 }
 
 /// The code, without comment lines, of the files that configure Rails: application.rb, environments and initializers.
@@ -215,7 +221,10 @@ impl Catalog {
 
     /// Whether the default locale (any, with fallbacks) has `key`, as a leaf or as a group of keys.
     pub fn has(&self, key: &str) -> bool {
-        lookup(&self.locales, key).any(|(_, t)| self.fallbacks || t.locale == self.default_locale)
+        if lookup(&self.locales, key).any(|(_, t)| t.locale == self.default_locale) {
+            return true;
+        }
+        self.fallbacks && lookup(self.every.get_or_init(|| locale_files(&self.dir)), key).next().is_some()
     }
 
     /// The file that holds the group of the default locale closest to `key` (`users.index` for `users.index.title`), where a
@@ -1040,10 +1049,49 @@ en:
         assert_eq!(fallbacks("config.i18n.fallbacks = true\n"), Some(true));
         assert_eq!(fallbacks("config.i18n.fallbacks = [:en]\n"), Some(true));
         assert_eq!(fallbacks("# config.i18n.fallbacks = true\n"), Some(false));
-        let started = GENERATION.load(Ordering::SeqCst);
+        let slot = Arc::clone(&*CATALOGS.entry(root.clone()).or_default());
         clear_catalogs();
-        remember(root.clone(), &None, started);
+        slot.get_or_init(|| None);
         assert!(!CATALOGS.contains_key(&root), "a read from before the clear is not kept");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_catalog_reads_the_files_that_declare_its_locale() {
+        let root = std::env::temp_dir().join(format!("rt-i18n-select-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::util::write_files(
+            &root,
+            &[
+                ("config/application.rb", ""),
+                ("config/locales/en.yml", "en:\n  a: A\n"),
+                ("config/locales/app.yml", "---\n# note\n\"en\":\n  from_app: X\nfr:\n  only_fr: F\n"),
+                ("config/locales/devise.fr.yml", "fr:\n  devise_fr: F\n"),
+                ("config/locales/fr/users.yml", "fr:\n  users_fr: F\n"),
+                ("config/locales/misnamed.fr.yml", "en:\n  misnamed: M\n"),
+                ("config/locales/indented.yml", "  en:\n    b: B\n"),
+                ("config/locales/nested.yml", "fr:\n  en:\n    deep: D\n"),
+            ],
+        );
+        let catalog = read_catalog(&root).unwrap();
+        let files: Vec<_> = catalog.locales.files.iter().map(|f| f.file_name().unwrap().to_str().unwrap()).collect();
+        assert_eq!(files, ["app.yml", "en.yml", "indented.yml", "misnamed.fr.yml", "nested.yml"]);
+        assert!(catalog.has("from_app") && catalog.has("misnamed") && catalog.has("b") && !catalog.has("only_fr") && !catalog.has("deep"));
+        assert_eq!(locale_files(&root.join("config/locales")).files.len(), 7, "hover and completion see every locale");
+        let lenient = |code| {
+            crate::util::write_files(&root, &[("config/application.rb", code)]);
+            read_catalog(&root).unwrap()
+        };
+        let with_fallbacks = lenient("config.i18n.fallbacks = true\n");
+        assert!(with_fallbacks.every.get().is_none());
+        assert!(with_fallbacks.has("a") && with_fallbacks.every.get().is_none(), "the default locale answers first");
+        assert!(with_fallbacks.has("only_fr") && with_fallbacks.every.get().is_some(), "other locales are read on a miss");
+        assert!(!with_fallbacks.has("nope") && !lenient("").has("only_fr"));
+        assert!(
+            declares_locale("\u{feff}en:\n  a: A\n", "en")
+                && declares_locale("  en:\n    b: B\n", "en")
+                && !declares_locale("# en:\n", "en")
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1057,12 +1105,12 @@ en:
             locales: Locales { files: vec![PathBuf::new()], by_key, locales: BTreeSet::new() },
             default_locale: "en".into(),
             fallbacks: false,
+            every: OnceLock::new(),
+            dir: PathBuf::new(),
         };
         assert!(catalog.has("users.index.title") && catalog.has("users.index.stats") && catalog.has("users.index"));
         assert!(!catalog.has("users.index.only_fr") && !catalog.has("users.index.titl"));
         assert_eq!(catalog.keys_under("users.index"), [".stats", ".stats.one", ".title"]);
-        let lenient = Catalog { fallbacks: true, ..catalog };
-        assert!(lenient.has("users.index.only_fr") && !lenient.has("users.index.nope"));
     }
 
     #[test]
