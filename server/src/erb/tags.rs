@@ -350,10 +350,13 @@ fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 }
 
 pub(crate) struct TagEnd {
-    end: usize,
+    pub(crate) end: usize,
     pub(crate) self_closing: bool,
-    quoted: Vec<(usize, usize)>,
+    pub(crate) quoted: Vec<(usize, usize)>,
 }
+
+/// Blanks an ERB tag in HTML bytes. Not a space: the ERB stays an unquoted attribute value ending at the next space.
+pub(crate) const ERB_FILL: u8 = b'~';
 
 /// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
 /// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
