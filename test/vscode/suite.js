@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
 import * as vscode from "vscode";
+import { workspaceFolderFor } from "../../src/workspace.js";
 import { replaceContents } from "../../src/convertTemplate.js";
 
 const app = process.env.RT_APP;
@@ -435,6 +436,11 @@ const checks = {
     } finally {
       await revert(editor);
     }
+  },
+
+  async "untitled documents get an absolute working directory"() {
+    const doc = await vscode.workspace.openTextDocument({ language: "slim" });
+    assert.ok(path.isAbsolute(workspaceFolderFor(doc)));
   },
 
   async "toggle Slim marker cycles lines but not engine bodies"() {
