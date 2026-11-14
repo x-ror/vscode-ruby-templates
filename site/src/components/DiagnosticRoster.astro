@@ -93,12 +93,6 @@ const setting = (entry: Diagnostic) =>
                   <pre class="roster__setting" tabindex="0" role="region" aria-label="Setting to turn this check off"><code>{setting(entry)}</code></pre>
                 </div>
               </div>
-              {entry.formerly && (
-                <p class="roster__field">
-                  <strong class="roster__term">Earlier code</strong>{" "}
-                  <span class="roster__detail"><code>{entry.formerly}</code>, still accepted.</span>
-                </p>
-              )}
             </div>
           </article>
         ))}

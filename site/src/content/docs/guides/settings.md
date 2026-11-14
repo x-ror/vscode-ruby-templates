@@ -31,7 +31,7 @@ Editor settings for one template language use its language id, such as `[erb]`, 
 | `rubyTemplates.haml.diagnostics.enabled`     | `true`  | Show the language server's diagnostics in Haml files. Turn off to silence them all.          |
 | `rubyTemplates.slim.diagnostics.enabled`     | `true`  | Show the language server's diagnostics in Slim and Skim files. Turn off to silence them all. |
 
-Each `disabledDiagnostics` setting takes the rule names of that language's checks (`Html/ImgAlt`; the kebab-case codes of earlier versions still work); the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists them. [Errors as you type](/vscode-ruby-templates/guides/checks/#turning-checks-off) shows examples.
+Each `disabledDiagnostics` setting takes the rule names of that language's checks (`Html/ImgAlt`); the [diagnostics reference](/vscode-ruby-templates/reference/diagnostics/) lists them. [Errors as you type](/vscode-ruby-templates/guides/checks/#turning-checks-off) shows examples.
 
 ## Formatting
 
