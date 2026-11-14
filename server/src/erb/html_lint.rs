@@ -46,7 +46,9 @@ pub fn non_markup(text: &str) -> Vec<(usize, usize)> {
             let mut body = i + 1;
             while let Some(gt) = text[body..].find(['>', '<']).map(|e| body + e) {
                 if text[gt..].starts_with("<%") {
-                    body = till("%>", gt + 2);
+                    let end = till("%>", gt + 2);
+                    out.push((gt, end));
+                    body = end;
                     continue;
                 }
                 body = gt + 1;
@@ -213,18 +215,26 @@ fn quoted_end(text: &str, regions: &[(usize, usize)], pos: usize, quote: char) -
 
 /// `image_tag` calls in output tags whose options give no `alt:` (a `**splat` may).
 fn image_tags_without_alt<'a>(text: &'a str, spans: &'a [(usize, usize)], index: &'a LineIndex) -> impl Iterator<Item = Diagnostic> + 'a {
-    spans.iter().filter_map(move |&(s, e)| {
+    spans.iter().flat_map(move |&(s, e)| {
         let code = &text[s..e.min(text.len())];
-        let call = IMAGE_TAG.find(code)?;
-        (!ALT_OPTION.is_match(&code[call.end()..])).then(|| {
+        IMAGE_TAG.find_iter(code).filter_map(move |call| {
+            if crate::ruby::code_end(&code[..call.start()]) != crate::ruby::CodeEnd::Code {
+                return None;
+            }
+            let rest = &code[call.end()..];
+            let args =
+                if rest.starts_with('(') { crate::util::find_balanced(rest, '(', ')').map_or(rest, |end| &rest[..end]) } else { rest };
+            if ALT_OPTION.is_match(args) {
+                return None;
+            }
             let range = index.range(s + call.start(), s + call.end());
             let found = coded(warning(range, format!("`image_tag` without `alt:`: {ALT_RULE}")), code::IMG_MISSING_ALT);
             let call_code = code.strip_suffix('%').unwrap_or(code)[call.start()..].trim_end();
             let end = image_tag_arguments_end(call_code).map(|end| index.position(s + call.start() + end));
-            match end {
+            Some(match end {
                 Some(end) => with_data(found, serde_json::json!({ "edit": TextEdit::new(Range::new(end, end), ", alt: \"\"".into()) })),
                 None => found,
-            }
+            })
         })
     })
 }
@@ -272,14 +282,33 @@ fn template_bodies(text: &str, regions: &[(usize, usize)]) -> Vec<(usize, usize)
     let mut at = 0;
     while let Some(open) = lower[at..].find("<template").map(|i| at + i) {
         at = open + 1;
-        if inside(regions, open) {
+        if inside(regions, open) || !names_tag(&lower[open + 1..], "template") {
             continue;
         }
-        let close = lower[open..].find("</template").map_or(text.len(), |e| open + e);
+        let close = template_end(&lower, regions, open);
         out.push((open, close));
         at = close.max(at);
     }
     out
+}
+
+/// Where the `<template>` opened at `open` ends: its own end tag, not one of a template nested in it.
+fn template_end(lower: &str, regions: &[(usize, usize)], open: usize) -> usize {
+    let mut depth = 0usize;
+    for (at, _) in lower[open..].match_indices('<').map(|(i, m)| (open + i, m)) {
+        if inside(regions, at) {
+            continue;
+        }
+        if names_tag(&lower[at + 1..], "template") {
+            depth += 1;
+        } else if lower[at + 1..].starts_with('/') && names_tag(&lower[at + 2..], "template") {
+            depth -= 1;
+            if depth == 0 {
+                return at;
+            }
+        }
+    }
+    lower.len()
 }
 
 /// Any ERB control flow (`if`, `else`, `when`, a loop) between the two offsets, which may render only one of them.
@@ -364,8 +393,33 @@ mod tests {
         let text = "<p><%# c %><!-- x --><script type=\"<%= t %>\">a < b</script><b>";
         let regions = non_markup(text);
         let at = |needle: &str| text.find(needle).unwrap();
-        assert!(inside(&regions, at("c %")) && inside(&regions, at("x --")) && inside(&regions, at("a < b")));
+        assert!(
+            inside(&regions, at("c %")) && inside(&regions, at("x --")) && inside(&regions, at("a < b")) && inside(&regions, at("t %"))
+        );
         assert!(!inside(&regions, at("<p>")) && !inside(&regions, at("<b>")) && !inside(&regions, at("</script>")));
         assert!(inside(&non_markup("<style>.a{"), 9));
+    }
+
+    #[test]
+    fn template_tags_end_at_their_own_end_tag() {
+        assert_eq!(codes("<template-card><div id=\"a\"></div></template-card><div id=\"a\"></div>"), [(0, code::DUPLICATE_ID.to_string())]);
+        let nested =
+            "<template><template><div id=\"b\"></div></template><div id=\"c\"></div></template><div id=\"b\"></div><div id=\"c\"></div>";
+        assert!(codes(nested).is_empty());
+    }
+
+    #[test]
+    fn every_image_tag_call_is_checked_in_code_only() {
+        assert_eq!(codes("<%= image_tag(\"a.png\") + image_tag(\"b.png\", alt: \"B\") %>"), [(0, code::IMG_MISSING_ALT.to_string())]);
+        assert_eq!(codes("<%= image_tag(\"a.png\", alt: \"A\") + image_tag(\"b.png\") %>").len(), 1);
+        assert!(codes("<%= \"image_tag('a.png')\" %>\n<%= x # image_tag(\"a.png\") %>").is_empty());
+        let fixed = |text: &str| {
+            let second = diagnostics(text).remove(1);
+            crate::util::edited(text, &crate::util::data_edit(&second).unwrap())
+        };
+        assert_eq!(
+            fixed("<%= image_tag(\"a.png\") + image_tag(\"b.png\") %>"),
+            "<%= image_tag(\"a.png\") + image_tag(\"b.png\", alt: \"\") %>"
+        );
     }
 }

@@ -73,20 +73,37 @@ fn in_start_tag(head: &str, regions: &[(usize, usize)]) -> bool {
     quote.is_none()
 }
 
+fn mask(text: &str, regions: &[(usize, usize)]) -> Vec<u8> {
+    let mut bytes = text.as_bytes().to_vec();
+    for &(start, end) in regions {
+        bytes[start..end.min(text.len())].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = tags::ERB_FILL);
+    }
+    bytes
+}
+
+/// Where the tag whose name ends at `from` ends, and whether it is self-closing; `None` while it is still being typed
+/// (`<a hre`: no `>` before the next tag). `masked` has its ERB tags and non-markup blanked.
+fn start_tag_end(masked: &[u8], from: usize) -> Option<(usize, bool)> {
+    let tag = tags::tag_end(masked, from)?;
+    let in_quote = |at: usize| tag.quoted.iter().any(|&(start, end)| (start..end).contains(&at));
+    let opens_other_tag = (from..tag.end).any(|at| masked[at] == b'<' && !in_quote(at));
+    (!opens_other_tag).then_some((tag.end, tag.self_closing))
+}
+
 /// The innermost element still open at the end of `before`, by a plain scan of its markup.
 fn open_element(before: &str) -> Option<String> {
     let regions = non_markup(before);
+    let masked = mask(before, &regions);
     let mut stack: Vec<String> = Vec::new();
+    let mut resume = 0;
     for cap in TAG.captures_iter(before) {
         let (Some(whole), Some(name)) = (cap.get(0), cap.get(2)) else { continue };
-        if inside(&regions, whole.start()) {
+        if whole.start() < resume || inside(&regions, whole.start()) {
             continue;
         }
         let name = name.as_str().to_ascii_lowercase();
-        let rest = &before[whole.end()..];
-        // A start tag still being typed (`<a hre`) has no `>` before the next tag.
-        let Some(gt) = rest.find('>').filter(|&gt| !rest[..gt].contains('<')) else { continue };
-        let self_closing = tags::tag_end(&rest.as_bytes()[..=gt], 0).is_some_and(|tag| tag.self_closing);
+        let Some((tag_end, self_closing)) = start_tag_end(&masked, whole.end()) else { continue };
+        resume = tag_end;
         if &cap[1] == "/" {
             if let Some(at) = stack.iter().rposition(|open| *open == name) {
                 stack.truncate(at);
@@ -169,6 +186,9 @@ mod tests {
         assert_eq!(close("<div><i />"), ["div>"]);
         assert_eq!(close("<%# <section> %><div><p></p>"), ["div>"]);
         assert_eq!(close("<section>\n  <butt\n  <a hre\n  "), ["section>"]);
+        assert_eq!(close("<div title=\"<b>\"><p></p></"), ["div>"]);
+        assert_eq!(close("<div <%= attrs if a > b %>><p></p></"), ["div>"]);
+        assert_eq!(close("<section><a href=<%= u %>/>y"), ["a>"]);
     }
 
     #[test]

@@ -328,11 +328,7 @@ fn tokens_of<'a>(text: &'a str, analyzed: &[(erb::ruby::ErbTag<'a>, BlockEffect)
         if closing {
             tokens.push(Token::Close { tag, quoted });
         } else if TEXT_ELEMENTS.contains(&tag.name.as_str()) && !self_closing {
-            let close = format!("</{}", tag.name);
-            let close = find(&html, end, close.as_bytes()).map(|close_start| {
-                let after = close_start + close.len();
-                (close_start, after + (html.get(after) == Some(&b'>')) as usize)
-            });
+            let close = find_raw_close(&html, end, &tag.name);
             i = close.map_or(html.len(), |(_, close_end)| close_end);
             tokens.push(Token::Raw { tag, close });
         } else {
@@ -349,11 +345,31 @@ fn find(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     hay.get(from..)?.windows(needle.len()).position(|w| w == needle).map(|p| p + from)
 }
 
-pub(crate) struct TagEnd {
-    end: usize,
-    pub(crate) self_closing: bool,
-    quoted: Vec<(usize, usize)>,
+/// The end tag of a raw-text element: `</name` followed by whitespace, `/` or `>`, so `</style-guide>` doesn't end a
+/// `<style>`. Returns where it starts and ends.
+fn find_raw_close(html: &[u8], from: usize, name: &str) -> Option<(usize, usize)> {
+    let close = format!("</{name}");
+    let mut search = from;
+    while let Some(close_start) = find(html, search, close.as_bytes()) {
+        let after = close_start + close.len();
+        if html.get(after).is_none_or(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/')) {
+            let end = html[after..].iter().position(|&b| b == b'>' || b == b'<').map_or(html.len(), |p| after + p);
+            let close_end = if html.get(end) == Some(&b'>') { end + 1 } else { after };
+            return Some((close_start, close_end));
+        }
+        search = after;
+    }
+    None
 }
+
+pub(crate) struct TagEnd {
+    pub(crate) end: usize,
+    pub(crate) self_closing: bool,
+    pub(crate) quoted: Vec<(usize, usize)>,
+}
+
+/// Blanks an ERB tag in HTML bytes. Not a space: the ERB stays an unquoted attribute value ending at the next space.
+pub(crate) const ERB_FILL: u8 = b'~';
 
 /// Byte offset just past the `>` closing a tag (skipping quoted attribute values), whether it is
 /// self-closing, and the quoted values' spans. A `/` ending an unquoted value (`<a href=/>`) belongs to the
@@ -401,7 +417,8 @@ fn split<'a>(
     let mut html = text.as_bytes().to_ascii_lowercase();
     let mut events = Vec::new();
     for (tag, effect) in analyzed.iter().filter(|(t, _)| !t.is_literal()) {
-        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = b' ');
+        let fill = if tag.is_comment() { b' ' } else { ERB_FILL };
+        html[tag.start..tag.end].iter_mut().filter(|b| **b != b'\n').for_each(|b| *b = fill);
         let (effect, keyword, code) = if tag.is_comment() {
             (BlockEffect::Neutral, "", "")
         } else {
@@ -1031,5 +1048,18 @@ mod tests {
     fn broken_erb_is_skipped() {
         assert!(diagnostics("<div><% if a %>").is_empty());
         assert!(diagnostics("<div><% foo").is_empty());
+    }
+
+    #[test]
+    fn a_space_ends_an_erb_attribute_value() {
+        assert!(diagnostics("<div><x-card class=<%= x %> /></div>").is_empty());
+        assert_eq!(messages("<div><x-card class=<%= x %>/></div>").len(), 1, "the slash is part of the value");
+    }
+
+    #[test]
+    fn a_raw_text_element_ends_at_its_own_end_tag() {
+        assert!(diagnostics("<style>.a{}</style-guide><b></b></style>").is_empty());
+        assert_eq!(messages("<style>.a{}</style-guide></style><div>"), ["`<div>` is never closed (HTML 13.2.6.4.7)"]);
+        assert!(diagnostics("<script>a</script\n><div></div>").is_empty());
     }
 }
