@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0
+
+- The server registers its formatters itself: document formatting for ERB, Haml, Slim and Skim, Format Selection for ERB and Haml. Slim and Skim get no Format Selection, since re-indenting only the selected lines would change which element a line belongs to.
+- Toggle Slim Tag and Wrap in Slim work in Skim files too. The editing shortcuts (toggle and wrap for ERB, Haml and Slim) do nothing in read-only editors.
+- `ruby-templates format --check` exits 1 when a `.ruby-templates.toml` has a problem, and prints the problems as annotations with `--format github`. Formatting to stdout, with `--stdin-filepath` or with `--write` still exits 0, so editors keep the formatted text.
+- `.editorconfig` globs read nested braces, `[...]` classes and `\,` inside braces like editorconfig-core; a brace without a comma (`{x*}`) is a literal `{`.
+- An empty table for a known section (`[erb.format]`, `format = {}`) is no longer reported as an unknown key; an empty table nothing knows still is.
+- Converting a template no longer overwrites a document that changed while the conversion ran, and says so instead. Preview and conversion of an untitled template with no folder open run in the home folder instead of failing.
+- ERB: `</` completion closes the right element after attributes with quotes or ERB (`<div title="<b>">`, `<div <%= attrs if a > b %>>`). `Html/ImgAlt` checks every `image_tag` on a line, not ones inside strings or comments. `<template-card>` is not taken for `<template>`, and `<style-guide>` or `</style-guide>` doesn't end a `<style>`. A space ends an unquoted ERB attribute value (`class=<%= x %> />`). The formatter's blank-line rules see what a line's tags leave open, so `<div><pre>x</pre>` still opens the div.
+- Haml: `$"`, `$'` and `` $` `` in a multi-line attribute hash no longer report "Unbalanced brackets.".
+- Slim: tag names with non-ASCII letters (`.café(a=1` continued on the next line, `.café/`) are read like ASCII ones.
+- Rails i18n: a `|` or `>` block under a key that isn't read (dotted, merge, alias, flow) no longer becomes part of the previous translation.
+- Stimulus: an escaped quote in a Haml or Slim attribute value (`title="a\""`) no longer hides the element's controller.
+
 ## 0.15.0
 
 - Signature help for Rails helpers and the app's own helpers in `app/helpers`: typing `(`, `,` or a space after `link_to "Users"` in ERB, Haml and Slim code shows the signature with the current parameter highlighted, counting commas outside strings, hashes, arrays and nested calls, and following `key:` to its keyword or `**options`. Inside a nested call, the innermost known helper is shown.
