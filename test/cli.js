@@ -822,6 +822,39 @@ try {
     "--format github needs --check",
   );
 
+  // A config problem fails only --check; output meant for an editor keeps its exit code.
+  const broken_config = path.join(root, "config");
+  fs.mkdirSync(broken_config);
+  fs.writeFileSync(
+    path.join(broken_config, ".ruby-templates.toml"),
+    "root = true\n[UnknownDept]\n",
+  );
+  const configured = path.join(broken_config, "a.html.erb");
+  fs.writeFileSync(configured, "<p>hi</p>\n");
+  r = run(["format", "--check", configured]);
+  assert.strictEqual(r.status, 1, "--check fails on a config problem");
+  assert.match(
+    r.stderr,
+    /\.ruby-templates\.toml:2:2: warning: unknown department `UnknownDept`/,
+  );
+  r = run(
+    ["format", "--check", "--format", "github", configured],
+    undefined,
+    broken_config,
+  );
+  assert.strictEqual(r.status, 1);
+  assert.match(
+    r.stdout,
+    /^::warning file=\.ruby-templates\.toml,line=2,col=2,.*title=/,
+  );
+  r = run(["format", configured]);
+  assert.strictEqual(r.status, 0, "stdout output keeps exit 0");
+  assert.strictEqual(r.stdout, "<p>hi</p>\n");
+  assert.match(r.stderr, /unknown department/);
+  r = run(["format", "--stdin-filepath", configured], "<p>hi</p>\n");
+  assert.strictEqual(r.status, 0, "stdin output keeps exit 0");
+  assert.strictEqual(r.stdout, "<p>hi</p>\n");
+
   console.log("cli ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

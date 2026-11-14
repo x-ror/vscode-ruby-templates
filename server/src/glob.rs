@@ -32,16 +32,34 @@ impl Glob {
     }
 }
 
-/// The index of the first unescaped `close` at or after `from`, counting `open` pairs when given.
-fn find_closing(chars: &[char], from: usize, open: Option<char>, close: char) -> Option<usize> {
-    let mut depth = 0;
-    let mut i = from;
+/// The index of `]` closing a character class `[` at `open`, when valid (no `/`).
+fn closing_class(chars: &[char], open: usize) -> Option<usize> {
+    let mut i = open + 1;
     while i < chars.len() {
         match chars[i] {
             '\\' => i += 1,
-            c if Some(c) == open => depth += 1,
-            c if c == close && depth <= 1 => return Some(i),
-            c if c == close => depth -= 1,
+            ']' => return Some(i),
+            '/' => return None,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The `}` closing the `{` at `open` (nested braces, classes and `\x` escapes skipped) and whether it has a top-level comma.
+fn closing_brace(chars: &[char], open: usize) -> Option<(usize, bool)> {
+    let mut depth = 0;
+    let mut comma = false;
+    let mut i = open;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            '[' => i = closing_class(chars, i).unwrap_or(i),
+            '{' => depth += 1,
+            '}' if depth == 1 => return Some((i, comma)),
+            '}' => depth -= 1,
+            ',' if depth == 1 => comma = true,
             _ => {}
         }
         i += 1;
@@ -77,7 +95,7 @@ fn glob_regex(glob: &str) -> Option<(Regex, Vec<(i64, i64)>)> {
     let mut re = String::from("^");
     let chars: Vec<char> = glob.chars().collect();
     let mut i = 0;
-    let mut braces = 0;
+    let mut brace_ends: Vec<usize> = Vec::new();
     while i < chars.len() {
         match chars[i] {
             '*' if i == 0 && chars[1..].starts_with(&['*', '/']) => {
@@ -94,34 +112,33 @@ fn glob_regex(glob: &str) -> Option<(Regex, Vec<(i64, i64)>)> {
                 re.push_str("(?:/|/.*/)");
                 i += 3;
             }
-            '[' => match find_closing(&chars, i + 1, None, ']').filter(|&close| !chars[i..close].contains(&'/')) {
+            '[' => match closing_class(&chars, i) {
                 Some(close) => {
                     re.push_str(&format!("[{}]", class_body(&chars[i + 1..close])));
                     i = close;
                 }
                 None => re.push_str("\\["),
             },
-            '{' => match find_closing(&chars, i, Some('{'), '}') {
-                Some(close) => {
+            '{' => match closing_brace(&chars, i) {
+                Some((close, has_comma)) => {
                     let inner: String = chars[i + 1..close].iter().collect();
                     if let Some((a, b)) = inner.split_once("..").and_then(|(a, b)| Some((a.parse::<i64>().ok()?, b.parse::<i64>().ok()?))) {
                         ranges.push((a.min(b), a.max(b)));
                         re.push_str("(-?(?:0|[1-9][0-9]*))");
                         i = close;
-                    } else if inner.contains(',') {
+                    } else if has_comma {
                         re.push_str("(?:");
-                        braces += 1;
+                        brace_ends.push(close);
                     } else {
-                        re.push_str(&regex::escape(&format!("{{{inner}}}")));
-                        i = close;
+                        re.push_str("\\{");
                     }
                 }
                 None => re.push_str("\\{"),
             },
-            ',' if braces > 0 => re.push('|'),
-            '}' if braces > 0 => {
+            ',' if !brace_ends.is_empty() => re.push('|'),
+            '}' if brace_ends.last() == Some(&i) => {
                 re.push(')');
-                braces -= 1;
+                brace_ends.pop();
             }
             '\\' if i + 1 < chars.len() => {
                 re.push_str(&regex::escape(&chars[i + 1].to_string()));
@@ -295,6 +312,16 @@ mod tests {
             ("{-3..3}", "-03", false),
             ("{1..9}", "010", false),
             ("{a..c}.x", "a..c.x", false),
+            ("{a{b,c}}.x", "{ab}.x", true),
+            ("{a{b,c}}.x", "{ac}.x", true),
+            ("{a{b,c}}.x", "ab.x", false),
+            ("{[a,b]}.x", "{a}.x", true),
+            ("{[a,b]}.x", "a.x", false),
+            ("{[}a],b}.x", "}.x", true),
+            ("{a\\,b}.x", "{a,b}.x", true),
+            ("{a\\,b}.x", "a.x", false),
+            ("{x*}.c", "{xyz}.c", true),
+            ("{x*}.c", "xyz.c", false),
         ]);
     }
 

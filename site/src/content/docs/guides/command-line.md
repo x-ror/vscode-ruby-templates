@@ -41,7 +41,7 @@ Without `--check` or `--write`, the result goes to standard output. A file whose
 
 | Option                    | What it does                                                                                                                               |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--check`                 | Lists the files that would change; exits with 1 if any                                                                                     |
+| `--check`                 | Lists the files that would change; exits with 1 if any, or if a `.ruby-templates.toml` has problems                                        |
 | `--write`                 | Writes the formatted files                                                                                                                 |
 | `--verbose`               | Also prints the settings, and the `.editorconfig` and `.ruby-templates.toml` files used                                                    |
 | `--align-comments`        | Moves the lines inside ERB comments with the line the comment opens on; it can only turn this on, over `format.align_comments` in the file |
@@ -54,7 +54,7 @@ npx ruby-templates format --verbose --check app/views   # also the settings and 
 
 ## Configuration
 
-Both commands read the `.ruby-templates.toml` files above each template, as the editor does: rules turned off, files excluded, `[erb] format.enabled = false`, `format.align_comments`, `extra_engines`. The [rules reference](/vscode-ruby-templates/reference/rules/#configuration) describes the file. `format --verbose` also prints each file read and its problems; an excluded file is reported as `left unchanged: excluded by <file>`.
+Both commands read the `.ruby-templates.toml` files above each template, as the editor does: rules turned off, files excluded, `[erb] format.enabled = false`, `format.align_comments`, `extra_engines`. The [rules reference](/vscode-ruby-templates/reference/rules/#configuration) describes the file. `format` prints a file's problems once on standard error and fails only with `--check`, never when it prints the result for an editor (`--check --format github` annotates them). `format --verbose` also prints each file read; an excluded file is reported as `left unchanged: excluded by <file>`.
 
 ## Files and folders
 
