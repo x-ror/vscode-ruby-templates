@@ -440,3 +440,15 @@ assert.ok(errorPage("T", "d", "<hint>").includes("&lt;hint&gt;"));
     assert.ok(when.includes("skim"), `${command}: ${when}`);
   }
 }
+
+// Editing keybindings stay off in read-only editors
+{
+  const { contributes } = JSON.parse(
+    fs.readFileSync(path.join(import.meta.dirname, "../package.json"), "utf8"),
+  );
+  const editing = /toggle|wrapIn/;
+  for (const { command, when } of contributes.keybindings) {
+    if (!editing.test(command)) continue;
+    assert.ok(when.includes("!editorReadonly"), `${command}: ${when}`);
+  }
+}

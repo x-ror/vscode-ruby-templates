@@ -498,31 +498,31 @@
         "command": "rubyTemplates.toggleErbTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.toggleHamlPrefix",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId == haml"
+        "when": "editorTextFocus && !editorReadonly && editorLangId == haml"
       },
       {
         "command": "rubyTemplates.toggleSlimTag",
         "key": "ctrl+alt+e",
         "mac": "cmd+alt+e",
-        "when": "editorTextFocus && editorLangId =~ /^(slim|skim)$/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^(slim|skim)$/"
       },
       {
         "command": "rubyTemplates.wrapInErb",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId =~ /^erb/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^erb/"
       },
       {
         "command": "rubyTemplates.wrapInSlim",
         "key": "ctrl+alt+w",
         "mac": "cmd+alt+w",
-        "when": "editorTextFocus && editorLangId =~ /^(slim|skim)$/"
+        "when": "editorTextFocus && !editorReadonly && editorLangId =~ /^(slim|skim)$/"
       },
       {
         "command": "rubyTemplates.preview",
