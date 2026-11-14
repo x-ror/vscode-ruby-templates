@@ -231,8 +231,12 @@ pub fn indented_element(before: &str) -> &str {
 /// Whether `text` leaves a bracket open, counting none inside quotes.
 fn unclosed(text: &str) -> bool {
     let (mut depth, mut quote) = (0i32, None);
-    for c in text.chars() {
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
         match (quote, c) {
+            (Some(_), '\\') => {
+                chars.next();
+            }
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '\'') => quote = Some(c),
@@ -816,5 +820,12 @@ export default class extends Controller {
             assert!(resolve(&current, id).is_empty(), "{id}");
         }
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unclosed_skips_escaped_quotes() {
+        assert!(!unclosed("(\"\\\"\")"));
+        let before = "%div(\n  title=\"a\\\"\"\n  data-c";
+        assert!(indented_element(before).starts_with("%div("));
     }
 }
