@@ -6,6 +6,8 @@ use crate::slim;
 use crate::slim::parser::{indent_width, Piece};
 use crate::util::BOM;
 use crate::util::{balanced_across_lines, coded, error, leading_ws, span_range, warning};
+use regex::Regex;
+use std::sync::LazyLock;
 use tower_lsp_server::ls_types::Diagnostic;
 
 /// Stable diagnostic codes; `rubyTemplates.slim.disabledDiagnostics` refers to these.
@@ -253,22 +255,16 @@ fn is_explicit_end(code: &str) -> bool {
     code.trim_start().strip_prefix("end").is_some_and(|after| after.chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_')))
 }
 
+/// Slim's tag name characters: `\w` is Unicode-aware, so `café` and NFD `cafe\u{301}` both match.
+static TAG_HEAD_NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\A[\w%.#:-]+").unwrap());
+
 /// Skip over `tag.class#id attr=val (...)`, validating bracket balance (possibly across lines).
 /// Returns the remainder and lines consumed.
 fn skip_tag_head(lines: &[&str], i: usize) -> (String, usize) {
     let raw = lines[i];
     let mut consumed = 1;
     let mut s: String = raw.trim_start().to_string();
-    let mut pos = 0usize;
-    let b = s.as_bytes();
-    while pos < b.len() {
-        let ch = b[pos] as char;
-        if ch.is_ascii_alphanumeric() || matches!(ch, '%' | '.' | '#' | '-' | '_' | ':') {
-            pos += 1;
-        } else {
-            break;
-        }
-    }
+    let mut pos = TAG_HEAD_NAME.find(&s).map_or(0, |m| m.end());
     // Slim: `li: a ...` — the colon ends the head; treat the rest as content
     loop {
         let b = s.as_bytes();
@@ -787,6 +783,11 @@ mod tests {
     #[test]
     fn non_ascii_text_after_tag() {
         assert!(slim("p Größe\np ü\nspan.x ä=1 b\n").is_empty());
+        assert!(slim(".café(a=1\n  b=2)\n  p ok\n").is_empty());
+        assert!(slim(".cafe\u{301}(a=1\n  b=2)\n  p ok\n").is_empty());
+        let closed = diagnostics(".café/\n  p\n", &[]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].message, "Unexpected indentation");
     }
 
     #[test]
