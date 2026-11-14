@@ -823,6 +823,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inline_script_and_style_helpers_without_a_block_are_indented() {
+        for helper in ["tag.style x", "tag.script(src: x)", "javascript_tag \"x\"", "content_tag :script, x"] {
+            let out = indent(&format!("<div>\n<%= {helper} %>\n</div>\n"), "  ", false).unwrap();
+            assert_eq!(out.text, format!("<div>\n  <%= {helper} %>\n</div>\n"), "{helper}");
+        }
+    }
+
     fn with_blank_lines(text: &str, settings: &Settings) -> String {
         let indented = indent(text, "  ", false).unwrap();
         crate::format::blank_lines::apply(&indented.text, &indented.lines, settings, text)
