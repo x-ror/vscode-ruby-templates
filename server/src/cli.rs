@@ -297,8 +297,8 @@ struct Checked {
     /// The problems of each `.ruby-templates.toml` the file uses; the printer shows a file's once, with its first template.
     config: Vec<(PathBuf, Rendered)>,
     stderr: String,
-    /// The Rails-looking app the file is in when it has no `Gemfile.lock`; the printer notes each app once.
-    unlocked_app: Option<PathBuf>,
+    /// The Rails-looking app the file is in when it has no `Gemfile.lock`, and its name for the note; the printer notes each app once.
+    unlocked_app: Option<(PathBuf, PathBuf)>,
     code: i32,
 }
 
@@ -331,9 +331,15 @@ fn check_file(
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = absolute_file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     // Every worker's projects of one app share its view roots.
-    let project = Project::memoized(projects, path, Some(view_roots));
+    // The path as the diagnostics see it, so a relative `check x/f.erb` finds the app above the working folder.
+    let real = util::file_path(&uri).unwrap_or_else(|| path.to_path_buf());
+    let project = Project::memoized(projects, &real, Some(view_roots));
     let mut checked = Checked::new(OK);
-    checked.unlocked_app = project.rails_root_without_lockfile(path);
+    checked.unlocked_app = project.rails_root_without_lockfile(&real).map(|app| {
+        let shown = shown_path(&app, output.cwd);
+        let shown = if shown.as_os_str().is_empty() { Path::new(".") } else { shown };
+        (app.clone(), shown.to_path_buf())
+    });
     let rules = resolve(&uri, lang, &Options::default(), configs);
     for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
         let rendered = render_config_problems(file, output);
@@ -387,8 +393,8 @@ fn print_in_order(results: mpsc::Receiver<(usize, Checked)>, format: Format) -> 
             next += 1;
             code = code.max(checked.code);
             let mut stderr = checked.stderr;
-            if let Some(app) = checked.unlocked_app.filter(|app| noted_apps.insert(app.clone())) {
-                stderr.push_str(&missing_lockfile_note(&app));
+            if let Some((_, shown)) = checked.unlocked_app.filter(|(app, _)| noted_apps.insert(app.clone())) {
+                stderr.push_str(&missing_lockfile_note(&shown));
             }
             let new_config = checked.config.into_iter().filter(|(path, _)| reported.insert(path.clone()));
             let shown: Vec<Rendered> = new_config.map(|(_, rendered)| rendered).chain([checked.rendered]).collect();
@@ -485,7 +491,7 @@ fn format_text(
         (Some(uri), Some(lang)) => {
             let rules = resolve(&uri, lang, &Options::default(), configs);
             let resolved = config::settings_for(&util::file_path(&uri).unwrap_or_else(|| path.to_path_buf()));
-            let mut settings = rules.format_settings(resolved.settings);
+            let mut settings = rules.format_settings(resolved.settings, resolved.insert_final_newline);
             settings.align_comments |= args.align_comments;
             if args.verbose {
                 print_verbose(&shown.to_string(), &settings, &resolved.notes, (&rules, cwd));

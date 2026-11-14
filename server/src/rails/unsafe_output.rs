@@ -210,20 +210,35 @@ fn is_safe(source: &str, expression: &Node) -> bool {
     escapes || (is_tag_builder && TAG_BUILDER_ELEMENTS.contains(&name.as_ref()))
 }
 
+/// Escapers for a JavaScript string, which leave `<` alone: not safe inside HTML.
+const JS_ESCAPERS: &[&str] = &["j", "escape_javascript"];
+
 /// A part of a string literal that adds nothing unsafe: text, or `#{…}` of a safe expression (`"#{h(name)}"`).
 fn is_safe_part(source: &str, part: &Node) -> bool {
     if part.as_string_node().is_some() {
         return true;
     }
+    if let Some(nested) = part.as_interpolated_string_node() {
+        return nested.parts().iter().all(|part| is_safe_part(source, &part));
+    }
     let Some(statements) = part.as_embedded_statements_node().and_then(|embedded| embedded.statements()) else { return false };
     let mut body = statements.body().iter();
     let (Some(only), None) = (body.next(), body.next()) else { return false };
-    is_safe(source, &unwrapped(only))
+    let only = unwrapped(only);
+    let js_escaper = only
+        .as_call_node()
+        .is_some_and(|call| call.receiver().is_none() && JS_ESCAPERS.iter().any(|name| call.name().as_slice() == name.as_bytes()));
+    !js_escaper && is_safe(source, &only)
 }
 
 /// `truncate` escapes its result (a `SafeBuffer`) unless called with `escape: false`; options it can't read are not trusted.
 fn truncate_escapes(call: &CallNode) -> bool {
     let Some(arguments) = call.arguments() else { return false };
+    // A splat or `...` may carry `escape: false`.
+    if arguments.arguments().iter().any(|argument| argument.as_splat_node().is_some() || argument.as_forwarding_arguments_node().is_some())
+    {
+        return false;
+    }
     let options = arguments.arguments().iter().skip(1);
     options.into_iter().all(|option| {
         let Some(hash) =
@@ -449,6 +464,14 @@ mod tests {
             "<%= truncate(@x, escape: false).html_safe %>\n<%= truncate(@x, opts).html_safe %>\n<%= truncate(@x, **opts).html_safe %>\n\
                                 <%= truncate(@x, escape: @e).html_safe %>\n<%= @x.truncate(5).html_safe %>\n";
         assert_eq!(flagged(Erb, unsafe_truncates), ["html_safe"; 5]);
+    }
+
+    #[test]
+    fn js_escapers_splats_and_nested_literals_in_safe_strings() {
+        let unsafe_cases = "<%= \"<p>#{j(@q)}</p>\".html_safe %>\n<%= \"<p>#{escape_javascript(@q)}</p>\".html_safe %>\n\
+                            <%= truncate(*args).html_safe %>\n<%= truncate(@x, *opts).html_safe %>\n<%= (\"a\" \"#{@y}\").html_safe %>\n";
+        assert_eq!(flagged(Erb, unsafe_cases), ["html_safe"; 5]);
+        assert!(flagged(Erb, "<%= (\"a\" \"#{h @y}\").html_safe %>\n").is_empty());
     }
 
     #[test]

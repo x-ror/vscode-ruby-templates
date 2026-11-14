@@ -216,11 +216,11 @@ impl ResolvedRules {
         &self.files
     }
 
-    pub fn format_settings(&self, base: Settings) -> Settings {
+    pub fn format_settings(&self, base: Settings, insert_final_newline: bool) -> Settings {
         Settings {
             align_comments: self.align_comments,
             max_empty_lines: self.max_empty_lines,
-            trailing_empty_lines: if base.insert_final_newline {
+            trailing_empty_lines: if insert_final_newline {
                 self.trailing_empty_lines_with_final_newline
             } else {
                 self.trailing_empty_lines
@@ -479,14 +479,14 @@ mod tests {
             "haml": { "diagnostics": { "enabled": false }, "disabledDiagnostics": ["Syntax/Template"] },
         }));
         let erb = project.resolve("a.html.erb", TemplateLang::Erb, &settings);
-        assert!(erb.format_enabled() && erb.reports(IMG) && !erb.format_settings(Settings::default()).align_comments);
+        assert!(erb.format_enabled() && erb.reports(IMG) && !erb.format_settings(Settings::default(), false).align_comments);
         let slim = project.resolve("b.html.slim", TemplateLang::Slim, &settings);
         assert_eq!(slim.extra_engines(), ["mjml"]);
         assert!(!slim.diagnostics_enabled(), "silent in the file: the editor's switch applies");
         let haml = project.resolve("c.html.haml", TemplateLang::Haml, &settings);
         assert!(!haml.diagnostics_enabled() && !haml.reports("Syntax/Template"));
         let without = Project::new("editor-only", &[("a.html.erb", "")]).resolve("a.html.erb", TemplateLang::Erb, &settings);
-        assert!(!without.format_enabled() && !without.reports(IMG) && without.format_settings(Settings::default()).align_comments);
+        assert!(!without.format_enabled() && !without.reports(IMG) && without.format_settings(Settings::default(), false).align_comments);
     }
 
     #[test]
@@ -498,31 +498,30 @@ mod tests {
 
     #[test]
     fn editorconfig_final_newline_turns_trailing_empty_lines_on_unless_the_config_says_otherwise() {
-        let wants = Settings { insert_final_newline: true, ..Settings::default() };
         let project = Project::new("final-newline", &[("a.html.erb", "")]);
-        assert!(project.erb("a.html.erb").format_settings(wants.clone()).trailing_empty_lines, "off by default for ERB");
-        assert!(!project.erb("a.html.erb").format_settings(Settings::default()).trailing_empty_lines);
+        assert!(project.erb("a.html.erb").format_settings(Settings::default(), true).trailing_empty_lines, "off by default for ERB");
+        assert!(!project.erb("a.html.erb").format_settings(Settings::default(), false).trailing_empty_lines);
         let off = Project::new(
             "final-newline-off",
             &[(".ruby-templates.toml", "[Layout.TrailingEmptyLines]\nenabled = false\n"), ("a.html.erb", "")],
         );
-        assert!(!off.erb("a.html.erb").format_settings(wants).trailing_empty_lines, "the rule's own switch wins");
+        assert!(!off.erb("a.html.erb").format_settings(Settings::default(), true).trailing_empty_lines, "the rule's own switch wins");
     }
 
     #[test]
     fn formatting_rules_decode_into_the_settings() {
         let project = Project::new("format-rules", &[("a.html.erb", ""), ("b.html.slim", "")]);
-        let settings = project.erb("a.html.erb").format_settings(Settings::default());
+        let settings = project.erb("a.html.erb").format_settings(Settings::default(), false);
         assert_eq!((settings.max_empty_lines, settings.trailing_empty_lines), (None, false), "both off for ERB");
-        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
+        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default(), false);
         assert_eq!((slim.max_empty_lines, slim.trailing_empty_lines), (None, true), "TrailingEmptyLines on for Slim");
         let editor = editor(serde_json::json!({ "slim": { "disabledDiagnostics": ["Layout/TrailingEmptyLines"] } }));
-        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &editor).format_settings(Settings::default());
+        let slim = project.resolve("b.html.slim", TemplateLang::Slim, &editor).format_settings(Settings::default(), false);
         assert!(slim.trailing_empty_lines, "the editor's diagnostic list doesn't switch a formatting rule");
 
         let toml = "[Layout.EmptyLines]\nenabled = true\n[Layout.TrailingEmptyLines]\nenabled = false\n";
         let on = Project::new("format-rules-on", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
-        let settings = on.erb("a.html.erb").format_settings(Settings::default());
+        let settings = on.erb("a.html.erb").format_settings(Settings::default(), false);
         assert_eq!((settings.max_empty_lines, settings.trailing_empty_lines), (Some(1), false), "max defaults to 1");
 
         let files = [
@@ -533,26 +532,27 @@ mod tests {
             ("inner/b.html.slim", ""),
         ];
         let nested = Project::new("format-rules-nested", &files);
-        let max = |file: &str, lang| nested.resolve(file, lang, &Options::default()).format_settings(Settings::default()).max_empty_lines;
+        let max =
+            |file: &str, lang| nested.resolve(file, lang, &Options::default()).format_settings(Settings::default(), false).max_empty_lines;
         assert_eq!(max("a.html.erb", TemplateLang::Erb), Some(3), "the department switch turns a formatting rule on");
         assert_eq!(max("inner/a.html.erb", TemplateLang::Erb), Some(0), "the nearest file sets max");
         assert_eq!(max("inner/b.html.slim", TemplateLang::Slim), None, "its exclude");
         let toml = "[Layout]\nenabled = true\n[Layout.EmptyLinesAroundBranches]\nstyle = \"empty_lines\"\n[Layout.EmptyLinesAroundElementBody]\nenabled = false\n";
         let around = Project::new("format-rules-around", &[(".ruby-templates.toml", toml), ("a.html.haml", "")]);
-        let settings = around.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default());
+        let settings = around.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default(), false);
         let styles = (settings.around_block_body, settings.around_element_body, settings.around_branches);
         assert_eq!(styles, (Some(Style::NoEmptyLines), None, Some(Style::EmptyLines)), "no_empty_lines by default, off by enabled = false");
         let plain = Project::new("format-rules-around-off", &[("a.html.haml", "")]);
-        let settings = plain.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default());
+        let settings = plain.resolve("a.html.haml", TemplateLang::Haml, &Options::default()).format_settings(Settings::default(), false);
         assert_eq!((settings.around_block_body, settings.around_element_body, settings.around_branches), (None, None, None));
         let off = Project::new("format-rules-dept", &[(".ruby-templates.toml", "[Layout]\nenabled = false\n"), ("a.html.slim", "")]);
-        let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default());
+        let settings = off.resolve("a.html.slim", TemplateLang::Slim, &Options::default()).format_settings(Settings::default(), false);
         assert!(!settings.trailing_empty_lines, "the department switch turns an on-by-default rule off");
     }
 
     #[test]
     fn line_length_and_element_content_read_their_options() {
-        let settings = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default()).content_on_own_line;
+        let settings = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default(), false).content_on_own_line;
         let off = Project::new("options-off", &[("a.html.erb", "")]);
         assert_eq!((off.erb("a.html.erb").line_length(), settings(&off)), (None, None));
         let toml = "[Layout.LineLength]\nenabled = true\n[Layout.ElementContentOnOwnLine]\nenabled = true\n";
@@ -563,7 +563,7 @@ mod tests {
             "[Layout.LineLength]\nenabled = true\nmax = 80\n[Layout.ElementContentOnOwnLine]\nenabled = true\ntags = [\"P\", \"li\"]\n";
         let set = Project::new("options-set", &[(".ruby-templates.toml", toml), ("a.html.erb", "")]);
         assert_eq!((set.erb("a.html.erb").line_length(), settings(&set)), (Some(80), Some(vec!["p".to_string(), "li".to_string()])));
-        let per_line = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default()).attributes_per_line;
+        let per_line = |project: &Project| project.erb("a.html.erb").format_settings(Settings::default(), false).attributes_per_line;
         assert_eq!(per_line(&off), None);
         let default_limit =
             Project::new("per-line-on", &[(".ruby-templates.toml", "[Layout.AttributesPerLine]\nenabled = true\n"), ("a.html.erb", "")]);
@@ -579,7 +579,7 @@ mod tests {
     fn indentation_style_follows_the_file_then_the_base_and_trailing_whitespace_the_switch() {
         let style = |project: &Project, file: &str, lang, base: IndentStyle| {
             let base = Settings { indent_style: base, ..Settings::default() };
-            project.resolve(file, lang, &Options::default()).format_settings(base).indent_style
+            project.resolve(file, lang, &Options::default()).format_settings(base, false).indent_style
         };
         let silent = Project::new("indent-silent", &[("a.html.erb", "")]);
         assert_eq!(
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(style(&tabs, "b.html.haml", TemplateLang::Haml, IndentStyle::Tabs), IndentStyle::Spaces, "not a Haml rule");
 
         let trailing = |project: &Project, file: &str, lang| {
-            project.resolve(file, lang, &Options::default()).format_settings(Settings::default()).trailing_whitespace
+            project.resolve(file, lang, &Options::default()).format_settings(Settings::default(), false).trailing_whitespace
         };
         assert!(trailing(&silent, "a.html.erb", TemplateLang::Erb), "on by default");
         let no_trim = toml("[Layout.TrailingWhitespace]\nenabled = false\n");

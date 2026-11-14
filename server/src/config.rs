@@ -9,6 +9,8 @@ use std::path::Path;
 /// Settings for one file, and what was read or ignored to get them.
 pub struct Resolved {
     pub settings: Settings,
+    /// `insert_final_newline = true`: turns `Layout/TrailingEmptyLines` on where it is off by default (ERB).
+    pub insert_final_newline: bool,
     pub notes: Vec<String>,
 }
 
@@ -19,10 +21,9 @@ pub fn settings_for(path: &Path) -> Resolved {
     let settings = Settings {
         indent_size: indent_size(&properties).unwrap_or(defaults.indent_size),
         indent_style: indent_style(&properties).unwrap_or(defaults.indent_style),
-        insert_final_newline: property(&properties, "insert_final_newline") == Some("true"),
         ..defaults
     };
-    Resolved { settings, notes }
+    Resolved { settings, insert_final_newline: property(&properties, "insert_final_newline") == Some("true"), notes }
 }
 
 /// The `.editorconfig` properties that apply to `path`: files from the root (or the topmost `root = true`) down, later sections
@@ -205,7 +206,7 @@ mod tests {
     fn editorconfig_insert_final_newline_true_is_read() {
         let text = "[*.erb]\ninsert_final_newline = true\n[*.slim]\ninsert_final_newline = false\n";
         let project = Project::new("newline", &[(".editorconfig", text), ("a.html.erb", ""), ("b.html.slim", ""), ("c.html.haml", "")]);
-        let newline = |file: &str| project.settings(file).settings.insert_final_newline;
+        let newline = |file: &str| project.settings(file).insert_final_newline;
         assert_eq!((newline("a.html.erb"), newline("b.html.slim"), newline("c.html.haml")), (true, false, false));
         let notes = project.settings("a.html.erb").notes;
         assert!(notes.iter().all(|n| !n.contains("ignored")), "{notes:?}");

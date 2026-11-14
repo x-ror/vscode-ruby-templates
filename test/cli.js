@@ -66,6 +66,23 @@ try {
     lockNotes[0].includes(root) &&
       /Rails\/\*, Stimulus\/\* and Turbo\/\*/.test(lockNotes[0]),
   );
+  r = run(["check", "app/views/users/index.html.slim"], undefined, root);
+  assert.match(
+    r.stderr,
+    /^note: \. looks like a Rails app/,
+    "relative to the working folder",
+  );
+  const appViews = path.join(root, "app", "views");
+  for (const arg of [
+    "users/index.html.slim",
+    "../views/users/index.html.slim",
+  ]) {
+    r = run(["check", arg], undefined, appViews);
+    assert.ok(
+      r.stderr.startsWith(`note: ${root} looks like a Rails app`),
+      `${arg}\n${r.stderr}`,
+    );
+  }
   r = run(["check", "--format", "json", views]);
   assert.strictEqual(r.status, 1);
   assert.ok(
