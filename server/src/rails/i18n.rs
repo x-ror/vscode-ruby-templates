@@ -324,8 +324,8 @@ struct LocaleParser {
     // The valueless key a `- item` line right below it would belong to.
     list_key: Option<usize>,
     // Indent of the last key with a value or sequence item: deeper lines continue it (`|`/`>` blocks, wrapped
-    // scalars, item mappings), plus the quote of a quoted scalar still open.
-    scalar: Option<(usize, Option<char>)>,
+    // scalars, item mappings), the quote of a quoted scalar still open, and the entry its lines append to (none when the key is skipped).
+    scalar: Option<(usize, Option<char>, Option<usize>)>,
 }
 
 impl LocaleParser {
@@ -335,8 +335,8 @@ impl LocaleParser {
             return;
         }
         let indent = raw.len() - line.len();
-        if let Some((i, quote)) = self.scalar.filter(|&(i, _)| indent > i) {
-            self.continue_scalar(i, quote, line);
+        if let Some((i, quote, target)) = self.scalar.filter(|&(i, _, _)| indent > i) {
+            self.continue_scalar(i, quote, target, line);
             return;
         }
         self.scalar = None;
@@ -351,19 +351,18 @@ impl LocaleParser {
         self.key_line(n, indent, line);
     }
 
-    /// Appends a line deeper than the scalar opened at `indent` to the last entry's value.
-    fn continue_scalar(&mut self, indent: usize, quote: Option<char>, line: &str) {
-        // A sequence's parent key is a mapping (no value), so item lines append nothing.
-        let Some(value) = self.out.last_mut().and_then(|t| t.value.as_mut()) else { return };
+    /// Appends a line deeper than the scalar opened at `indent` to the value of entry `target`, if it has one.
+    fn continue_scalar(&mut self, indent: usize, quote: Option<char>, target: Option<usize>, line: &str) {
         let (more, closed) = match quote {
             Some(q) => unquote(q, line.trim_end()),
             None => (line.trim_end().to_string(), Some(0)),
         };
+        self.scalar = Some((indent, quote.filter(|_| closed.is_none()), target));
+        let Some(value) = target.and_then(|at| self.out[at].value.as_mut()) else { return };
         if !value.is_empty() {
             value.push(' ');
         }
         value.push_str(&more);
-        self.scalar = Some((indent, quote.filter(|_| closed.is_none())));
     }
 
     fn list_item(&mut self, indent: usize, item: &str) {
@@ -374,7 +373,7 @@ impl LocaleParser {
                 self.out[at].value = None;
             }
         }
-        self.scalar = (!listed).then_some((indent, None));
+        self.scalar = (!listed).then_some((indent, None, None));
     }
 
     fn key_line(&mut self, n: usize, indent: usize, line: &str) {
@@ -387,7 +386,7 @@ impl LocaleParser {
         let flow = flow_value(rest);
         let value = if flow.is_some() { None } else { scalar_value(rest) };
         if let Some((_, open)) = &value {
-            self.scalar = Some((indent, *open));
+            self.scalar = Some((indent, *open, None));
         }
         // `I18n.t` splits on `.`, so a key containing one can never be looked up.
         if self.path.iter().any(|(_, k)| k.contains('.')) {
@@ -420,6 +419,9 @@ impl LocaleParser {
         } else if let Some(flow) = flow {
             push_flow(&mut self.out, &locale, key, n, flow);
         } else {
+            if let Some((_, open)) = &value {
+                self.scalar = Some((indent, *open, Some(self.out.len())));
+            }
             let value = value.map(|(v, _)| v);
             self.list_key = value.is_none().then_some(self.out.len());
             self.out.push(Translation { locale, key, line: n, value });
@@ -1061,5 +1063,14 @@ en:
         assert_eq!(catalog.keys_under("users.index"), [".stats", ".stats.one", ".title"]);
         let lenient = Catalog { fallbacks: true, ..catalog };
         assert!(lenient.has("users.index.only_fr") && !lenient.has("users.index.nope"));
+    }
+
+    #[test]
+    fn block_scalar_of_a_skipped_key_leaves_the_previous_value() {
+        for skipped in ["\"a.b\": |", "<<: *missing", "alias: *missing", "flow: {a: 1}", "\"x.y\": >"] {
+            let parsed = parse(&format!("en:\n  hello: World\n  {skipped}\n    continued\n"));
+            let hello = parsed.iter().find(|t| t.key == "hello").unwrap();
+            assert_eq!(hello.value.as_deref(), Some("World"), "{skipped}");
+        }
     }
 }
