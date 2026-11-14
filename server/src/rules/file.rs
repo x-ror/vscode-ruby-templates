@@ -127,7 +127,7 @@ impl Reader<'_> {
     fn language(&mut self, section: &str, allowed: &[&str], value: Value) -> LanguageTable {
         let mut language = LanguageTable::default();
         let Some(table) = self.as_table(section, value) else { return language };
-        for (path, key, value) in leaves(table) {
+        for (path, key, value) in leaves(table, allowed) {
             if !allowed.contains(&path.as_str()) {
                 let home = LANGUAGE_TABLES.iter().find(|(_, keys)| keys.contains(&path.as_str()));
                 let message = match home {
@@ -300,13 +300,18 @@ impl Reader<'_> {
 }
 
 /// The entries of `table` with tables flattened one level, as `format.enabled` is written under `[erb]`.
-fn leaves<'a>(table: &'a DeTable<'a>) -> Vec<(String, Key<'a>, Value<'a>)> {
+/// An empty table stays one entry unless a key in `allowed` lives under it, so `[erb.unknown]` is still reported.
+fn leaves<'a>(table: &'a DeTable<'a>, allowed: &[&str]) -> Vec<(String, Key<'a>, Value<'a>)> {
     let mut out = Vec::new();
     for (key, value) in table {
         let name: &str = key.get_ref();
         match value.get_ref().as_table() {
-            Some(inner) => out.extend(inner.iter().map(|(sub, v)| (format!("{name}.{}", sub.get_ref()), sub, v))),
-            None => out.push((name.to_string(), key, value)),
+            Some(inner)
+                if !inner.is_empty() || allowed.iter().any(|key| key.strip_prefix(name).is_some_and(|rest| rest.starts_with('.'))) =>
+            {
+                out.extend(inner.iter().map(|(sub, v)| (format!("{name}.{}", sub.get_ref()), sub, v)))
+            }
+            _ => out.push((name.to_string(), key, value)),
         }
     }
     out
@@ -504,5 +509,16 @@ colour = 1
                 "8:2: unknown department `Nope`; the departments are Syntax, Html, A11y, Rails, Turbo, Stimulus, Layout, Style",
             ]
         );
+        let empty_sub = read("[erb]\n[erb.unknown]\n");
+        assert_eq!(
+            messages(&empty_sub),
+            ["2:6: unknown key `unknown` in [erb]; it takes format.enabled, format.align_comments, diagnostics.enabled, disabled_diagnostics"]
+        );
+    }
+
+    #[test]
+    fn empty_subtables_of_known_keys_are_valid() {
+        let file = read("[erb.format]\n[erb]\ndiagnostics = {}\n[haml.diagnostics]\n");
+        assert_eq!(messages(&file), Vec::<String>::new());
     }
 }
