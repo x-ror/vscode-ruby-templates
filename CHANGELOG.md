@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Breaking:** the kebab-case diagnostic codes from before 0.11 (`img-missing-alt`, `unresolved-render`, ...) are no longer accepted in `disabledDiagnostics`, in the VS Code settings or `.ruby-templates.toml`. Use the rule names (`Html/ImgAlt`, `Rails/MissingPartial`), listed in the diagnostics reference; the toml reports an old code as an unknown rule.
+- **Breaking:** `ruby-templates-ls --check` and `ruby-templates-ls --format` are removed. Use `ruby-templates check` and `ruby-templates format`.
 
 ## 0.16.0
 

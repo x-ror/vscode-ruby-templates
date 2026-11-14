@@ -1,4 +1,4 @@
-//! The `ruby-templates` command line, and the `--check`/`--format` flags `ruby-templates-ls` keeps.
+//! The `ruby-templates` command line.
 
 use crate::checks::{diagnostics_in, Doc};
 use crate::config;
@@ -60,37 +60,10 @@ warnings), a problem in a .ruby-templates.toml, or files that would change, 2 us
 or (for check) a named file that isn't a template.
 ";
 
-/// `ruby-templates-ls --check <file>...` and `--format <file.slim>`: the exit code, or `None` to start the server.
-pub fn legacy(args: &[String]) -> Option<i32> {
-    match args {
-        [flag, file] if flag == "--format" => Some(legacy_format(file)),
-        [flag, files @ ..] if flag == "--check" => {
-            let files: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
-            Some(check(&files, DiagnosticSeverity::ERROR, FINDINGS, Format::Text))
-        }
-        _ => None,
-    }
-}
-
-/// Prints the Slim file formatted with 2 spaces, or fails if it can't be.
-fn legacy_format(file: &str) -> i32 {
-    let formatted = std::fs::read_to_string(file).ok().and_then(|text| {
-        let settings = crate::format::Settings::default();
-        let indented = crate::format::slim::format(&text, &settings, &[])?;
-        Some(crate::format::blank_lines::apply(&indented.text, &indented.lines, &settings, &text))
-    });
-    let Some(formatted) = formatted else {
-        eprintln!("{file}: cannot be formatted");
-        return FINDINGS;
-    };
-    print!("{formatted}");
-    OK
-}
-
 pub fn run(args: &[String]) -> i32 {
     match args.split_first() {
         Some((command, rest)) if command == "check" => match CheckArgs::parse(rest) {
-            Ok(parsed) => check(&parsed.paths, DiagnosticSeverity::WARNING, USAGE, parsed.format),
+            Ok(parsed) => check(&parsed.paths, parsed.format),
             Err(message) => usage(&message),
         },
         Some((command, rest)) if command == "format" => match FormatArgs::parse(rest) {
@@ -234,9 +207,9 @@ struct Source<'a> {
     text: &'a str,
 }
 
-/// Prints diagnostics as `file:line:col: severity: message`; 1 when one is at least as severe as `fail_at`, `bad_file`
+/// Prints diagnostics as `file:line:col: severity: message`; 1 when one is a warning or an error, 2
 /// for a file that can't be read or isn't a template.
-fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32, format: Format) -> i32 {
+fn check(paths: &[PathBuf], format: Format) -> i32 {
     let files = template_files(paths);
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get()).min(files.len()).max(1);
     let next = AtomicUsize::new(0);
@@ -253,7 +226,7 @@ fn check(paths: &[PathBuf], fail_at: DiagnosticSeverity, bad_file: i32, format: 
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(file) = files.get(index) else { break };
                     // The printer hung up (stdout closed): nothing left to do.
-                    let checked = check_file(&file.path, (fail_at, bad_file), output, (&mut projects, &mut configs), view_roots);
+                    let checked = check_file(&file.path, output, (&mut projects, &mut configs), view_roots);
                     if sender.send((index, checked)).is_err() {
                         break;
                     }
@@ -328,13 +301,12 @@ fn render_config_problems(file: &ConfigFile, output: Output) -> Rendered {
 
 fn check_file(
     path: &Path,
-    (fail_at, bad_file): (DiagnosticSeverity, i32),
     output: Output,
     (projects, configs): (&mut Projects, &mut Configs),
     view_roots: &Arc<view_roots::Cache>,
 ) -> Checked {
     let shown = path.display();
-    let failed = |stderr| Checked { stderr, ..Checked::new(bad_file) };
+    let failed = |stderr| Checked { stderr, ..Checked::new(USAGE) };
     let Ok(text) = std::fs::read_to_string(path) else { return failed(format!("cannot read {shown}\n")) };
     let Some((uri, lang)) = absolute_file_uri(path).zip(language(path)) else { return failed(format!("{shown}: unknown template type\n")) };
     // Every worker's projects of one app share its view roots.
@@ -344,9 +316,7 @@ fn check_file(
     for file in rules.files().iter().filter(|file| !file.problems.is_empty()) {
         let rendered = render_config_problems(file, output);
         checked.config.push((file.path.clone(), rendered));
-        if DiagnosticSeverity::WARNING <= fail_at {
-            checked.code = FINDINGS;
-        }
+        checked.code = FINDINGS;
     }
     let doc = Doc { lang, text, plain_erb: false, percent_lines: false, version: 0 };
     let source = Source { shown: path, path, text: &doc.text };
@@ -354,7 +324,7 @@ fn check_file(
         let severity = d.severity.unwrap_or(DiagnosticSeverity::ERROR);
         checked.rendered.add(output, &source, (Severity::of(severity), util::code(&d), &d.message), d.range);
         // Lower numbers are more severe.
-        if severity <= fail_at {
+        if severity <= DiagnosticSeverity::WARNING {
             checked.code = FINDINGS;
         }
     }
