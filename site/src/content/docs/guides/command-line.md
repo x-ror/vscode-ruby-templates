@@ -58,7 +58,7 @@ Both commands read the `.ruby-templates.toml` files above each template, as the 
 
 ## Files and folders
 
-Pass files or folders. Folders are walked for template files, skipping hidden folders and `node_modules`.
+Pass files or folders. Folders are walked for template files, skipping hidden folders, `node_modules`, `vendor`, `tmp`, `public`, `log` and `lib/templates` (Rails generator templates, which are ERB that produces templates, not views). `vendor`, `tmp`, `public` and `log` are walked inside `app/views`, where they can be view folders. A file named on the command line is always checked, and `.gitignore` is not read. `check` and `format` walk the same folders.
 
 ## Exit codes
 

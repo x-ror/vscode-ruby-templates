@@ -6,6 +6,7 @@ use crate::format;
 use crate::format::SkipKind;
 use crate::lang::TemplateLang;
 use crate::options::Options;
+use crate::rails::paths;
 use crate::rails::project::{Project, Projects};
 use crate::rails::view_roots;
 use crate::report::{self, Finding, Format, Severity};
@@ -163,6 +164,9 @@ struct File {
     named: bool,
 }
 
+/// Folder names a walk skips outside `app/views`.
+const SKIPPED_DIRS: &[&str] = &["node_modules", "vendor", "tmp", "public", "log"];
+
 /// Template files under `paths`, following symlinked folders as the server does.
 fn template_files(paths: &[PathBuf]) -> Vec<File> {
     let mut out = Vec::new();
@@ -172,16 +176,31 @@ fn template_files(paths: &[PathBuf]) -> Vec<File> {
             continue;
         }
         let walk = walkdir::WalkDir::new(path).follow_links(true).sort_by_file_name().into_iter();
-        let entries = walk.filter_entry(|e| e.depth() == 0 || !is_skipped_dir(e)).filter_map(Result::ok);
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+        let entries = walk.filter_entry(|e| e.depth() == 0 || !is_skipped_dir(e, path, &absolute)).filter_map(Result::ok);
         let templates = entries.filter(|e| e.file_type().is_file() && language(e.path()).is_some());
         out.extend(templates.map(|e| File { path: e.into_path(), named: false }));
     }
     out
 }
 
-fn is_skipped_dir(entry: &walkdir::DirEntry) -> bool {
+/// Folders a walk skips: hidden ones (everywhere), dependencies and build output, and Rails generator templates (`lib/templates`,
+/// ERB that produces templates). Inside `app/views` a folder may have any of the other names (`public/`).
+fn is_skipped_dir(entry: &walkdir::DirEntry, root: &Path, absolute_root: &Path) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
     let name = entry.file_name().to_string_lossy();
-    entry.file_type().is_dir() && (name.starts_with('.') || name == "node_modules")
+    if name.starts_with('.') {
+        return true;
+    }
+    let Ok(below) = entry.path().strip_prefix(root) else { return false };
+    let path = absolute_root.join(below);
+    if path.ancestors().any(paths::is_app_views) {
+        return false;
+    }
+    let in_lib = path.parent().and_then(Path::file_name).is_some_and(|parent| parent == "lib");
+    (name == "templates" && in_lib) || SKIPPED_DIRS.contains(&name.as_ref())
 }
 
 fn absolute_file_uri(path: &Path) -> Option<Uri> {
@@ -590,15 +609,47 @@ mod tests {
     #[test]
     fn walks_folders_for_templates_only() {
         let root = std::env::temp_dir().join(format!("rt-cli-walk-{}", std::process::id()));
-        let views = root.join("app/views/users");
-        std::fs::create_dir_all(&views).unwrap();
-        std::fs::create_dir_all(root.join("node_modules/x")).unwrap();
-        std::fs::create_dir_all(root.join(".git")).unwrap();
-        for file in ["app/views/users/show.html.erb", "app/views/users/a.rb", "node_modules/x/b.html.erb", ".git/c.slim"] {
+        let files = [
+            "app/views/users/show.html.erb",
+            "app/views/users/a.rb",
+            "app/views/public/home.html.erb",
+            "lib/other/templates/y.html.erb",
+            "app/views/lib/templates/z.html.erb",
+            "node_modules/x/b.html.erb",
+            ".git/c.slim",
+            "lib/templates/slim/scaffold/_form.html.slim",
+            "vendor/bundle/gems/x/app/views/d.html.erb",
+            "tmp/cache/e.html.erb",
+            "public/f.html.erb",
+            "log/g.html.erb",
+        ];
+        for file in files {
+            std::fs::create_dir_all(root.join(file).parent().unwrap()).unwrap();
             std::fs::write(root.join(file), "").unwrap();
         }
         let found: Vec<PathBuf> = template_files(std::slice::from_ref(&root)).into_iter().map(|f| f.path).collect();
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(found, [root.join("app/views/users/show.html.erb")]);
+        let kept = [
+            "app/views/lib/templates/z.html.erb",
+            "app/views/public/home.html.erb",
+            "app/views/users/show.html.erb",
+            "lib/other/templates/y.html.erb",
+        ];
+        assert_eq!(found, kept.map(|file| root.join(file)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walks_a_symlinked_views_folder() {
+        let root = std::env::temp_dir().join(format!("rt-cli-walk-link-{}", std::process::id()));
+        let shared = root.join("shared/public");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("a.html.erb"), "").unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::os::unix::fs::symlink(root.join("shared"), root.join("app/views")).unwrap();
+        let walked = |dir: PathBuf| template_files(&[dir]).into_iter().map(|f| f.path).collect::<Vec<_>>();
+        assert_eq!(walked(root.join("app/views")), [root.join("app/views/public/a.html.erb")]);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

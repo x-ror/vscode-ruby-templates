@@ -219,6 +219,44 @@ try {
   );
   fs.rmSync(lock);
 
+  // A folder walk skips generator templates and dependencies, a named file is always checked, and an instance
+  // variable in a partial is information, which does not fail the run.
+  const app = path.join(root, "walk");
+  const generator = path.join(
+    app,
+    "lib",
+    "templates",
+    "slim",
+    "_form.html.slim",
+  );
+  for (const [name, text] of [
+    ["Gemfile.lock", "GEM\n  specs:\n    actionview (7.1.3)\n"],
+    ["app/views/users/_card.html.erb", "<p><%= @user.name %></p>\n"],
+    ["lib/templates/slim/_form.html.slim", "= f.<%%= attribute.name %>\n"],
+    ["vendor/bundle/x/show.html.slim", "p\n    a\n  b\n"],
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(app, name)), { recursive: true });
+    fs.writeFileSync(path.join(app, name), text);
+  }
+  r = run(["check", app]);
+  assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+  assert.match(
+    r.stdout,
+    /_card\.html\.erb:1:\d+: info: `@user` is read in a partial/,
+  );
+  assert.doesNotMatch(r.stdout, /_form|show\.html\.slim/);
+  assert.strictEqual(
+    run(["check", generator]).status,
+    1,
+    "named files are checked",
+  );
+  assert.strictEqual(
+    run(["format", "--check", app]).status,
+    0,
+    "format walks the same folders",
+  );
+  fs.rmSync(app, { recursive: true });
+
   // The HTML and accessibility rules run in Haml and Slim without a Rails project, and a same-line duplicate id is safe.
   const html = path.join(root, "html");
   fs.mkdirSync(html);

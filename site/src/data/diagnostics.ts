@@ -584,7 +584,7 @@ export const diagnostics: Diagnostic[] = [
     languages: ["erb", "haml", "slim"],
     summary: "An instance variable read inside a partial.",
     explanation:
-      'A partial that reads `@user` works only for the controllers that set it. Pass it as a local instead (`render "users/card", user: @user`). Reported once per variable and file. Not reported when the partial assigns the variable itself, for `defined?(@user)`, for ActionView\'s own variables, and in partials under app/views/layouts. Rails projects only, in templates under app/views.',
+      'A partial that reads `@user` works only for the controllers that set it. Pass it as a local instead (`render "users/card", user: @user`). Reported once per variable and file. Not reported when the partial assigns the variable itself, for `defined?(@user)`, for ActionView\'s own variables, and in partials under app/views/layouts. Reported as information, so `ruby-templates check` prints it without failing. Rails projects only, in templates under app/views.',
     example: {
       file: "app/views/users/_card.html.erb",
       lang: "erb",

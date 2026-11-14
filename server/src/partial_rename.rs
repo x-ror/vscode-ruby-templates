@@ -7,7 +7,7 @@ use crate::lang::TemplateLang;
 use crate::outline;
 use crate::rails::controller_classes::view_prefixes;
 use crate::rails::i18n;
-use crate::rails::partials::{first_folder_only, matching_templates, resolve, resolve_model, split_render_name};
+use crate::rails::partials::{first_folder_only, format_checker, matching_templates_in, resolve, resolve_model, split_render_name};
 use crate::rails::paths::{app_root, app_views, template_stem, views_root};
 use crate::rails::project::Project;
 use crate::rails::render_call::HamlPipes;
@@ -36,7 +36,7 @@ pub struct Source {
 /// with no folder prefix; `None` for non-partials and files outside a views dir.
 fn qualified_name(project: &Project, views: &Path, file: &Path) -> Option<String> {
     let dir = slash_path(file.parent()?.strip_prefix(views).ok()?);
-    let name = template_stem(|f| project.is_format(f), file.file_name()?.to_str()?.strip_prefix('_')?);
+    let name = template_stem(format_checker(project, file), file.file_name()?.to_str()?.strip_prefix('_')?);
     (!name.is_empty()).then(|| format!("{dir}/{name}"))
 }
 
@@ -71,7 +71,8 @@ fn is_first_match_from(project: &Project, source: &Path, views: &Path, qualified
     let Some(at) = folders.iter().position(|folder| folder == &views.join(dir)) else { return false };
     let earlier = source.parent().into_iter().chain(folders[..at].iter().map(PathBuf::as_path));
     let basename = format!("_{base}");
-    earlier.into_iter().all(|folder| matching_templates(project, folder, &basename).is_empty())
+    let is_format = format_checker(project, source);
+    earlier.into_iter().all(|folder| matching_templates_in(is_format, folder, &basename).is_empty())
 }
 
 /// The references `find` sees on each line that are inside code, as (byte start, byte end, reference, its payload); only those
@@ -177,7 +178,7 @@ fn model_refs(line: &str) -> Vec<RenderRef> {
 fn partial_stems<'a>(project: &Project, files: impl IntoIterator<Item = &'a PathBuf>) -> Vec<&'a str> {
     files
         .into_iter()
-        .filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(|stem| template_stem(|f| project.is_format(f), stem)))
+        .filter_map(|f| f.file_name()?.to_str()?.strip_prefix('_').map(|stem| template_stem(format_checker(project, f), stem)))
         .collect()
 }
 
@@ -682,6 +683,16 @@ mod tests {
                 ("app/views/home/show.html.erb".into(), 0, 12, "people/card".into()),
                 ("app/views/users/index.html.slim".into(), 1, 10, "people/card".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn folder_rename_keeps_unregistered_format_out_of_the_name() {
+        let t = Tree::new("mobile", &["app/views/users/_card.mobile.erb", "app/views/users/index.mobile.erb"]);
+        let sources = [t.source("app/views/users/index.mobile.erb", ERB, "<%= render \"card\" %>\n<%= render \"users/card\" %>\n")];
+        assert_eq!(
+            t.edits(&[("app/views/users", "app/views/people")], &sources),
+            [("app/views/users/index.mobile.erb".into(), 1, 12, "people/card".into())]
         );
     }
 

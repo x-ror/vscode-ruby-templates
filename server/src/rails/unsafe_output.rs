@@ -161,7 +161,7 @@ fn is_unescaping(expression: &Node) -> bool {
     expression.as_call_node().is_some_and(|call| unescaped_argument(&call).is_some())
 }
 
-/// The parentheses and the single statement around an expression removed.
+/// The parentheses, the single statement and an `if`/`unless` modifier (nil is safe) around an expression removed.
 fn unwrapped<'pr>(node: Node<'pr>) -> Node<'pr> {
     if let Some(inner) = node.as_parentheses_node().and_then(|parentheses| parentheses.body()) {
         return unwrapped(inner);
@@ -171,6 +171,12 @@ fn unwrapped<'pr>(node: Node<'pr>) -> Node<'pr> {
         if let (Some(only), None) = (body.next(), body.next()) {
             return unwrapped(only);
         }
+    }
+    if let Some(body) = node.as_if_node().filter(|branch| branch.subsequent().is_none()).and_then(|branch| branch.statements()) {
+        return unwrapped(body.as_node());
+    }
+    if let Some(body) = node.as_unless_node().filter(|branch| branch.else_clause().is_none()).and_then(|branch| branch.statements()) {
+        return unwrapped(body.as_node());
     }
     node
 }
@@ -332,6 +338,14 @@ mod tests {
         assert!(flagged(Erb, erb).is_empty());
         assert!(flagged(Haml, "= raw sanitize(@x)\n!= t(\".a_html\")\n!= render \"x\"\n").is_empty());
         assert!(flagged(Slim, "= raw sanitize(@x)\n== t(\".a_html\")\n== render \"x\"\n").is_empty());
+    }
+
+    #[test]
+    fn modifiers_around_a_safe_call_are_quiet() {
+        assert!(flagged(Erb, "<%== render \"a\" if x %>\n<%== render(\"a\") unless x %>\n<%= raw render(\"a\") if x %>\n").is_empty());
+        assert!(flagged(Haml, "!= render \"a\" if x\n!= render(\"a\") unless x\n").is_empty());
+        assert!(flagged(Slim, "== render \"a\" if x\n== render(\"a\") unless x\n").is_empty());
+        assert_eq!(flagged(Slim, "== @a if x\n== (x ? render(\"a\") : @b)\n"), ["==", "=="]);
     }
 
     #[test]

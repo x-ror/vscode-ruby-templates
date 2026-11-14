@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Rails/MissingPartial` finds a partial in the format of the template that renders it, whichever gem or initializer registered that format: `index.mobile.haml` renders `_card.mobile.haml` (`mobile-fu`'s `:mobile`, a custom `.amp`) without a report.
+- `Rails/UnsafeOutput` no longer reports a safe call with a trailing `if` or `unless` (`== render "a" if x`, `<%== render "a" unless x %>`, `!= render "a" if x`).
+- `ruby-templates check` and `format` skip `lib/templates` (Rails generator templates), `vendor`, `tmp`, `public` and `log` when walking a folder, as well as hidden folders and `node_modules`; `app/views` may hold folders with those names, and files named on the command line are always processed. `.gitignore` is not read.
+- **Behaviour change:** `Rails/InstanceVariableInPartial` is information instead of a warning, so `ruby-templates check` no longer fails on it; the editor still shows it.
 - **Breaking:** the kebab-case diagnostic codes from before 0.11 (`img-missing-alt`, `unresolved-render`, ...) are no longer accepted in `disabledDiagnostics`, in the VS Code settings or `.ruby-templates.toml`. Use the rule names (`Html/ImgAlt`, `Rails/MissingPartial`), listed in the diagnostics reference; the toml reports an old code as an unknown rule.
 - **Breaking:** `ruby-templates-ls --check` and `ruby-templates-ls --format` are removed. Use `ruby-templates check` and `ruby-templates format`.
 
