@@ -91,27 +91,54 @@ pub(crate) fn indent(text: &str, settings: &Settings, partial: bool, ruby: &Ruby
         .into_iter()
         .collect();
     let decided = decide(&lines, &roles, &units, &levels.levels, unit);
-    let infos = line_infos(&tokens, &starts, &roles, &levels);
+    let infos = line_infos(&tokens, &paired, &starts, &roles, &levels);
     Ok(Indented { text: render(text.len(), &lines, &roles, &keeps_end, &decided, trim_trailing), lines: infos, notes })
 }
 
-/// Per line: whether a blank line may go, its level, what it opens (the last block or element its tags open, if the
-/// nesting is deeper after the line than at its start) and whether it leads with a closer.
-fn line_infos(tokens: &[Token], starts: &[usize], roles: &[Role], levels: &Levels) -> Vec<LineInfo> {
+/// Per line: whether a blank line may go, its level, what it opens (the last block or element its tags open and don't
+/// close on the same line, if the nesting is deeper after the line than at its start) and whether it leads with a closer.
+fn line_infos(tokens: &[Token], paired: &HashSet<usize>, starts: &[usize], roles: &[Role], levels: &Levels) -> Vec<LineInfo> {
     let mut found = vec![(LineRole::Other, 0); starts.len()];
-    for token in tokens {
+    // Per line, what its tags opened and haven't closed yet: the role, its tail and the element name (empty for a block).
+    let mut unclosed: Vec<Vec<(LineRole, usize, &str)>> = vec![Vec::new(); starts.len()];
+    for (i, token) in tokens.iter().enumerate() {
         let (start, end) = span(token);
         let line = line_of(starts, start);
-        let role = match token {
-            Token::Erb(e) if matches!(e.effect, BlockEffect::Continue) => LineRole::Branch,
-            _ if found[line].0 == LineRole::Branch => continue,
-            Token::Erb(e) if matches!(e.effect, BlockEffect::Open(_)) => LineRole::Opens(Body::Block),
+        if found[line].0 == LineRole::Branch {
+            continue;
+        }
+        let tail = line_of(starts, end.saturating_sub(1)) - line;
+        match token {
+            Token::Erb(e) => match e.effect {
+                BlockEffect::Continue => found[line] = (LineRole::Branch, tail),
+                BlockEffect::Open(n) => unclosed[line].extend((0..n).map(|_| (LineRole::Opens(Body::Block), tail, ""))),
+                BlockEffect::Close(n) => {
+                    for _ in 0..n {
+                        if !unclosed[line].last().is_some_and(|(_, _, name)| name.is_empty()) {
+                            break;
+                        }
+                        unclosed[line].pop();
+                    }
+                }
+                BlockEffect::Neutral => {}
+            },
             // Whitespace counts in these, and their end tag's line has no level to close them.
-            Token::Open { tag, .. } if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") => LineRole::Other,
-            Token::Open { .. } => LineRole::Opens(Body::Element),
-            _ => continue,
-        };
-        found[line] = (role, line_of(starts, end.saturating_sub(1)) - line);
+            Token::Open { tag, .. } if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") => {}
+            Token::Open { tag, pairs, .. } if *pairs || paired.contains(&i) => {
+                unclosed[line].push((LineRole::Opens(Body::Element), tail, &tag.name));
+            }
+            Token::Close { tag, .. } if unclosed[line].last().is_some_and(|(_, _, name)| *name == tag.name) => {
+                unclosed[line].pop();
+            }
+            _ => {}
+        }
+    }
+    for (slot, stack) in found.iter_mut().zip(&unclosed) {
+        if slot.0 != LineRole::Branch {
+            if let Some(&(role, tail, _)) = stack.last() {
+                *slot = (role, tail);
+            }
+        }
     }
     (0..starts.len())
         .map(|i| {
@@ -168,7 +195,7 @@ fn regions(text: &str, tokens: &[Token], starts: &[usize], align_comments: bool)
                     fixed.push((q + 1, q_end - 1));
                     keep_end.push((q + 1, q_end - 1));
                 }
-                if let Token::Open { tag, .. } = token {
+                if let Token::Open { tag, pairs: true, .. } = token {
                     if matches!(tag.name.as_str(), "pre" | "xmp" | "listing") {
                         let Some(close) = closing(&tokens[i + 1..], &tag.name) else {
                             let message = format!("line {}: `<{}>` is never closed", line_of(starts, tag.start) + 1, tag.name);
@@ -794,5 +821,33 @@ mod tests {
         for helper in ["<%= javascript_tag do %>", "<%= content_tag :pre do %>", "<%= tag.textarea(name: \"a\") do %>"] {
             assert!(indent(&format!("<div>\n{helper}\na\n  b\n<% end %>\n</div>"), "  ", false).is_err(), "{helper}");
         }
+    }
+
+    fn with_blank_lines(text: &str, settings: &Settings) -> String {
+        let indented = indent(text, "  ", false).unwrap();
+        crate::format::blank_lines::apply(&indented.text, &indented.lines, settings, text)
+    }
+
+    #[test]
+    fn a_line_opens_what_its_tags_leave_open() {
+        use crate::format::Style::EmptyLines;
+        let blocks = Settings { around_block_body: Some(EmptyLines), ..Settings::default() };
+        let elements = Settings { around_element_body: Some(EmptyLines), ..Settings::default() };
+        assert_eq!(with_blank_lines("<% if a %><span>x</span>\ny\n<% end %>", &blocks), "<% if a %><span>x</span>\n\n  y\n\n<% end %>\n");
+        assert_eq!(with_blank_lines("<% if a %><span>x</span>\ny\n<% end %>", &elements), "<% if a %><span>x</span>\n  y\n<% end %>\n");
+        assert_eq!(with_blank_lines("<div><% if a %>x<% end %>\ny\n</div>", &elements), "<div><% if a %>x<% end %>\n\n  y\n\n</div>\n");
+        assert_eq!(with_blank_lines("<% if a %> <br>\ny\n<% end %>", &blocks), "<% if a %> <br>\n\n  y\n\n<% end %>\n");
+    }
+
+    #[test]
+    fn a_pre_closed_on_the_line_leaves_the_enclosing_element_open() {
+        use crate::format::Style::EmptyLines;
+        let elements = Settings { around_element_body: Some(EmptyLines), ..Settings::default() };
+        assert_eq!(with_blank_lines("<div><pre>x</pre>\ny\n</div>", &elements), "<div><pre>x</pre>\n\n  y\n\n</div>\n");
+    }
+
+    #[test]
+    fn a_self_closing_pre_needs_no_end_tag() {
+        assert_eq!(fmt("<div>\n<pre />\n</div>"), "<div>\n  <pre />\n</div>");
     }
 }
