@@ -260,27 +260,6 @@ async function serverFormatEdits(doc, { tabSize, insertSpaces }, range) {
   }
 }
 
-const FORMATTED_LANGS = ["erb", "haml"];
-
-/**
- * Offers the server's formatting for ERB and Haml always: a `.ruby-templates.toml` beats the `format.enabled`
- * settings, so the server decides per file and returns no edits where formatting is off.
- */
-function registerServerFormatting(context) {
-  for (const lang of FORMATTED_LANGS) {
-    context.subscriptions.push(
-      vscode.languages.registerDocumentFormattingEditProvider(lang, {
-        provideDocumentFormattingEdits: async (doc, options) =>
-          (await serverFormatEdits(doc, options)) ?? [],
-      }),
-      vscode.languages.registerDocumentRangeFormattingEditProvider(lang, {
-        provideDocumentRangeFormattingEdits: async (doc, range, options) =>
-          (await serverFormatEdits(doc, options, range)) ?? [],
-      }),
-    );
-  }
-}
-
 /** Starts the server, restarting it on the restart command or a change to a setting it reads; returns its log. */
 function registerServer(context) {
   output = vscode.window.createOutputChannel("Ruby Templates", { log: true });
@@ -294,7 +273,6 @@ function registerServer(context) {
         void restartClient(context);
     }),
   );
-  registerServerFormatting(context);
   void startClient(context);
 }
 

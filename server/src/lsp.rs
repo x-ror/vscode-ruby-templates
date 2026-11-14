@@ -50,7 +50,19 @@ const SERVER_NAME: &str = "ruby-templates-ls";
 /// The client's notification with the app's routes.
 const ROUTES_NOTIFICATION: &str = "rubyTemplates/routes";
 
-const SLIM_FORMATTING_REGISTRATION: &str = "slim-formatting";
+const FORMATTING_REGISTRATION: &str = "formatting";
+const RANGE_FORMATTING_REGISTRATION: &str = "range-formatting";
+
+const FORMATTING_LANGUAGES: [&str; 4] = ["erb", "haml", "slim", "skim"];
+/// Not Slim/Skim: range formatting re-indents only the range, which breaks nesting in indentation-sensitive languages.
+const RANGE_FORMATTING_LANGUAGES: [&str; 2] = ["erb", "haml"];
+
+/// Which formatting requests the client takes dynamic registrations for.
+#[derive(Clone, Copy, Default)]
+struct DynamicFormatting {
+    formatting: bool,
+    range_formatting: bool,
+}
 
 /// Runs the language server on stdin/stdout until the client exits.
 pub async fn serve() {
@@ -109,9 +121,9 @@ struct Backend {
     config_reports: Arc<ConfigReports>,
     /// Workspace folders from `initialize`, for workspace symbols before any view is open.
     roots: OnceLock<Vec<PathBuf>>,
-    /// Formatting is registered for Slim/Skim only, when the client supports dynamic registration:
-    /// a static capability would cover ERB/Haml too, with a formatter that does nothing there.
-    dynamic_formatting: OnceLock<bool>,
+    /// Formatting is registered per template language when the client supports dynamic registration:
+    /// a static capability would cover every language, including ones the formatter does nothing for.
+    dynamic_formatting: OnceLock<DynamicFormatting>,
     /// The client takes `workspace/didChangeWatchedFiles` registrations, for config files outside the workspace folders.
     dynamic_watching: OnceLock<Option<Watching>>,
     /// The client takes `workspace/semanticTokens/refresh`.
@@ -140,9 +152,11 @@ impl LanguageServer for Backend {
         let root_uri = params.root_uri.iter().cloned();
         let folders = params.workspace_folders.unwrap_or_default().into_iter().map(|f| f.uri);
         let _ = self.roots.set(folders.chain(root_uri).filter_map(|u| util::file_path(&u)).collect());
-        let dynamic_formatting =
-            params.capabilities.text_document.and_then(|t| t.formatting).and_then(|f| f.dynamic_registration).unwrap_or(false);
-        let _ = self.dynamic_formatting.set(dynamic_formatting);
+        let text_document = params.capabilities.text_document.as_ref();
+        let _ = self.dynamic_formatting.set(DynamicFormatting {
+            formatting: text_document.and_then(|t| t.formatting.as_ref()).and_then(|f| f.dynamic_registration).unwrap_or(false),
+            range_formatting: text_document.and_then(|t| t.range_formatting.as_ref()).and_then(|f| f.dynamic_registration).unwrap_or(false),
+        });
         let workspace = params.capabilities.workspace.unwrap_or_default();
         let watching = workspace.did_change_watched_files.unwrap_or_default();
         let roots = self.roots.get().cloned().unwrap_or_default();
@@ -211,15 +225,24 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        if self.dynamic_formatting.get() == Some(&true) {
-            let selector = serde_json::json!({ "documentSelector": [{ "language": "slim" }, { "language": "skim" }] });
-            let registration = Registration {
-                id: SLIM_FORMATTING_REGISTRATION.into(),
-                method: "textDocument/formatting".into(),
-                register_options: Some(selector),
-            };
-            if let Err(e) = self.client.register_capability(vec![registration]).await {
-                self.client.log_message(MessageType::WARNING, format!("Slim formatting not registered: {e}")).await;
+        let dynamic = self.dynamic_formatting.get().copied().unwrap_or_default();
+        let registration = |id: &str, method: &str, languages: &[&str]| Registration {
+            id: id.into(),
+            method: method.into(),
+            register_options: Some(serde_json::json!({
+                "documentSelector": languages.iter().map(|language| serde_json::json!({ "language": language })).collect::<Vec<_>>()
+            })),
+        };
+        let mut registrations = Vec::new();
+        if dynamic.formatting {
+            registrations.push(registration(FORMATTING_REGISTRATION, "textDocument/formatting", &FORMATTING_LANGUAGES));
+        }
+        if dynamic.range_formatting {
+            registrations.push(registration(RANGE_FORMATTING_REGISTRATION, "textDocument/rangeFormatting", &RANGE_FORMATTING_LANGUAGES));
+        }
+        if !registrations.is_empty() {
+            if let Err(e) = self.client.register_capability(registrations).await {
+                self.client.log_message(MessageType::WARNING, format!("Formatting not registered: {e}")).await;
             }
         }
         self.client.log_message(MessageType::INFO, format!("{SERVER_NAME} ready")).await;
@@ -813,8 +836,7 @@ impl LanguageServer for Backend {
         Ok(Some(vec![TextEdit::new(Range::new(Position::new(0, 0), end), formatted)]))
     }
 
-    /// Only the lines in the range change, with nesting read from the whole document; not advertised, the client's
-    /// ERB and Haml providers ask for it.
+    /// Only the lines in the range change, with nesting read from the whole document.
     async fn range_formatting(&self, p: DocumentRangeFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let Some((text, formatted)) = self.formatted(&p.text_document.uri, &p.options, true).await else { return Ok(None) };
         Ok(line_edits(&text, &formatted, p.range.start.line as usize..=p.range.end.line as usize))
