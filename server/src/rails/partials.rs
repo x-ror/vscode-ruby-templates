@@ -179,17 +179,16 @@ fn lookup_formats(view: &str) -> impl Iterator<Item = &str> {
     std::iter::once(view).chain(matches!(view, "js" | "turbo_stream").then_some("html"))
 }
 
-/// Whether `segment` is a format as seen from `current`: one the project knows, or `current`'s own, since Rails looks
-/// partials up in the format of the template rendering them, whichever gem or initializer registered it.
-fn format_checker<'a>(project: &'a Project, current: &'a Path) -> impl Fn(&str) -> bool + Copy + 'a {
+/// Whether `segment` is a format when reading the names of templates next to `current`: one the project knows, or
+/// `current`'s own, so `_card.mobile.erb` is the partial `_card` for a `.mobile` view whoever registered the format.
+pub(crate) fn format_checker<'a>(project: &'a Project, current: &'a Path) -> impl Fn(&str) -> bool + Copy + 'a {
     let own = own_format(current);
     move |segment| project.is_format(segment) || own == Some(segment)
 }
 
 /// Format-less files match any format.
 fn renders_format(project: &Project, current: &Path, candidate: &Path) -> bool {
-    let is_format = format_checker(project, current);
-    match (template_format(is_format, current), template_format(is_format, candidate)) {
+    match (template_format(|f| project.is_format(f), current), template_format(format_checker(project, current), candidate)) {
         (Some(view), Some(partial)) => lookup_formats(view).any(|format| format == partial),
         _ => true,
     }
@@ -200,7 +199,7 @@ pub fn matching_templates(project: &Project, dir: &Path, basename: &str) -> Vec<
     matching_templates_in(|f| project.is_format(f), dir, basename)
 }
 
-fn matching_templates_in(is_format: impl Fn(&str) -> bool + Copy, dir: &Path, basename: &str) -> Vec<PathBuf> {
+pub(crate) fn matching_templates_in(is_format: impl Fn(&str) -> bool + Copy, dir: &Path, basename: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
     let mut found: Vec<PathBuf> = entries
         .flatten()
@@ -228,7 +227,7 @@ pub fn split_render_name(name: &str) -> (Option<&str>, &str) {
 /// unknown here, isn't ordered). With no `variants:` the view's own is wanted, as in Rails.
 fn sort_like_action_view(project: &Project, current: &Path, lookup: &Lookup, found: &mut [PathBuf]) {
     let is_format = format_checker(project, current);
-    let view_format = template_format(is_format, current);
+    let view_format = template_format(|f| project.is_format(f), current);
     let view_variant = template_variant(current);
     found.sort_by_key(|p| {
         let format = template_format(is_format, p);
@@ -807,7 +806,7 @@ mod tests {
         let found = |view: &str| {
             resolved_names(&Project::for_template(&users.join(view)), &views, &format!("users/{view}"), r#"render "users/card""#)
         };
-        assert_eq!(found("show.mobile.erb"), ["_card.mobile.erb"]);
+        assert_eq!(found("show.mobile.erb"), ["_card.html.erb", "_card.mobile.erb"]);
         assert_eq!(found("show.html.erb"), ["_card.html.erb"]);
 
         let initializers = root.join("config/initializers");
@@ -840,9 +839,12 @@ mod tests {
             )
         };
         assert_eq!(found("index.mobile.haml", "card"), ["_card.mobile.haml"]);
-        assert_eq!(found("show.amp.erb", "row"), ["_row.amp.erb"]);
+        assert_eq!(found("show.amp.erb", "row"), ["_row.html.erb", "_row.amp.erb"]);
         assert_eq!(found("show.html.erb", "row"), ["_row.html.erb"]);
         assert!(found("list.html.erb", "item").is_empty());
+        for view in ["show.v2.erb", "welcome.backup.erb", "card.zh_Hant.erb", "x.es-419.erb", "bar.mobile.erb"] {
+            assert_eq!(found(view, "row"), ["_row.html.erb"], "{view}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -176,7 +176,7 @@ fn template_files(paths: &[PathBuf]) -> Vec<File> {
             continue;
         }
         let walk = walkdir::WalkDir::new(path).follow_links(true).sort_by_file_name().into_iter();
-        let absolute = util::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let absolute = std::path::absolute(path).unwrap_or_else(|_| path.clone());
         let entries = walk.filter_entry(|e| e.depth() == 0 || !is_skipped_dir(e, path, &absolute)).filter_map(Result::ok);
         let templates = entries.filter(|e| e.file_type().is_file() && language(e.path()).is_some());
         out.extend(templates.map(|e| File { path: e.into_path(), named: false }));
@@ -184,8 +184,8 @@ fn template_files(paths: &[PathBuf]) -> Vec<File> {
     out
 }
 
-/// Folders a walk skips: hidden ones, dependencies and build output, and Rails generator templates (`lib/templates`,
-/// ERB that produces templates). Inside `app/views` a folder may have any of these names (`public/`).
+/// Folders a walk skips: hidden ones (everywhere), dependencies and build output, and Rails generator templates (`lib/templates`,
+/// ERB that produces templates). Inside `app/views` a folder may have any of the other names (`public/`).
 fn is_skipped_dir(entry: &walkdir::DirEntry, root: &Path, absolute_root: &Path) -> bool {
     if !entry.file_type().is_dir() {
         return false;
@@ -194,12 +194,13 @@ fn is_skipped_dir(entry: &walkdir::DirEntry, root: &Path, absolute_root: &Path) 
     if name.starts_with('.') {
         return true;
     }
-    let path = entry.path();
-    if name == "templates" && path.parent().and_then(Path::file_name).is_some_and(|parent| parent == "lib") {
-        return true;
+    let Ok(below) = entry.path().strip_prefix(root) else { return false };
+    let path = absolute_root.join(below);
+    if path.ancestors().any(paths::is_app_views) {
+        return false;
     }
-    let inside_views = path.strip_prefix(root).is_ok_and(|below| absolute_root.join(below).ancestors().any(paths::is_app_views));
-    !inside_views && SKIPPED_DIRS.contains(&name.as_ref())
+    let in_lib = path.parent().and_then(Path::file_name).is_some_and(|parent| parent == "lib");
+    (name == "templates" && in_lib) || SKIPPED_DIRS.contains(&name.as_ref())
 }
 
 fn absolute_file_uri(path: &Path) -> Option<Uri> {
@@ -613,6 +614,7 @@ mod tests {
             "app/views/users/a.rb",
             "app/views/public/home.html.erb",
             "lib/other/templates/y.html.erb",
+            "app/views/lib/templates/z.html.erb",
             "node_modules/x/b.html.erb",
             ".git/c.slim",
             "lib/templates/slim/scaffold/_form.html.slim",
@@ -627,7 +629,27 @@ mod tests {
         }
         let found: Vec<PathBuf> = template_files(std::slice::from_ref(&root)).into_iter().map(|f| f.path).collect();
         std::fs::remove_dir_all(&root).unwrap();
-        let kept = ["app/views/public/home.html.erb", "app/views/users/show.html.erb", "lib/other/templates/y.html.erb"];
+        let kept = [
+            "app/views/lib/templates/z.html.erb",
+            "app/views/public/home.html.erb",
+            "app/views/users/show.html.erb",
+            "lib/other/templates/y.html.erb",
+        ];
         assert_eq!(found, kept.map(|file| root.join(file)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walks_a_symlinked_views_folder() {
+        let root = std::env::temp_dir().join(format!("rt-cli-walk-link-{}", std::process::id()));
+        let shared = root.join("shared/public");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("a.html.erb"), "").unwrap();
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::os::unix::fs::symlink(root.join("shared"), root.join("app/views")).unwrap();
+        let walked = |dir: PathBuf| template_files(&[dir]).into_iter().map(|f| f.path).collect::<Vec<_>>();
+        assert_eq!(walked(root.join("app/views")), [root.join("app/views/public/a.html.erb")]);
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
