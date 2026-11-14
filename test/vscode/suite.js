@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
 import * as vscode from "vscode";
+import { replaceContents } from "../../src/convertTemplate.js";
 
 const app = process.env.RT_APP;
 const settings = () => vscode.workspace.getConfiguration("rubyTemplates");
@@ -413,6 +414,26 @@ const checks = {
       assert.strictEqual(empty.selection.active.character, 4);
     } finally {
       await revert(empty);
+    }
+  },
+
+  async "convert does not overwrite a document edited meanwhile"() {
+    const editor = await open("app/views/users/toggle.html.slim");
+    try {
+      const { version } = editor.document;
+      await editor.edit((eb) => eb.insert(new vscode.Position(0, 0), "x"));
+      const before = editor.document.getText();
+      await replaceContents(editor, version, "converted", "haml");
+      assert.strictEqual(editor.document.getText(), before);
+      await replaceContents(
+        editor,
+        editor.document.version,
+        "converted",
+        "slim",
+      );
+      assert.strictEqual(editor.document.getText(), "converted");
+    } finally {
+      await revert(editor);
     }
   },
 

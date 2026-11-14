@@ -76,14 +76,23 @@ async function saveAs(fileName, content) {
   });
 }
 
-/** Replaces `src`, the text the conversion started from, and switches the document to `language`. */
-async function replaceContents(ed, src, content, language) {
-  const full = new vscode.Range(
-    ed.document.positionAt(0),
-    ed.document.positionAt(src.length),
+/** Replaces the whole document unless it changed since `version`, then switches it to `language`. */
+async function replaceContents(ed, version, content, language) {
+  const { document } = ed;
+  if (document.version !== version) {
+    vscode.window.showWarningMessage(
+      "The template changed while converting; the converted text was not applied.",
+    );
+    return;
+  }
+  const full = document.validateRange(
+    new vscode.Range(0, 0, document.lineCount, 0),
   );
-  await ed.edit((eb) => eb.replace(full, content));
-  await vscode.languages.setTextDocumentLanguage(ed.document, language);
+  if (!(await ed.edit((eb) => eb.replace(full, content)))) {
+    vscode.window.showWarningMessage("Could not replace the template.");
+    return;
+  }
+  await vscode.languages.setTextDocumentLanguage(document, language);
 }
 
 async function convert(target) {
@@ -98,6 +107,7 @@ async function convert(target) {
     );
     return;
   }
+  const { version } = doc;
   const src = doc.getText();
   const converted = await runConverter(converter, doc, src);
   if (converted === undefined) return;
@@ -107,7 +117,7 @@ async function convert(target) {
   if (destination === "untitled") await openUntitled(target, converted);
   else if (destination === "save") await saveAs(newName, converted);
   else if (destination === "replace")
-    await replaceContents(ed, src, converted, target);
+    await replaceContents(ed, version, converted, target);
 }
 
-export { convert };
+export { convert, replaceContents };
