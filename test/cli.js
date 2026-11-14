@@ -65,6 +65,7 @@ try {
   assert.ok(
     lockNotes[0].includes(root) &&
       /Rails\/\*, Stimulus\/\* and Turbo\/\*/.test(lockNotes[0]),
+    `the note names ${root}\n${r.stderr}`,
   );
   r = run(["check", "app/views/users/index.html.slim"], undefined, root);
   assert.match(

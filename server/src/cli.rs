@@ -335,7 +335,9 @@ fn check_file(
     let real = util::file_path(&uri).unwrap_or_else(|| path.to_path_buf());
     let project = Project::memoized(projects, &real, Some(view_roots));
     let mut checked = Checked::new(OK);
-    checked.unlocked_app = project.rails_root_without_lockfile(&real).map(|app| {
+    // Spelled as given, made absolute: a path back from the file URI may be written differently on Windows.
+    let typed = std::path::absolute(path).unwrap_or_else(|_| real.clone());
+    checked.unlocked_app = project.rails_root_without_lockfile(&typed).map(|app| {
         let shown = shown_path(&app, output.cwd);
         let shown = if shown.as_os_str().is_empty() { Path::new(".") } else { shown };
         (app.clone(), shown.to_path_buf())
