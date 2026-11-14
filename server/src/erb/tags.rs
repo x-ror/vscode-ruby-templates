@@ -403,7 +403,7 @@ pub(crate) fn tag_end(html: &[u8], from: usize) -> Option<TagEnd> {
 
 /// HTML with ERB tags blanked out, plus every ERB tag as an event, in order. Tags are Erubi's; a `<%%` literal
 /// renders as text, so it stays in the HTML. With `skip_raw_blocks` the JS/CSS block helpers' bodies are blanked and
-/// their events dropped; without, any such helper makes the result `None`.
+/// their events dropped; without, any such helper with a block makes the result `None`.
 fn split<'a>(
     text: &'a str,
     analyzed: &[(erb::ruby::ErbTag<'a>, BlockEffect)],
@@ -423,7 +423,8 @@ fn split<'a>(
             (BlockEffect::Neutral, "", "")
         } else {
             let snippet = &text[tag.code.clone()];
-            if RAW_BLOCK.is_match(snippet) && (!skip_raw_blocks || BRACE_BLOCK_OPEN.is_match(snippet)) {
+            let unreadable_block = BRACE_BLOCK_OPEN.is_match(snippet) || (!skip_raw_blocks && matches!(effect, BlockEffect::Open(_)));
+            if RAW_BLOCK.is_match(snippet) && unreadable_block {
                 return None;
             }
             (*effect, snippet.split_whitespace().next().unwrap_or(""), snippet)

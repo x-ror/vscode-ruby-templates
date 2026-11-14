@@ -14,7 +14,7 @@ use tower_lsp_server::ls_types::Diagnostic;
 pub(crate) const UNSAFE_OUTPUT: &str = "Rails/UnsafeOutput";
 
 const SANITIZE_HINT: &str = "use `sanitize` if it holds user HTML";
-/// Longer code is not quoted in the message.
+/// Longer code, and code past its first line, is cut in the message.
 const MAX_QUOTED_LEN: usize = 40;
 
 /// Helpers whose result is safe markup, or is escaped for the place it goes to.
@@ -96,11 +96,11 @@ impl Finder<'_> {
 
     fn quoted(&self, expression: &Node) -> String {
         let location = expression.location();
-        let code = &self.compiled.source[location.start() as usize..location.end() as usize];
-        if code.len() > MAX_QUOTED_LEN || code.contains('\n') {
-            return "its value".into();
-        }
-        format!("`{code}`")
+        let code = self.compiled.source[location.start() as usize..location.end() as usize].trim();
+        let first_line = code.lines().next().unwrap_or(code);
+        let shown: String = first_line.chars().take(MAX_QUOTED_LEN).collect();
+        let cut = if shown.len() < code.len() { "…" } else { "" };
+        format!("`{}{cut}`", shown.trim_end())
     }
 
     /// A node that is the whole code of an output tag or line, and has an unescaped marker before it.
@@ -183,9 +183,9 @@ fn unwrapped<'pr>(node: Node<'pr>) -> Node<'pr> {
 
 /// Whether the expression is certainly safe to output unescaped: a literal, or what a helper that makes safe HTML returns.
 fn is_safe(source: &str, expression: &Node) -> bool {
-    let adjacent_literals =
-        expression.as_interpolated_string_node().is_some_and(|string| string.parts().iter().all(|part| part.as_string_node().is_some()));
-    let literal = adjacent_literals
+    let safe_string =
+        expression.as_interpolated_string_node().is_some_and(|string| string.parts().iter().all(|part| is_safe_part(source, &part)));
+    let literal = safe_string
         || expression.as_yield_node().is_some()
         || expression.as_string_node().is_some()
         || expression.as_symbol_node().is_some()
@@ -197,13 +197,61 @@ fn is_safe(source: &str, expression: &Node) -> bool {
     let Some(call) = expression.as_call_node() else { return literal };
     let name = String::from_utf8_lossy(call.name().as_slice());
     let Some(receiver) = call.receiver() else {
-        return if TRANSLATIONS.contains(&name.as_ref()) { translates_html(&call) } else { SAFE_HELPERS.contains(&name.as_ref()) };
+        return match name.as_ref() {
+            _ if TRANSLATIONS.contains(&name.as_ref()) => translates_html(&call),
+            "truncate" => truncate_escapes(&call),
+            _ => SAFE_HELPERS.contains(&name.as_ref()),
+        };
     };
     let location = receiver.location();
     let receiver_code = &source[location.start() as usize..location.end() as usize];
     let escapes = ESCAPERS.iter().any(|(module, names)| *module == receiver_code && names.contains(&name.as_ref()));
     let is_tag_builder = receiver.as_call_node().is_some_and(|r| r.is_variable_call() && r.name().as_slice() == b"tag");
     escapes || (is_tag_builder && TAG_BUILDER_ELEMENTS.contains(&name.as_ref()))
+}
+
+/// Escapers for a JavaScript string, which leave `<` alone: not safe inside HTML.
+const JS_ESCAPERS: &[&str] = &["j", "escape_javascript"];
+
+/// A part of a string literal that adds nothing unsafe: text, or `#{…}` of a safe expression (`"#{h(name)}"`).
+fn is_safe_part(source: &str, part: &Node) -> bool {
+    if part.as_string_node().is_some() {
+        return true;
+    }
+    if let Some(nested) = part.as_interpolated_string_node() {
+        return nested.parts().iter().all(|part| is_safe_part(source, &part));
+    }
+    let Some(statements) = part.as_embedded_statements_node().and_then(|embedded| embedded.statements()) else { return false };
+    let mut body = statements.body().iter();
+    let (Some(only), None) = (body.next(), body.next()) else { return false };
+    let only = unwrapped(only);
+    let js_escaper = only
+        .as_call_node()
+        .is_some_and(|call| call.receiver().is_none() && JS_ESCAPERS.iter().any(|name| call.name().as_slice() == name.as_bytes()));
+    !js_escaper && is_safe(source, &only)
+}
+
+/// `truncate` escapes its result (a `SafeBuffer`) unless called with `escape: false`; options it can't read are not trusted.
+fn truncate_escapes(call: &CallNode) -> bool {
+    let Some(arguments) = call.arguments() else { return false };
+    // A splat or `...` may carry `escape: false`.
+    if arguments.arguments().iter().any(|argument| argument.as_splat_node().is_some() || argument.as_forwarding_arguments_node().is_some())
+    {
+        return false;
+    }
+    let options = arguments.arguments().iter().skip(1);
+    options.into_iter().all(|option| {
+        let Some(hash) =
+            option.as_keyword_hash_node().map(|hash| hash.elements()).or_else(|| option.as_hash_node().map(|hash| hash.elements()))
+        else {
+            return false;
+        };
+        hash.iter().all(|element| {
+            let Some(pair) = element.as_assoc_node() else { return false };
+            let is_escape = pair.key().as_symbol_node().is_some_and(|key| key.unescaped() == b"escape");
+            !is_escape || pair.value().as_true_node().is_some()
+        })
+    })
 }
 
 /// `t(".name_html")`: the key is a literal that Rails marks safe.
@@ -401,5 +449,41 @@ mod tests {
     fn adjacent_literals_are_literals() {
         assert!(flagged(Erb, "<%= raw \"a\" \"<b>\" %>\n<%= (\"a\" 'b').html_safe %>\n").is_empty());
         assert_eq!(flagged(Erb, "<%= raw \"a\" \"#{@b}\" %>\n"), ["raw"]);
+    }
+
+    #[test]
+    fn escaped_interpolations_and_truncate_are_quiet() {
+        assert!(flagged(Erb, "<%= \"Hi #{h(@q)}\".html_safe %>\n<%= raw \"<b>#{html_escape(@a)}</b> #{sanitize(@b)}\" %>\n").is_empty());
+        assert!(flagged(Slim, "== \"Hi #{h(@q)}\"\n").is_empty());
+        assert_eq!(
+            flagged(Erb, "<%= \"Hi #{@q}\".html_safe %>\n<%= \"#{h(@a)}#{@b}\".html_safe %>\n<%= \"#@q\".html_safe %>\n"),
+            ["html_safe"; 3]
+        );
+        assert!(flagged(Erb, "<%= truncate(@x, length: 5).html_safe %>\n<%= raw truncate(@x) %>\n<%= truncate(@x, escape: true) { link_to \"a\", b }.html_safe %>\n").is_empty());
+        let unsafe_truncates =
+            "<%= truncate(@x, escape: false).html_safe %>\n<%= truncate(@x, opts).html_safe %>\n<%= truncate(@x, **opts).html_safe %>\n\
+                                <%= truncate(@x, escape: @e).html_safe %>\n<%= @x.truncate(5).html_safe %>\n";
+        assert_eq!(flagged(Erb, unsafe_truncates), ["html_safe"; 5]);
+    }
+
+    #[test]
+    fn js_escapers_splats_and_nested_literals_in_safe_strings() {
+        let unsafe_cases = "<%= \"<p>#{j(@q)}</p>\".html_safe %>\n<%= \"<p>#{escape_javascript(@q)}</p>\".html_safe %>\n\
+                            <%= truncate(*args).html_safe %>\n<%= truncate(@x, *opts).html_safe %>\n<%= (\"a\" \"#{@y}\").html_safe %>\n";
+        assert_eq!(flagged(Erb, unsafe_cases), ["html_safe"; 5]);
+        assert!(flagged(Erb, "<%= (\"a\" \"#{h @y}\").html_safe %>\n").is_empty());
+    }
+
+    #[test]
+    fn long_and_multi_line_code_is_quoted_cut() {
+        let message = |lang, text| found(lang, text).remove(0).1;
+        assert_eq!(
+            message(Slim, "== t('.x', name: user.name, other: user.other_name_long)\n"),
+            "`==` outputs `t('.x', name: user.name, other: user.oth…` without escaping; use `sanitize` if it holds user HTML"
+        );
+        assert_eq!(
+            message(Erb, "<%= raw t('.x',\n  a: 1) %>\n"),
+            "`raw` outputs `t('.x',…` without escaping; use `sanitize` if it holds user HTML"
+        );
     }
 }

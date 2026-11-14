@@ -877,8 +877,10 @@ impl Backend {
             if rules.excluded_by().is_some() || !rules.format_enabled() {
                 return (Arc::new(rules), None);
             }
-            let base = util::file_path(&uri).map_or_else(format::Settings::default, |path| config::settings_for(&path).settings);
-            let mut settings = rules.format_settings(base.with_editor(&options));
+            let resolved = util::file_path(&uri).map(|path| config::settings_for(&path));
+            let insert_final_newline = resolved.as_ref().is_some_and(|resolved| resolved.insert_final_newline);
+            let base = resolved.map_or_else(format::Settings::default, |resolved| resolved.settings);
+            let mut settings = rules.format_settings(base.with_editor(&options), insert_final_newline);
             if lines_only {
                 // A range can't add or remove a line, and may hold a comment's inner lines without the line they move with.
                 settings.trailing_empty_lines = false;

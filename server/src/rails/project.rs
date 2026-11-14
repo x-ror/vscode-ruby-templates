@@ -17,6 +17,14 @@ use walkdir::WalkDir;
 pub const LOCKFILE: &str = "Gemfile.lock";
 const RUBY_VERSION_FILE: &str = ".ruby-version";
 
+/// Tells why a Rails-looking app at `root` gets no Rails, Stimulus or Turbo rules.
+pub fn missing_lockfile_note(root: &Path) -> String {
+    format!(
+        "note: {} looks like a Rails app but has no {LOCKFILE}, so the Rails/*, Stimulus/* and Turbo/* rules are off: they need its actionview gem\n",
+        root.display()
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
     Rails,
@@ -189,6 +197,16 @@ impl Project {
                 .flatten()
                 .map(|identifier| strict_locals::Rails { close: self.strict_locals_close(), identifier }),
         }
+    }
+
+    /// The folder of a Rails-looking app (`app/views` or `config/application.rb`) that holds `template` when no `Gemfile.lock` is
+    /// above it: its Rails, Stimulus and Turbo rules are off.
+    pub fn rails_root_without_lockfile(&self, template: &Path) -> Option<PathBuf> {
+        if self.root.is_some() {
+            return None;
+        }
+        let looks_like_rails = |dir: &&Path| dir.join(APP_VIEWS).is_dir() || dir.join("config/application.rb").is_file();
+        template.ancestors().skip(1).find(looks_like_rails).map(Path::to_path_buf)
     }
 
     /// Is `segment` a template format: one of Rails' own or registered by the app?
