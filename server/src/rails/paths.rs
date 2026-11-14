@@ -89,6 +89,14 @@ pub fn template_format(is_format: impl Fn(&str) -> bool + Copy, path: &Path) -> 
     template_suffix(is_format, fname, template_stem(is_format, fname))?
 }
 
+/// The format segment of a template's file name, registered or not: `mobile` of `index.mobile.haml`, never a locale.
+pub fn own_format(path: &Path) -> Option<&str> {
+    let mut segments = path.file_name()?.to_str()?.rsplit('.');
+    let (_handler, segment) = (segments.next()?, segments.next()?);
+    let format = segment.split('+').next().filter(|format| !format.is_empty() && !is_locale(format))?;
+    segments.next().map(|_| format)
+}
+
 /// `phone` of `show.html+phone.erb`.
 pub fn template_variant(path: &Path) -> Option<&str> {
     let fname = path.file_name()?.to_str()?;
@@ -211,6 +219,19 @@ mod tests {
         std::os::unix::fs::symlink(&views, views.join("loop")).unwrap();
         assert_eq!(files_under(&views, usize::MAX), [views.join("shared/cards/_card.html.erb")]);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn own_formats() {
+        fn format(fname: &str) -> Option<&str> {
+            own_format(Path::new(fname))
+        }
+        assert_eq!(format("index.mobile.haml"), Some("mobile"));
+        assert_eq!(format("show.en.amp+tablet.erb"), Some("amp"));
+        assert_eq!(format("show.html.erb"), Some("html"));
+        assert_eq!(format("show.erb"), None);
+        assert_eq!(format("show.de.erb"), None);
+        assert_eq!(format("show.+phone.erb"), None);
     }
 
     #[test]

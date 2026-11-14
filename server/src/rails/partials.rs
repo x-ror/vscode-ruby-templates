@@ -5,7 +5,7 @@ use crate::rails::controller_classes::controller_file;
 use crate::rails::inflect;
 use crate::rails::inflect::{pluralize, singularize};
 use crate::rails::paths::{
-    app_root, is_partial_path, template_format, template_stem, template_suffix, template_variant, view_relative, views_root,
+    app_root, is_partial_path, own_format, template_format, template_stem, template_suffix, template_variant, view_relative, views_root,
 };
 use crate::rails::project::Project;
 use crate::rails::render_refs::{Lookup, RenderKind, RenderRef};
@@ -53,8 +53,10 @@ pub fn resolve(project: &Project, current: &Path, r: &RenderRef) -> Vec<PathBuf>
         }
     }
     let found_in = |d: &Path| {
-        let mut found: Vec<PathBuf> =
-            matching_templates(project, d, &basename).into_iter().filter(|p| looked_up(project, current, p, &r.lookup)).collect();
+        let mut found: Vec<PathBuf> = matching_templates_in(format_checker(project, current), d, &basename)
+            .into_iter()
+            .filter(|p| looked_up(project, current, p, &r.lookup))
+            .collect();
         sort_like_action_view(project, current, &r.lookup, &mut found);
         found
     };
@@ -88,7 +90,7 @@ pub fn resolve_model(project: &Project, current: &Path, name: &str) -> Vec<PathB
             vec![prefixed, views.join(namespace.join(&plural))]
         };
         for dir in dirs {
-            let mut found: Vec<PathBuf> = matching_templates(project, &dir, &format!("_{singular}"))
+            let mut found: Vec<PathBuf> = matching_templates_in(format_checker(project, current), &dir, &format!("_{singular}"))
                 .into_iter()
                 .filter(|p| renders_format(project, current, p))
                 .collect();
@@ -177,9 +179,16 @@ fn lookup_formats(view: &str) -> impl Iterator<Item = &str> {
     std::iter::once(view).chain(matches!(view, "js" | "turbo_stream").then_some("html"))
 }
 
+/// Whether `segment` is a format as seen from `current`: one the project knows, or `current`'s own, since Rails looks
+/// partials up in the format of the template rendering them, whichever gem or initializer registered it.
+fn format_checker<'a>(project: &'a Project, current: &'a Path) -> impl Fn(&str) -> bool + Copy + 'a {
+    let own = own_format(current);
+    move |segment| project.is_format(segment) || own == Some(segment)
+}
+
 /// Format-less files match any format.
 fn renders_format(project: &Project, current: &Path, candidate: &Path) -> bool {
-    let is_format = |f: &str| project.is_format(f);
+    let is_format = format_checker(project, current);
     match (template_format(is_format, current), template_format(is_format, candidate)) {
         (Some(view), Some(partial)) => lookup_formats(view).any(|format| format == partial),
         _ => true,
@@ -188,13 +197,17 @@ fn renders_format(project: &Project, current: &Path, candidate: &Path) -> bool {
 
 /// All template files matching `dir/<prefix>name.*`.
 pub fn matching_templates(project: &Project, dir: &Path, basename: &str) -> Vec<PathBuf> {
+    matching_templates_in(|f| project.is_format(f), dir, basename)
+}
+
+fn matching_templates_in(is_format: impl Fn(&str) -> bool + Copy, dir: &Path, basename: &str) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
     let mut found: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
             let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
-            template_suffix(|f| project.is_format(f), fname, basename).is_some()
+            template_suffix(is_format, fname, basename).is_some()
         })
         .filter(|p| p.is_file())
         .collect();
@@ -214,10 +227,11 @@ pub fn split_render_name(name: &str) -> (Option<&str>, &str) {
 /// Orders candidates like ActionView's `TemplateDetails#sort_key_for`: by format, variant, then handler (the locale,
 /// unknown here, isn't ordered). With no `variants:` the view's own is wanted, as in Rails.
 fn sort_like_action_view(project: &Project, current: &Path, lookup: &Lookup, found: &mut [PathBuf]) {
-    let view_format = template_format(|f| project.is_format(f), current);
+    let is_format = format_checker(project, current);
+    let view_format = template_format(is_format, current);
     let view_variant = template_variant(current);
     found.sort_by_key(|p| {
-        let format = template_format(|f| project.is_format(f), p);
+        let format = template_format(is_format, p);
         let format_rank = match (&lookup.formats, view_format) {
             (Some(_), _) => rank(listed(&lookup.formats), format),
             (None, Some(view)) => rank(lookup_formats(view), format),
@@ -253,7 +267,7 @@ fn looked_up(project: &Project, current: &Path, candidate: &Path, lookup: &Looku
         names.as_ref().is_none_or(|names| value.is_none_or(|value| names.iter().any(|name| name == value)))
     };
     let format_ok = if lookup.formats.is_some() {
-        among(&lookup.formats, template_format(|f| project.is_format(f), candidate))
+        among(&lookup.formats, template_format(format_checker(project, current), candidate))
     } else {
         renders_format(project, current, candidate)
     };
@@ -272,7 +286,11 @@ pub fn resolve_component(project: &Project, current: &Path, name: &str) -> Vec<P
         out.push(rb);
     }
     if let (Some(dir), Some(stem)) = (base.parent(), base.file_name().and_then(|s| s.to_str())) {
-        out.extend(matching_templates(project, dir, stem).into_iter().filter(|p| p.extension().map(|e| e != "rb").unwrap_or(true)));
+        out.extend(
+            matching_templates_in(format_checker(project, current), dir, stem)
+                .into_iter()
+                .filter(|p| p.extension().map(|e| e != "rb").unwrap_or(true)),
+        );
     }
     out
 }
@@ -789,7 +807,7 @@ mod tests {
         let found = |view: &str| {
             resolved_names(&Project::for_template(&users.join(view)), &views, &format!("users/{view}"), r#"render "users/card""#)
         };
-        assert_eq!(found("show.mobile.erb"), ["_card.html.erb"]);
+        assert_eq!(found("show.mobile.erb"), ["_card.mobile.erb"]);
         assert_eq!(found("show.html.erb"), ["_card.html.erb"]);
 
         let initializers = root.join("config/initializers");
@@ -801,6 +819,30 @@ mod tests {
         let project = Project::for_template(&users.join("show.mobile.erb"));
         assert_eq!(template_stem(|f| project.is_format(f), "_card.mobile.erb"), "_card");
         assert_eq!(template_format(|f| project.is_format(f), &users.join("_card.mobile.erb")), Some("mobile"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn partial_in_the_views_own_unregistered_format() {
+        let root = std::env::temp_dir().join(format!("rt-own-format-{}", std::process::id()));
+        let users = root.join("app/views/users");
+        std::fs::create_dir_all(&users).unwrap();
+        for f in ["_card.mobile.haml", "_row.amp.erb", "_row.html.erb", "_item.mobile.erb"] {
+            std::fs::write(users.join(f), "").unwrap();
+        }
+        let views = root.join("app/views");
+        let found = |view: &str, name: &str| {
+            resolved_names(
+                &Project::for_template(&users.join(view)),
+                &views,
+                &format!("users/{view}"),
+                &format!(r#"render "users/{name}""#),
+            )
+        };
+        assert_eq!(found("index.mobile.haml", "card"), ["_card.mobile.haml"]);
+        assert_eq!(found("show.amp.erb", "row"), ["_row.amp.erb"]);
+        assert_eq!(found("show.html.erb", "row"), ["_row.html.erb"]);
+        assert!(found("list.html.erb", "item").is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
